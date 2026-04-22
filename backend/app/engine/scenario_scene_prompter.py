@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from typing import Any
@@ -69,6 +70,26 @@ _GLOBAL_PROMPT_RULES = [
     "Respect wardrobe continuity when current input/story locks wardrobe; do not invent wardrobe progression defaults unless explicitly provided by current story/refs.",
     "Enforce LTX-safe motion and anatomy-safe constraints for all routes.",
 ]
+_CHARACTER_STYLE_LEAK_TOKENS = (
+    "same woman",
+    "same man",
+    "woman",
+    "female",
+    "girl",
+    "lady",
+    "dress",
+    "crop top",
+    "cropped top",
+    "open neckline",
+    "bust",
+    "hips",
+    "jewelry",
+)
+_IDENTITY_REFERENCE_LEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bshow the same (woman|man|person)\b"),
+    re.compile(r"(?i)\bprovided character_1 reference\b"),
+    re.compile(r"(?i)\bsame (woman|man) as the provided\b"),
+)
 
 _NEGATIVE_LEAK_TOKENS = (
     "low quality",
@@ -2908,21 +2929,59 @@ def _sanitize_prompts_v11_wording(payload: dict[str, Any]) -> tuple[dict[str, An
 
 
 def _build_global_style_anchor(story_core: dict[str, Any]) -> str:
-    identity = _build_identity_lock_summary(story_core)
     world = _build_world_lock_summary(story_core)
     style = _build_style_lock_summary(story_core)
     parts = [
-        "Same woman by reference with stable face identity, body proportions, outfit and silhouette continuity unless story explicitly changes them",
         "Same world family across all segments with location-zone variation only, no random location drift",
         "Grounded realism contract with one coherent lighting family and stable mood progression",
     ]
-    if identity:
-        parts.append(f"Identity lock: {identity}")
     if world:
         parts.append(f"World lock: {world}")
     if style:
         parts.append(f"Style lock: {style}")
     return "; ".join(parts)[:1200]
+
+
+def _sanitize_global_style_anchor(anchor: str, story_core: dict[str, Any]) -> tuple[str, bool]:
+    text = str(anchor or "").strip()
+    if not text:
+        return _build_global_style_anchor(story_core), True
+    sentences = [s.strip() for s in re.split(r"[.;]\s*", text) if s.strip()]
+    filtered = [
+        s
+        for s in sentences
+        if not any(token in s.lower() for token in _CHARACTER_STYLE_LEAK_TOKENS)
+    ]
+    if filtered:
+        return "; ".join(filtered)[:1200], len(filtered) != len(sentences)
+    return _build_global_style_anchor(story_core), True
+
+
+def _is_lip_sync_only_character_1(package: dict[str, Any]) -> bool:
+    input_pkg = _safe_dict(package.get("input"))
+    summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    role_map = _safe_dict(summary.get("role_identity_mapping"))
+    char = _safe_dict(role_map.get("character_1"))
+    appearance = str(char.get("appearanceMode") or char.get("appearance_mode") or "").strip().lower()
+    presence = str(char.get("screenPresenceMode") or char.get("screen_presence_mode") or "").strip().lower()
+    return appearance == "lip_sync_only" or presence == "lip_sync_only"
+
+
+def _character_1_identity_diag(package: dict[str, Any]) -> dict[str, Any]:
+    input_pkg = _safe_dict(package.get("input"))
+    connected = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(package.get("connected_context_summary"))
+    role_map = _safe_dict(connected.get("role_identity_mapping"))
+    char = _safe_dict(role_map.get("character_1"))
+    refs = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
+    ref_tokens = [str(v).strip() for v in refs if str(v).strip()]
+    signature = hashlib.sha256("|".join(sorted(ref_tokens)).encode("utf-8")).hexdigest() if ref_tokens else ""
+    return {
+        "current_character_1_gender_hint": str(char.get("gender_hint") or "").strip().lower(),
+        "current_character_1_identity_label": str(char.get("identity_label") or "").strip(),
+        "current_character_1_ref_count": len(ref_tokens),
+        "current_character_1_ref_signature": signature,
+        "current_identity_source": "current_connected_ref",
+    }
 
 
 def _build_prompts_v11_prompt(
@@ -3029,8 +3088,8 @@ def _build_prompts_v11_prompt(
         "- camera_intent must be translated into natural descriptive prose.\n"
         "- framing/motion hints must be expressed without camera jargon.\n"
         "- Forbidden literal leakage examples in final prompt text: stable framing, push-in, pull-back, lateral tracking, dolly, zoom, camera move, tracking shot, medium shot, close-up, wide shot.\n"
-        "- Make photo_prompt and video_prompt stable/specific across segments (same woman identity and wardrobe continuity), while changing micro-performance and local action intent by segment.\n"
-        "- Prefer explicit role-grounded wording over generic labels: e.g. \"character_1, the woman from reference\" and \"character_2, the man from reference\" when those cast references exist.\n"
+        "- Make photo_prompt and video_prompt stable/specific across segments (same current-role identity continuity), while changing micro-performance and local action intent by segment.\n"
+        "- Prefer explicit role-grounded wording over generic labels: e.g. \"character_1 from current reference\" and \"character_2 from current reference\" when those cast references exist.\n"
         "- Keep prompts within the same world family defined by story_core/world_lock and user input. Use local_zone_hint only as deterministic local pocket guidance. Do not invent a new venue or cast.\n"
         "- Read prompt_interface_contract as source-of-truth for visibility constraints: visibility_mode, must_be_visible, may_be_offscreen, subject_presence_requirement.\n"
         "- If prompt_interface_contract.must_be_visible contains multiple cast roles, every photo_prompt must include all required visible roles in the same shared physical space defined by world_lock/user input.\n"
@@ -3455,6 +3514,7 @@ def _apply_prompts_v11_shared_space_post_repair(
 def _apply_storyboard_stage_metadata_passthrough(
     prompts_v11: dict[str, Any],
     prompt_rows: list[dict[str, Any]],
+    package: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     patched = dict(prompts_v11)
     storyboard_by_segment = {
@@ -3477,6 +3537,9 @@ def _apply_storyboard_stage_metadata_passthrough(
     lipsync_present_count = 0
     missing_role_segments: list[str] = []
     ia2v_audio_driven_count = 0
+    lip_sync_only_policy_applied = _is_lip_sync_only_character_1(package)
+    lip_sync_only_i2v_segments: list[str] = []
+    lip_sync_only_ia2v_segments: list[str] = []
     for raw_segment in _safe_list(prompts_v11.get("segments")):
         segment = dict(_safe_dict(raw_segment))
         segment_id = str(segment.get("segment_id") or "").strip()
@@ -3487,6 +3550,7 @@ def _apply_storyboard_stage_metadata_passthrough(
         segment["primary_role"] = str(storyboard_row.get("primary_role") or "").strip()
         segment["visual_focus_role"] = str(storyboard_row.get("visual_focus_role") or "").strip()
         segment["speaker_role"] = str(storyboard_row.get("speaker_role") or "").strip()
+        segment["vocal_owner_role"] = str(storyboard_row.get("vocal_owner_role") or "").strip()
         segment["reaction_role"] = str(storyboard_row.get("reaction_role") or "").strip()
         segment["spoken_line"] = str(storyboard_row.get("spoken_line") or "").strip()
         segment["lip_sync_priority"] = str(storyboard_row.get("lip_sync_priority") or "").strip()
@@ -3499,7 +3563,24 @@ def _apply_storyboard_stage_metadata_passthrough(
         segment["foreground_performance_rule"] = str(storyboard_row.get("foreground_performance_rule") or "").strip()
 
         if route == "ia2v":
+            lip_sync_only_ia2v_segments.append(segment_id)
+            inferred_owner = str(storyboard_row.get("vocal_owner_role") or "character_1").strip() or "character_1"
+            segment["speaker_role"] = inferred_owner
+            segment["vocal_owner_role"] = inferred_owner
+            segment["lip_sync_allowed"] = True
+            segment["lip_sync_priority"] = "primary"
+            segment["mouth_visible_required"] = True
+            segment["singing_readiness_required"] = True
             apply_ia2v_lipsync_canon_to_prompt_row(segment, source_scene=storyboard_row)
+        elif lip_sync_only_policy_applied and route == "i2v":
+            lip_sync_only_i2v_segments.append(segment_id)
+            segment["speaker_role"] = ""
+            segment["lip_sync_allowed"] = False
+            segment["lip_sync_priority"] = "none"
+            segment["mouth_visible_required"] = False
+            segment["singing_readiness_required"] = False
+            segment["visual_focus_role"] = "environment"
+            segment["subject_priority"] = "environment"
 
         role_complete = all(str(segment.get(field) or "").strip() for field in role_fields)
         reaction_required = bool(segment.get("listener_reaction_allowed")) or (
@@ -3526,6 +3607,9 @@ def _apply_storyboard_stage_metadata_passthrough(
         "scene_prompts_lipsync_metadata_present_count": lipsync_present_count,
         "scene_prompts_missing_role_metadata_segments": [seg for seg in missing_role_segments if seg],
         "scene_prompts_ia2v_audio_driven_count": ia2v_audio_driven_count,
+        "lip_sync_only_policy_applied": bool(lip_sync_only_policy_applied),
+        "lip_sync_only_i2v_segments": [seg for seg in lip_sync_only_i2v_segments if seg],
+        "lip_sync_only_ia2v_segments": [seg for seg in lip_sync_only_ia2v_segments if seg],
     }
 
 
@@ -3736,6 +3820,59 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
     }
 
 
+def _sanitize_identity_and_visibility_conflicts(
+    payload: dict[str, Any],
+    prompt_rows: list[dict[str, Any]],
+    package: dict[str, Any],
+    story_core: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    out = dict(payload)
+    rows_by_id = {str(_safe_dict(r).get("segment_id") or "").strip(): _safe_dict(r) for r in prompt_rows}
+    lip_sync_only = _is_lip_sync_only_character_1(package)
+    stale_identity_removed = 0
+    repaired_segments: list[str] = []
+    i2v_visual_removed = 0
+    global_anchor, anchor_changed = _sanitize_global_style_anchor(str(out.get("global_style_anchor") or ""), story_core)
+    out["global_style_anchor"] = global_anchor
+    segments_out: list[dict[str, Any]] = []
+    for raw in _safe_list(out.get("segments")):
+        seg = dict(_safe_dict(raw))
+        segment_id = str(seg.get("segment_id") or "").strip()
+        route = str(seg.get("route") or "").strip().lower()
+        prompt_row = _safe_dict(rows_by_id.get(segment_id))
+        mutated = False
+        for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "first_frame_prompt", "last_frame_prompt"):
+            value = str(seg.get(field) or "")
+            if any(p.search(value) for p in _IDENTITY_REFERENCE_LEAK_PATTERNS):
+                stale_identity_removed += 1
+                mutated = True
+                if lip_sync_only and route == "i2v":
+                    world_hint = ". ".join(
+                        part
+                        for part in [
+                            str(prompt_row.get("scene_goal") or "").strip(),
+                            str(prompt_row.get("local_zone_hint") or "").strip(),
+                            "Environment-focused cutaway, no main performer visible.",
+                        ]
+                        if part
+                    ).strip()
+                    seg[field] = world_hint
+                    i2v_visual_removed += 1
+                else:
+                    seg[field] = re.sub(r"(?i)\bshow the same (woman|man|person)[^.]*\.?", " ", value).strip()
+        if mutated and segment_id:
+            repaired_segments.append(segment_id)
+        segments_out.append(seg)
+    out["segments"] = segments_out
+    return out, {
+        "scene_prompts_identity_conflict_repaired": bool(repaired_segments or anchor_changed),
+        "scene_prompts_identity_conflict_repaired_segments": list(dict.fromkeys(repaired_segments)),
+        "stale_identity_clause_removed_count": stale_identity_removed,
+        "stale_wardrobe_clause_removed_count": 0,
+        "lip_sync_only_i2v_hero_visual_removed_count": i2v_visual_removed,
+    }
+
+
 def _diagnose_ia2v_canonical_source(
     *,
     canonical_source: str,
@@ -3845,6 +3982,7 @@ def build_gemini_scene_prompts(
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
         "capability_rules_source_version": get_capability_rules_source_version(),
     }
+    diagnostics.update(_character_1_identity_diag(package))
 
     empty_canonical = {"prompts_version": "1.1", "global_style_anchor": global_style_anchor, "segments": []}
     if not prompt_rows:
@@ -3928,8 +4066,15 @@ def build_gemini_scene_prompts(
     diagnostics.update(required_fields_diag)
     raw_payload, shared_space_diag, shared_space_validation_errors = _apply_prompts_v11_shared_space_post_repair(raw_payload, story_core)
     diagnostics.update(shared_space_diag)
-    raw_payload, passthrough_diag = _apply_storyboard_stage_metadata_passthrough(raw_payload, prompt_rows)
+    raw_payload, passthrough_diag = _apply_storyboard_stage_metadata_passthrough(raw_payload, prompt_rows, package)
     diagnostics.update(passthrough_diag)
+    raw_payload, identity_sanitize_diag = _sanitize_identity_and_visibility_conflicts(
+        raw_payload,
+        prompt_rows,
+        package,
+        story_core,
+    )
+    diagnostics.update(identity_sanitize_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     if shared_space_validation_errors:

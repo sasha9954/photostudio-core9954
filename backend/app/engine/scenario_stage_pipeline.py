@@ -1898,15 +1898,20 @@ def _scene_prompt_identity_anchor(role: str, role_plan: dict[str, Any], scene_ro
     has_ref, _ = _has_connected_visual_ref(package, input_pkg, refs_inventory, clean_role)
     if not has_ref:
         return ""
-    if clean_role == "character_1":
-        return (
-            "Show the same woman as the provided character_1 reference. "
-            "Preserve the same face, age impression, body proportions, hairstyle, clothing, silhouette, and overall look in this scene."
-        )
     return (
         f"Show the same person as the provided {clean_role} reference. "
         "Preserve the same face, age impression, body proportions, hairstyle, clothing, silhouette, and overall look in this scene."
     )
+
+
+def _character_1_lip_sync_only(package: dict[str, Any]) -> bool:
+    input_pkg = _safe_dict(package.get("input"))
+    summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    role_map = _safe_dict(summary.get("role_identity_mapping"))
+    char1 = _safe_dict(role_map.get("character_1"))
+    appearance = str(char1.get("appearanceMode") or char1.get("appearance_mode") or "").strip().lower()
+    presence = str(char1.get("screenPresenceMode") or char1.get("screen_presence_mode") or "").strip().lower()
+    return appearance == "lip_sync_only" or presence == "lip_sync_only"
 
 
 def _secondary_presence_mode_hints(scene_row: dict[str, Any], role_plan: dict[str, Any], package: dict[str, Any]) -> list[str]:
@@ -2025,6 +2030,7 @@ def _enforce_scene_prompts_identity_and_presence(
     identity_enforced_count = 0
     secondary_hints_applied_count = 0
     identity_drift_segment = ""
+    lip_sync_only = _character_1_lip_sync_only(package)
     for row in _scene_prompt_rows_for_validation(normalized):
         segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
         if not segment_id:
@@ -2039,7 +2045,8 @@ def _enforce_scene_prompts_identity_and_presence(
             or role_state.get("speaker_role") == "character_1"
             or "character_1" in present_roles
         )
-        if character_1_involved:
+        route = str(row.get("route") or scene_row.get("route") or "").strip().lower()
+        if character_1_involved and not (lip_sync_only and route == "i2v"):
             anchor = _scene_prompt_identity_anchor("character_1", role_row, scene_row, package)
             if anchor:
                 row["photo_prompt"] = _prepend_clause_once(row.get("photo_prompt"), anchor)

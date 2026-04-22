@@ -39,13 +39,13 @@ _LIP_SYNC_VARIANTS = (
 )
 
 GLOBAL_HERO_IDENTITY_LOCK = (
-    "GLOBAL HERO IDENTITY LOCK: The same woman must remain the same person in every scene. Preserve exact face identity, age impression, skin tone, hair color, hair length, hairstyle, facial structure, body proportions, height impression, shoulder width, waist/hip ratio, bust/hips balance, arm and leg thickness, posture family, outfit, jewelry, neckline, crop length and overall silhouette."
+    "GLOBAL HERO IDENTITY LOCK: Keep the same current performer identity in every scene. Preserve face identity, body proportions, hairstyle, clothing silhouette and overall look from the current connected reference."
 )
 BODY_CONTINUITY_LOCK = (
-    "BODY CONTINUITY: Do not make her slimmer, taller, younger, older, more athletic, more model-like, thinner-waisted, longer-legged, narrower-shouldered, or change her body type. Preserve the same body volume and silhouette from the established hero reference and/or the first successfully generated hero image."
+    "BODY CONTINUITY: Keep the same body type and silhouette from the current reference; avoid body-shape drift."
 )
 WARDROBE_CONTINUITY_LOCK = (
-    "WARDROBE CONTINUITY: Keep the exact same outfit in every scene. Do not change neckline, collar, straps, sleeves, crop length, fabric coverage, color, material, jewelry or fit. If she wears a cropped top, it must remain the same cropped top with the same neckline and same visible skin coverage. Do not turn it into a high-neck top, turtleneck, closed collar, blouse, jacket, longer shirt, or different garment."
+    "WARDROBE CONTINUITY: Keep outfit continuity from the current reference when present; do not introduce unrelated wardrobe identity drift."
 )
 CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE = (
     "Use the confirmed hero look reference from scene_01 to preserve the same face, body proportions, silhouette, outfit, neckline, jewelry, hairstyle and production look."
@@ -56,17 +56,7 @@ IA2V_BASE_PROMPT_V1 = (
     "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
     "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in."
 )
-IDENTITY_NEGATIVE_GUARD = (
-    "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
-)
-CHARACTER_1_OUTFIT_ANCHOR = (
-    "same beige cropped sleeveless top with the same open neckline / same visible upper-chest coverage / same crop length, "
-    "not high-neck, not turtleneck, not closed collar, not blouse, not full-coverage top"
-)
-CHARACTER_1_OUTFIT_NEGATIVES = (
-    "do not raise neckline; do not close chest coverage; do not convert cropped top into high-neck top; "
-    "do not reinterpret into blouse, sweater, turtleneck, or closed tank"
-)
+IDENTITY_NEGATIVE_GUARD = "different person, different face, changed face, changed body type, changed silhouette, different outfit, hairstyle drift, age drift, body proportion drift"
 CONTROLLED_MOTION_SAFETY_BLOCK = (
     "CONTROLLED MOTION SAFETY: smooth readable cinematic motion, grounded body movement, moderate step/sway/turn/weight shift, "
     "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
@@ -210,6 +200,40 @@ _CONFIRMED_HERO_URL_KEYS = (
     "hero_reference_url",
     "heroReferenceUrl",
 )
+_STALE_IDENTITY_TERMS = (
+    "same woman",
+    "woman",
+    "female",
+    "girl",
+    "lady",
+    "light linen dress",
+    "beige cropped sleeveless top",
+    "open neckline",
+    "crop length",
+    "bust/hips",
+)
+
+
+def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
+    input_pkg = _safe_dict(package.get("input"))
+    connected = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(package.get("connected_context_summary"))
+    role_map = _safe_dict(connected.get("role_identity_mapping"))
+    char1 = _safe_dict(role_map.get("character_1"))
+    refs = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
+    refs_inventory = _safe_list(_safe_dict(package.get("refs_inventory")).get("ref_character_1"))
+    all_refs = [str(v).strip() for v in [*refs, *refs_inventory] if str(v).strip()]
+    ref_signature = hashlib.sha256("|".join(sorted(all_refs)).encode("utf-8")).hexdigest() if all_refs else ""
+    gender_hint = str(char1.get("gender_hint") or "").strip().lower()
+    identity_label = str(char1.get("identity_label") or "").strip()
+    appearance = str(char1.get("appearanceMode") or char1.get("appearance_mode") or "").strip().lower()
+    presence = str(char1.get("screenPresenceMode") or char1.get("screen_presence_mode") or "").strip().lower()
+    return {
+        "gender_hint": gender_hint,
+        "identity_label": identity_label,
+        "ref_count": len(all_refs),
+        "ref_signature": ref_signature,
+        "lip_sync_only": appearance == "lip_sync_only" or presence == "lip_sync_only",
+    }
 
 
 def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) -> str:
@@ -720,7 +744,7 @@ def _build_instruction(payload: dict[str, Any]) -> str:
     )
 
 
-def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: dict[str, Any]) -> dict[str, Any]:
     row = _safe_dict(raw_row)
     segment_id = str(row.get("segment_id") or fallback_row.get("segment_id") or "").strip()
     scene_id = str(row.get("scene_id") or fallback_row.get("scene_id") or segment_id).strip()
@@ -734,8 +758,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     fallback_video_prompt = _strip_literal_quoted_dialogue(str(fallback_prompt_row.get("video_prompt") or "").strip())
     scene_seq_index = int(fallback_row.get("sequence_index") or 0)
     has_human_subject = _scene_has_human_subject(fallback_row, route)
-    confirmed_look_clause_applied = bool(has_human_subject and scene_seq_index >= 2)
-    confirmed_look_used = bool(confirmed_look_clause_applied and _has_real_confirmed_hero_image_url(fallback_row))
+    confirmed_look_used = bool(has_human_subject and scene_seq_index >= 2 and _has_real_confirmed_hero_image_url(fallback_row))
+    confirmed_look_clause_applied = bool(confirmed_look_used)
     positive_contract_duplicates_removed = False
     positive_prompt_seed = positive_prompt
     if has_human_subject and route != "ia2v":
@@ -745,7 +769,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         positive_prompt = _append_clause(positive_prompt, GLOBAL_HERO_IDENTITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, BODY_CONTINUITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, WARDROBE_CONTINUITY_LOCK)
-        if confirmed_look_clause_applied:
+        if confirmed_look_used:
             positive_prompt = _append_clause(positive_prompt, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
         negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
 
@@ -856,11 +880,6 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         route_template_source = "ia2v_lipsync_template"
         if positive_prompt:
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {route_behavior_template}"
-    if has_character_1 and route == "i2v":
-        positive_prompt = _append_clause(positive_prompt, f"OUTFIT ANCHOR (character_1): {CHARACTER_1_OUTFIT_ANCHOR}.")
-        positive_prompt = _append_clause(positive_prompt, f"OUTFIT NEGATIVES: {CHARACTER_1_OUTFIT_NEGATIVES}.")
-        negative_prompt = _append_clause(negative_prompt, CHARACTER_1_OUTFIT_NEGATIVES)
-
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
         negative_prompt=negative_prompt,
@@ -886,6 +905,23 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
     if route == "ia2v":
         negative_prompt = _clean_ia2v_negative_prompt(negative_prompt)
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
+
+    stale_removed = 0
+    terms_removed: list[str] = []
+    if str(identity_ctx.get("gender_hint") or "") == "male":
+        for term in _STALE_IDENTITY_TERMS:
+            before = positive_prompt
+            positive_prompt = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", positive_prompt)
+            positive_prompt = re.sub(r"\s+", " ", positive_prompt).strip(" ,.;")
+            if before != positive_prompt:
+                stale_removed += 1
+                terms_removed.append(term)
+            before_neg = negative_prompt
+            negative_prompt = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", negative_prompt)
+            negative_prompt = re.sub(r"\s+", " ", negative_prompt).strip(" ,.;")
+            if before_neg != negative_prompt:
+                stale_removed += 1
+                terms_removed.append(term)
 
     first_frame_raw = route_payload.get("first_frame_prompt")
     last_frame_raw = route_payload.get("last_frame_prompt")
@@ -968,6 +1004,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         )
     )
     requires_audio = route == "ia2v"
+    if bool(identity_ctx.get("lip_sync_only")) and route == "i2v":
+        speaker_role = ""
+        lip_sync_allowed = False
+        requires_audio = False
     alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
     image_prompt = ". ".join(
@@ -1048,7 +1088,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "body_lock_applied": bool(has_human_subject),
         "wardrobe_lock_applied": bool(has_human_subject),
         "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
-        "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_clause_applied),
+        "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_used and confirmed_look_clause_applied),
+        "confirmedHeroLookReferenceSkippedReason": None if confirmed_look_used else "signature_or_gender_mismatch",
         "clearVocalCanonicalApplied": bool(contract_debug.get("clearVocalCanonicalApplied")),
         "clearVocalFragmentsRemoved": bool(contract_debug.get("clearVocalFragmentsRemoved")),
         "positiveContractDuplicatesRemoved": bool(positive_contract_duplicates_removed),
@@ -1081,10 +1122,15 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any]) -> dict[str, A
         "ia2vNegativeHasSingingKillerTokens": bool(route == "ia2v" and ia2v_negative_has_singing_killer_tokens),
         "ia2vNegativeKillerTokensFound": ia2v_negative_killer_tokens_found if route == "ia2v" else [],
         "ia2vNegativeKillerTokenSegments": ia2v_negative_killer_token_segments if route == "ia2v" else [],
+        "identity_gender_conflict_detected": bool(stale_removed > 0),
+        "identity_gender_conflict_terms_removed": list(dict.fromkeys(terms_removed)),
+        "identity_gender_conflict_segments": [segment_id] if stale_removed > 0 and segment_id else [],
+        "stale_identity_clause_removed_count": stale_removed,
+        "stale_wardrobe_clause_removed_count": 0,
     }
 
 
-def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict[str, Any]) -> dict[str, Any]:
     data = _safe_dict(raw)
     model_segments = _safe_list(data.get("segments"))
     by_segment_id = {
@@ -1095,9 +1141,10 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]]) -> dict[str, 
 
     normalized: list[dict[str, Any]] = []
     previous_lip_variant = ""
+    identity_ctx = _character_1_context(package)
     for fallback_row in segment_rows:
         segment_id = str(fallback_row.get("segment_id") or "").strip()
-        seg = _sanitize_segment(by_segment_id.get(segment_id), fallback_row)
+        seg = _sanitize_segment(by_segment_id.get(segment_id), fallback_row, identity_ctx)
         if normalized:
             _rewire_shadow_continuity(normalized[-1], seg)
         if str(seg.get("video_metadata", {}).get("route_type") or "") == "ia2v":
@@ -1159,6 +1206,7 @@ def _build_route_diagnostics(segments: list[dict[str, Any]]) -> dict[str, Any]:
 
 def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     segment_rows = _canonical_segments(package)
+    identity_ctx = _character_1_context(package)
     if not segment_rows:
         return {
             "ok": False,
@@ -1211,7 +1259,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             if isinstance(response, dict) and response.get("__http_error__"):
                 raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
             parsed = _extract_json_obj(_extract_gemini_text(response))
-            normalized_payload = _sanitize_output(parsed, segment_rows)
+            normalized_payload = _sanitize_output(parsed, segment_rows, package)
             last_error = ""
             break
         except Exception as exc:
@@ -1256,6 +1304,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                     "negativePromptPreview": str(route_payload.get("negative_prompt") or "")[:220],
                 }
             )
+    stale_identity_removed_total = sum(int(_safe_dict(seg).get("stale_identity_clause_removed_count") or 0) for seg in _safe_list(normalized_payload.get("segments")))
     return {
         "ok": ok,
         "final_video_prompt": normalized_payload if ok else {"delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION, "segments": [], "scenes": []},
@@ -1273,6 +1322,13 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_timeout_retry_attempted": bool(timed_out and attempts > 1),
             "final_video_prompt_response_was_empty_after_timeout": response_was_empty_after_timeout,
             "final_video_prompt_scene_contract_logs": scene_contract_logs,
+            "current_character_1_gender_hint": str(identity_ctx.get("gender_hint") or ""),
+            "current_character_1_identity_label": str(identity_ctx.get("identity_label") or ""),
+            "current_character_1_ref_count": int(identity_ctx.get("ref_count") or 0),
+            "current_character_1_ref_signature": str(identity_ctx.get("ref_signature") or ""),
+            "current_identity_source": "current_connected_ref",
+            "stale_identity_clause_removed_count": stale_identity_removed_total if ok else 0,
+            "stale_wardrobe_clause_removed_count": 0,
             **route_diagnostics,
         },
         "error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
