@@ -92,6 +92,8 @@ _IDENTITY_REFERENCE_LEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 _MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
     "same woman",
+    "woman's",
+    "women",
     "light linen dress",
     "beige cropped sleeveless top",
     "cropped top",
@@ -101,13 +103,31 @@ _MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
     "bust/hips",
     "woman",
     "female",
+    "feminine",
     "girl",
+    "girl's",
     "lady",
+    "lady's",
+    "her",
+    "she",
     "dress",
     "bust",
     "hips",
 )
-_STALE_IDENTITY_TERMS = {"same woman", "woman", "female", "girl", "lady"}
+_STALE_IDENTITY_TERMS = {
+    "same woman",
+    "woman",
+    "woman's",
+    "women",
+    "female",
+    "feminine",
+    "girl",
+    "girl's",
+    "lady",
+    "lady's",
+    "her",
+    "she",
+}
 _STALE_WARDROBE_TERMS = {
     "light linen dress",
     "dress",
@@ -2987,6 +3007,38 @@ def _sanitize_global_style_anchor(anchor: str, story_core: dict[str, Any]) -> tu
     return _build_global_style_anchor(story_core), True
 
 
+def _rebuild_global_style_anchor_from_story_core(story_core: dict[str, Any]) -> str:
+    identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    style_lock = _safe_dict(story_core.get("style_lock"))
+
+    candidates = [
+        str(identity_doctrine.get("world_doctrine") or "").strip(),
+        str(identity_doctrine.get("style_doctrine") or "").strip(),
+        str(world_lock.get("rule") or world_lock.get("rules") or "").strip(),
+        str(style_lock.get("rule") or style_lock.get("rules") or "").strip(),
+        _build_world_lock_summary(story_core),
+        _build_style_lock_summary(story_core),
+    ]
+    leak_tokens = set(_CHARACTER_STYLE_LEAK_TOKENS) | {"woman's", "girl's", "lady's", "her", "she", "women", "feminine"}
+    parts: list[str] = []
+    for chunk in candidates:
+        if not chunk:
+            continue
+        for sentence in [s.strip() for s in re.split(r"[.;]\s*", chunk) if s.strip()]:
+            lower_sentence = sentence.lower()
+            if any(token in lower_sentence for token in leak_tokens):
+                continue
+            parts.append(sentence)
+    deduped = list(dict.fromkeys(parts))
+    if deduped:
+        return "; ".join(deduped)[:1200]
+    return (
+        "Grounded realistic urban world, coherent documentary realism, stable lighting, "
+        "consistent atmosphere, no identity or wardrobe drift."
+    )
+
+
 def _is_lip_sync_only_character_1(package: dict[str, Any]) -> bool:
     input_pkg = _safe_dict(package.get("input"))
     summary = _safe_dict(input_pkg.get("connected_context_summary"))
@@ -3045,6 +3097,31 @@ def _remove_stale_term_set(text: str, terms: tuple[str, ...]) -> tuple[str, set[
     out = re.sub(r"(?:\.\s*){2,}", ". ", out)
     out = out.strip(" ,;:.")
     return out, removed
+
+
+def _find_stale_term_set(text: str, terms: tuple[str, ...]) -> set[str]:
+    body = str(text or "")
+    if not body:
+        return set()
+    hits: set[str] = set()
+    for term in terms:
+        token = str(term or "").strip()
+        if not token:
+            continue
+        if re.search(rf"(?i)(?<!\w){re.escape(token)}(?!\w)", body):
+            hits.add(token.lower())
+    return hits
+
+
+def _is_bad_prompt_cleanup(text: str) -> bool:
+    normalized = str(text or "").strip()
+    lower = normalized.lower()
+    if len(normalized) < 20:
+        return True
+    bad_fragments = ("the 's", "a in ", "with ,", "wearing a .", "wearing .")
+    if any(fragment in lower for fragment in bad_fragments):
+        return True
+    return lower.startswith("in her") or lower.startswith("her ") or lower.startswith("she ")
 
 
 def _build_prompts_v11_prompt(
@@ -3921,13 +3998,19 @@ def _sanitize_identity_and_visibility_conflicts(
     gender_terms_removed: set[str] = set()
     stale_identity_removed_by_gender = 0
     stale_wardrobe_removed_by_gender = 0
+    first_last_frame_rebuilt_segments: list[str] = []
+    prompt_rebuilt_after_bad_cleanup_segments: list[str] = []
+    global_style_anchor_rebuilt_due_to_identity_conflict = False
+    global_style_anchor_rebuild_source = ""
     character_1_gender_hint = _get_character_1_gender_hint(package)
     apply_male_stale_cleanup = character_1_gender_hint == "male"
     global_anchor, anchor_changed = _sanitize_global_style_anchor(str(out.get("global_style_anchor") or ""), story_core)
     if apply_male_stale_cleanup:
-        sanitized_anchor, removed_anchor_terms = _remove_stale_term_set(global_anchor, _MALE_CONFLICT_STALE_TERMS)
+        removed_anchor_terms = _find_stale_term_set(global_anchor, _MALE_CONFLICT_STALE_TERMS)
         if removed_anchor_terms:
-            global_anchor = sanitized_anchor
+            global_anchor = _rebuild_global_style_anchor_from_story_core(story_core)
+            global_style_anchor_rebuilt_due_to_identity_conflict = True
+            global_style_anchor_rebuild_source = "story_core_world_style"
             gender_terms_removed.update(removed_anchor_terms)
             stale_identity_removed_by_gender += len([t for t in removed_anchor_terms if t in _STALE_IDENTITY_TERMS])
             stale_wardrobe_removed_by_gender += len([t for t in removed_anchor_terms if t in _STALE_WARDROBE_TERMS])
@@ -4000,19 +4083,76 @@ def _sanitize_identity_and_visibility_conflicts(
                     seg[field] = re.sub(r"(?i)\bshow the same (woman|man|person)[^.]*\.?", " ", value).strip()
         if apply_male_stale_cleanup:
             removed_in_segment: set[str] = set()
-            for field in (
-                "photo_prompt",
-                "video_prompt",
-                "positive_video_prompt",
-                "first_frame_prompt",
-                "last_frame_prompt",
-                "negative_prompt",
-            ):
+            for field in ("first_frame_prompt", "last_frame_prompt"):
+                original = str(seg.get(field) or "")
+                removed_terms = _find_stale_term_set(original, _MALE_CONFLICT_STALE_TERMS)
+                if not removed_terms:
+                    continue
+                if lip_sync_only and route == "i2v":
+                    seg[field] = (
+                        "Environment-focused frame in the same grounded world, no main performer visible, "
+                        "singer remains voiceover only."
+                    )
+                elif route == "ia2v":
+                    seg[field] = (
+                        "Current performer face clearly visible, mouth readable, grounded realistic lighting, "
+                        "identity follows the current connected reference."
+                    )
+                else:
+                    seg[field] = "Grounded realistic frame, current package identity and world continuity preserved."
+                removed_in_segment.update(removed_terms)
+                if segment_id:
+                    first_last_frame_rebuilt_segments.append(segment_id)
+                mutated = True
+
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "negative_prompt"):
                 clean_value, removed_terms = _remove_stale_term_set(str(seg.get(field) or ""), _MALE_CONFLICT_STALE_TERMS)
-                if removed_terms:
-                    seg[field] = clean_value
-                    removed_in_segment.update(removed_terms)
-                    mutated = True
+                if not removed_terms:
+                    continue
+                seg[field] = clean_value
+                if field in {"photo_prompt", "video_prompt"} and _is_bad_prompt_cleanup(clean_value):
+                    scene_goal = str(prompt_row.get("scene_goal") or "").strip()
+                    background_evidence = str(prompt_row.get("background_story_evidence") or "").strip()
+                    ltx_video_goal = str(prompt_row.get("ltx_video_goal") or "").strip()
+                    vocal_phrase = str(
+                        prompt_row.get("vocal_phrase")
+                        or prompt_row.get("vocal_line")
+                        or prompt_row.get("lyric_phrase")
+                        or prompt_row.get("lyric_line")
+                        or ""
+                    ).strip()
+                    if lip_sync_only and route == "i2v":
+                        if field == "photo_prompt":
+                            still_focus = scene_goal or background_evidence or "world continuity"
+                            seg[field] = (
+                                f"Environment-focused still frame: {still_focus}. Grounded realistic world, "
+                                "no main performer visible, singer remains voiceover only."
+                            )
+                        else:
+                            motion_focus = ltx_video_goal or scene_goal or "grounded environment continuity"
+                            seg[field] = (
+                                f"Environment-focused motion shot: {motion_focus}. Subtle city/world atmosphere motion only. "
+                                "No main performer visible. No lip-sync."
+                            )
+                    elif route == "ia2v":
+                        if field == "photo_prompt":
+                            seg[field] = (
+                                "Current performer from the connected character_1 reference, face clearly visible, "
+                                "grounded realistic lighting, stable identity."
+                            )
+                        else:
+                            ia2v_video = _IA2V_VIDEO_PROMPT_CANON
+                            if scene_goal:
+                                ia2v_video = _append_prompt_clause(ia2v_video, f"Scene goal: {scene_goal}.")
+                            if vocal_phrase:
+                                ia2v_video = _append_prompt_clause(ia2v_video, f"Vocal phrase: {vocal_phrase}.")
+                            seg[field] = ia2v_video
+                    else:
+                        seg[field] = "Grounded realistic frame, current package identity and world continuity preserved."
+                    if segment_id:
+                        prompt_rebuilt_after_bad_cleanup_segments.append(segment_id)
+                removed_in_segment.update(removed_terms)
+                mutated = True
             if removed_in_segment:
                 gender_terms_removed.update(removed_in_segment)
                 stale_identity_removed_by_gender += len([t for t in removed_in_segment if t in _STALE_IDENTITY_TERMS])
@@ -4033,6 +4173,16 @@ def _sanitize_identity_and_visibility_conflicts(
         "scene_prompts_identity_gender_conflict_segments": list(dict.fromkeys([seg for seg in gender_conflict_segments if seg])),
         "scene_prompts_stale_identity_clause_removed_count": stale_identity_removed_total,
         "scene_prompts_stale_wardrobe_clause_removed_count": stale_wardrobe_removed_by_gender,
+        "scene_prompts_global_style_anchor_rebuilt_due_to_identity_conflict": global_style_anchor_rebuilt_due_to_identity_conflict,
+        "scene_prompts_global_style_anchor_rebuild_source": global_style_anchor_rebuild_source,
+        "scene_prompts_first_last_frame_rebuilt_count": len(list(dict.fromkeys(first_last_frame_rebuilt_segments))),
+        "scene_prompts_first_last_frame_rebuilt_segments": list(dict.fromkeys([seg for seg in first_last_frame_rebuilt_segments if seg])),
+        "scene_prompts_prompt_rebuilt_after_bad_cleanup_count": len(
+            list(dict.fromkeys(prompt_rebuilt_after_bad_cleanup_segments))
+        ),
+        "scene_prompts_prompt_rebuilt_after_bad_cleanup_segments": list(
+            dict.fromkeys([seg for seg in prompt_rebuilt_after_bad_cleanup_segments if seg])
+        ),
         "stale_identity_clause_removed_count": stale_identity_removed_total,
         "stale_wardrobe_clause_removed_count": stale_wardrobe_removed_by_gender,
         "lip_sync_only_i2v_hero_visual_removed_count": i2v_visual_removed,
