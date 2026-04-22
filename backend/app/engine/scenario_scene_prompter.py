@@ -3047,6 +3047,73 @@ def _build_prompts_v11_prompt(
     )
 
 
+def _build_prompts_v11_compact_retry_prompt(
+    *,
+    prompt_rows: list[dict[str, Any]],
+    global_style_anchor: str,
+    validation_feedback: str = "",
+) -> str:
+    compact_rows: list[dict[str, Any]] = []
+    for row_raw in prompt_rows[:7]:
+        row = _safe_dict(row_raw)
+        compact_rows.append(
+            {
+                "segment_id": str(row.get("segment_id") or "").strip(),
+                "scene_id": str(row.get("scene_id") or "").strip(),
+                "route": str(row.get("route") or "i2v").strip().lower() or "i2v",
+                "primary_role": str(row.get("primary_role") or "").strip(),
+                "speaker_role": str(row.get("speaker_role") or "").strip(),
+                "spoken_line": _trim_sentence(str(row.get("spoken_line") or row.get("transcript_slice") or "").strip(), max_len=120),
+            }
+        )
+    feedback_block = f"\nVALIDATION_FEEDBACK:\n{validation_feedback}\n" if str(validation_feedback or "").strip() else ""
+    return (
+        "Return STRICT JSON only.\n"
+        "Schema: {\"prompts_version\":\"1.1\",\"global_style_anchor\":\"\",\"segments\":[...]}\n"
+        "Rules (compact retry):\n"
+        "- Generate rows ONLY for listed segment_id values.\n"
+        "- Keep route exactly as provided.\n"
+        "- Keep prompts concise, continuity-safe, and route-aware.\n"
+        "- ia2v: audio-driven performance, readable mouth only for speaker_role.\n"
+        "- first_last: include first_frame_prompt and last_frame_prompt.\n"
+        "- Do not include technical tags or renderer params.\n"
+        f"{feedback_block}"
+        f"GLOBAL_STYLE_ANCHOR:\n{global_style_anchor}\n"
+        f"SCENE_ROWS_COMPACT:\n{json.dumps(compact_rows, ensure_ascii=False)}"
+    )
+
+
+def _build_prompts_v11_fallback_payload(
+    *,
+    prompt_rows: list[dict[str, Any]],
+    story_core: dict[str, Any],
+    global_style_anchor: str,
+) -> dict[str, Any]:
+    segments: list[dict[str, Any]] = []
+    for row_raw in prompt_rows:
+        row = _safe_dict(row_raw)
+        route = str(row.get("route") or "i2v").strip().lower() or "i2v"
+        fallback = _build_prompts_v11_segment_fallback({**row, "route": route}, story_core)
+        segment = {
+            "segment_id": str(row.get("segment_id") or "").strip(),
+            "scene_id": str(row.get("scene_id") or "").strip(),
+            "route": route,
+            "photo_prompt": str(fallback.get("photo_prompt") or ""),
+            "video_prompt": str(fallback.get("video_prompt") or ""),
+            "negative_prompt": str(fallback.get("negative_prompt") or _GLOBAL_NEGATIVE_PROMPT),
+            "first_frame_prompt": str(fallback.get("first_frame_prompt") or ""),
+            "last_frame_prompt": str(fallback.get("last_frame_prompt") or ""),
+            "prompt_notes": _prompt_notes_template(route),
+        }
+        apply_ia2v_lipsync_canon_to_prompt_row(segment, source_scene=row)
+        segments.append(segment)
+    return {
+        "prompts_version": "1.1",
+        "global_style_anchor": str(global_style_anchor or "").strip(),
+        "segments": segments,
+    }
+
+
 def _coerce_prompts_v11_payload(raw: Any, prompt_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str], dict[str, Any]]:
     prompt_route_by_segment = {
         str(_safe_dict(row).get("segment_id") or "").strip(): str(_safe_dict(row).get("route") or "i2v").strip() or "i2v"
@@ -3700,7 +3767,14 @@ def _diagnose_ia2v_canonical_source(
     }
 
 
-def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validation_feedback: str = "") -> dict[str, Any]:
+def build_gemini_scene_prompts(
+    *,
+    api_key: str,
+    package: dict[str, Any],
+    validation_feedback: str = "",
+    compact_retry: bool = False,
+    force_rebuild_from_scene_plan: bool = False,
+) -> dict[str, Any]:
     prompt_rows, aux = _build_prompt_rows(package)
     story_core = _safe_dict(aux.get("story_core"))
     global_style_anchor = _build_global_style_anchor(story_core)
@@ -3764,6 +3838,8 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "scene_prompts_shared_space_missing_segments": [],
         "scene_prompts_offscreen_violation_segments": [],
         "scene_prompts_legacy_bridge_used": False,
+        "scene_prompts_request_mode": "compact_retry" if compact_retry else "full",
+        "scene_prompts_fallback_rebuild_from_scene_plan": False,
         "active_video_model_capability_profile": active_model_id,
         "active_route_capability_mode": route_capability_mode,
         "prompt_capability_guard_applied": prompt_capability_guard_applied,
@@ -3783,44 +3859,63 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
             "diagnostics": diagnostics,
         }
 
-    prompt = _build_prompts_v11_prompt(
-        prompt_rows=prompt_rows,
-        global_style_anchor=global_style_anchor,
-        package=package,
-        validation_feedback=validation_feedback,
-    )
-    raw_payload: dict[str, Any] = {}
+    if force_rebuild_from_scene_plan:
+        raw_payload = _build_prompts_v11_fallback_payload(
+            prompt_rows=prompt_rows,
+            story_core=story_core,
+            global_style_anchor=global_style_anchor,
+        )
+        diagnostics["scene_prompts_fallback_rebuild_from_scene_plan"] = True
+        diagnostics["scene_prompts_used_fallback"] = True
+        diagnostics["scene_prompts_failure_reason"] = "scene_prompts_fallback_rebuild_from_scene_plan"
+    else:
+        prompt = (
+            _build_prompts_v11_compact_retry_prompt(
+                prompt_rows=prompt_rows,
+                global_style_anchor=global_style_anchor,
+                validation_feedback=validation_feedback,
+            )
+            if compact_retry
+            else _build_prompts_v11_prompt(
+                prompt_rows=prompt_rows,
+                global_style_anchor=global_style_anchor,
+                package=package,
+                validation_feedback=validation_feedback,
+            )
+        )
+        raw_payload = {}
     error = ""
     configured_timeout = get_scenario_stage_timeout("scene_prompts")
-    try:
-        response = post_generate_content(
-            api_key=str(api_key or "").strip(),
-            model="gemini-3-flash-preview",
-            body={
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-            },
-            timeout=configured_timeout,
-        )
-        if isinstance(response, dict) and response.get("__http_error__"):
-            raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
-        raw_text = _extract_gemini_text(response)
-        diagnostics["scene_prompts_raw_model_response_preview"] = _preview_payload(raw_text)
-        sanitized_text = _strip_json_code_fences(raw_text)
-        parsed_payload = _extract_json_obj(sanitized_text)
-        diagnostics["scene_prompts_parsed_payload_preview"] = _preview_payload(parsed_payload)
-        raw_payload, dropped_fields, top_level_list_diag = _coerce_prompts_v11_payload(parsed_payload, prompt_rows)
-        diagnostics["scene_prompts_sanitized_payload_preview"] = _preview_payload(raw_payload)
-        diagnostics["scene_prompts_dropped_non_canonical_fields"] = dropped_fields
-        diagnostics.update(top_level_list_diag)
-    except Exception as exc:  # noqa: BLE001
-        error = str(exc)
-        timeout_error = is_timeout_error(error)
-        diagnostics["scene_prompts_timed_out"] = timeout_error
-        diagnostics["scene_prompts_response_was_empty_after_timeout"] = timeout_error
-        diagnostics["scene_prompts_failure_reason"] = (
-            "scene_prompts_timeout" if timeout_error else f"transport_or_parse_error:{error[:240]}"
-        )
+    if not force_rebuild_from_scene_plan:
+        try:
+            response = post_generate_content(
+                api_key=str(api_key or "").strip(),
+                model="gemini-3-flash-preview",
+                body={
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+                },
+                timeout=configured_timeout,
+            )
+            if isinstance(response, dict) and response.get("__http_error__"):
+                raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
+            raw_text = _extract_gemini_text(response)
+            diagnostics["scene_prompts_raw_model_response_preview"] = _preview_payload(raw_text)
+            sanitized_text = _strip_json_code_fences(raw_text)
+            parsed_payload = _extract_json_obj(sanitized_text)
+            diagnostics["scene_prompts_parsed_payload_preview"] = _preview_payload(parsed_payload)
+            raw_payload, dropped_fields, top_level_list_diag = _coerce_prompts_v11_payload(parsed_payload, prompt_rows)
+            diagnostics["scene_prompts_sanitized_payload_preview"] = _preview_payload(raw_payload)
+            diagnostics["scene_prompts_dropped_non_canonical_fields"] = dropped_fields
+            diagnostics.update(top_level_list_diag)
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+            timeout_error = is_timeout_error(error)
+            diagnostics["scene_prompts_timed_out"] = timeout_error
+            diagnostics["scene_prompts_response_was_empty_after_timeout"] = timeout_error
+            diagnostics["scene_prompts_failure_reason"] = (
+                "scene_prompts_timeout_empty_response" if timeout_error else f"transport_or_parse_error:{error[:240]}"
+            )
 
     if not str(raw_payload.get("global_style_anchor") or "").strip():
         raw_payload["global_style_anchor"] = global_style_anchor
@@ -3866,10 +3961,17 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
             "segments": _safe_list(raw_payload.get("segments"))[:2],
         }
     )
+    if diagnostics.get("scene_prompts_timed_out") and diagnostics.get("scene_prompts_response_was_empty_after_timeout"):
+        error_code = "scene_prompts_timeout_empty_response"
+        validation_error = "scene_prompts_timeout_empty_response"
     if error_code or validation_error:
         diagnostics["scene_prompts_failure_reason"] = str(validation_error or error_code).strip()
     if diagnostics.get("scene_prompts_timed_out"):
-        diagnostics["scene_prompts_error_code"] = "scene_prompts_timeout"
+        diagnostics["scene_prompts_error_code"] = (
+            "scene_prompts_timeout_empty_response"
+            if diagnostics.get("scene_prompts_response_was_empty_after_timeout")
+            else "scene_prompts_timeout"
+        )
         validation_reason = str(diagnostics.get("scene_prompts_failure_reason") or "").strip()
         diagnostics["scene_prompts_failure_reason"] = (
             f"scene_prompts_timeout; downstream_validation={validation_reason}" if validation_reason else "scene_prompts_timeout"
@@ -3897,6 +3999,7 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
             normalized=scene_prompts,
         )
     )
+    used_fallback = bool(force_rebuild_from_scene_plan or diagnostics.get("scene_prompts_fallback_rebuild_from_scene_plan"))
     has_validation_error = bool(validation_error)
     has_error_code = bool(error_code)
     has_transport_error = bool(error)
@@ -3910,7 +4013,11 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         and bool(diagnostics.get("scene_prompts_segment_coverage_ok"))
     )
     final_error = (
-        "scene_prompts_timeout"
+        (
+            "scene_prompts_timeout_empty_response"
+            if diagnostics.get("scene_prompts_response_was_empty_after_timeout")
+            else "scene_prompts_timeout"
+        )
         if diagnostics.get("scene_prompts_timed_out")
         else (
             "scene_prompts_empty_required_fields"
@@ -3922,8 +4029,16 @@ def build_gemini_scene_prompts(*, api_key: str, package: dict[str, Any], validat
         "ok": ok,
         "scene_prompts": scene_prompts,
         "error": final_error,
-        "error_code": ("scene_prompts_timeout" if diagnostics.get("scene_prompts_timed_out") else error_code),
+        "error_code": (
+            (
+                "scene_prompts_timeout_empty_response"
+                if diagnostics.get("scene_prompts_response_was_empty_after_timeout")
+                else "scene_prompts_timeout"
+            )
+            if diagnostics.get("scene_prompts_timed_out")
+            else error_code
+        ),
         "validation_error": validation_error,
-        "used_fallback": False,
+        "used_fallback": used_fallback,
         "diagnostics": diagnostics,
     }
