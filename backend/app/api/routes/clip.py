@@ -491,7 +491,15 @@ class AssembleSceneIn(BaseModel):
     sceneId: str | None = None
     videoUrl: str
     requestedDurationSec: int | float | None = None
+    expectedDurationSec: int | float | None = None
     providerDurationSec: int | float | None = None
+    startSec: int | float | None = None
+    endSec: int | float | None = None
+    t0: int | float | None = None
+    t1: int | float | None = None
+    segmentId: str | None = None
+    route: str | None = None
+    audioSliceUrl: str | None = None
     mode: str | None = None
     model: str | None = None
 
@@ -536,8 +544,10 @@ class IntroGenerateIn(BaseModel):
 
 class AssembleClipIn(BaseModel):
     audioUrl: str | None = None
+    masterAudioUrl: str | None = None
     format: str | None = "9:16"
     scenes: list[AssembleSceneIn]
+    audioMap: dict | None = None
     intro: AssembleIntroIn | None = None
 
 
@@ -5368,6 +5378,73 @@ def _ffprobe_duration(path: str) -> tuple[float | None, str | None]:
     return duration_sec, err
 
 
+def probe_media_duration_sec(path_or_url: str, *, temp_files: list[str] | None = None) -> tuple[float | None, dict[str, Any]]:
+    source = str(path_or_url or "").strip()
+    diagnostic: dict[str, Any] = {
+        "source": source,
+        "resolvedPath": "",
+        "warning": None,
+    }
+    if not source:
+        diagnostic["warning"] = "empty_media_path_or_url"
+        print(f"[ASSEMBLY WARNING] probe_media_duration_sec failed: {json.dumps(diagnostic, ensure_ascii=False)}")
+        return None, diagnostic
+
+    resolved_path = source
+    if source.startswith("http://") or source.startswith("https://") or source.startswith("/"):
+        resolved_temp_files = temp_files if temp_files is not None else []
+        maybe_path, resolve_err = _resolve_media_input(source, resolved_temp_files)
+        if resolve_err or not maybe_path:
+            diagnostic["warning"] = f"resolve_media_failed:{resolve_err or 'unknown'}"
+            print(f"[ASSEMBLY WARNING] probe_media_duration_sec failed: {json.dumps(diagnostic, ensure_ascii=False)}")
+            return None, diagnostic
+        resolved_path = maybe_path
+    diagnostic["resolvedPath"] = resolved_path
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                resolved_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        diagnostic["warning"] = "ffprobe_missing_install_and_add_to_PATH"
+        print(f"[ASSEMBLY WARNING] probe_media_duration_sec failed: {json.dumps(diagnostic, ensure_ascii=False)}")
+        return None, diagnostic
+
+    if proc.returncode != 0:
+        diagnostic["warning"] = (proc.stderr or proc.stdout or "ffprobe_failed").strip()[:500]
+        print(f"[ASSEMBLY WARNING] probe_media_duration_sec failed: {json.dumps(diagnostic, ensure_ascii=False)}")
+        return None, diagnostic
+
+    raw_duration = str(proc.stdout or "").strip()
+    try:
+        duration_sec = float(raw_duration)
+    except Exception:
+        diagnostic["warning"] = "ffprobe_duration_parse_failed"
+        diagnostic["raw"] = raw_duration[:120]
+        print(f"[ASSEMBLY WARNING] probe_media_duration_sec failed: {json.dumps(diagnostic, ensure_ascii=False)}")
+        return None, diagnostic
+
+    if duration_sec <= 0:
+        diagnostic["warning"] = "ffprobe_duration_non_positive"
+        diagnostic["raw"] = raw_duration[:120]
+        print(f"[ASSEMBLY WARNING] probe_media_duration_sec failed: {json.dumps(diagnostic, ensure_ascii=False)}")
+        return None, diagnostic
+
+    diagnostic["durationSec"] = round(float(duration_sec), 6)
+    return duration_sec, diagnostic
+
+
 def _ffprobe_video_metrics(path: str) -> tuple[float | None, int | None, str | None]:
     try:
         proc = subprocess.run(
@@ -5409,6 +5486,51 @@ def _ffprobe_video_metrics(path: str) -> tuple[float | None, int | None, str | N
         except Exception:
             nb_frames = None
     return duration, nb_frames, None
+
+
+def _extract_audio_map_segment_duration(audio_map: dict[str, Any] | None, scene: AssembleSceneIn, index: int) -> float | None:
+    if not isinstance(audio_map, dict):
+        return None
+    segments = audio_map.get("segments")
+    if not isinstance(segments, list):
+        return None
+
+    target_scene_id = str(scene.sceneId or "").strip()
+    target_segment_id = str(scene.segmentId or "").strip()
+    if not target_segment_id and index < len(segments):
+        seg = segments[index]
+        if isinstance(seg, dict):
+            return _safe_positive_float(seg.get("duration_sec") or seg.get("durationSec"))
+
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        seg_scene_id = str(seg.get("scene_id") or seg.get("sceneId") or "").strip()
+        seg_id = str(seg.get("segment_id") or seg.get("segmentId") or seg.get("id") or "").strip()
+        if (target_segment_id and target_segment_id == seg_id) or (target_scene_id and target_scene_id == seg_scene_id):
+            return _safe_positive_float(seg.get("duration_sec") or seg.get("durationSec"))
+    return None
+
+
+def _resolve_expected_scene_duration_sec(scene: AssembleSceneIn, audio_map: dict[str, Any] | None, index: int) -> tuple[float, str]:
+    candidates: list[tuple[float | None, str]] = [
+        (_safe_positive_float(getattr(scene, "expectedDurationSec", None)), "scene.expectedDurationSec"),
+        (_safe_positive_float(getattr(scene, "requestedDurationSec", None)), "scene.requestedDurationSec"),
+    ]
+    start_sec = _safe_float(getattr(scene, "startSec", None))
+    end_sec = _safe_float(getattr(scene, "endSec", None))
+    if start_sec is not None and end_sec is not None and end_sec > start_sec:
+        candidates.append((end_sec - start_sec, "scene.endSec-scene.startSec"))
+    t0 = _safe_float(getattr(scene, "t0", None))
+    t1 = _safe_float(getattr(scene, "t1", None))
+    if t0 is not None and t1 is not None and t1 > t0:
+        candidates.append((t1 - t0, "scene.t1-scene.t0"))
+    candidates.append((_extract_audio_map_segment_duration(audio_map, scene, index), "audio_map.segments[].duration_sec"))
+
+    for value, source in candidates:
+        if value is not None and value > 0:
+            return max(0.1, float(value)), source
+    return 5.0, "fallback_default_5s"
 
 
 def _resolve_media_input(url: str, temp_files: list[str]) -> tuple[str | None, str | None]:
@@ -14438,10 +14560,12 @@ def _has_valid_intro_image(intro: AssembleIntroIn | None) -> bool:
 def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     scenes = payload.scenes or []
     intro = payload.intro
+    audio_map = payload.audioMap if isinstance(payload.audioMap, dict) else None
     _ensure_assets_dir()
     temp_files: list[str] = []
     generated_temp_assets: list[str] = []
     prepared_scenes: list[tuple[str, float]] = []
+    assembly_timing_debug: list[dict[str, Any]] = []
     final_path: str | None = None
 
     scene_count = len(scenes)
@@ -14587,42 +14711,119 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             if scene_err or not scene_path:
                 continue
 
-            scene_duration, probe_err = _ffprobe_duration(scene_path)
-            if probe_err == "ffprobe_missing_install_and_add_to_PATH":
+            source_duration, source_diag = probe_media_duration_sec(scene_path, temp_files=temp_files)
+            if source_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
                 raise RuntimeError("FFPROBE_MISSING")
-            if probe_err or scene_duration is None:
+            if source_duration is None:
                 continue
 
-            requested = scene.requestedDurationSec
-            if requested is None:
-                requested = scene.providerDurationSec
-            if requested is None:
-                requested = 5
-            try:
-                requested_duration = max(0.1, float(requested))
-            except Exception:
-                requested_duration = 5.0
+            expected_duration, expected_source = _resolve_expected_scene_duration_sec(scene, audio_map, idx)
+            pad_duration = max(0.0, expected_duration - source_duration)
+            trim_duration = max(0.0, source_duration - expected_duration)
+            if trim_duration > 0.01 and pad_duration > 0.01:
+                action_applied = "trim_pad"
+            elif trim_duration > 0.01:
+                action_applied = "trim"
+            elif pad_duration > 0.01:
+                action_applied = "pad"
+            else:
+                action_applied = "none"
 
-            trim_duration = min(scene_duration, requested_duration)
-            trimmed_filename = f"clip_assembled_scene_{idx}_{uuid4().hex}.mp4"
-            trimmed_path = os.path.join(str(ASSETS_DIR), trimmed_filename)
-            generated_temp_assets.append(trimmed_path)
+            normalized_filename = f"clip_assembled_scene_{idx}_{uuid4().hex}.mp4"
+            normalized_path = os.path.join(str(ASSETS_DIR), normalized_filename)
+            generated_temp_assets.append(normalized_path)
+            width, height = _resolve_assembly_video_geometry(payload.format)
+            safe_pad_sec = max(1.0, pad_duration + 0.05)
+            scene_vf = (
+                f"fps=24,scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                f"tpad=stop_mode=clone:stop_duration={safe_pad_sec:.3f},"
+                f"trim=duration={expected_duration:.3f},setpts=PTS-STARTPTS,format=yuv420p"
+            )
             ffmpeg_ok, ffmpeg_err = _run_ffmpeg([
                 "ffmpeg", "-y",
                 "-i", scene_path,
-                "-t", f"{trim_duration:.3f}",
+                "-vf", scene_vf,
+                "-r", "24",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
                 "-preset", "veryfast",
                 "-an",
-                trimmed_path,
+                normalized_path,
             ])
             if not ffmpeg_ok:
                 if ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
                     raise RuntimeError("FFMPEG_MISSING")
                 continue
 
-            prepared_scenes.append((trimmed_path, trim_duration))
+            normalized_duration, normalized_diag = probe_media_duration_sec(normalized_path, temp_files=temp_files)
+            if normalized_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+                raise RuntimeError("FFPROBE_MISSING")
+            if normalized_duration is None:
+                normalized_duration = expected_duration
+
+            timeline_start = sum(item.get("expectedDurationSec", 0.0) for item in assembly_timing_debug)
+            timeline_end = timeline_start + expected_duration
+            cumulative_actual_end = sum(float(item.get("normalizedVideoDurationSec") or 0.0) for item in assembly_timing_debug) + float(normalized_duration)
+            cumulative_expected_end = timeline_end
+            cumulative_drift = cumulative_actual_end - cumulative_expected_end
+            scene_delta = float(normalized_duration) - expected_duration
+
+            audio_slice_url = str(scene.audioSliceUrl or "").strip()
+            audio_slice_duration: float | None = None
+            if audio_slice_url and str(scene.route or "").strip().lower() in {"ia2v", "lip_sync_music"}:
+                slice_path, slice_err = _resolve_audio_slice_source(audio_slice_url, temp_files)
+                if not slice_err and slice_path:
+                    slice_duration, slice_diag = probe_media_duration_sec(slice_path, temp_files=temp_files)
+                    if slice_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+                        raise RuntimeError("FFPROBE_MISSING")
+                    if slice_duration is not None:
+                        audio_slice_duration = float(slice_duration)
+                        audio_delta = audio_slice_duration - expected_duration
+                        if abs(audio_delta) > 0.08:
+                            print(
+                                "[ASSEMBLY WARNING] audio_slice_duration_mismatch",
+                                json.dumps(
+                                    {
+                                        "jobId": job_id,
+                                        "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
+                                        "route": str(scene.route or "").strip().lower(),
+                                        "requestedT0": _safe_float(scene.t0),
+                                        "requestedT1": _safe_float(scene.t1),
+                                        "expectedDurationSec": round(expected_duration, 3),
+                                        "audioSliceDurationSec": round(audio_slice_duration, 3),
+                                        "deltaSec": round(audio_delta, 3),
+                                    },
+                                    ensure_ascii=False,
+                                ),
+                            )
+
+            debug_entry = {
+                "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
+                "route": str(scene.route or "").strip().lower() or None,
+                "expectedStartSec": round(timeline_start, 3),
+                "expectedEndSec": round(timeline_end, 3),
+                "expectedDurationSec": round(expected_duration, 3),
+                "expectedDurationSource": expected_source,
+                "sourceVideoUrl": scene_url,
+                "sourceVideoDurationSec": round(float(source_duration), 3),
+                "normalizedVideoPath": normalized_path,
+                "normalizedVideoDurationSec": round(float(normalized_duration), 3),
+                "audioSliceUrl": audio_slice_url or None,
+                "audioSliceDurationSec": round(audio_slice_duration, 3) if audio_slice_duration is not None else None,
+                "timelineStartSec": round(timeline_start, 3),
+                "timelineEndSec": round(timeline_end, 3),
+                "cumulativeExpectedEndSec": round(cumulative_expected_end, 3),
+                "cumulativeActualEndSec": round(cumulative_actual_end, 3),
+                "sceneDurationDeltaSec": round(scene_delta, 3),
+                "cumulativeDriftSec": round(cumulative_drift, 3),
+                "actionApplied": action_applied,
+                "padDurationSec": round(pad_duration, 3),
+                "trimDurationSec": round(trim_duration, 3),
+            }
+            print("[ASSEMBLY TIMING DEBUG]", json.dumps(debug_entry, ensure_ascii=False))
+            assembly_timing_debug.append(debug_entry)
+            prepared_scenes.append((normalized_path, expected_duration))
 
         if not prepared_scenes:
             raise RuntimeError("ASSEMBLE_NO_VALID_SCENES")
@@ -14664,12 +14865,18 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 raise RuntimeError("FFMPEG_MISSING")
             raise RuntimeError(f"ASSEMBLE_FAILED:{concat_err}")
 
+        expected_timeline_duration_sec = sum(float(item.get("expectedDurationSec") or 0.0) for item in assembly_timing_debug)
+        concat_video_duration_sec, concat_video_diag = probe_media_duration_sec(assembled_no_audio, temp_files=temp_files)
+        if concat_video_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+            raise RuntimeError("FFPROBE_MISSING")
+
         final_filename = f"clip_final_{uuid4().hex}.mp4"
         final_path = os.path.join(str(ASSETS_DIR), final_filename)
         audio_applied = False
         audio_delay_sec = intro_duration if has_intro and intro_duration > 0 else 0.0
 
-        audio_url = str(payload.audioUrl or "").strip()
+        audio_url = str(payload.masterAudioUrl or payload.audioUrl or "").strip()
+        master_audio_duration_sec: float | None = None
         if audio_url:
             print(f"[CLIP ASSEMBLE] stage=audio_mux delaySec={audio_delay_sec:.3f}")
             _update_clip_assemble_job(
@@ -14681,10 +14888,24 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             )
             audio_path, audio_err = _resolve_media_input(audio_url, temp_files)
             if not audio_err and audio_path:
-                audio_probe, audio_probe_err = _ffprobe_duration(audio_path)
-                if audio_probe_err == "ffprobe_missing_install_and_add_to_PATH":
+                audio_probe, audio_probe_diag = probe_media_duration_sec(audio_path, temp_files=temp_files)
+                if audio_probe_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
                     raise RuntimeError("FFPROBE_MISSING")
-                if not audio_probe_err and audio_probe is not None:
+                if audio_probe is not None:
+                    master_audio_duration_sec = float(audio_probe)
+                    if concat_video_duration_sec is not None and master_audio_duration_sec - concat_video_duration_sec > 0.08:
+                        print(
+                            "[ASSEMBLY WARNING] concat_video_shorter_than_master_audio",
+                            json.dumps(
+                                {
+                                    "jobId": job_id,
+                                    "concatVideoDurationSec": round(float(concat_video_duration_sec), 3),
+                                    "masterAudioDurationSec": round(float(master_audio_duration_sec), 3),
+                                    "deltaSec": round(float(master_audio_duration_sec - concat_video_duration_sec), 3),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
                     audio_mux_cmd = [
                         "ffmpeg", "-y",
                         "-i", assembled_no_audio,
@@ -14697,7 +14918,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                         "-map", "1:a:0",
                         "-c:v", "copy",
                         "-c:a", "aac",
-                        "-shortest",
+                        "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
                         final_path,
                     ])
                     audio_ok, audio_ffmpeg_err = _run_ffmpeg(audio_mux_cmd)
@@ -14733,6 +14954,28 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         if not os.path.isfile(final_path):
             raise RuntimeError("final_file_not_created")
 
+        final_video_duration_sec, final_video_diag = probe_media_duration_sec(final_path, temp_files=temp_files)
+        if final_video_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+            raise RuntimeError("FFPROBE_MISSING")
+        max_scene_delta = max(
+            [abs(float(item.get("sceneDurationDeltaSec") or 0.0)) for item in assembly_timing_debug] or [0.0]
+        )
+        final_drift_sec = (
+            float(final_video_duration_sec or 0.0) - float(master_audio_duration_sec or expected_timeline_duration_sec or 0.0)
+        )
+        drift_detected = abs(final_drift_sec) > 0.08 or max_scene_delta > 0.05
+        assembly_timing_summary = {
+            "sceneCount": len(assembly_timing_debug),
+            "expectedTimelineDurationSec": round(float(expected_timeline_duration_sec), 3),
+            "masterAudioDurationSec": round(float(master_audio_duration_sec), 3) if master_audio_duration_sec is not None else None,
+            "concatVideoDurationSec": round(float(concat_video_duration_sec), 3) if concat_video_duration_sec is not None else None,
+            "finalVideoDurationSec": round(float(final_video_duration_sec), 3) if final_video_duration_sec is not None else None,
+            "finalDriftSec": round(float(final_drift_sec), 3),
+            "maxSceneDurationDeltaSec": round(float(max_scene_delta), 3),
+            "driftDetected": bool(drift_detected),
+        }
+        print("[ASSEMBLY TIMING SUMMARY]", json.dumps(assembly_timing_summary, ensure_ascii=False))
+
         final_video_url = _build_public_static_url(final_filename)
         print(f"[CLIP ASSEMBLE] done {final_video_url}")
         _update_clip_assemble_job(
@@ -14750,6 +14993,8 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             introIncluded=has_intro,
             introDurationSec=intro_duration if has_intro else 0,
             totalSegments=len(prepared_scenes),
+            assemblyTimingSummary=assembly_timing_summary,
+            assemblyTimingDebug=assembly_timing_debug,
             error=None,
         )
     except Exception as exc:
@@ -14817,6 +15062,8 @@ def clip_assemble(payload: AssembleClipIn):
             "introIncluded": has_intro,
             "introDurationSec": intro_duration,
             "totalSegments": total_steps,
+            "assemblyTimingSummary": None,
+            "assemblyTimingDebug": [],
             "error": None,
             "updatedAt": time.time(),
         }
