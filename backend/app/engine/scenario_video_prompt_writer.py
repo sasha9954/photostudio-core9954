@@ -208,9 +208,12 @@ _STALE_IDENTITY_TERMS = (
     "lady",
     "light linen dress",
     "beige cropped sleeveless top",
+    "cropped top",
     "open neckline",
     "crop length",
     "bust/hips",
+    "bust",
+    "hips",
 )
 
 
@@ -219,9 +222,17 @@ def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
     connected = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(package.get("connected_context_summary"))
     role_map = _safe_dict(connected.get("role_identity_mapping"))
     char1 = _safe_dict(role_map.get("character_1"))
-    refs = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
-    refs_inventory = _safe_list(_safe_dict(package.get("refs_inventory")).get("ref_character_1"))
-    all_refs = [str(v).strip() for v in [*refs, *refs_inventory] if str(v).strip()]
+    refs_present = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
+    connected_refs = _safe_list(_safe_dict(connected.get("connectedRefsPresentByRole")).get("character_1"))
+    ref_character_1_inventory = _safe_dict(_safe_dict(package.get("refs_inventory")).get("ref_character_1"))
+    inventory_refs = _safe_list(ref_character_1_inventory.get("refs"))
+    inventory_value = str(ref_character_1_inventory.get("value") or "").strip()
+    all_refs = [
+        str(v).strip()
+        for v in [*refs_present, *connected_refs, *inventory_refs, inventory_value]
+        if str(v).strip()
+    ]
+    all_refs = list(dict.fromkeys(all_refs))
     ref_signature = hashlib.sha256("|".join(sorted(all_refs)).encode("utf-8")).hexdigest() if all_refs else ""
     gender_hint = str(char1.get("gender_hint") or "").strip().lower()
     identity_label = str(char1.get("identity_label") or "").strip()
@@ -324,6 +335,36 @@ def _strip_negative_positive_contract_blocks(text: str) -> str:
         text = re.sub(pattern, " ", text)
     text = re.sub(r"\s+", " ", text).strip(" ,.;")
     return text
+
+
+def _sanitize_prompt_text_for_current_identity(
+    text: Any,
+    identity_ctx: dict[str, Any],
+    route: str,
+    field_name: str,
+) -> tuple[str, dict[str, Any]]:
+    cleaned = str(text or "").strip()
+    removed_terms: list[str] = []
+    stale_identity_removed = 0
+    stale_wardrobe_removed = 0
+    if str(identity_ctx.get("gender_hint") or "").strip().lower() == "male":
+        for term in _STALE_IDENTITY_TERMS:
+            before = cleaned
+            cleaned = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", cleaned)
+            if cleaned != before:
+                removed_terms.append(term)
+                stale_identity_removed += 1
+                if term in {"light linen dress", "beige cropped sleeveless top", "cropped top", "open neckline", "crop length", "bust/hips", "bust", "hips"}:
+                    stale_wardrobe_removed += 1
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned, {
+        "field_name": field_name,
+        "route": route,
+        "identity_gender_conflict_detected": bool(removed_terms),
+        "identity_gender_conflict_terms_removed": list(dict.fromkeys(removed_terms)),
+        "stale_identity_clause_removed_count": stale_identity_removed,
+        "stale_wardrobe_clause_removed_count": stale_wardrobe_removed,
+    }
 
 
 def _contains_action_conflict_words(text: str) -> bool:
@@ -757,7 +798,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     fallback_photo_prompt = _strip_literal_quoted_dialogue(str(fallback_prompt_row.get("photo_prompt") or "").strip())
     fallback_video_prompt = _strip_literal_quoted_dialogue(str(fallback_prompt_row.get("video_prompt") or "").strip())
     scene_seq_index = int(fallback_row.get("sequence_index") or 0)
-    has_human_subject = _scene_has_human_subject(fallback_row, route)
+    lip_sync_only_i2v = bool(identity_ctx.get("lip_sync_only")) and route == "i2v"
+    has_human_subject = False if lip_sync_only_i2v else _scene_has_human_subject(fallback_row, route)
     confirmed_look_used = bool(has_human_subject and scene_seq_index >= 2 and _has_real_confirmed_hero_image_url(fallback_row))
     confirmed_look_clause_applied = bool(confirmed_look_used)
     positive_contract_duplicates_removed = False
@@ -817,6 +859,17 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         positive_prompt = ". ".join(part for part in rebuild_parts if part).strip(". ")
         final_prompt_rebuilt_from_scene_prompts = True
         final_prompt_scene_specific_missing = _scene_specific_char_count(positive_prompt) < 80
+    if lip_sync_only_i2v:
+        env_still_focus = str(plan_row.get("scene_goal") or fallback_prompt_row.get("background_story_evidence") or fallback_photo_prompt or "grounded world continuity").strip()
+        env_motion_focus = str(fallback_prompt_row.get("ltx_video_goal") or plan_row.get("scene_goal") or fallback_video_prompt or "grounded world continuity").strip()
+        positive_prompt = (
+            f"Environment-focused motion shot: {env_motion_focus}. "
+            "Subtle atmosphere/city/people/world motion only. No main performer visible. No lip-sync. Singer remains voiceover only."
+        )
+        fallback_photo_prompt = (
+            f"Environment-focused still frame: {env_still_focus}. "
+            "Grounded realistic world, no main performer visible, singer remains voiceover only."
+        )
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
     domestic_scene = any(
@@ -906,22 +959,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         negative_prompt = _clean_ia2v_negative_prompt(negative_prompt)
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
-    stale_removed = 0
-    terms_removed: list[str] = []
-    if str(identity_ctx.get("gender_hint") or "") == "male":
-        for term in _STALE_IDENTITY_TERMS:
-            before = positive_prompt
-            positive_prompt = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", positive_prompt)
-            positive_prompt = re.sub(r"\s+", " ", positive_prompt).strip(" ,.;")
-            if before != positive_prompt:
-                stale_removed += 1
-                terms_removed.append(term)
-            before_neg = negative_prompt
-            negative_prompt = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", negative_prompt)
-            negative_prompt = re.sub(r"\s+", " ", negative_prompt).strip(" ,.;")
-            if before_neg != negative_prompt:
-                stale_removed += 1
-                terms_removed.append(term)
+    positive_prompt, positive_diag = _sanitize_prompt_text_for_current_identity(
+        positive_prompt, identity_ctx, route, "route_payload.positive_prompt"
+    )
+    negative_prompt, negative_diag = _sanitize_prompt_text_for_current_identity(
+        negative_prompt, identity_ctx, route, "route_payload.negative_prompt"
+    )
 
     first_frame_raw = route_payload.get("first_frame_prompt")
     last_frame_raw = route_payload.get("last_frame_prompt")
@@ -941,6 +984,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             if confirmed_look_clause_applied:
                 first_frame = _append_clause(first_frame, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
                 last_frame = _append_clause(last_frame, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
+    first_frame, first_frame_diag = _sanitize_prompt_text_for_current_identity(
+        first_frame, identity_ctx, route, "route_payload.first_frame_prompt"
+    )
+    last_frame, last_frame_diag = _sanitize_prompt_text_for_current_identity(
+        last_frame, identity_ctx, route, "route_payload.last_frame_prompt"
+    )
 
     first_frame_has_identity_lock = "GLOBAL HERO IDENTITY LOCK:" in first_frame if first_frame else False
     last_frame_has_identity_lock = "GLOBAL HERO IDENTITY LOCK:" in last_frame if last_frame else False
@@ -1006,6 +1055,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     requires_audio = route == "ia2v"
     if bool(identity_ctx.get("lip_sync_only")) and route == "i2v":
         speaker_role = ""
+        vocal_owner_role = ""
         lip_sync_allowed = False
         requires_audio = False
     alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
@@ -1022,6 +1072,14 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     ).strip()
     image_prompt = _append_clause(image_prompt, DOMESTIC_WORLD_LOCK_BLOCK if domestic_scene else "")
     image_prompt = _strip_literal_quoted_dialogue(image_prompt)
+    if lip_sync_only_i2v:
+        image_prompt = fallback_photo_prompt
+    image_prompt, image_prompt_diag = _sanitize_prompt_text_for_current_identity(
+        image_prompt, identity_ctx, route, "route_payload.image_prompt"
+    )
+    video_prompt_output, video_prompt_diag = _sanitize_prompt_text_for_current_identity(
+        _strip_literal_quoted_dialogue(positive_prompt), identity_ctx, route, "route_payload.video_prompt"
+    )
     scene_chars = len(scene_specific_payload)
     route_chars = len(route_behavior_template)
     ratio = round(scene_chars / route_chars, 4) if route_chars > 0 else None
@@ -1032,6 +1090,20 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     ia2v_negative_killer_tokens_found, ia2v_negative_killer_token_segments = _analyze_ia2v_negative_killer_tokens(negative_prompt if route == "ia2v" else "")
     ia2v_negative_has_singing_killer_tokens = bool(ia2v_negative_killer_tokens_found)
     ia2v_video_prompt_has_singing_mechanics = all(token in lower_positive for token in ("lip sync", "jaw", "mouth"))
+    sanitize_diags = [
+        positive_diag,
+        negative_diag,
+        first_frame_diag,
+        last_frame_diag,
+        image_prompt_diag,
+        video_prompt_diag,
+    ]
+    stale_identity_removed_total = sum(int(_safe_dict(d).get("stale_identity_clause_removed_count") or 0) for d in sanitize_diags)
+    stale_wardrobe_removed_total = sum(int(_safe_dict(d).get("stale_wardrobe_clause_removed_count") or 0) for d in sanitize_diags)
+    removed_terms_all: list[str] = []
+    for diag in sanitize_diags:
+        removed_terms_all.extend(_safe_list(_safe_dict(diag).get("identity_gender_conflict_terms_removed")))
+    identity_conflict_detected = bool(removed_terms_all)
 
     return {
         "segment_id": segment_id,
@@ -1044,8 +1116,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             "first_frame_prompt": first_frame if first_frame else None,
             "last_frame_prompt": last_frame if last_frame else None,
             "image_prompt": image_prompt,
-            "video_prompt": _strip_literal_quoted_dialogue(positive_prompt),
+            "video_prompt": video_prompt_output,
         },
+        "image_prompt": image_prompt,
+        "video_prompt": video_prompt_output,
         "requires_first_frame": route == "first_last",
         "requires_last_frame": route == "first_last",
         "requires_audio": requires_audio,
@@ -1084,9 +1158,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         "continuity_with_next": str(row.get("continuity_with_next") or "").strip() or None,
         "potential_contradiction": str(row.get("potential_contradiction") or "").strip() or None,
         "fix_if_needed": str(row.get("fix_if_needed") or "").strip() or None,
-        "identity_lock_applied": bool(has_human_subject),
-        "body_lock_applied": bool(has_human_subject),
-        "wardrobe_lock_applied": bool(has_human_subject),
+        "identity_lock_applied": bool(has_human_subject and route != "ia2v"),
+        "body_lock_applied": bool(has_human_subject and route != "ia2v"),
+        "wardrobe_lock_applied": bool(has_human_subject and route != "ia2v"),
         "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
         "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_used and confirmed_look_clause_applied),
         "confirmedHeroLookReferenceSkippedReason": None if confirmed_look_used else "signature_or_gender_mismatch",
@@ -1122,11 +1196,11 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         "ia2vNegativeHasSingingKillerTokens": bool(route == "ia2v" and ia2v_negative_has_singing_killer_tokens),
         "ia2vNegativeKillerTokensFound": ia2v_negative_killer_tokens_found if route == "ia2v" else [],
         "ia2vNegativeKillerTokenSegments": ia2v_negative_killer_token_segments if route == "ia2v" else [],
-        "identity_gender_conflict_detected": bool(stale_removed > 0),
-        "identity_gender_conflict_terms_removed": list(dict.fromkeys(terms_removed)),
-        "identity_gender_conflict_segments": [segment_id] if stale_removed > 0 and segment_id else [],
-        "stale_identity_clause_removed_count": stale_removed,
-        "stale_wardrobe_clause_removed_count": 0,
+        "identity_gender_conflict_detected": identity_conflict_detected,
+        "identity_gender_conflict_terms_removed": list(dict.fromkeys(str(term).strip() for term in removed_terms_all if str(term).strip())),
+        "identity_gender_conflict_segments": [segment_id] if identity_conflict_detected and segment_id else [],
+        "stale_identity_clause_removed_count": stale_identity_removed_total,
+        "stale_wardrobe_clause_removed_count": stale_wardrobe_removed_total,
     }
 
 
