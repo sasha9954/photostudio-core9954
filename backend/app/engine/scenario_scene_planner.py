@@ -24,13 +24,14 @@ SCENE_PLAN_PROMPT_VERSION = "scene_plan_v1"
 SCENE_PLAN_MODEL = "gemini-3.1-pro-preview"
 SCENES_VERSION = "1.1"
 ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
-ALLOWED_PACING = {"fluid", "staccato", "stable"}
+ALLOWED_PACING = {"stable", "slow", "medium", "fast"}
 ALLOWED_ENERGY_ALIGNMENT = {"match", "counterpoint", "build_against", "release_after"}
 ALLOWED_FRAMING = {"close_up", "medium", "wide", "detail", "silhouette", "overhead"}
 ALLOWED_SUBJECT_PRIORITY = {"hero", "ensemble", "object", "environment"}
 ALLOWED_LAYOUT = {"centered", "rule_of_thirds", "off_balance", "symmetrical"}
 ALLOWED_DEPTH_STRATEGY = {"flat", "layered", "deep"}
 ALLOWED_LIP_SYNC_PRIORITY = {"none", "low", "medium", "high"}
+ALLOWED_STORY_BEAT_TYPES = {"physical_event", "vocal_emotion", "state_transition"}
 UNKNOWN_SPEAKER_ROLE = "unknown"
 UNKNOWN_VOCAL_GENDER = "unknown"
 UNKNOWN_VOCAL_OWNER_ROLE = "unknown"
@@ -1729,6 +1730,23 @@ def _sanitize_free_text_technical_leaks(raw_row: dict[str, Any]) -> tuple[dict[s
     return cleaned, changed
 
 
+def _default_story_beat_type_for_route(route: str) -> str:
+    if route == "ia2v":
+        return "vocal_emotion"
+    if route == "first_last":
+        return "state_transition"
+    return "physical_event"
+
+
+def _repair_story_beat_type(value: str, route: str) -> str:
+    token = str(value or "").strip().lower()
+    if token in ALLOWED_STORY_BEAT_TYPES:
+        return token
+    if token in {"environment", "atmosphere", "city_cutaway", "street_observation", "observational"}:
+        return "physical_event"
+    return _default_story_beat_type_for_route(route)
+
+
 def _normalize_scene_plan(
     raw_plan: dict[str, Any],
     *,
@@ -1778,6 +1796,13 @@ def _normalize_scene_plan(
     scene_plan_technical_leak_tokens: set[str] = set()
     scene_plan_technical_leak_cleaned_locally = False
     enum_invalid_count = 0
+    enum_invalid_rows: list[dict[str, Any]] = []
+    enum_invalid_field = ""
+    enum_invalid_value = ""
+    enum_invalid_allowed_values: list[str] = []
+    enum_invalid_segment_id = ""
+    enum_repair_applied = False
+    enum_repair_rows: list[dict[str, Any]] = []
     illegal_route_count = 0
     cast_mutation_count = 0
     speaker_role_invalid_count = 0
@@ -1818,17 +1843,13 @@ def _normalize_scene_plan(
         visual_motion = _safe_dict(raw_row.get("visual_motion"))
         composition = _safe_dict(raw_row.get("composition"))
 
+        raw_story_beat_type = str(raw_row.get("story_beat_type") or "").strip().lower()
         pacing = str(visual_motion.get("pacing") or "").strip().lower()
         energy_alignment = str(visual_motion.get("energy_alignment") or "").strip().lower()
         framing = str(composition.get("framing") or "").strip().lower()
         subject_priority = str(composition.get("subject_priority") or "").strip().lower()
         layout = str(composition.get("layout") or "").strip().lower()
         depth_strategy = str(composition.get("depth_strategy") or "").strip().lower()
-
-        if pacing not in ALLOWED_PACING or energy_alignment not in ALLOWED_ENERGY_ALIGNMENT or framing not in ALLOWED_FRAMING or subject_priority not in ALLOWED_SUBJECT_PRIORITY or layout not in ALLOWED_LAYOUT or depth_strategy not in ALLOWED_DEPTH_STRATEGY:
-            enum_invalid_count += 1
-            validation_error = validation_error or "enum_invalid"
-            error_code = error_code or "SCENES_ENUM_INVALID"
 
         content_blob = " ".join(
             [
@@ -1933,12 +1954,65 @@ def _normalize_scene_plan(
         elif character_1_appearance_mode == "background_only" and route == "i2v" and primary_role == "character_1":
             visual_focus_role = "location" if "location" in active_roles else ("props" if "props" in active_roles else visual_focus_role)
 
+        enum_checks: list[tuple[str, str, set[str], str]] = [
+            ("story_beat_type", raw_story_beat_type, ALLOWED_STORY_BEAT_TYPES, _repair_story_beat_type(raw_story_beat_type, route)),
+            ("visual_motion.pacing", pacing, ALLOWED_PACING, "stable"),
+            ("composition.framing", framing, ALLOWED_FRAMING, "medium"),
+            (
+                "composition.subject_priority",
+                subject_priority,
+                ALLOWED_SUBJECT_PRIORITY,
+                "hero" if route == "ia2v" else "environment",
+            ),
+            ("visual_motion.energy_alignment", energy_alignment, ALLOWED_ENERGY_ALIGNMENT, "match"),
+            ("composition.layout", layout, ALLOWED_LAYOUT, "centered"),
+            ("composition.depth_strategy", depth_strategy, ALLOWED_DEPTH_STRATEGY, "layered"),
+            ("lip_sync_priority", lip_sync_priority, ALLOWED_LIP_SYNC_PRIORITY, "high" if route == "ia2v" else "none"),
+        ]
+        repaired_values: dict[str, str] = {}
+        for field_name, field_value, allowed_values, fallback_value in enum_checks:
+            if field_value in allowed_values:
+                repaired_values[field_name] = field_value
+                continue
+            enum_invalid_count += 1
+            enum_invalid_rows.append(
+                {
+                    "segment_id": segment_id,
+                    "field": field_name,
+                    "value": field_value,
+                    "allowed_values": sorted(allowed_values),
+                }
+            )
+            if not enum_invalid_field:
+                enum_invalid_field = field_name
+                enum_invalid_value = field_value
+                enum_invalid_allowed_values = sorted(allowed_values)
+                enum_invalid_segment_id = segment_id
+            repaired_values[field_name] = fallback_value
+            enum_repair_applied = True
+            enum_repair_rows.append(
+                {
+                    "segment_id": segment_id,
+                    "field": field_name,
+                    "value": field_value,
+                    "repaired_to": fallback_value,
+                    "allowed_values": sorted(allowed_values),
+                }
+            )
+        raw_story_beat_type = repaired_values.get("story_beat_type", raw_story_beat_type)
+        pacing = repaired_values.get("visual_motion.pacing", pacing)
+        framing = repaired_values.get("composition.framing", framing)
+        subject_priority = repaired_values.get("composition.subject_priority", subject_priority)
+        energy_alignment = repaired_values.get("visual_motion.energy_alignment", energy_alignment)
+        layout = repaired_values.get("composition.layout", layout)
+        depth_strategy = repaired_values.get("composition.depth_strategy", depth_strategy)
+        lip_sync_priority = repaired_values.get("lip_sync_priority", lip_sync_priority)
+
         row_rejected_reasons: list[str] = []
         if speaker_role and speaker_role not in active_roles:
             speaker_role_invalid_count += 1
             row_rejected_reasons.append("speaker_role_not_in_present_cast")
         if lip_sync_priority not in ALLOWED_LIP_SYNC_PRIORITY:
-            enum_invalid_count += 1
             row_rejected_reasons.append("lip_sync_priority_invalid")
         if lip_sync_allowed and not speaker_role:
             speaker_role_invalid_count += 1
@@ -2065,8 +2139,8 @@ def _normalize_scene_plan(
                 "scene_goal": str(raw_row.get("scene_goal") or "").strip(),
                 "narrative_function": str(raw_row.get("narrative_function") or "").strip(),
                 "story_beat_type": str(
-                    raw_row.get("story_beat_type")
-                    or ("vocal_emotion" if route == "ia2v" else ("state_transition" if route == "first_last" else "physical_event"))
+                    raw_story_beat_type
+                    or _default_story_beat_type_for_route(route)
                 ).strip(),
                 "photo_staging_goal": str(raw_row.get("photo_staging_goal") or "").strip(),
                 "ltx_video_goal": str(raw_row.get("ltx_video_goal") or "").strip(),
@@ -2122,9 +2196,18 @@ def _normalize_scene_plan(
     route_budget_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
     route_budget_resolved_from = "audio_map_segments_count" if route_budget_preset == "no_first_last_50_50_0" else "creative_config"
     route_budget_mismatch = bool(hard_short_clip_target and route_counts != route_budget_target)
+    validation_errors: list[str] = []
+    error_codes: list[str] = []
+    if enum_invalid_count > 0:
+        validation_errors.append("enum_invalid")
+        error_codes.append("SCENES_ENUM_INVALID")
+        validation_error = validation_error or "enum_invalid"
+        error_code = error_code or "SCENES_ENUM_INVALID"
     if route_budget_mismatch:
-        validation_error = validation_error or "route_budget_mismatch"
-        error_code = error_code or "SCENES_ROUTE_BUDGET_MISMATCH"
+        validation_errors.append("route_budget_mismatch")
+        error_codes.append("SCENES_ROUTE_BUDGET_MISMATCH")
+        validation_error = "route_budget_mismatch"
+        error_code = "SCENES_ROUTE_BUDGET_MISMATCH"
 
     legacy_scenes: list[dict[str, Any]] = []
     for row, source_row in zip(normalized_storyboard, scene_segment_rows, strict=False):
@@ -2200,6 +2283,17 @@ def _normalize_scene_plan(
         "scene_plan_technical_leak_tokens": sorted(scene_plan_technical_leak_tokens),
         "scene_plan_technical_leak_cleaned_locally": scene_plan_technical_leak_cleaned_locally,
         "enum_invalid_count": enum_invalid_count,
+        "scene_plan_validation_errors": validation_errors,
+        "scene_plan_error_codes": error_codes,
+        "scene_plan_enum_invalid_detected": bool(enum_invalid_count),
+        "scene_plan_enum_invalid_field": enum_invalid_field,
+        "scene_plan_enum_invalid_value": enum_invalid_value,
+        "scene_plan_enum_invalid_allowed_values": enum_invalid_allowed_values,
+        "scene_plan_enum_invalid_segment_id": enum_invalid_segment_id,
+        "scene_plan_enum_invalid_rows": enum_invalid_rows,
+        "scene_plan_enum_repair_applied": enum_repair_applied,
+        "scene_plan_enum_repair_count": len(enum_repair_rows),
+        "scene_plan_enum_repair_rows": enum_repair_rows,
         "illegal_route_count": illegal_route_count,
         "cast_mutation_count": cast_mutation_count,
         "speaker_role_invalid_count": speaker_role_invalid_count,
@@ -2375,6 +2469,17 @@ def build_gemini_scene_plan(
             "scene_plan_technical_leak_fields": _safe_list(normalization_diag.get("scene_plan_technical_leak_fields")),
             "scene_plan_technical_leak_tokens": _safe_list(normalization_diag.get("scene_plan_technical_leak_tokens")),
             "scene_plan_technical_leak_cleaned_locally": bool(normalization_diag.get("scene_plan_technical_leak_cleaned_locally")),
+            "scene_plan_validation_errors": _safe_list(normalization_diag.get("scene_plan_validation_errors")),
+            "scene_plan_error_codes": _safe_list(normalization_diag.get("scene_plan_error_codes")),
+            "scene_plan_enum_invalid_detected": bool(normalization_diag.get("scene_plan_enum_invalid_detected")),
+            "scene_plan_enum_invalid_field": str(normalization_diag.get("scene_plan_enum_invalid_field") or ""),
+            "scene_plan_enum_invalid_value": str(normalization_diag.get("scene_plan_enum_invalid_value") or ""),
+            "scene_plan_enum_invalid_allowed_values": _safe_list(normalization_diag.get("scene_plan_enum_invalid_allowed_values")),
+            "scene_plan_enum_invalid_segment_id": str(normalization_diag.get("scene_plan_enum_invalid_segment_id") or ""),
+            "scene_plan_enum_invalid_rows": _safe_list(normalization_diag.get("scene_plan_enum_invalid_rows")),
+            "scene_plan_enum_repair_applied": bool(normalization_diag.get("scene_plan_enum_repair_applied")),
+            "scene_plan_enum_repair_count": int(normalization_diag.get("scene_plan_enum_repair_count") or 0),
+            "scene_plan_enum_repair_rows": _safe_list(normalization_diag.get("scene_plan_enum_repair_rows")),
             "scene_plan_route_strategy_active": bool(normalization_diag.get("scene_plan_route_strategy_active")),
             "scene_plan_route_strategy_preset": str(normalization_diag.get("scene_plan_route_strategy_preset") or ""),
             "scene_plan_route_targets_per_block": _safe_dict(normalization_diag.get("scene_plan_route_targets_per_block")),
