@@ -2524,6 +2524,124 @@ def _extract_user_hard_route_map(input_pkg: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _is_vocal_lipsync_candidate_segment(segment: dict[str, Any]) -> bool:
+    row = _safe_dict(segment)
+    if bool(
+        row.get("is_lip_sync_candidate")
+        or row.get("is_lipsync_candidate")
+        or row.get("lip_sync_candidate")
+        or row.get("lipSyncCandidate")
+        or row.get("singing_readiness_required")
+    ):
+        return True
+    transcript_slice = str(row.get("transcript_slice") or row.get("transcript") or "").strip()
+    return bool(transcript_slice)
+
+
+def _segment_duration_sec(segment: dict[str, Any]) -> float:
+    row = _safe_dict(segment)
+    for key in ("duration_sec", "duration", "segment_duration_sec"):
+        try:
+            value = float(row.get(key))
+            if value > 0:
+                return value
+        except Exception:
+            continue
+    try:
+        t0 = float(row.get("t0"))
+        t1 = float(row.get("t1"))
+        if t1 > t0:
+            return t1 - t0
+    except Exception:
+        pass
+    return 0.0
+
+
+def build_no_first_last_50_50_hard_route_map(package: dict[str, Any]) -> dict[str, str]:
+    audio_segments = _safe_list(_safe_dict(package.get("audio_map")).get("segments"))
+    segment_ids = [
+        str(_safe_dict(segment).get("segment_id") or f"seg_{idx:02d}").strip()
+        for idx, segment in enumerate(audio_segments, start=1)
+    ]
+    segment_ids = [segment_id for segment_id in segment_ids if segment_id]
+    scene_count = len(segment_ids)
+    if scene_count <= 0:
+        return {}
+    ia2v_target = int(math.ceil(scene_count / 2))
+    max_consecutive_lipsync = 2
+
+    candidate_scores: dict[str, float] = {}
+    vocal_candidates: list[str] = []
+    for idx, segment in enumerate(audio_segments):
+        segment_id = segment_ids[idx] if idx < len(segment_ids) else ""
+        if not segment_id:
+            continue
+        if not _is_vocal_lipsync_candidate_segment(_safe_dict(segment)):
+            continue
+        vocal_candidates.append(segment_id)
+        duration_sec = _segment_duration_sec(_safe_dict(segment))
+        transcript_blob = " ".join(
+            [
+                str(_safe_dict(segment).get("transcript_slice") or ""),
+                str(_safe_dict(segment).get("emotion_hint") or ""),
+                str(_safe_dict(segment).get("story_beat") or ""),
+            ]
+        ).lower()
+        score = 0.0
+        if idx == 0:
+            score += 12.0
+        if idx == scene_count - 1:
+            score += 10.0
+        if idx % 2 == 0:
+            score += 4.0
+        if 3.0 <= duration_sec <= 5.0:
+            score += 3.5
+        elif duration_sec > 5.2 and idx != 0:
+            score -= 1.5
+        if any(token in transcript_blob for token in ("peak", "climax", "release", "hook", "drop", "emotion", "cry", "love", "heart")):
+            score += 2.5
+        candidate_scores[segment_id] = score
+
+    ia2v_selected: list[str] = []
+    if vocal_candidates:
+        first_segment_id = segment_ids[0]
+        last_segment_id = segment_ids[-1]
+        if first_segment_id in vocal_candidates:
+            ia2v_selected.append(first_segment_id)
+        if len(ia2v_selected) < ia2v_target and last_segment_id in vocal_candidates and last_segment_id not in ia2v_selected:
+            ia2v_selected.append(last_segment_id)
+        ranked_candidates = sorted(vocal_candidates, key=lambda seg_id: (-candidate_scores.get(seg_id, 0.0), segment_ids.index(seg_id)))
+        for segment_id in ranked_candidates:
+            if len(ia2v_selected) >= ia2v_target:
+                break
+            if segment_id in ia2v_selected:
+                continue
+            idx = segment_ids.index(segment_id)
+            left_selected = idx > 0 and segment_ids[idx - 1] in ia2v_selected
+            right_selected = idx + 1 < scene_count and segment_ids[idx + 1] in ia2v_selected
+            if left_selected and right_selected and max_consecutive_lipsync <= 2:
+                continue
+            ia2v_selected.append(segment_id)
+
+    if len(ia2v_selected) < ia2v_target:
+        for idx, segment_id in enumerate(segment_ids):
+            if len(ia2v_selected) >= ia2v_target:
+                break
+            if segment_id in ia2v_selected:
+                continue
+            if idx % 2 == 0:
+                ia2v_selected.append(segment_id)
+    if len(ia2v_selected) < ia2v_target:
+        for segment_id in segment_ids:
+            if len(ia2v_selected) >= ia2v_target:
+                break
+            if segment_id not in ia2v_selected:
+                ia2v_selected.append(segment_id)
+
+    ia2v_set = set(ia2v_selected[:ia2v_target])
+    return {segment_id: ("ia2v" if segment_id in ia2v_set else "i2v") for segment_id in segment_ids}
+
+
 def _scene_plan_routes_by_segment(scene_plan: dict[str, Any]) -> dict[str, str]:
     routes: dict[str, str] = {}
     for idx, row in enumerate(_scene_plan_rows_for_validation(scene_plan), start=1):
@@ -8646,6 +8764,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_validation_mode"] = "mixed"
     diagnostics["scene_plan_lipsync_streak_warning"] = ""
     diagnostics["scene_plan_route_budget_mismatch"] = False
+    diagnostics["scene_plan_hard_route_map_enabled"] = False
+    diagnostics["scene_plan_hard_route_map_source"] = ""
+    diagnostics["scene_plan_hard_route_map_by_segment"] = {}
+    diagnostics["scene_plan_hard_route_map_target_counts"] = {"i2v": 0, "ia2v": 0, "first_last": 0}
+    diagnostics["scene_plan_hard_route_map_actual_counts_after_normalize"] = {"i2v": 0, "ia2v": 0, "first_last": 0}
     diagnostics["scene_plan_enum_invalid_detected"] = False
     diagnostics["scene_plan_enum_invalid_count"] = 0
     diagnostics["scene_plan_enum_invalid_field"] = ""
@@ -8690,6 +8813,26 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_plan")
     hard_fail_error = ""
     scene_plan_prompt_package = _build_scene_plan_prompt_package(package)
+    scene_prompt_input = _safe_dict(scene_plan_prompt_package.get("input"))
+    scene_prompt_creative_config = deepcopy(_safe_dict(scene_prompt_input.get("creative_config")))
+    strict_preset_name = str(scene_prompt_creative_config.get("route_strategy_preset") or "").strip().lower()
+    backend_hard_route_map: dict[str, str] = {}
+    backend_hard_route_source = ""
+    if strict_preset_name == "no_first_last_50_50_0":
+        backend_hard_route_map = build_no_first_last_50_50_hard_route_map(package)
+        if backend_hard_route_map:
+            backend_hard_route_source = "backend_strict_preset_no_first_last_50_50_0"
+            scene_prompt_creative_config["hard_route_assignments_by_segment"] = dict(backend_hard_route_map)
+            scene_prompt_creative_config["route_assignments_by_segment"] = dict(backend_hard_route_map)
+            scene_prompt_creative_config["routes_are_hard_locked"] = True
+            scene_prompt_creative_config["route_assignment_source"] = backend_hard_route_source
+            scene_prompt_input["creative_config"] = scene_prompt_creative_config
+            scene_plan_prompt_package["input"] = scene_prompt_input
+    backend_hard_route_target_counts = {
+        "i2v": sum(1 for route in backend_hard_route_map.values() if route == "i2v"),
+        "ia2v": sum(1 for route in backend_hard_route_map.values() if route == "ia2v"),
+        "first_last": sum(1 for route in backend_hard_route_map.values() if route == "first_last"),
+    }
 
     result = build_gemini_scene_plan(
         api_key=gemini_api_key,
@@ -8727,6 +8870,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     route_semantic_mismatches: list[dict[str, Any]] = []
     semantic_retry_used = False
     user_hard_route_map = _extract_user_hard_route_map(_safe_dict(package.get("input")))
+    effective_hard_route_map = dict(backend_hard_route_map or user_hard_route_map)
     if scene_plan:
         route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
             package=package,
@@ -8740,7 +8884,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             overwrite_existing=(route_lock_source != "fallback_backend_route_fill"),
         )
         route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(scene_plan)
-        if route_semantic_mismatches and not user_hard_route_map:
+        if route_semantic_mismatches and not effective_hard_route_map:
             semantic_retry_used = True
             targeted_feedback = (
                 "Some routes do not match story beat types. Reassign routes semantically while respecting "
@@ -8938,10 +9082,19 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_locks_by_segment"] = _safe_dict(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_applied"] = bool(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_source"] = str(route_lock_source or "")
+    diagnostics["scene_plan_hard_route_map_enabled"] = bool(backend_hard_route_map)
+    diagnostics["scene_plan_hard_route_map_source"] = str(backend_hard_route_source or "")
+    diagnostics["scene_plan_hard_route_map_by_segment"] = dict(backend_hard_route_map)
+    diagnostics["scene_plan_hard_route_map_target_counts"] = dict(backend_hard_route_target_counts)
+    diagnostics["scene_plan_hard_route_map_actual_counts_after_normalize"] = _scene_plan_route_counts(scene_plan)
     diagnostics["scene_plan_route_assignment_source"] = str(
-        "user_hard_route_map"
-        if route_lock_source == "creative_config.route_assignments_by_segment"
-        else (route_assignment_source or ("user_hard_route_map" if user_hard_route_map else ""))
+        "hard_route_map"
+        if bool(backend_hard_route_map)
+        else (
+            "user_hard_route_map"
+            if route_lock_source == "creative_config.route_assignments_by_segment"
+            else (route_assignment_source or ("user_hard_route_map" if user_hard_route_map else ""))
+        )
     )
     diagnostics["scene_plan_route_semantic_mismatches"] = list(route_semantic_mismatches)
     diagnostics["scene_plan_route_semantic_retry_used"] = bool(semantic_retry_used)
