@@ -217,6 +217,44 @@ def _normalize_identity_label_hint(value: Any) -> str:
     return ""
 
 
+def normalize_character_appearance_mode(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"only_lipsync", "lip-sync only"}:
+        return "lip_sync_only"
+    if token == "voice_only":
+        return "offscreen_voice"
+    if token == "silhouette":
+        return "background_only"
+    if token in {"auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"}:
+        return token
+    return "auto"
+
+
+def _extract_character_appearance_modes(input_pkg: dict[str, Any]) -> dict[str, str]:
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    nested_sources: list[dict[str, Any]] = [
+        _safe_dict(input_pkg.get("role_identity_mapping")),
+        _safe_dict(input_pkg.get("character_identity_by_role")),
+        _safe_dict(connected_summary.get("role_identity_mapping")),
+        _safe_dict(connected_summary.get("character_identity_by_role")),
+    ]
+    out: dict[str, str] = {}
+    for source in nested_sources:
+        for role in _ROLE_KEYS:
+            if role in out:
+                continue
+            row = _safe_dict(source.get(role))
+            out[role] = normalize_character_appearance_mode(
+                row.get("appearanceMode")
+                or row.get("screenPresenceMode")
+                or row.get("appearance_mode")
+                or row.get("screen_presence_mode")
+            )
+    for role in _ROLE_KEYS:
+        out.setdefault(role, "auto")
+    return out
+
+
 def _extract_role_identity_gender_map(input_pkg: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
@@ -671,6 +709,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     scene_windows = _build_scene_windows(audio_map)
     scene_segment_rows, missing_core_source_segments = _build_scene_segment_rows(audio_map, story_core, role_plan)
     role_identity_gender_map = _extract_role_identity_gender_map(input_pkg)
+    character_appearance_modes_by_role = _extract_character_appearance_modes(input_pkg)
     vocal_gender = _resolve_vocal_gender(audio_map, input_pkg)
     vocal_owner_role = _resolve_vocal_owner_role(vocal_gender, role_identity_gender_map)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
@@ -714,6 +753,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "vocal_gender": vocal_gender,
             "vocal_owner_role": vocal_owner_role,
         },
+        "character_appearance_modes_by_role": character_appearance_modes_by_role,
         "role_plan": {
             "roles_version": str(role_plan.get("roles_version") or ""),
             "roster": _safe_list(role_plan.get("roster")),
@@ -788,6 +828,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "vocal_gender": vocal_gender,
         "vocal_owner_role": vocal_owner_role,
         "role_identity_gender_map": role_identity_gender_map,
+        "character_appearance_modes_by_role": character_appearance_modes_by_role,
     }
     return context, aux
 
@@ -897,6 +938,10 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         "If lip_sync_allowed=true then speaker_role must equal audio_map.vocal_owner_role.\\n"
         "For i2v scenes, set speaker_role to an empty string. Do not use 'unknown'.\\n"
         "For ia2v scenes, speaker_role must be character_1.\\n"
+        "Respect character_appearance_modes_by_role contract from context.\\n"
+        "If character_1 appearance mode is lip_sync_only: character_1 is visually mandatory for ia2v, but in i2v do not make character_1 primary physical subject. Prefer environment/city/street/port/courtyard/objects/crowd as primary.\\n"
+        "If character_1 appearance mode is offscreen_voice: avoid ia2v for character_1 and keep character_1 offscreen/implied in i2v.\\n"
+        "If character_1 appearance mode is background_only: allow only shadow/silhouette/background presence in i2v; avoid close-up hero lip-sync framing unless route is ia2v.\\n"
         "For two-active conflict scenes keep lip-sync sparse: strong lines only, no more than 2 consecutive lip-sync scenes.\\n"
         "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
         "Do not use raw director text as free authoring source beyond this package context.\\n"
@@ -1579,6 +1624,7 @@ def _normalize_scene_plan(
     vocal_gender: str = UNKNOWN_VOCAL_GENDER,
     vocal_owner_role: str = UNKNOWN_VOCAL_OWNER_ROLE,
     include_debug_raw: bool = False,
+    character_appearance_modes_by_role: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
     raw_storyboard = [_safe_dict(row) for row in _safe_list(raw_plan.get("storyboard"))]
     storyboard_by_id: dict[str, dict[str, Any]] = {}
@@ -1635,6 +1681,8 @@ def _normalize_scene_plan(
     lip_sync_selected_count = 0
     max_consecutive_allowed = int(creative_config.get("max_consecutive_lipsync") or 2)
     hard_route_map = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
+    appearance_modes = _safe_dict(character_appearance_modes_by_role)
+    scene_character_visibility_policy: list[dict[str, Any]] = []
 
     for idx, source_row in enumerate(scene_segment_rows):
         segment_id = str(source_row.get("segment_id") or "").strip()
@@ -1735,6 +1783,7 @@ def _normalize_scene_plan(
         role_primary = str(role_row.get("primary_role") or "").strip()
         primary_role = role_primary if role_primary in active_roles else (active_roles[0] if active_roles else "")
         visual_focus_role = primary_role
+        character_1_appearance_mode = normalize_character_appearance_mode(appearance_modes.get("character_1"))
         speaker_role = str(raw_row.get("speaker_role") or "").strip()
         spoken_line = str(raw_row.get("spoken_line") or "").strip()
         lip_sync_allowed = bool(raw_row.get("lip_sync_allowed"))
@@ -1757,6 +1806,18 @@ def _normalize_scene_plan(
             lip_sync_allowed = False
             lip_sync_priority = "none"
             mouth_visible_required = False
+        if character_1_appearance_mode == "offscreen_voice":
+            if route == "ia2v":
+                route = "i2v"
+            speaker_role = ""
+            lip_sync_allowed = False
+            lip_sync_priority = "none"
+            mouth_visible_required = False
+        elif character_1_appearance_mode == "lip_sync_only" and route == "i2v":
+            if primary_role == "character_1":
+                visual_focus_role = "location" if "location" in active_roles else ("props" if "props" in active_roles else "")
+        elif character_1_appearance_mode == "background_only" and route == "i2v" and primary_role == "character_1":
+            visual_focus_role = "location" if "location" in active_roles else ("props" if "props" in active_roles else visual_focus_role)
 
         row_rejected_reasons: list[str] = []
         if speaker_role and speaker_role not in active_roles:
@@ -1859,6 +1920,25 @@ def _normalize_scene_plan(
         visual_focus_role_by_segment[segment_id] = visual_focus_role
         speaker_role_by_segment[segment_id] = speaker_role
         reaction_role_by_segment[segment_id] = reaction_role
+        character_1_visual_policy = (
+            "offscreen_voiceover"
+            if character_1_appearance_mode == "offscreen_voice"
+            else "offscreen_or_implied_for_i2v"
+            if character_1_appearance_mode == "lip_sync_only" and route == "i2v"
+            else "background_or_silhouette"
+            if character_1_appearance_mode == "background_only"
+            else "story_visible_default"
+        )
+        scene_character_visibility_policy.append(
+            {
+                "segment_id": segment_id,
+                "route": route,
+                "primary_role": primary_role,
+                "character_1_appearanceMode": character_1_appearance_mode,
+                "character_1_visual_policy": character_1_visual_policy,
+                "characterRefAttachedAllowed": not (route == "i2v" and character_1_appearance_mode in {"lip_sync_only", "offscreen_voice"}),
+            }
+        )
 
         normalized_storyboard.append(
             {
@@ -2007,6 +2087,12 @@ def _normalize_scene_plan(
         "visual_focus_role_by_segment": visual_focus_role_by_segment,
         "speaker_role_by_segment": speaker_role_by_segment,
         "reaction_role_by_segment": reaction_role_by_segment,
+        "characterAppearanceModesByRole": {
+            role: normalize_character_appearance_mode(mode)
+            for role, mode in appearance_modes.items()
+            if str(role or "").strip()
+        },
+        "sceneCharacterVisibilityPolicy": scene_character_visibility_policy,
         "lip_sync_voice_role_mismatch_segments": lip_sync_voice_role_mismatch_segments,
         "lip_sync_decision_by_segment": lip_sync_decision_by_segment,
         "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
@@ -2305,6 +2391,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
+            character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
         )
 
     try:
@@ -2355,6 +2442,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
+            character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
         )
         diagnostics["error_code"] = "scene_plan_timeout" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
         diagnostics.update(

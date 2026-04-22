@@ -24,6 +24,7 @@ const REF_BINDING_TYPES = new Set(["carried", "worn", "held", "pocketed", "nearb
 const REF_STORY_ROLES = new Set(["auto", "main", "secondary", "support", "antagonist", "minor", "group", "style_anchor"]);
 const REF_IDENTITY_LABELS = new Set(["auto", "девушка", "парень", "женщина", "мужчина", "ребёнок", "животное", "группа людей", "другое"]);
 const REF_GENDER_HINTS = new Set(["auto", "female", "male", "not_applicable"]);
+const REF_APPEARANCE_MODES = new Set(["auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"]);
 const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
   auto: "auto",
   main: "character_1",
@@ -56,6 +57,14 @@ function normalizeRefIdentityLabel(value) {
 function normalizeRefGenderHint(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return REF_GENDER_HINTS.has(normalized) ? normalized : "auto";
+}
+
+function normalizeRefAppearanceMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "only_lipsync" || normalized === "lip-sync only") return "lip_sync_only";
+  if (normalized === "voice_only") return "offscreen_voice";
+  if (normalized === "silhouette") return "background_only";
+  return REF_APPEARANCE_MODES.has(normalized) ? normalized : "auto";
 }
 
 const MODE_RULES = {
@@ -798,6 +807,9 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
     const storyRole = normalizeRefStoryRole(sourceNode?.data?.storyRole || sourceNode?.data?.story_role);
     const identityLabel = normalizeRefIdentityLabel(sourceNode?.data?.identityLabel || sourceNode?.data?.identity_label);
     const genderHint = normalizeRefGenderHint(sourceNode?.data?.genderHint || sourceNode?.data?.gender_hint);
+    const appearanceMode = normalizeRefAppearanceMode(
+      sourceNode?.data?.appearanceMode || sourceNode?.data?.screenPresenceMode || sourceNode?.data?.appearance_mode || sourceNode?.data?.screen_presence_mode
+    );
     const withOwnershipBinding = (items = []) => items.map((item) => ({
       ...item,
       ownershipRole,
@@ -806,6 +818,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
       story_role: storyRole,
       identity_label: identityLabel,
       gender_hint: genderHint,
+      appearanceMode,
+      screenPresenceMode: appearanceMode,
     }));
     const withRoleType = (items = []) => {
       if (!(cfg?.role === "character_1" || cfg?.role === "character_2" || cfg?.role === "character_3")) return items;
@@ -909,6 +923,8 @@ export function deriveComfyBrainState({ nodeId = "", nodeData = {}, nodesNow = [
           story_role: normalizeRefStoryRole(node?.data?.storyRole || node?.data?.story_role),
           identity_label: normalizeRefIdentityLabel(node?.data?.identityLabel || node?.data?.identity_label),
           gender_hint: normalizeRefGenderHint(node?.data?.genderHint || node?.data?.gender_hint),
+          appearanceMode: normalizeRefAppearanceMode(node?.data?.appearanceMode || node?.data?.screenPresenceMode || node?.data?.appearance_mode || node?.data?.screen_presence_mode),
+          screenPresenceMode: normalizeRefAppearanceMode(node?.data?.appearanceMode || node?.data?.screenPresenceMode || node?.data?.appearance_mode || node?.data?.screen_presence_mode),
         },
       ])
   );
