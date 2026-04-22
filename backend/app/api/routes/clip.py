@@ -1581,6 +1581,10 @@ def _safe_float(value: Any) -> float | None:
     return parsed
 
 
+def _safe_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _resolve_video_timeframe(payload: ClipVideoIn) -> tuple[float, float | None, float | None, float | None]:
     requested = _safe_positive_float(payload.requestedDurationSec)
     scene_duration = _safe_positive_float(payload.sceneDurationSec)
