@@ -1803,6 +1803,8 @@ def _normalize_scene_plan(
     enum_invalid_segment_id = ""
     enum_repair_applied = False
     enum_repair_rows: list[dict[str, Any]] = []
+    enum_unrepaired_count = 0
+    enum_unrepaired_rows: list[dict[str, Any]] = []
     illegal_route_count = 0
     cast_mutation_count = 0
     speaker_role_invalid_count = 0
@@ -1975,30 +1977,34 @@ def _normalize_scene_plan(
                 repaired_values[field_name] = field_value
                 continue
             enum_invalid_count += 1
-            enum_invalid_rows.append(
-                {
-                    "segment_id": segment_id,
-                    "field": field_name,
-                    "value": field_value,
-                    "allowed_values": sorted(allowed_values),
-                }
-            )
+            invalid_row = {
+                "segment_id": segment_id,
+                "field": field_name,
+                "value": field_value,
+                "allowed_values": sorted(allowed_values),
+            }
+            enum_invalid_rows.append(invalid_row)
             if not enum_invalid_field:
                 enum_invalid_field = field_name
                 enum_invalid_value = field_value
                 enum_invalid_allowed_values = sorted(allowed_values)
                 enum_invalid_segment_id = segment_id
-            repaired_values[field_name] = fallback_value
-            enum_repair_applied = True
-            enum_repair_rows.append(
-                {
-                    "segment_id": segment_id,
-                    "field": field_name,
-                    "value": field_value,
-                    "repaired_to": fallback_value,
-                    "allowed_values": sorted(allowed_values),
-                }
-            )
+            if fallback_value in allowed_values:
+                repaired_values[field_name] = fallback_value
+                enum_repair_applied = True
+                enum_repair_rows.append(
+                    {
+                        "segment_id": segment_id,
+                        "field": field_name,
+                        "value": field_value,
+                        "repaired_to": fallback_value,
+                        "allowed_values": sorted(allowed_values),
+                    }
+                )
+            else:
+                enum_unrepaired_count += 1
+                enum_unrepaired_rows.append(invalid_row)
+                repaired_values[field_name] = field_value
         raw_story_beat_type = repaired_values.get("story_beat_type", raw_story_beat_type)
         pacing = repaired_values.get("visual_motion.pacing", pacing)
         framing = repaired_values.get("composition.framing", framing)
@@ -2198,7 +2204,7 @@ def _normalize_scene_plan(
     route_budget_mismatch = bool(hard_short_clip_target and route_counts != route_budget_target)
     validation_errors: list[str] = []
     error_codes: list[str] = []
-    if enum_invalid_count > 0:
+    if enum_unrepaired_count > 0:
         validation_errors.append("enum_invalid")
         error_codes.append("SCENES_ENUM_INVALID")
         validation_error = validation_error or "enum_invalid"
@@ -2283,9 +2289,11 @@ def _normalize_scene_plan(
         "scene_plan_technical_leak_tokens": sorted(scene_plan_technical_leak_tokens),
         "scene_plan_technical_leak_cleaned_locally": scene_plan_technical_leak_cleaned_locally,
         "enum_invalid_count": enum_invalid_count,
+        "enum_unrepaired_count": enum_unrepaired_count,
         "scene_plan_validation_errors": validation_errors,
         "scene_plan_error_codes": error_codes,
         "scene_plan_enum_invalid_detected": bool(enum_invalid_count),
+        "scene_plan_enum_invalid_count": enum_invalid_count,
         "scene_plan_enum_invalid_field": enum_invalid_field,
         "scene_plan_enum_invalid_value": enum_invalid_value,
         "scene_plan_enum_invalid_allowed_values": enum_invalid_allowed_values,
@@ -2294,6 +2302,8 @@ def _normalize_scene_plan(
         "scene_plan_enum_repair_applied": enum_repair_applied,
         "scene_plan_enum_repair_count": len(enum_repair_rows),
         "scene_plan_enum_repair_rows": enum_repair_rows,
+        "scene_plan_enum_unrepaired_count": enum_unrepaired_count,
+        "scene_plan_enum_unrepaired_rows": enum_unrepaired_rows,
         "illegal_route_count": illegal_route_count,
         "cast_mutation_count": cast_mutation_count,
         "speaker_role_invalid_count": speaker_role_invalid_count,
@@ -2472,6 +2482,7 @@ def build_gemini_scene_plan(
             "scene_plan_validation_errors": _safe_list(normalization_diag.get("scene_plan_validation_errors")),
             "scene_plan_error_codes": _safe_list(normalization_diag.get("scene_plan_error_codes")),
             "scene_plan_enum_invalid_detected": bool(normalization_diag.get("scene_plan_enum_invalid_detected")),
+            "scene_plan_enum_invalid_count": int(normalization_diag.get("scene_plan_enum_invalid_count") or 0),
             "scene_plan_enum_invalid_field": str(normalization_diag.get("scene_plan_enum_invalid_field") or ""),
             "scene_plan_enum_invalid_value": str(normalization_diag.get("scene_plan_enum_invalid_value") or ""),
             "scene_plan_enum_invalid_allowed_values": _safe_list(normalization_diag.get("scene_plan_enum_invalid_allowed_values")),
@@ -2480,6 +2491,8 @@ def build_gemini_scene_plan(
             "scene_plan_enum_repair_applied": bool(normalization_diag.get("scene_plan_enum_repair_applied")),
             "scene_plan_enum_repair_count": int(normalization_diag.get("scene_plan_enum_repair_count") or 0),
             "scene_plan_enum_repair_rows": _safe_list(normalization_diag.get("scene_plan_enum_repair_rows")),
+            "scene_plan_enum_unrepaired_count": int(normalization_diag.get("scene_plan_enum_unrepaired_count") or 0),
+            "scene_plan_enum_unrepaired_rows": _safe_list(normalization_diag.get("scene_plan_enum_unrepaired_rows")),
             "scene_plan_route_strategy_active": bool(normalization_diag.get("scene_plan_route_strategy_active")),
             "scene_plan_route_strategy_preset": str(normalization_diag.get("scene_plan_route_strategy_preset") or ""),
             "scene_plan_route_targets_per_block": _safe_dict(normalization_diag.get("scene_plan_route_targets_per_block")),
