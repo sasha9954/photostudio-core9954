@@ -400,8 +400,19 @@ def _is_bad_prompt_cleanup(text: str) -> bool:
     lower = clean.lower()
     if len(lower) < 32:
         return True
-    bad_tokens = ("the 's", "a in her", "wearing a", "wearing", "with")
-    return lower in bad_tokens
+    if "the 's" in lower:
+        return True
+    if "show the as" in lower:
+        return True
+    if "show as the" in lower:
+        return True
+    if re.search(r"\ba\s+in\s+her\b", lower):
+        return True
+    if re.search(r"\bwearing\s+(a|the)?\s*$", lower):
+        return True
+    if re.search(r"\bwith\s*$", lower):
+        return True
+    return False
 
 
 def _contains_action_conflict_words(text: str) -> bool:

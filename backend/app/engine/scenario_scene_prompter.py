@@ -103,7 +103,7 @@ _IDENTITY_REFERENCE_LEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bsame (woman|man|performer) as the provided\b"),
 )
 _MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
-    "same performer",
+    "same woman",
     "woman's",
     "women",
     "light linen dress",
@@ -120,6 +120,7 @@ _MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
     "girl's",
     "lady",
     "lady's",
+    "heroine",
     "her",
     "she",
     "dress",
@@ -150,7 +151,7 @@ _LIP_SYNC_ONLY_I2V_VIOLATION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bmouth close[- ]?up\b"),
 )
 _STALE_IDENTITY_TERMS = {
-    "same performer",
+    "same woman",
     "woman",
     "woman's",
     "women",
@@ -160,6 +161,7 @@ _STALE_IDENTITY_TERMS = {
     "girl's",
     "lady",
     "lady's",
+    "heroine",
     "her",
     "she",
 }
