@@ -158,7 +158,19 @@ function resolveScenePreviewSources(scene = {}) {
     }
     return { field: "none", value: "" };
   };
-  const singleHit = resolveAliasHit(["imageUrl", "generatedImageUrl", "resultImageUrl", "finalImageUrl", "previewUrl", "image_url", "preview_url"]);
+  const singleHit = resolveAliasHit([
+    "imageUrl",
+    "generatedImageUrl",
+    "resultImageUrl",
+    "finalImageUrl",
+    "imagePreviewUrl",
+    "previewSourceUrl",
+    "displayImageUrl",
+    "imageResultUrl",
+    "previewUrl",
+    "image_url",
+    "preview_url",
+  ]);
   const startHit = resolveAliasHit(["startImageUrl", "startFrameImageUrl", "startFramePreviewUrl", "firstFrameImageUrl", "firstImageUrl"]);
   const endHit = resolveAliasHit(["endImageUrl", "endFrameImageUrl", "endFramePreviewUrl", "lastFrameImageUrl", "lastImageUrl"]);
   const resolvedSinglePreviewSrc = String(resolveAssetUrl(singleHit.value || "") || "").trim();
@@ -601,6 +613,7 @@ export default function ScenarioStoryboardEditor({
   globalAudioUrl = "",
   onClose,
   onUpdateScene,
+  onUpdateSceneGenerationRuntime,
   onGenerateScene,
   onClearSceneImage,
   onGenerateVideo,
@@ -624,6 +637,7 @@ export default function ScenarioStoryboardEditor({
   const [playingPhraseIndex, setPlayingPhraseIndex] = useState(-1);
   const [phrasePlaybackError, setPhrasePlaybackError] = useState("");
   const prevStoryboardRevisionRef = useRef("");
+  const syncedPreviewBySceneRef = useRef(new Map());
   const stopNodeDragEvent = (event) => event.stopPropagation();
 
   useEffect(() => {
@@ -1135,6 +1149,7 @@ export default function ScenarioStoryboardEditor({
   const imageDebugApplyRejectedReason = String(imageApiResult?.rejectedReason || effectiveRuntime?.lastRejectedReason || "").trim();
   const imageDebugUrlPresent = Boolean(
     String(selectedScene?.imageUrl || "").trim()
+    || String(selectedScene?.sourceImageUrl || "").trim()
     || String(imageApiResult?.imageUrl || "").trim()
     || String(effectiveRuntime?.lastRejectedImageUrl || "").trim()
   );
@@ -1157,6 +1172,7 @@ export default function ScenarioStoryboardEditor({
     || ""
   ).trim();
   const sourceImageUrl = previewSources.resolvedPreviewSrc || runtimeFallbackImageUrl;
+  const displayImageUrl = String(sourceImageUrl || "").trim();
   const startFrameSourceUrl = previewSources.resolvedStartPreviewSrc;
   const endFrameSourceUrl = previewSources.resolvedEndPreviewSrc;
   const sceneVideoUrl = String(selectedScene?.videoUrl || "").trim();
@@ -1239,6 +1255,64 @@ export default function ScenarioStoryboardEditor({
       end: endFrameSourceUrl,
     });
   }, [selectedScene?.imageUrl, imageApiResult?.imageUrl, runtimeFallbackImageUrl, selectedSceneId, sourceImageUrl, startFrameSourceUrl, endFrameSourceUrl]);
+  useEffect(() => {
+    if (!selectedSceneId) return;
+    const runtimeScene = safeGeneration?.[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object"
+      ? safeGeneration[selectedSceneId]
+      : {};
+    console.log("[SCENARIO IMAGE PREVIEW SOURCE]", {
+      sceneId: selectedSceneId,
+      displayImageUrl,
+      sceneImageUrl: selectedScene?.imageUrl,
+      sceneGeneratedImageUrl: selectedScene?.generatedImageUrl,
+      sceneStartImageUrl: selectedScene?.startImageUrl,
+      runtimeImage: runtimeScene?.imageUrl,
+      lastImageApiResult: runtimeScene?.lastImageApiResult,
+    });
+  }, [displayImageUrl, safeGeneration, selectedScene?.generatedImageUrl, selectedScene?.imageUrl, selectedScene?.startImageUrl, selectedSceneId]);
+  useEffect(() => {
+    if (!selectedSceneId || !displayImageUrl) return;
+    const canonicalImageUrl = String(
+      selectedScene?.imageUrl
+      || selectedScene?.generatedImageUrl
+      || selectedScene?.resultImageUrl
+      || selectedScene?.finalImageUrl
+      || ""
+    ).trim();
+    if (canonicalImageUrl) return;
+    const syncedKey = `${selectedSceneId}::${displayImageUrl}`;
+    if (syncedPreviewBySceneRef.current.get(selectedSceneId) === syncedKey) return;
+    syncedPreviewBySceneRef.current.set(selectedSceneId, syncedKey);
+    const existingStartImageUrl = String(selectedScene?.startImageUrl || selectedScene?.startFrameImageUrl || "").trim();
+    const isIa2v = sceneFinalRoute === "lip_sync_music" || sceneFinalRoute === "ia2v";
+    const startImageUrl = isIa2v ? displayImageUrl : existingStartImageUrl;
+    onUpdateScene?.(nodeId, selectedSceneId, {
+      imageUrl: displayImageUrl,
+      generatedImageUrl: displayImageUrl,
+      resultImageUrl: displayImageUrl,
+      finalImageUrl: displayImageUrl,
+      startImageUrl: startImageUrl || undefined,
+      sourceImageUrl: displayImageUrl,
+    }, { actionName: "sync_image_preview_to_video_source", preserveSourceFieldsInVideoActions: true });
+    const runtimeScene = safeGeneration?.[selectedSceneId] && typeof safeGeneration[selectedSceneId] === "object"
+      ? safeGeneration[selectedSceneId]
+      : {};
+    const existingResult = runtimeScene?.lastImageApiResult && typeof runtimeScene.lastImageApiResult === "object"
+      ? runtimeScene.lastImageApiResult
+      : {};
+    onUpdateSceneGenerationRuntime?.(selectedSceneId, {
+      imageUrl: displayImageUrl,
+      generatedImageUrl: displayImageUrl,
+      resultImageUrl: displayImageUrl,
+      startImageUrl: startImageUrl || undefined,
+      lastImageApiResult: {
+        ...existingResult,
+        imageUrl: displayImageUrl,
+        accepted: true,
+        applyAccepted: true,
+      },
+    }, { nodeId });
+  }, [displayImageUrl, nodeId, onUpdateScene, onUpdateSceneGenerationRuntime, safeGeneration, sceneFinalRoute, selectedScene?.finalImageUrl, selectedScene?.generatedImageUrl, selectedScene?.imageUrl, selectedScene?.resultImageUrl, selectedScene?.startFrameImageUrl, selectedScene?.startImageUrl, selectedSceneId]);
   useEffect(() => {
     if (!selectedScene) return;
     console.debug("[SCENARIO FIRST_LAST PREVIEW RESOLVE]", {

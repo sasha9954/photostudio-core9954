@@ -4574,6 +4574,11 @@ function resolveScenarioVideoSourceImage(scene, sceneId, runtime = {}, nodesList
     sourceScene?.generatedImageUrl,
     sourceScene?.photoUrl,
     sourceScene?.resultImageUrl,
+    sourceScene?.imagePreviewUrl,
+    sourceScene?.previewSourceUrl,
+    sourceScene?.displayImageUrl,
+    sourceScene?.imageResultUrl,
+    sourceScene?.imageResult?.url,
     sourceScene?.previewUrl,
     sourceScene?.startImageUrl,
     sourceScene?.sourceImageUrl,
@@ -4597,6 +4602,9 @@ function resolveScenarioVideoSourceImage(scene, sceneId, runtime = {}, nodesList
     bySceneRuntime?.imageUrl,
     bySceneRuntime?.photoUrl,
     bySceneRuntime?.startImageUrl,
+    bySceneRuntime?.previewUrl,
+    bySceneRuntime?.displayImageUrl,
+    bySceneRuntime?.lastImageApiResult?.imageUrl,
     sourceRuntime?.imagesBySceneId?.[sceneId],
     sourceRuntime?.photoBySceneId?.[sceneId],
     sourceRuntime?.resultsBySceneId?.[sceneId]?.imageUrl,
@@ -9890,6 +9898,7 @@ export default function ClipStoryboardPage() {
   const scenarioVideoScrollRafRef = useRef(0);
   const scenarioVideoPollTimersRef = useRef(new Map());
   const scenarioVideoJobsBySceneRef = useRef(new Map());
+  const scenarioPreviewCanonicalSyncRef = useRef(new Map());
   const scenarioActivePollingJobIdsRef = useRef(new Set());
   const restoredScenarioVideoJobsRef = useRef(new Set());
   const comfyVideoPollTimersRef = useRef(new Map());
@@ -11177,6 +11186,66 @@ const scenarioImageOverlayVisible = scenarioSceneImageBusy;
       };
     }));
   }, [scenarioFlowSourceNode?.id, setNodes]);
+
+  useEffect(() => {
+    const sceneId = String(scenarioSelected?.sceneId || "").trim();
+    const nodeId = String(activeScenarioStoryboardNode?.id || "").trim();
+    const displayImageUrl = String(scenarioSelectedResolvedPreviewSrc || "").trim();
+    if (!sceneId || !nodeId || !displayImageUrl) return;
+    const canonicalImageUrl = String(
+      scenarioSelected?.imageUrl
+      || scenarioSelected?.generatedImageUrl
+      || scenarioSelected?.resultImageUrl
+      || scenarioSelected?.finalImageUrl
+      || ""
+    ).trim();
+    if (canonicalImageUrl) return;
+    const syncKey = `${sceneId}::${displayImageUrl}`;
+    if (scenarioPreviewCanonicalSyncRef.current.get(sceneId) === syncKey) return;
+    scenarioPreviewCanonicalSyncRef.current.set(sceneId, syncKey);
+    const routeRaw = String(scenarioSelected?.resolvedWorkflowKey || scenarioSelected?.route || scenarioSelected?.ltxMode || "").trim().toLowerCase();
+    const isIa2v = routeRaw === "ia2v" || routeRaw === "lip_sync_music" || routeRaw === "lip_sync";
+    const existingStartImageUrl = String(scenarioSelected?.startImageUrl || "").trim();
+    const startImageUrl = isIa2v ? displayImageUrl : existingStartImageUrl;
+    updateScenarioScene(sceneId, {
+      imageUrl: displayImageUrl,
+      generatedImageUrl: displayImageUrl,
+      resultImageUrl: displayImageUrl,
+      finalImageUrl: displayImageUrl,
+      sourceImageUrl: displayImageUrl,
+      ...(startImageUrl ? { startImageUrl } : {}),
+    }, { nodeId, actionName: "sync_image_preview_to_video_source", preserveSourceFieldsInVideoActions: true });
+    const existingApiResult = scenarioSelectedRuntime?.lastImageApiResult && typeof scenarioSelectedRuntime.lastImageApiResult === "object"
+      ? scenarioSelectedRuntime.lastImageApiResult
+      : {};
+    updateScenarioSceneGenerationRuntime(sceneId, {
+      imageUrl: displayImageUrl,
+      generatedImageUrl: displayImageUrl,
+      resultImageUrl: displayImageUrl,
+      ...(startImageUrl ? { startImageUrl } : {}),
+      lastImageApiResult: {
+        ...existingApiResult,
+        imageUrl: displayImageUrl,
+        accepted: true,
+        applyAccepted: true,
+      },
+    }, { nodeId });
+  }, [
+    activeScenarioStoryboardNode?.id,
+    scenarioSelected?.finalImageUrl,
+    scenarioSelected?.generatedImageUrl,
+    scenarioSelected?.imageUrl,
+    scenarioSelected?.ltxMode,
+    scenarioSelected?.resolvedWorkflowKey,
+    scenarioSelected?.resultImageUrl,
+    scenarioSelected?.route,
+    scenarioSelected?.sceneId,
+    scenarioSelected?.startImageUrl,
+    scenarioSelectedResolvedPreviewSrc,
+    scenarioSelectedRuntime?.lastImageApiResult,
+    updateScenarioScene,
+    updateScenarioSceneGenerationRuntime,
+  ]);
 
   const persistActiveVideoJob = useCallback((jobsByScene) => {
     const entries = Object.entries(jobsByScene || {}).filter(([, value]) => value?.jobId);
@@ -15127,10 +15196,11 @@ Aspect ratio: ${imageFormat}`,
       }, { nodeId: targetNodeId });
       const responseSceneId = String(out?.sceneId || "").trim();
       const generatedImageUrl = resolveScenarioImageUrlFromApiResponse(out);
+      const normalizedGeneratedImageUrl = normalizeVideoSourceUrl(generatedImageUrl);
       console.info("[SCENARIO FIRST_LAST IMAGE DONE]", {
         sceneId,
         frameKind,
-        imageUrl: generatedImageUrl,
+        imageUrl: normalizedGeneratedImageUrl,
       });
       const resultStatus = String(out?.resultStatus || "").trim();
       const responseEngine = String(out?.engine || "").trim();
@@ -15163,13 +15233,13 @@ Aspect ratio: ${imageFormat}`,
           requestedSceneId: sceneId,
           responseOk: Boolean(out?.ok),
           responseSceneId,
-          hasImageUrl: !!generatedImageUrl,
+          hasImageUrl: !!normalizedGeneratedImageUrl,
           resultStatus,
           degraded: responseDegraded,
           slot: normalizedSlot,
         });
       }
-      if (!out?.ok || !generatedImageUrl) {
+      if (!out?.ok || !normalizedGeneratedImageUrl) {
         const responseError = new Error(String(out?.hint || out?.message || out?.code || "image_generation_failed"));
         responseError.code = String(out?.code || "").trim();
         responseError.hint = String(out?.hint || "").trim();
@@ -15187,7 +15257,7 @@ Aspect ratio: ${imageFormat}`,
       const liveSceneStableSignature = String(buildScenarioSceneStableSignature(liveBinding?.scene || {}) || "").trim();
       const reasonIgnored = [];
       if (responseSceneId && responseSceneId !== sceneId) reasonIgnored.push("response_scene_mismatch");
-      if (!generatedImageUrl) reasonIgnored.push("image_url_missing");
+      if (!normalizedGeneratedImageUrl) reasonIgnored.push("image_url_missing");
       if (!liveBinding || !liveBinding.scene) reasonIgnored.push("scene_missing_in_live_storyboard");
       if (liveBinding?.storyboardRevision && requestStoryboardRevision && liveBinding.storyboardRevision !== requestStoryboardRevision) {
         reasonIgnored.push("storyboard_revision_mismatch");
@@ -15203,7 +15273,7 @@ Aspect ratio: ${imageFormat}`,
       const rejectedReason = reasonIgnored.join("|") || (applyAccepted ? "" : "apply_rejected");
       const imageApiRuntimeResult = buildScenarioImageApiRuntimeResult({
         ok: out?.ok,
-        imageUrl: generatedImageUrl,
+        imageUrl: normalizedGeneratedImageUrl,
         engine: responseEngine,
         hint: responseHint,
         degradeReason: responseDegradeReason,
@@ -15224,7 +15294,7 @@ Aspect ratio: ${imageFormat}`,
         liveStoryboardRevision: String(liveBinding?.storyboardRevision || "").trim(),
         requestSceneSignature: String(requestSceneSignature || "").trim(),
         liveSceneSignature: String(liveBinding?.sceneSignature || "").trim(),
-        imageUrl: generatedImageUrl,
+        imageUrl: normalizedGeneratedImageUrl,
         slot: normalizedSlot,
       };
       if (applyAccepted) {
@@ -15248,7 +15318,7 @@ Aspect ratio: ${imageFormat}`,
           "liveBinding?.storyboardRevision": String(liveBinding?.storyboardRevision || "").trim(),
           "liveBinding?.storyboardSignature": String(liveBinding?.storyboardSignature || "").trim(),
           "liveBinding?.sceneSignature": String(liveBinding?.sceneSignature || "").trim(),
-          imageUrl: generatedImageUrl,
+          imageUrl: normalizedGeneratedImageUrl,
           slot: normalizedSlot,
         });
         console.debug("[SCENARIO LIVE BINDING TARGET]", {
@@ -15279,14 +15349,14 @@ Aspect ratio: ${imageFormat}`,
         updateScenarioSceneGenerationRuntime(sceneId, {
           ...runtimeResetPatch,
           lastImageApiResult: imageApiRuntimeResult,
-          lastRejectedImageUrl: generatedImageUrl,
+          lastRejectedImageUrl: normalizedGeneratedImageUrl,
           lastRejectedReason: rejectedReason,
           lastRejectedAt: new Date().toISOString(),
           lastApiEngine: responseEngine,
           lastApiHint: responseHint,
           lastApiDegradeReason: responseDegradeReason,
           lastApiResultStatus: resultStatus,
-          lastApiImageUrlPresent: Boolean(generatedImageUrl),
+          lastApiImageUrlPresent: Boolean(normalizedGeneratedImageUrl),
         }, { nodeId: targetNodeId });
         if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
           const selectedPreviewSources = resolveScenarioScenePreviewSources(scenarioSelected, scenarioPreviousScene);
@@ -15317,13 +15387,13 @@ Aspect ratio: ${imageFormat}`,
       if ((imageStrategy === "continuation" || isTwoFrameScene) && normalizedSlot === "start") {
         updateScenarioScene(sceneId, {
           imageUrl: "",
-          generatedImageUrl: generatedImageUrl,
-          resultImageUrl: generatedImageUrl,
-          finalImageUrl: generatedImageUrl,
-          startImageUrl: generatedImageUrl,
-          firstFrameImageUrl: generatedImageUrl,
-          startFrameImageUrl: generatedImageUrl,
-          startFramePreviewUrl: generatedImageUrl,
+          generatedImageUrl: normalizedGeneratedImageUrl,
+          resultImageUrl: normalizedGeneratedImageUrl,
+          finalImageUrl: normalizedGeneratedImageUrl,
+          startImageUrl: normalizedGeneratedImageUrl,
+          firstFrameImageUrl: normalizedGeneratedImageUrl,
+          startFrameImageUrl: normalizedGeneratedImageUrl,
+          startFramePreviewUrl: normalizedGeneratedImageUrl,
           frameRole: "first",
           suppressInheritedStartPreview: false,
           imageStatus: "",
@@ -15351,7 +15421,7 @@ Aspect ratio: ${imageFormat}`,
           canonicalRoute,
           requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
           requestedSlot: normalizedSlot,
-          returnedImageUrl: generatedImageUrl,
+          returnedImageUrl: normalizedGeneratedImageUrl,
           wroteStartImage: true,
           wroteEndImage: false,
           wroteGenericImage: false,
@@ -15359,11 +15429,11 @@ Aspect ratio: ${imageFormat}`,
         });
       } else if ((imageStrategy === "continuation" || isTwoFrameScene) && normalizedSlot === "end") {
         const existingStartAssetUrl = String(targetScene?.startImageUrl || targetScene?.startFrameImageUrl || "").trim();
-        const duplicatedFirstLastOutput = isTwoFrameScene && existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl;
+        const duplicatedFirstLastOutput = isTwoFrameScene && existingStartAssetUrl && existingStartAssetUrl === normalizedGeneratedImageUrl;
         console.debug("[SCENARIO FIRST_LAST ASSET CHECK]", {
           sceneId: String(sceneId || ""),
           startImageUrl: existingStartAssetUrl,
-          endImageUrl: String(generatedImageUrl || "").trim(),
+          endImageUrl: String(normalizedGeneratedImageUrl || "").trim(),
           identical: Boolean(duplicatedFirstLastOutput),
         });
         if (duplicatedFirstLastOutput) {
@@ -15371,13 +15441,13 @@ Aspect ratio: ${imageFormat}`,
         }
         updateScenarioScene(sceneId, {
           imageUrl: "",
-          generatedImageUrl: generatedImageUrl,
-          resultImageUrl: generatedImageUrl,
-          finalImageUrl: generatedImageUrl,
-          endImageUrl: generatedImageUrl,
-          lastFrameImageUrl: generatedImageUrl,
-          endFrameImageUrl: generatedImageUrl,
-          endFramePreviewUrl: generatedImageUrl,
+          generatedImageUrl: normalizedGeneratedImageUrl,
+          resultImageUrl: normalizedGeneratedImageUrl,
+          finalImageUrl: normalizedGeneratedImageUrl,
+          endImageUrl: normalizedGeneratedImageUrl,
+          lastFrameImageUrl: normalizedGeneratedImageUrl,
+          endFrameImageUrl: normalizedGeneratedImageUrl,
+          endFramePreviewUrl: normalizedGeneratedImageUrl,
           frameRole: "last",
           suppressInheritedStartPreview: false,
           imageStatus: "",
@@ -15405,7 +15475,7 @@ Aspect ratio: ${imageFormat}`,
           canonicalRoute,
           requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
           requestedSlot: normalizedSlot,
-          returnedImageUrl: generatedImageUrl,
+          returnedImageUrl: normalizedGeneratedImageUrl,
           wroteStartImage: false,
           wroteEndImage: true,
           wroteGenericImage: false,
@@ -15415,17 +15485,19 @@ Aspect ratio: ${imageFormat}`,
           console.debug("[SCENARIO FIRST_LAST ASSET CHECK]", {
             sceneId,
             startImageUrl: existingStartAssetUrl,
-            endImageUrl: generatedImageUrl,
-            identical: Boolean(existingStartAssetUrl && existingStartAssetUrl === generatedImageUrl),
+            endImageUrl: normalizedGeneratedImageUrl,
+            identical: Boolean(existingStartAssetUrl && existingStartAssetUrl === normalizedGeneratedImageUrl),
           });
         }
       } else {
         updateScenarioScene(sceneId, {
-          imageUrl: generatedImageUrl,
-          generatedImageUrl: generatedImageUrl,
-          resultImageUrl: generatedImageUrl,
-          finalImageUrl: generatedImageUrl,
-          startImageUrl: "",
+          imageUrl: normalizedGeneratedImageUrl,
+          generatedImageUrl: normalizedGeneratedImageUrl,
+          resultImageUrl: normalizedGeneratedImageUrl,
+          finalImageUrl: normalizedGeneratedImageUrl,
+          startImageUrl: (canonicalRoute === "lip_sync_music" || sceneRouteRaw === "ia2v" || sceneRouteRaw === "lip_sync_music")
+            ? normalizedGeneratedImageUrl
+            : "",
           endImageUrl: "",
           startFrameImageUrl: "",
           endFrameImageUrl: "",
@@ -15434,6 +15506,7 @@ Aspect ratio: ${imageFormat}`,
           suppressAssetRehydrate: false,
           imageClearedAt: "",
           suppressInheritedStartPreview: false,
+          sourceImageUrl: normalizedGeneratedImageUrl,
           imageStatus: imageDegraded ? "degraded" : "done",
           imageDegraded,
           imageDegradeReason,
@@ -15456,7 +15529,7 @@ Aspect ratio: ${imageFormat}`,
           canonicalRoute,
           requiresTwoFrames: Boolean(videoProfile?.requiresTwoFrames),
           requestedSlot: normalizedSlot,
-          returnedImageUrl: generatedImageUrl,
+          returnedImageUrl: normalizedGeneratedImageUrl,
           wroteStartImage: false,
           wroteEndImage: false,
           wroteGenericImage: true,
@@ -15469,10 +15542,18 @@ Aspect ratio: ${imageFormat}`,
           ? (normalizedSlot === "start"
             ? { startFrameImageStatus: "done", startFrameStatus: "done", startFrameImageStartedAt: 0 }
             : { endFrameImageStatus: "done", endFrameStatus: "done", endFrameImageStartedAt: 0 })
-          : { imageStatus: "done", imageUrl: generatedImageUrl }),
+          : {
+            imageStatus: "done",
+            imageUrl: normalizedGeneratedImageUrl,
+            generatedImageUrl: normalizedGeneratedImageUrl,
+            resultImageUrl: normalizedGeneratedImageUrl,
+            startImageUrl: (canonicalRoute === "lip_sync_music" || sceneRouteRaw === "ia2v" || sceneRouteRaw === "lip_sync_music")
+              ? normalizedGeneratedImageUrl
+              : "",
+          }),
         imageGenerationStep: "",
         lastImageApiResult: imageApiRuntimeResult,
-        lastAcceptedImageUrl: generatedImageUrl,
+        lastAcceptedImageUrl: normalizedGeneratedImageUrl,
         lastRejectedImageUrl: "",
         lastRejectedReason: "",
         lastRejectedAt: "",
@@ -15480,21 +15561,21 @@ Aspect ratio: ${imageFormat}`,
         lastApiHint: responseHint,
         lastApiDegradeReason: responseDegradeReason,
         lastApiResultStatus: resultStatus,
-        lastApiImageUrlPresent: Boolean(generatedImageUrl),
+        lastApiImageUrlPresent: Boolean(normalizedGeneratedImageUrl),
       }, { nodeId: targetNodeId });
       if (CLIP_TRACE_SCENARIO_IMAGE_E2E) {
         console.debug("[SCENARIO IMAGE SCENE PATCHED]", {
           sceneId,
           slot: normalizedSlot,
           targetNodeId,
-          imageUrl: generatedImageUrl,
+          imageUrl: normalizedGeneratedImageUrl,
           patchApplied: true,
         });
         console.debug("[SCENARIO IMAGE STATUS SYNC]", {
           sceneId,
           slot: normalizedSlot,
           status: "done",
-          hasImageUrl: !!generatedImageUrl,
+          hasImageUrl: !!normalizedGeneratedImageUrl,
           error: "",
         });
       }
@@ -24790,6 +24871,11 @@ const hydrate = useCallback((source = "unknown") => {
         musicUrl={activeScenarioMusicUrl}
         onClose={() => setIsScenarioStoryboardOpen(false)}
         onUpdateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneUpdate}
+        onUpdateSceneGenerationRuntime={(sceneId, patch = {}, options = {}) => {
+          updateScenarioSceneGenerationRuntime(sceneId, patch, {
+            nodeId: options?.nodeId || activeScenarioStoryboardNode?.id || "",
+          });
+        }}
         onGenerateScene={activeScenarioStoryboardNode?.data?.onScenarioSceneGenerate}
         onClearSceneImage={handleClearScenarioSceneImageSlot}
         onGenerateVideo={(scene, options = {}) => {
