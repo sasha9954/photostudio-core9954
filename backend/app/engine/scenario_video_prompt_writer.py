@@ -53,7 +53,7 @@ CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE = (
 IA2V_BASE_PROMPT_V1 = (
     "Use the uploaded image as the exact first frame and identity anchor. "
     "A performance shot of the same performer singing an emotional line. Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
-    "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
+    "Emotional eyes, controlled breathing, slight head tension, and controlled emotional upper-body movement. "
     "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in."
 )
 IDENTITY_NEGATIVE_GUARD = "different person, different face, changed face, changed body type, changed silhouette, different outfit, hairstyle drift, age drift, body proportion drift"
@@ -468,6 +468,85 @@ def _is_bad_prompt_cleanup(text: str) -> bool:
 def _contains_action_conflict_words(text: str) -> bool:
     lowered = str(text or "").lower()
     return any(word in lowered for word in _ACTION_CONFLICT_WORDS)
+
+
+def _resolve_lipsync_gesture_intensity(segment: dict[str, Any], scene_plan_row: dict[str, Any], audio_segment: dict[str, Any]) -> str:
+    def _to_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(str(value).strip())
+        except Exception:
+            return None
+
+    intensity_candidates: list[float] = []
+    for source in (segment, scene_plan_row, audio_segment):
+        for key in (
+            "intensity",
+            "segment_intensity",
+            "audio_intensity",
+            "energy",
+            "energy_level",
+            "emotion_intensity",
+        ):
+            parsed = _to_float(_safe_dict(source).get(key))
+            if parsed is not None:
+                intensity_candidates.append(parsed)
+
+    intensity_score = max(intensity_candidates) if intensity_candidates else 0.0
+    semantic_blob = " ".join(
+        str(_safe_dict(src).get(key) or "").strip().lower()
+        for src in (segment, scene_plan_row, audio_segment)
+        for key in ("arc_role", "narrative_function", "scene_goal", "story_beat_type", "emotional_intent")
+    )
+    high_markers = (
+        "climax",
+        "chorus",
+        "peak",
+        "emotional peak",
+        "powerful",
+        "intense",
+        "commanding",
+        "fierce",
+    )
+    medium_markers = (
+        "emotional",
+        "yearning",
+        "confident",
+        "assertive",
+        "determined",
+        "uplift",
+        "resolve",
+        "passionate",
+    )
+
+    if intensity_score >= 0.85 or any(marker in semantic_blob for marker in high_markers):
+        return "high"
+    if intensity_score >= 0.65 or any(marker in semantic_blob for marker in medium_markers):
+        return "medium"
+    return "low"
+
+
+def _lipsync_gesture_prompt_rule(gesture_intensity: str) -> str:
+    if gesture_intensity == "high":
+        return (
+            "Emotionally expressive but controlled upper-body performance, stronger natural hand gestures near chest and waist, "
+            "one hand may open outward or press briefly toward the chest to emphasize the phrase, subtle rhythmic shoulder and torso emphasis. "
+            "Hands stay below the face line, never cross the face, and never cover the mouth."
+        )
+    if gesture_intensity == "medium":
+        return (
+            "Controlled expressive upper-body performance, natural hand gestures near chest and waist, one hand may briefly open outward to emphasize the lyric, "
+            "subtle shoulder emphasis. Hands stay below the face line and never cover the mouth."
+        )
+    return (
+        "Very restrained upper-body performance, small natural hand presence near the torso, subtle breath-led shoulder motion. "
+        "Hands stay below the face line and never cover the mouth."
+    )
+
+
+def _is_lipsync_gesture_route(*, route: str, audio_sync_mode: str, requires_audio: bool) -> bool:
+    return route == "ia2v" or str(audio_sync_mode or "").strip().lower() == "lip_sync" or bool(requires_audio)
 
 
 def _strip_ia2v_positive_noise(text: str) -> str:
@@ -993,6 +1072,32 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     has_character_1 = "character_1" in json.dumps(fallback_row, ensure_ascii=False).lower()
 
     if route == "ia2v":
+        audio_segment = _safe_dict(fallback_row.get("audio_segment"))
+        hinted_audio_sync_mode = str(
+            _safe_dict(row.get("engine_hints")).get("audio_sync_mode")
+            or row.get("audio_sync_mode")
+            or fallback_prompt_row.get("audio_sync_mode")
+            or plan_row.get("audio_sync_mode")
+            or ""
+        ).strip().lower()
+        requires_audio_signal = bool(
+            row.get("requires_audio")
+            if "requires_audio" in row
+            else (
+                fallback_prompt_row.get("requires_audio")
+                if "requires_audio" in fallback_prompt_row
+                else plan_row.get("requires_audio")
+            )
+        ) or route == "ia2v"
+        apply_gesture_layer = _is_lipsync_gesture_route(
+            route=route,
+            audio_sync_mode=hinted_audio_sync_mode,
+            requires_audio=requires_audio_signal,
+        )
+        gesture_intensity = _resolve_lipsync_gesture_intensity(row, plan_row, audio_segment) if apply_gesture_layer else "low"
+        gesture_rule = _lipsync_gesture_prompt_rule(gesture_intensity)
+        hand_gesture_rule = "controlled expressive hand gestures near chest and waist"
+        mouth_safety_rule = "hands stay below face line and never cover mouth"
         lip_sync_shot_variant = str(
             row.get("lip_sync_shot_variant")
             or fallback_prompt_row.get("lip_sync_shot_variant")
@@ -1021,9 +1126,11 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             if clause.lower() in positive_prompt.lower():
                 continue
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {clause}".strip() if positive_prompt else clause
+        if apply_gesture_layer and gesture_rule.lower() not in positive_prompt.lower():
+            positive_prompt = f"{positive_prompt.rstrip('. ')}. {gesture_rule}".strip() if positive_prompt else gesture_rule
         positive_prompt = _append_clause(
             positive_prompt,
-            f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or 'minimal performance motion'}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
+            f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or hand_gesture_rule}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
         )
         if not positive_prompt.startswith("Use the uploaded image as the exact first frame and identity anchor."):
             positive_prompt = f"{IA2V_BASE_PROMPT_V1} {positive_prompt}".strip()
@@ -1034,6 +1141,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         gesture = ""
         location_zone = ""
         mouth_readability = ""
+        gesture_intensity = ""
+        hand_gesture_rule = ""
+        mouth_safety_rule = ""
     route_behavior_template = ""
     route_template_source = "route_default_template"
     if route == "i2v":
@@ -1043,7 +1153,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
     elif route == "ia2v":
-        route_behavior_template = "Performer-first singing mechanics only; minimal movement and steady camera."
+        route_behavior_template = "Performer-first lip-sync remains the priority, with controlled emotional upper-body movement and readable mouth."
         route_template_source = "ia2v_lipsync_template"
         if positive_prompt:
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {route_behavior_template}"
@@ -1070,6 +1180,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         negative_prompt = _append_clause(negative_prompt, DOMESTIC_WORLD_NEGATIVE_TERMS)
 
     if route == "ia2v":
+        negative_prompt = _append_clause(
+            negative_prompt,
+            "hands covering mouth, hands crossing face, hands blocking lips, hands blocking jaw, fingers over mouth, frantic arm waving, excessive choreography, wild gestures, malformed hands, extra hands, broken fingers, hand-face collision, motion blur over mouth",
+        )
         negative_prompt = _clean_ia2v_negative_prompt(negative_prompt)
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
@@ -1297,6 +1411,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             "route_type": route,
             "requires_first_frame": bool(metadata_defaults["requires_first_frame"]),
             "requires_last_frame": bool(metadata_defaults["requires_last_frame"]),
+            "gesture_intensity": gesture_intensity or None,
+            "hand_gesture_rule": hand_gesture_rule or None,
+            "mouth_safety_rule": mouth_safety_rule or None,
         },
         "audio_behavior_hints": str(row.get("audio_behavior_hints") or "").strip(),
         "speaker_role": speaker_role or None,
