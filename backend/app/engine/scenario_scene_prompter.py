@@ -52,16 +52,16 @@ _FIRST_LAST_NEGATIVE_PROMPT = (
     "camera drift, zoom spikes, chaotic reframing, body-axis jump, step, crouch, bow, torso dip, large arm action, spin, added actors, layout change, temporal instability, identity drift, outfit drift, finger choreography near face, wearable-touch micro choreography"
 )
 _IDENTITY_WARDROBE_NEGATIVE = (
-    "different woman, different face, changed face, changed body type, slimmer body, thinner waist, longer legs, narrower shoulders, changed bust, changed hips, changed silhouette, different outfit, changed neckline, raised neckline, high-neck top, turtleneck, closed collar, added collar, added sleeves, longer shirt, changed jewelry, missing jewelry, different hairstyle, different hair length, age drift, body proportion drift"
+    "different person, different face, changed face, changed body type, changed silhouette, different outfit, hairstyle drift, age drift, body proportion drift"
 )
 _GLOBAL_HERO_IDENTITY_LOCK = (
-    "GLOBAL HERO IDENTITY LOCK: The same woman must remain the same person in every scene. Preserve exact face identity, age impression, skin tone, hair color, hair length, hairstyle, facial structure, body proportions, height impression, shoulder width, waist/hip ratio, bust/hips balance, arm and leg thickness, posture family, outfit, jewelry, neckline, crop length and overall silhouette."
+    "GLOBAL HERO IDENTITY LOCK: Keep the same current performer identity in every scene. Preserve face identity, age impression, body proportions, hairstyle, clothing silhouette, outfit family and overall look from the current connected reference."
 )
 _BODY_CONTINUITY_LOCK = (
-    "BODY CONTINUITY: Do not make her slimmer, taller, younger, older, more athletic, more model-like, thinner-waisted, longer-legged, narrower-shouldered, or change her body type. Preserve the same body volume and silhouette from the established hero reference and/or the first successfully generated hero image."
+    "BODY CONTINUITY: Keep the same body type, proportions and silhouette from the current reference; avoid body-shape drift."
 )
 _WARDROBE_CONTINUITY_LOCK = (
-    "WARDROBE CONTINUITY: Keep the exact same outfit in every scene. Do not change neckline, collar, straps, sleeves, crop length, fabric coverage, color, material, jewelry or fit. If she wears a cropped top, it must remain the same cropped top with the same neckline and same visible skin coverage. Do not turn it into a high-neck top, turtleneck, closed collar, blouse, jacket, longer shirt, or different garment."
+    "WARDROBE CONTINUITY: Keep outfit continuity from the current reference when present; do not introduce unrelated wardrobe identity drift."
 )
 
 _GLOBAL_PROMPT_RULES = [
@@ -3517,6 +3517,8 @@ def _apply_storyboard_stage_metadata_passthrough(
     package: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     patched = dict(prompts_v11)
+    audio_map = _safe_dict(package.get("audio_map"))
+    global_audio_owner = str(audio_map.get("vocal_owner_role") or "").strip()
     storyboard_by_segment = {
         str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
         for row in prompt_rows
@@ -3540,6 +3542,8 @@ def _apply_storyboard_stage_metadata_passthrough(
     lip_sync_only_policy_applied = _is_lip_sync_only_character_1(package)
     lip_sync_only_i2v_segments: list[str] = []
     lip_sync_only_ia2v_segments: list[str] = []
+    repaired_owner_segments: list[str] = []
+    repaired_owner_count = 0
     for raw_segment in _safe_list(prompts_v11.get("segments")):
         segment = dict(_safe_dict(raw_segment))
         segment_id = str(segment.get("segment_id") or "").strip()
@@ -3564,7 +3568,15 @@ def _apply_storyboard_stage_metadata_passthrough(
 
         if route == "ia2v":
             lip_sync_only_ia2v_segments.append(segment_id)
-            inferred_owner = str(storyboard_row.get("vocal_owner_role") or "character_1").strip() or "character_1"
+            inferred_owner = str(storyboard_row.get("vocal_owner_role") or "").strip()
+            if inferred_owner.lower() in {"", "unknown", "auto", "none", "null"}:
+                inferred_owner = global_audio_owner
+            if inferred_owner.lower() in {"", "unknown", "auto", "none", "null"}:
+                inferred_owner = "character_1"
+            repaired = str(storyboard_row.get("vocal_owner_role") or "").strip().lower() in {"", "unknown", "auto", "none", "null"}
+            if repaired and segment_id:
+                repaired_owner_segments.append(segment_id)
+                repaired_owner_count += 1
             segment["speaker_role"] = inferred_owner
             segment["vocal_owner_role"] = inferred_owner
             segment["lip_sync_allowed"] = True
@@ -3574,11 +3586,14 @@ def _apply_storyboard_stage_metadata_passthrough(
             apply_ia2v_lipsync_canon_to_prompt_row(segment, source_scene=storyboard_row)
         elif lip_sync_only_policy_applied and route == "i2v":
             lip_sync_only_i2v_segments.append(segment_id)
+            segment["primary_role"] = ""
             segment["speaker_role"] = ""
+            segment["vocal_owner_role"] = ""
             segment["lip_sync_allowed"] = False
             segment["lip_sync_priority"] = "none"
             segment["mouth_visible_required"] = False
             segment["singing_readiness_required"] = False
+            segment["listener_reaction_allowed"] = False
             segment["visual_focus_role"] = "environment"
             segment["subject_priority"] = "environment"
 
@@ -3610,6 +3625,8 @@ def _apply_storyboard_stage_metadata_passthrough(
         "lip_sync_only_policy_applied": bool(lip_sync_only_policy_applied),
         "lip_sync_only_i2v_segments": [seg for seg in lip_sync_only_i2v_segments if seg],
         "lip_sync_only_ia2v_segments": [seg for seg in lip_sync_only_ia2v_segments if seg],
+        "scene_prompts_ia2v_vocal_owner_repaired_count": repaired_owner_count,
+        "scene_prompts_ia2v_vocal_owner_repaired_segments": [seg for seg in repaired_owner_segments if seg],
     }
 
 
@@ -3832,6 +3849,7 @@ def _sanitize_identity_and_visibility_conflicts(
     stale_identity_removed = 0
     repaired_segments: list[str] = []
     i2v_visual_removed = 0
+    lip_sync_only_i2v_segments: list[str] = []
     global_anchor, anchor_changed = _sanitize_global_style_anchor(str(out.get("global_style_anchor") or ""), story_core)
     out["global_style_anchor"] = global_anchor
     segments_out: list[dict[str, Any]] = []
@@ -3841,23 +3859,62 @@ def _sanitize_identity_and_visibility_conflicts(
         route = str(seg.get("route") or "").strip().lower()
         prompt_row = _safe_dict(rows_by_id.get(segment_id))
         mutated = False
+        if lip_sync_only and route == "i2v":
+            scene_goal = str(prompt_row.get("scene_goal") or "").strip()
+            narrative_function = str(prompt_row.get("narrative_function") or "").strip()
+            background_evidence = str(prompt_row.get("background_story_evidence") or "").strip()
+            photo_staging_goal = str(prompt_row.get("photo_staging_goal") or "").strip()
+            ltx_video_goal = str(prompt_row.get("ltx_video_goal") or "").strip()
+            subject_priority = str(_safe_dict(prompt_row.get("composition")).get("subject_priority") or prompt_row.get("subject_priority") or "").strip()
+            camera_intent = str(_safe_dict(prompt_row.get("visual_motion")).get("camera_intent") or "").strip()
+            global_style_anchor = str(prompt_row.get("global_style_anchor") or out.get("global_style_anchor") or "").strip()
+            still_focus = scene_goal or background_evidence or narrative_function or photo_staging_goal or "grounded world continuity"
+            motion_focus = ltx_video_goal or scene_goal or narrative_function or "grounded environment continuity"
+            photo_prompt = (
+                f"Environment-focused still frame: {still_focus}. "
+                "Grounded realistic world, no main performer visible, singer remains voiceover only."
+            ).strip()
+            if subject_priority or camera_intent or global_style_anchor:
+                photo_prompt = _append_prompt_clause(
+                    photo_prompt,
+                    ". ".join(part for part in [subject_priority, camera_intent, global_style_anchor] if part),
+                )
+            video_prompt = (
+                f"Environment-focused motion shot: {motion_focus}. "
+                "Subtle atmosphere/city/people/world motion only. No main performer visible. No lip-sync. Singer remains voiceover only."
+            ).strip()
+            if subject_priority or camera_intent or global_style_anchor:
+                video_prompt = _append_prompt_clause(
+                    video_prompt,
+                    ". ".join(part for part in [subject_priority, camera_intent, global_style_anchor] if part),
+                )
+            seg["photo_prompt"] = photo_prompt
+            seg["video_prompt"] = video_prompt
+            seg["positive_video_prompt"] = video_prompt
+            seg["primary_role"] = ""
+            seg["visual_focus_role"] = "environment"
+            seg["speaker_role"] = ""
+            seg["vocal_owner_role"] = ""
+            seg["lip_sync_allowed"] = False
+            seg["lip_sync_priority"] = "none"
+            seg["mouth_visible_required"] = False
+            seg["singing_readiness_required"] = False
+            seg["listener_reaction_allowed"] = False
+            base_negative = str(seg.get("negative_prompt") or "")
+            seg["negative_prompt"] = _append_prompt_clause(
+                base_negative,
+                "main performer visible, singer visible, lip-sync, mouth close-up, character_1 as main subject, hero close-up",
+            )
+            i2v_visual_removed += 1
+            lip_sync_only_i2v_segments.append(segment_id)
+            mutated = True
         for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "first_frame_prompt", "last_frame_prompt"):
             value = str(seg.get(field) or "")
             if any(p.search(value) for p in _IDENTITY_REFERENCE_LEAK_PATTERNS):
                 stale_identity_removed += 1
                 mutated = True
                 if lip_sync_only and route == "i2v":
-                    world_hint = ". ".join(
-                        part
-                        for part in [
-                            str(prompt_row.get("scene_goal") or "").strip(),
-                            str(prompt_row.get("local_zone_hint") or "").strip(),
-                            "Environment-focused cutaway, no main performer visible.",
-                        ]
-                        if part
-                    ).strip()
-                    seg[field] = world_hint
-                    i2v_visual_removed += 1
+                    seg[field] = str(seg.get("video_prompt") or seg.get("photo_prompt") or "")
                 else:
                     seg[field] = re.sub(r"(?i)\bshow the same (woman|man|person)[^.]*\.?", " ", value).strip()
         if mutated and segment_id:
@@ -3870,6 +3927,8 @@ def _sanitize_identity_and_visibility_conflicts(
         "stale_identity_clause_removed_count": stale_identity_removed,
         "stale_wardrobe_clause_removed_count": 0,
         "lip_sync_only_i2v_hero_visual_removed_count": i2v_visual_removed,
+        "lip_sync_only_i2v_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_segments if seg])),
+        "lip_sync_only_policy_applied": bool(lip_sync_only),
     }
 
 
