@@ -3054,7 +3054,7 @@ def _build_prompts_v11_compact_retry_prompt(
     validation_feedback: str = "",
 ) -> str:
     compact_rows: list[dict[str, Any]] = []
-    for row_raw in prompt_rows[:7]:
+    for row_raw in prompt_rows:
         row = _safe_dict(row_raw)
         compact_rows.append(
             {
@@ -3964,6 +3964,9 @@ def build_gemini_scene_prompts(
     if diagnostics.get("scene_prompts_timed_out") and diagnostics.get("scene_prompts_response_was_empty_after_timeout"):
         error_code = "scene_prompts_timeout_empty_response"
         validation_error = "scene_prompts_timeout_empty_response"
+        diagnostics["scene_prompts_error_code"] = "scene_prompts_timeout_empty_response"
+        diagnostics["scene_prompts_validation_error"] = "scene_prompts_timeout_empty_response"
+        diagnostics["scene_prompts_failure_reason"] = "scene_prompts_timeout_empty_response"
     if error_code or validation_error:
         diagnostics["scene_prompts_failure_reason"] = str(validation_error or error_code).strip()
     if diagnostics.get("scene_prompts_timed_out"):
@@ -4012,6 +4015,15 @@ def build_gemini_scene_prompts(
         and scene_prompts.get("prompts_version") == "1.1"
         and bool(diagnostics.get("scene_prompts_segment_coverage_ok"))
     )
+    if ok and used_fallback and diagnostics.get("scene_prompts_fallback_rebuild_from_scene_plan"):
+        diagnostics["scene_prompts_timed_out"] = False
+        diagnostics["scene_prompts_response_was_empty_after_timeout"] = False
+        diagnostics["scene_prompts_error_code"] = ""
+        diagnostics["scene_prompts_validation_error"] = ""
+        diagnostics["scene_prompts_failure_reason"] = "scene_prompts_fallback_rebuild_from_scene_plan"
+        error_code = ""
+        validation_error = ""
+        error = ""
     final_error = (
         (
             "scene_prompts_timeout_empty_response"
