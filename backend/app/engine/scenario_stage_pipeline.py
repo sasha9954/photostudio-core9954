@@ -8622,6 +8622,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_capability_guard_applied"] = False
     diagnostics["scene_plan_validation_error"] = ""
     diagnostics["scene_plan_error_code"] = ""
+    diagnostics["scene_plan_validation_errors"] = []
+    diagnostics["scene_plan_error_codes"] = []
     diagnostics["scene_plan_scenes_version"] = ""
     diagnostics["scene_plan_segment_count_expected"] = 0
     diagnostics["scene_plan_segment_count_actual"] = 0
@@ -8641,6 +8643,22 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = False
     diagnostics["scene_plan_route_budget_validation_mode"] = "mixed"
     diagnostics["scene_plan_lipsync_streak_warning"] = ""
+    diagnostics["scene_plan_route_budget_mismatch"] = False
+    diagnostics["scene_plan_enum_invalid_detected"] = False
+    diagnostics["scene_plan_enum_invalid_field"] = ""
+    diagnostics["scene_plan_enum_invalid_value"] = ""
+    diagnostics["scene_plan_enum_invalid_allowed_values"] = []
+    diagnostics["scene_plan_enum_invalid_segment_id"] = ""
+    diagnostics["scene_plan_enum_invalid_rows"] = []
+    diagnostics["scene_plan_enum_repair_applied"] = False
+    diagnostics["scene_plan_enum_repair_count"] = 0
+    diagnostics["scene_plan_enum_repair_rows"] = []
+    diagnostics["scene_plan_failed_candidate_preview"] = []
+    diagnostics["scene_plan_failed_candidate_route_mix"] = {}
+    diagnostics["scene_plan_failed_candidate_rows_count"] = 0
+    diagnostics["scene_plan_failed_candidate_segment_ids"] = []
+    diagnostics["scene_plan_failed_candidate_first_routes"] = []
+    diagnostics["scene_plan_failed_candidate_validation_errors"] = []
     diagnostics["scenes_vocal_owner_role_used"] = "unknown"
     diagnostics["validation_error"] = ""
     diagnostics["scene_plan_error"] = ""
@@ -8756,54 +8774,54 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     route_budget_ok = True
     route_budget_feedback = ""
     route_budget_meta: dict[str, Any] = {}
-    if not hard_fail_error:
-        route_budget_ok, route_budget_feedback, route_budget_meta = _validate_scene_plan_route_budget(
+    route_budget_ok, route_budget_feedback, route_budget_meta = _validate_scene_plan_route_budget(
+        package=package,
+        scene_plan=scene_plan,
+        diagnostics=diagnostics,
+    )
+    if not route_budget_ok:
+        diagnostics["scene_plan_route_budget_retry_used"] = True
+        diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
+        diagnostics["scene_plan_first_attempt_error"] = diagnostics.get("scene_plan_first_attempt_error") or "route_budget_mismatch"
+        diagnostics["scene_plan_retry_reason"] = "route_budget_mismatch"
+        diagnostics["scene_plan_retry_prompt_mode"] = "compact_route_budget_retry"
+        _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
+        retry_result = build_gemini_scene_plan(
+            api_key=gemini_api_key,
+            package=scene_plan_prompt_package,
+            validation_feedback=route_budget_feedback,
+            prompt_mode="compact_route_budget_retry",
+        )
+        retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
+        retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
             package=package,
-            scene_plan=scene_plan,
+            scene_plan=retry_scene_plan,
             diagnostics=diagnostics,
         )
-        if not route_budget_ok:
-            diagnostics["scene_plan_route_budget_retry_used"] = True
-            diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
-            diagnostics["scene_plan_first_attempt_error"] = "route_budget_mismatch"
-            diagnostics["scene_plan_retry_reason"] = "route_budget_mismatch"
-            diagnostics["scene_plan_retry_prompt_mode"] = "compact_route_budget_retry"
-            _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
-            retry_result = build_gemini_scene_plan(
-                api_key=gemini_api_key,
-                package=scene_plan_prompt_package,
-                validation_feedback=route_budget_feedback,
-                prompt_mode="compact_route_budget_retry",
-            )
-            retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
-            retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
-                package=package,
-                scene_plan=retry_scene_plan,
-                diagnostics=diagnostics,
-            )
-            retry_diag = _safe_dict(retry_result.get("diagnostics"))
-            diagnostics["scene_plan_retry_timed_out"] = bool(retry_diag.get("timed_out"))
-            diagnostics["scene_plan_retry_empty_response"] = bool(
-                retry_diag.get("response_was_empty_after_timeout")
-                or (not _scene_plan_rows_for_validation(retry_scene_plan))
-            )
-            result = retry_result
-            scene_plan = retry_scene_plan
-            route_budget_ok = retry_ok
-            route_budget_feedback = retry_feedback
-            route_budget_meta = retry_meta
-            timeout_empty_retry = bool(diagnostics.get("scene_plan_retry_timed_out") or diagnostics.get("scene_plan_retry_empty_response"))
-            if timeout_empty_retry:
-                result["ok"] = False
-                result["validation_error"] = "scene_plan_timeout_empty_response"
-                result["error"] = "scene_plan_timeout"
-                result["error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE"
-                hard_fail_error = "scene_plan_timeout_empty_response"
-            if (not route_budget_ok) and (not timeout_empty_retry):
-                result["ok"] = False
-                result["validation_error"] = route_budget_feedback or "scene_plan_route_budget_validation_failed"
-                result["error"] = result.get("error") or "scene_plan_route_budget_validation_failed"
-                hard_fail_error = str(result["validation_error"])
+        retry_diag = _safe_dict(retry_result.get("diagnostics"))
+        diagnostics["scene_plan_retry_timed_out"] = bool(retry_diag.get("timed_out"))
+        diagnostics["scene_plan_retry_empty_response"] = bool(
+            retry_diag.get("response_was_empty_after_timeout")
+            or (not _scene_plan_rows_for_validation(retry_scene_plan))
+        )
+        result = retry_result
+        scene_plan = retry_scene_plan
+        route_budget_ok = retry_ok
+        route_budget_feedback = retry_feedback
+        route_budget_meta = retry_meta
+        timeout_empty_retry = bool(diagnostics.get("scene_plan_retry_timed_out") or diagnostics.get("scene_plan_retry_empty_response"))
+        if timeout_empty_retry:
+            result["ok"] = False
+            result["validation_error"] = "scene_plan_timeout_empty_response"
+            result["error"] = "scene_plan_timeout"
+            result["error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE"
+            hard_fail_error = "scene_plan_timeout_empty_response"
+        if (not route_budget_ok) and (not timeout_empty_retry):
+            result["ok"] = False
+            result["validation_error"] = "route_budget_mismatch"
+            result["error"] = "scene_plan_route_budget_validation_failed"
+            result["error_code"] = "SCENES_ROUTE_BUDGET_MISMATCH"
+            hard_fail_error = "route_budget_mismatch"
 
     scene_diag = _safe_dict(result.get("diagnostics"))
     route_counts = _safe_dict(scene_diag.get("route_counts"))
@@ -8843,6 +8861,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     diagnostics["scene_plan_validation_error"] = str(result.get("validation_error") or "")
     diagnostics["scene_plan_error_code"] = str(result.get("error_code") or scene_diag.get("error_code") or "")
+    diagnostics["scene_plan_validation_errors"] = _safe_list(scene_diag.get("scene_plan_validation_errors"))
+    diagnostics["scene_plan_error_codes"] = _safe_list(scene_diag.get("scene_plan_error_codes"))
     diagnostics["scene_plan_scenes_version"] = str(_safe_dict(scene_plan).get("scenes_version") or scene_diag.get("scene_plan_scenes_version") or "")
     diagnostics["scene_plan_segment_count_expected"] = int(scene_diag.get("segment_count_expected") or 0)
     diagnostics["scene_plan_segment_count_actual"] = int(scene_diag.get("segment_count_actual") or 0)
@@ -8882,6 +8902,16 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = bool(route_budget_meta.get("lipsync_streak_guard_relaxed"))
     diagnostics["scene_plan_route_budget_validation_mode"] = str(route_budget_meta.get("route_budget_validation_mode") or "mixed")
     diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
+    diagnostics["scene_plan_route_budget_mismatch"] = not bool(route_budget_ok)
+    diagnostics["scene_plan_enum_invalid_detected"] = bool(scene_diag.get("scene_plan_enum_invalid_detected"))
+    diagnostics["scene_plan_enum_invalid_field"] = str(scene_diag.get("scene_plan_enum_invalid_field") or "")
+    diagnostics["scene_plan_enum_invalid_value"] = str(scene_diag.get("scene_plan_enum_invalid_value") or "")
+    diagnostics["scene_plan_enum_invalid_allowed_values"] = _safe_list(scene_diag.get("scene_plan_enum_invalid_allowed_values"))
+    diagnostics["scene_plan_enum_invalid_segment_id"] = str(scene_diag.get("scene_plan_enum_invalid_segment_id") or "")
+    diagnostics["scene_plan_enum_invalid_rows"] = _safe_list(scene_diag.get("scene_plan_enum_invalid_rows"))
+    diagnostics["scene_plan_enum_repair_applied"] = bool(scene_diag.get("scene_plan_enum_repair_applied"))
+    diagnostics["scene_plan_enum_repair_count"] = int(scene_diag.get("scene_plan_enum_repair_count") or 0)
+    diagnostics["scene_plan_enum_repair_rows"] = _safe_list(scene_diag.get("scene_plan_enum_repair_rows"))
     diagnostics["scene_plan_route_locks_by_segment"] = _safe_dict(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_applied"] = bool(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_source"] = str(route_lock_source or "")
@@ -8895,8 +8925,17 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_after_lock"] = dict(locked_route_counts)
     diagnostics["scenes_vocal_owner_role_used"] = str(scene_diag.get("vocal_owner_role") or "unknown")
     if not route_budget_ok:
-        diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
-        diagnostics["scene_plan_error_code"] = diagnostics["scene_plan_error_code"] or "SCENES_ROUTE_INCOMPATIBILITY"
+        diagnostics["scene_plan_validation_error"] = "route_budget_mismatch"
+        diagnostics["scene_plan_error_code"] = "SCENES_ROUTE_BUDGET_MISMATCH"
+        if "route_budget_mismatch" not in diagnostics["scene_plan_validation_errors"]:
+            diagnostics["scene_plan_validation_errors"].append("route_budget_mismatch")
+        if "SCENES_ROUTE_BUDGET_MISMATCH" not in diagnostics["scene_plan_error_codes"]:
+            diagnostics["scene_plan_error_codes"].append("SCENES_ROUTE_BUDGET_MISMATCH")
+    if diagnostics.get("scene_plan_enum_invalid_detected"):
+        if "enum_invalid" not in diagnostics["scene_plan_validation_errors"]:
+            diagnostics["scene_plan_validation_errors"].append("enum_invalid")
+        if "SCENES_ENUM_INVALID" not in diagnostics["scene_plan_error_codes"]:
+            diagnostics["scene_plan_error_codes"].append("SCENES_ENUM_INVALID")
     timeout_empty = bool(
         diagnostics.get("scene_plan_timed_out")
         or diagnostics.get("scene_plan_response_was_empty_after_timeout")
@@ -8925,6 +8964,23 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_plan_invalid")
     package["diagnostics"] = diagnostics
     if hard_fail_error:
+        failed_rows = _scene_plan_rows_for_validation(scene_plan)
+        failed_routes = [
+            str(_safe_dict(row).get("route") or "").strip().lower()
+            for row in failed_rows
+        ]
+        failed_segment_ids = [
+            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+            for row in failed_rows
+        ]
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["scene_plan_failed_candidate_preview"] = failed_rows[:3]
+        diagnostics["scene_plan_failed_candidate_route_mix"] = _safe_dict(route_budget_meta.get("actual_route_mix"))
+        diagnostics["scene_plan_failed_candidate_rows_count"] = len(failed_rows)
+        diagnostics["scene_plan_failed_candidate_segment_ids"] = [sid for sid in failed_segment_ids if sid]
+        diagnostics["scene_plan_failed_candidate_first_routes"] = failed_routes[:5]
+        diagnostics["scene_plan_failed_candidate_validation_errors"] = _safe_list(diagnostics.get("scene_plan_validation_errors"))
+        package["diagnostics"] = diagnostics
         can_restore_snapshot = _scene_plan_snapshot_restore_is_safe(
             package=package,
             previous_scene_plan=previous_scene_plan,
