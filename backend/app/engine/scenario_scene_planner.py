@@ -615,6 +615,11 @@ def _build_scene_segment_rows(
     return normalized, list(dict.fromkeys(missing_core_source_segments))
 
 
+def _expected_scene_count_from_package(package: dict[str, Any]) -> int:
+    audio_map = _safe_dict(package.get("audio_map"))
+    return len(_safe_list(audio_map.get("segments")))
+
+
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
     scene_casting = _safe_list(role_plan.get("scene_casting"))
@@ -715,7 +720,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     hard_route_assignments = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
     hard_route_map_applied = bool(hard_route_assignments)
-    resolved_scene_count = len(scene_segment_rows)
+    resolved_scene_count = _expected_scene_count_from_package(package)
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(resolved_scene_count, creative_config)
     route_budget_original_targets = {
         "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
@@ -913,7 +918,46 @@ def _apply_scene_contract_constraints(
     return out, warnings
 
 
-def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> str:
+def _build_compact_route_budget_retry_context(context: dict[str, Any]) -> dict[str, Any]:
+    audio_segments: list[dict[str, Any]] = []
+    for row in _safe_list(_safe_dict(context.get("audio_map")).get("segments")):
+        segment = _safe_dict(row)
+        audio_segments.append(
+            {
+                "segment_id": str(segment.get("segment_id") or "").strip(),
+                "t0": _round3(segment.get("t0")),
+                "t1": _round3(segment.get("t1")),
+                "duration_sec": _round3(segment.get("duration_sec")),
+                "transcript_slice": str(segment.get("transcript_slice") or "").strip(),
+                "is_lip_sync_candidate": bool(segment.get("is_lip_sync_candidate")),
+            }
+        )
+    narrative_segments: list[dict[str, Any]] = []
+    for row in _safe_list(_safe_dict(context.get("audio_map")).get("segments")):
+        segment = _safe_dict(row)
+        narrative_segments.append(
+            {
+                "segment_id": str(segment.get("segment_id") or "").strip(),
+                "beat_purpose": str(segment.get("beat_purpose") or "").strip(),
+                "emotional_key": str(segment.get("emotional_key") or "").strip(),
+            }
+        )
+    route_budget_contract = _safe_dict(_safe_dict(context.get("clip_scene_policy")).get("route_budget_contract"))
+    return {
+        "audio_map": {"segments": audio_segments, "vocal_owner_role": str(_safe_dict(context.get("audio_map")).get("vocal_owner_role") or "")},
+        "story_core": {"narrative_segments": narrative_segments},
+        "role_plan": {"scene_casting": _safe_list(_safe_dict(context.get("role_plan")).get("scene_casting"))},
+        "character_appearance_modes_by_role": _safe_dict(context.get("character_appearance_modes_by_role")),
+        "route_budget_contract": {
+            "target_total_scenes": int(route_budget_contract.get("target_total_scenes") or len(audio_segments)),
+            "target_counts": _safe_dict(route_budget_contract.get("target_counts")),
+            "first_last_forbidden": bool(route_budget_contract.get("first_last_forbidden")),
+            "preset": str(route_budget_contract.get("route_strategy_preset") or ""),
+        },
+    }
+
+
+def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", prompt_mode: str = "default") -> str:
     feedback_block = ""
     if validation_feedback:
         feedback_block = (
@@ -928,6 +972,26 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "") -> 
         if hard_route_map
         else "Choose segment routes according to target_counts and dramaturgy.\\n"
     )
+    if prompt_mode == "compact_route_budget_retry":
+        compact_context = _build_compact_route_budget_retry_context(context)
+        return (
+            "You are SCENES stage only.\n"
+            "Return STRICT JSON only. No markdown, no prose.\n"
+            "Return exactly one storyboard row per segment_id from audio_map.segments.\n"
+            "Do not invent/remove segment_id and do not return empty storyboard.\n"
+            "Route budget contract is HARD and must be matched exactly.\n"
+            "No first_last allowed when target first_last is 0.\n"
+            "If character_1 appearanceMode is lip_sync_only:\n"
+            "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
+            "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; lip_sync_allowed=false; use environment/city/street/port/courtyard/people/atmosphere as visual subject.\n"
+            f"Fix exactly: {validation_feedback}\n"
+            "Output contract:\n"
+            "{\n"
+            '  "scenes_version":"1.1",\n'
+            '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","story_beat_type":"physical_event|vocal_emotion|state_transition","photo_staging_goal":"","ltx_video_goal":"","background_story_evidence":"","foreground_performance_rule":"","object_action_allowed":true,"singing_readiness_required":false,"ia2v_photo_readability_notes":"","speaker_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\n'
+            "}\n\n"
+            f"SCENE_PLANNING_CONTEXT:\n{json.dumps(_compact_prompt_payload(compact_context), ensure_ascii=False)}"
+        )
     return (
         "You are SCENES stage only.\\n"
         "Return STRICT JSON only. No markdown, no prose.\\n"
@@ -2021,7 +2085,8 @@ def _normalize_scene_plan(
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
     route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
-    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(len(normalized_storyboard), creative_config)
+    expected_scene_count = len(scene_segment_rows)
+    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
     route_budget_original_targets = {
         "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
         "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
@@ -2136,7 +2201,7 @@ def _normalize_scene_plan(
         "scene_plan_route_strategy_preset": route_budget_preset,
         "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
         "route_budget_original_targets": route_budget_original_targets,
-        "route_budget_resolved_scene_count": len(scene_segment_rows),
+        "route_budget_resolved_scene_count": expected_scene_count,
         "route_budget_resolved_targets": route_budget_target,
         "route_budget_resolved_from": route_budget_resolved_from,
         "route_budget_preset": route_budget_preset,
@@ -2165,7 +2230,13 @@ def _normalize_scene_plan(
         error_code = "SCENES_SCHEMA_INVALID"
     return plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code
 
-def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation_feedback: str = "") -> dict[str, Any]:
+def build_gemini_scene_plan(
+    *,
+    api_key: str,
+    package: dict[str, Any],
+    validation_feedback: str = "",
+    prompt_mode: str = "default",
+) -> dict[str, Any]:
     context, aux = _build_scene_planning_context(package)
     scene_segment_rows = _safe_list(aux.get("scene_segment_rows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
@@ -2200,6 +2271,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
         "timed_out": False,
         "timeout_retry_attempted": False,
         "response_was_empty_after_timeout": False,
+        "scene_plan_retry_prompt_mode": str(prompt_mode or "default"),
         **capability_diag,
     }
 
@@ -2407,7 +2479,7 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             "diagnostics": diagnostics,
         }
 
-    prompt = _build_prompt(context, validation_feedback=validation_feedback)
+    prompt = _build_prompt(context, validation_feedback=validation_feedback, prompt_mode=prompt_mode)
     configured_timeout = get_scenario_stage_timeout("scene_plan")
 
     def _run_generation(prompt_text: str) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
@@ -2484,7 +2556,8 @@ def build_gemini_scene_plan(*, api_key: str, package: dict[str, Any], validation
             include_debug_raw=include_debug_raw,
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
         )
-        diagnostics["error_code"] = "scene_plan_timeout" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
+        diagnostics["error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
+        validation_error = "scene_plan_timeout_empty_response" if timeout_error else validation_error
         diagnostics.update(
             _collect_scene_plan_diagnostics(
                 scene_plan=scene_plan,

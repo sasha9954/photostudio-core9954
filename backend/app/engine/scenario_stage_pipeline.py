@@ -1551,6 +1551,20 @@ def compute_no_first_last_50_50_targets(scene_count: int) -> dict[str, int]:
     }
 
 
+def _expected_scene_count_from_package(package: dict[str, Any]) -> int:
+    audio_segments = _safe_list(_safe_dict(package.get("audio_map")).get("segments"))
+    return len(audio_segments)
+
+
+def _expected_scene_segment_ids_from_package(package: dict[str, Any]) -> list[str]:
+    segment_ids: list[str] = []
+    for idx, row in enumerate(_safe_list(_safe_dict(package.get("audio_map")).get("segments")), start=1):
+        segment_id = str(_safe_dict(row).get("segment_id") or f"seg_{idx:02d}").strip()
+        if segment_id:
+            segment_ids.append(segment_id)
+    return segment_ids
+
+
 _SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS = [
     "identity_source",
     "identity_rule",
@@ -1844,6 +1858,25 @@ def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, sce
             + "\nFor i2v scenes, speaker_role must be an empty string. "
             "For ia2v scenes, speaker_role must be character_1. "
             "Do not use unknown/none/location/props/character_2 as speaker_role."
+        )
+    if ve == "route_budget_mismatch":
+        expected_count = int(_safe_dict(scene_diag).get("segment_count_expected") or 0)
+        target = _safe_dict(scene_diag.get("route_budget_resolved_targets") or scene_diag.get("scene_plan_route_budget_target"))
+        return (
+            "You returned wrong route distribution.\n"
+            f"There are exactly {expected_count} segment_id rows.\n"
+            "Return exactly one storyboard row per segment_id.\n"
+            "Required route budget:\n"
+            f"ia2v: {int(target.get('ia2v') or 0)}\n"
+            f"i2v: {int(target.get('i2v') or 0)}\n"
+            f"first_last: {int(target.get('first_last') or 0)}\n\n"
+            "No first_last is allowed when target first_last is 0.\n"
+            "Because character_1 appearanceMode can be lip_sync_only: ia2v rows require character_1 as physical speaker "
+            "(speaker_role=character_1, lip_sync_allowed=true, mouth_visible_required=true). "
+            "For i2v rows, character_1 must not be primary physical subject and speaker_role must be empty with lip_sync_allowed=false. "
+            "Use environment/city/street/port/courtyard/people/atmosphere as visual subject when needed.\n"
+            "Do not invent or remove segment_id.\n"
+            "Do not return empty storyboard."
         )
     return base
 
@@ -2403,7 +2436,8 @@ def _validate_scene_plan_route_budget(
         else:
             current_lipsync_streak = 0
 
-    target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
+    expected_scene_count = _expected_scene_count_from_package(package)
+    target_budget = _compute_route_budget_for_total(expected_scene_count, creative_config)
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
     preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
     original_targets = {
@@ -2414,13 +2448,13 @@ def _validate_scene_plan_route_budget(
     resolved_from = "audio_map_segments_count" if preset_name == "no_first_last_50_50_0" else "creative_config"
     strict_no_first_last_50_50_0 = preset_name == "no_first_last_50_50_0"
     all_lipsync_override = _is_all_lipsync_override_mode(
-        total_scenes=len(scene_rows),
+        total_scenes=expected_scene_count,
         creative_config=creative_config,
         target_budget=target_budget,
     )
     validation_mode = "all_lipsync_override" if all_lipsync_override else "mixed"
     max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
-    tolerance = 0 if strict_no_first_last_50_50_0 else (1 if len(scene_rows) >= 6 else 0)
+    tolerance = 0 if strict_no_first_last_50_50_0 else (1 if expected_scene_count >= 6 else 0)
     streak_guard_relaxed = all_lipsync_override
     lipsync_streak_warning = "all_lipsync_override_active" if streak_guard_relaxed else ""
     errors: list[str] = []
@@ -2432,9 +2466,9 @@ def _validate_scene_plan_route_budget(
     if longest_lipsync_streak > max_consecutive and not streak_guard_relaxed:
         errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
     target_first_last = int(target_budget.get("first_last") or 0)
-    if mode == "auto" and target_first_last > 0 and route_counts.get("first_last", 0) <= 0 and len(scene_rows) >= 4:
+    if mode == "auto" and target_first_last > 0 and route_counts.get("first_last", 0) <= 0 and expected_scene_count >= 4:
         errors.append("first_last share missing for visual variety")
-    if mode == "custom" and len(scene_rows) > 0 and sum(route_counts.values()) <= 0:
+    if mode == "custom" and expected_scene_count > 0 and sum(route_counts.values()) <= 0:
         errors.append("route distribution invalid: no supported routes found")
     duration_sec = float(input_pkg.get("audio_duration_sec") or 0.0)
     feedback_prefix = (
@@ -2450,7 +2484,7 @@ def _validate_scene_plan_route_budget(
     if strict_no_first_last_50_50_0 and errors:
         feedback = (
             "route distribution must match preset no_first_last_50_50_0 exactly: "
-            f"total={len(scene_rows)}, i2v={int(target_budget.get('i2v') or 0)}, "
+            f"total={expected_scene_count}, i2v={int(target_budget.get('i2v') or 0)}, "
             f"ia2v={int(target_budget.get('ia2v') or 0)}, first_last={target_first_last}; "
             "ia2v only on vocal windows with character_1 mouth/face visibility; "
             "i2v for non-speaking action/environment beats; no first_last scenes."
@@ -2469,7 +2503,7 @@ def _validate_scene_plan_route_budget(
         "route_strategy_preset": preset_name,
         "strict_preset_enforced": strict_no_first_last_50_50_0,
         "route_budget_original_targets": original_targets,
-        "route_budget_resolved_scene_count": len(scene_rows),
+        "route_budget_resolved_scene_count": expected_scene_count,
         "route_budget_resolved_targets": target_budget,
         "route_budget_resolved_from": resolved_from,
         "route_budget_preset": preset_name,
@@ -2596,6 +2630,40 @@ def _collect_scene_plan_route_semantic_mismatches(scene_plan: dict[str, Any]) ->
                 {"segment_id": segment_id, "route": route, "story_beat_type": story_beat_type, "reason": "i2v_with_singing_readiness_required"}
             )
     return mismatches
+
+
+def _scene_plan_snapshot_restore_is_safe(
+    *,
+    package: dict[str, Any],
+    previous_scene_plan: dict[str, Any],
+    resolved_target_budget: dict[str, Any],
+) -> bool:
+    if not _has_valid_scene_plan_payload(previous_scene_plan):
+        return False
+    expected_segment_ids = _expected_scene_segment_ids_from_package(package)
+    if not expected_segment_ids:
+        return False
+    previous_rows = _scene_plan_rows_for_validation(previous_scene_plan)
+    previous_segment_ids = [
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        for row in previous_rows
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    ]
+    if previous_segment_ids != expected_segment_ids:
+        return False
+    previous_mix = _scene_plan_route_counts(previous_scene_plan)
+    target_mix = {
+        "i2v": int(_safe_dict(resolved_target_budget).get("i2v") or 0),
+        "ia2v": int(_safe_dict(resolved_target_budget).get("ia2v") or 0),
+        "first_last": int(_safe_dict(resolved_target_budget).get("first_last") or 0),
+    }
+    if previous_mix != target_mix:
+        return False
+    current_signature = _current_scenario_input_signature(package)
+    previous_signature = str(_safe_dict(previous_scene_plan).get("created_for_signature") or "")
+    if current_signature and previous_signature and current_signature != previous_signature:
+        return False
+    return True
 
 
 def _resolve_audio_semantic_source_type(input_pkg: dict[str, Any]) -> str:
@@ -8587,6 +8655,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_timed_out"] = False
     diagnostics["scene_plan_timeout_retry_attempted"] = False
     diagnostics["scene_plan_response_was_empty_after_timeout"] = False
+    diagnostics["scene_plan_first_attempt_error"] = ""
+    diagnostics["scene_plan_retry_reason"] = ""
+    diagnostics["scene_plan_retry_prompt_mode"] = ""
+    diagnostics["scene_plan_retry_timed_out"] = False
+    diagnostics["scene_plan_retry_empty_response"] = False
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
@@ -8601,6 +8674,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     initial_validation_error = str(result.get("validation_error") or "").strip()
     if initial_validation_error:
+        diagnostics["scene_plan_first_attempt_error"] = initial_validation_error
+        diagnostics["scene_plan_retry_reason"] = initial_validation_error
+        diagnostics["scene_plan_retry_prompt_mode"] = "default"
         validation_error_code = str(result.get("error_code") or "").strip()
         validation_feedback = _build_scene_plan_retry_feedback(
             initial_validation_error,
@@ -8687,11 +8763,15 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         if not route_budget_ok:
             diagnostics["scene_plan_route_budget_retry_used"] = True
             diagnostics["scene_plan_route_budget_feedback"] = route_budget_feedback
+            diagnostics["scene_plan_first_attempt_error"] = "route_budget_mismatch"
+            diagnostics["scene_plan_retry_reason"] = "route_budget_mismatch"
+            diagnostics["scene_plan_retry_prompt_mode"] = "compact_route_budget_retry"
             _append_diag_event(package, f"scene_plan route budget validation failed, retrying once: {route_budget_feedback}", stage_id="scene_plan")
             retry_result = build_gemini_scene_plan(
                 api_key=gemini_api_key,
                 package=scene_plan_prompt_package,
                 validation_feedback=route_budget_feedback,
+                prompt_mode="compact_route_budget_retry",
             )
             retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
@@ -8699,12 +8779,25 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 scene_plan=retry_scene_plan,
                 diagnostics=diagnostics,
             )
+            retry_diag = _safe_dict(retry_result.get("diagnostics"))
+            diagnostics["scene_plan_retry_timed_out"] = bool(retry_diag.get("timed_out"))
+            diagnostics["scene_plan_retry_empty_response"] = bool(
+                retry_diag.get("response_was_empty_after_timeout")
+                or (not _scene_plan_rows_for_validation(retry_scene_plan))
+            )
             result = retry_result
             scene_plan = retry_scene_plan
             route_budget_ok = retry_ok
             route_budget_feedback = retry_feedback
             route_budget_meta = retry_meta
-            if not route_budget_ok:
+            timeout_empty_retry = bool(diagnostics.get("scene_plan_retry_timed_out") or diagnostics.get("scene_plan_retry_empty_response"))
+            if timeout_empty_retry:
+                result["ok"] = False
+                result["validation_error"] = "scene_plan_timeout_empty_response"
+                result["error"] = "scene_plan_timeout"
+                result["error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE"
+                hard_fail_error = "scene_plan_timeout_empty_response"
+            if (not route_budget_ok) and (not timeout_empty_retry):
                 result["ok"] = False
                 result["validation_error"] = route_budget_feedback or "scene_plan_route_budget_validation_failed"
                 result["error"] = result.get("error") or "scene_plan_route_budget_validation_failed"
@@ -8802,16 +8895,40 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     if not route_budget_ok:
         diagnostics["scene_plan_validation_error"] = route_budget_feedback or diagnostics["scene_plan_validation_error"]
         diagnostics["scene_plan_error_code"] = diagnostics["scene_plan_error_code"] or "SCENES_ROUTE_INCOMPATIBILITY"
+    timeout_empty = bool(
+        diagnostics.get("scene_plan_timed_out")
+        or diagnostics.get("scene_plan_response_was_empty_after_timeout")
+        or (
+            diagnostics.get("scene_plan_segment_count_actual") == 0
+            and (
+                diagnostics.get("scene_plan_retry_timed_out")
+                or diagnostics.get("scene_plan_retry_empty_response")
+            )
+        )
+    )
+    if timeout_empty and int(diagnostics.get("scene_plan_segment_count_actual") or 0) == 0:
+        diagnostics["scene_plan_validation_error"] = "scene_plan_timeout_empty_response"
+        diagnostics["scene_plan_error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE"
+        diagnostics["scene_plan_failure_reason"] = "scene_plan_timeout_empty_response"
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
+    if timeout_empty and int(diagnostics.get("scene_plan_segment_count_actual") or 0) == 0:
+        diagnostics["scene_plan_error"] = "scene_plan_timeout"
     diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("storyboard")))
+    if timeout_empty and diagnostics["scene_plan_empty"]:
+        hard_fail_error = "scene_plan_timeout_empty_response"
     if not hard_fail_error:
         result_has_validation_error = bool(str(result.get("validation_error") or "").strip())
         if (not bool(result.get("ok"))) or result_has_validation_error:
             hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_plan_invalid")
     package["diagnostics"] = diagnostics
     if hard_fail_error:
-        if previous_scene_plan_valid:
+        can_restore_snapshot = _scene_plan_snapshot_restore_is_safe(
+            package=package,
+            previous_scene_plan=previous_scene_plan,
+            resolved_target_budget=_safe_dict(route_budget_meta.get("route_budget_resolved_targets")),
+        )
+        if previous_scene_plan_valid and can_restore_snapshot:
             package["scene_plan"] = _attach_downstream_mode_metadata(previous_scene_plan, package)
             diagnostics = _safe_dict(package.get("diagnostics"))
             diagnostics["scene_plan_snapshot_restored"] = True
