@@ -200,7 +200,7 @@ _CONFIRMED_HERO_URL_KEYS = (
     "hero_reference_url",
     "heroReferenceUrl",
 )
-_STALE_IDENTITY_TERMS = (
+_FEMALE_CODED_TERMS = (
     "same woman",
     "established heroine",
     "heroine",
@@ -215,31 +215,22 @@ _STALE_IDENTITY_TERMS = (
     "lady's",
     "her",
     "she",
-    "light linen dress",
-    "beige cropped sleeveless top",
-    "cropped top",
-    "crop top",
-    "open neckline",
-    "crop length",
-    "bust/hips",
-    "bust",
-    "hips",
 )
-_MALE_STALE_VALIDATION_TERMS = (
-    "woman",
-    "woman's",
-    "female",
-    "girl",
-    "lady",
-    "heroine",
-    "her",
-    "she",
-    "dress",
-    "cropped top",
-    "crop top",
-    "open neckline",
-    "bust",
-    "hips",
+_MALE_CODED_TERMS = (
+    "same man",
+    "established hero",
+    "hero",
+    "man",
+    "man's",
+    "men",
+    "male",
+    "masculine",
+    "boy",
+    "boy's",
+    "gentleman",
+    "gentleman's",
+    "his",
+    "he",
 )
 
 
@@ -373,15 +364,19 @@ def _sanitize_prompt_text_for_current_identity(
     removed_terms: list[str] = []
     stale_identity_removed = 0
     stale_wardrobe_removed = 0
-    if str(identity_ctx.get("gender_hint") or "").strip().lower() == "male":
-        for term in _STALE_IDENTITY_TERMS:
+    gender_hint = str(identity_ctx.get("gender_hint") or "").strip().lower()
+    stale_terms: tuple[str, ...] = ()
+    if gender_hint == "male":
+        stale_terms = _FEMALE_CODED_TERMS
+    elif gender_hint == "female":
+        stale_terms = _MALE_CODED_TERMS
+    if stale_terms:
+        for term in stale_terms:
             before = cleaned
             cleaned = re.sub(rf"(?i)\b{re.escape(term)}\b", " ", cleaned)
             if cleaned != before:
                 removed_terms.append(term)
                 stale_identity_removed += 1
-                if term in {"light linen dress", "beige cropped sleeveless top", "cropped top", "open neckline", "crop length", "bust/hips", "bust", "hips"}:
-                    stale_wardrobe_removed += 1
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
     return cleaned, {
         "field_name": field_name,
@@ -391,6 +386,19 @@ def _sanitize_prompt_text_for_current_identity(
         "stale_identity_clause_removed_count": stale_identity_removed,
         "stale_wardrobe_clause_removed_count": stale_wardrobe_removed,
     }
+
+
+def _find_identity_gender_conflict_terms(text: str, gender_hint: str) -> list[str]:
+    blob = str(text or "").lower()
+    normalized_gender = str(gender_hint or "").strip().lower()
+    if normalized_gender == "male":
+        terms = _FEMALE_CODED_TERMS
+    elif normalized_gender == "female":
+        terms = _MALE_CODED_TERMS
+    else:
+        return []
+    found = [term for term in terms if re.search(rf"(?i)\b{re.escape(term)}\b", blob)]
+    return list(dict.fromkeys(found))
 
 
 def _is_bad_prompt_cleanup(text: str) -> bool:
@@ -847,7 +855,24 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     fallback_video_prompt = _strip_literal_quoted_dialogue(str(fallback_prompt_row.get("video_prompt") or "").strip())
     scene_seq_index = int(fallback_row.get("sequence_index") or 0)
     lip_sync_only_i2v = bool(identity_ctx.get("lip_sync_only")) and route == "i2v"
-    has_human_subject = False if lip_sync_only_i2v else _scene_has_human_subject(fallback_row, route)
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    role_row = _safe_dict(fallback_row.get("role_row"))
+    visual_focus_role = str(
+        row.get("visual_focus_role")
+        or fallback_prompt_row.get("visual_focus_role")
+        or plan_row.get("visual_focus_role")
+        or role_row.get("visual_focus_role")
+        or ""
+    ).strip().lower()
+    speaker_role = str(
+        row.get("speaker_role")
+        or fallback_prompt_row.get("speaker_role")
+        or plan_row.get("speaker_role")
+        or role_row.get("speaker_role")
+        or ""
+    ).strip()
+    environment_cutaway_i2v = route == "i2v" and visual_focus_role == "environment" and not speaker_role
+    has_human_subject = False if lip_sync_only_i2v or environment_cutaway_i2v else _scene_has_human_subject(fallback_row, route)
     confirmed_look_used = bool(has_human_subject and scene_seq_index >= 2 and _has_real_confirmed_hero_image_url(fallback_row))
     confirmed_look_clause_applied = bool(confirmed_look_used)
     positive_contract_duplicates_removed = False
@@ -863,7 +888,6 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             positive_prompt = _append_clause(positive_prompt, CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE)
         negative_prompt = _append_clause(negative_prompt, IDENTITY_NEGATIVE_GUARD)
 
-    plan_row = _safe_dict(fallback_row.get("plan_row"))
     scene_specific_parts = [
         fallback_photo_prompt,
         fallback_video_prompt,
@@ -1076,15 +1100,6 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     renderer_family = str(video_metadata.get("renderer_family") or metadata_defaults["renderer_family"]).strip().lower()
     if renderer_family not in {"ltx", "generic"}:
         renderer_family = metadata_defaults["renderer_family"]
-    plan_row = _safe_dict(fallback_row.get("plan_row"))
-    role_row = _safe_dict(fallback_row.get("role_row"))
-    speaker_role = str(
-        row.get("speaker_role")
-        or fallback_prompt_row.get("speaker_role")
-        or plan_row.get("speaker_role")
-        or role_row.get("speaker_role")
-        or ""
-    ).strip()
     vocal_owner_role = str(
         row.get("vocal_owner_role")
         or fallback_prompt_row.get("vocal_owner_role")
@@ -1374,28 +1389,30 @@ def _validate_final_video_prompt_identity_clean(
     stale_segments: list[str] = []
     stale_fields: list[str] = []
     lip_sync_only_i2v_violation_segments: list[str] = []
-    if str(identity_ctx.get("gender_hint") or "").strip().lower() == "male":
-        for seg_raw in segments:
-            seg = _safe_dict(seg_raw)
-            seg_id = str(seg.get("segment_id") or "").strip()
-            route_payload = _safe_dict(seg.get("route_payload"))
-            fields = {
-                "route_payload.positive_prompt": str(route_payload.get("positive_prompt") or ""),
-                "route_payload.video_prompt": str(route_payload.get("video_prompt") or ""),
-                "route_payload.image_prompt": str(route_payload.get("image_prompt") or ""),
-                "route_payload.first_frame_prompt": str(route_payload.get("first_frame_prompt") or ""),
-                "route_payload.last_frame_prompt": str(route_payload.get("last_frame_prompt") or ""),
-                "route_payload.negative_prompt": str(route_payload.get("negative_prompt") or ""),
-                "top_level.image_prompt": str(seg.get("image_prompt") or ""),
-                "top_level.video_prompt": str(seg.get("video_prompt") or ""),
-            }
-            for field_name, text in fields.items():
-                lower = text.lower()
-                found = [term for term in _MALE_STALE_VALIDATION_TERMS if term in lower]
-                if found:
-                    stale_terms.update(found)
-                    stale_segments.append(seg_id)
-                    stale_fields.append(f"{seg_id}:{field_name}")
+    gender_hint = str(identity_ctx.get("gender_hint") or "").strip().lower()
+    for seg_raw in segments:
+        seg = _safe_dict(seg_raw)
+        seg_id = str(seg.get("segment_id") or "").strip()
+        route_payload = _safe_dict(seg.get("route_payload"))
+        fields = {
+            "route_payload.positive_prompt": str(route_payload.get("positive_prompt") or ""),
+            "route_payload.video_prompt": str(route_payload.get("video_prompt") or ""),
+            "route_payload.image_prompt": str(route_payload.get("image_prompt") or ""),
+            "route_payload.first_frame_prompt": str(route_payload.get("first_frame_prompt") or ""),
+            "route_payload.last_frame_prompt": str(route_payload.get("last_frame_prompt") or ""),
+            "route_payload.negative_prompt": str(route_payload.get("negative_prompt") or ""),
+            "starts_from_previous_logic": str(seg.get("starts_from_previous_logic") or ""),
+            "ends_with_state": str(seg.get("ends_with_state") or ""),
+            "continuity_with_next": str(seg.get("continuity_with_next") or ""),
+            "top_level.image_prompt": str(seg.get("image_prompt") or ""),
+            "top_level.video_prompt": str(seg.get("video_prompt") or ""),
+        }
+        for field_name, text in fields.items():
+            found = _find_identity_gender_conflict_terms(text, gender_hint)
+            if found:
+                stale_terms.update(found)
+                stale_segments.append(seg_id)
+                stale_fields.append(f"{seg_id}:{field_name}")
     if bool(identity_ctx.get("lip_sync_only")):
         for seg_raw in segments:
             seg = _safe_dict(seg_raw)
@@ -1420,6 +1437,8 @@ def _validate_final_video_prompt_identity_clean(
             "stale_identity_leak_terms": sorted(stale_terms),
             "stale_identity_leak_segments": list(dict.fromkeys([s for s in stale_segments if s])),
             "stale_identity_leak_fields": list(dict.fromkeys([f for f in stale_fields if f])),
+            "final_video_prompt_stale_identity_remaining_segments": list(dict.fromkeys([s for s in stale_segments if s])),
+            "final_video_prompt_validation_checked_after_sanitizer": True,
         }
     if lip_sync_only_i2v_violation_segments:
         return "lip_sync_only_i2v_visibility_violation", {
@@ -1427,8 +1446,12 @@ def _validate_final_video_prompt_identity_clean(
             "lip_sync_only_i2v_visibility_violation_segments": list(
                 dict.fromkeys([s for s in lip_sync_only_i2v_violation_segments if s])
             ),
+            "final_video_prompt_validation_checked_after_sanitizer": True,
         }
-    return "", {}
+    return "", {
+        "final_video_prompt_validation_checked_after_sanitizer": True,
+        "final_video_prompt_stale_identity_remaining_segments": [],
+    }
 
 
 def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
@@ -1587,6 +1610,12 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                 dict.fromkeys([seg for seg in final_gender_conflict_segments if seg])
             ),
             "final_video_prompt_prompt_rebuilt_after_bad_cleanup_count": rebuilt_after_cleanup_count if ok else 0,
+            "final_video_prompt_validation_checked_after_sanitizer": bool(
+                validation_diag.get("final_video_prompt_validation_checked_after_sanitizer")
+            ),
+            "final_video_prompt_stale_identity_remaining_segments": _safe_list(
+                validation_diag.get("final_video_prompt_stale_identity_remaining_segments")
+            ),
             "validation_error": validation_error,
             "error_code": validation_error,
             **validation_diag,
