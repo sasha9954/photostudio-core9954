@@ -342,7 +342,11 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         max_consecutive_ia2v = 2
     max_consecutive_ia2v = max(1, min(8, max_consecutive_ia2v))
 
-    hard_map_raw = row.get("route_assignments_by_segment")
+    hard_map_raw = row.get("hard_route_assignments_by_segment")
+    if hard_map_raw is None:
+        hard_map_raw = row.get("hardRouteAssignmentsBySegment")
+    if hard_map_raw is None:
+        hard_map_raw = row.get("route_assignments_by_segment")
     if hard_map_raw is None:
         hard_map_raw = row.get("routeAssignmentsBySegment")
     hard_map_obj = _safe_dict(hard_map_raw)
@@ -804,8 +808,8 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "route_strategy_preset": route_budget_preset,
                 "hard_route_assignments_by_segment": hard_route_assignments,
                 "hardRouteMapApplied": hard_route_map_applied,
-                "route_assignment_source": "creative_config.route_assignments_by_segment" if hard_route_map_applied else "gemini",
-                "routeAssignmentSource": "creative_config.route_assignments_by_segment" if hard_route_map_applied else "gemini",
+                "route_assignment_source": "creative_config.hard_route_assignments_by_segment" if hard_route_map_applied else "gemini",
+                "routeAssignmentSource": "creative_config.hard_route_assignments_by_segment" if hard_route_map_applied else "gemini",
             },
             "ia2v_definition": "emotion-first performance shot; readable face/mouth; smooth camera; restrained motion",
             "i2v_definition": "baseline clip route for observation, transit, environment and connective montage scenes",
@@ -968,6 +972,7 @@ def _build_compact_route_budget_retry_context(context: dict[str, Any]) -> dict[s
             "target_counts": target_counts,
             "first_last_forbidden": bool(route_budget_contract.get("first_last_forbidden")),
             "preset": str(route_budget_contract.get("route_strategy_preset") or ""),
+            "hard_route_assignments_by_segment": _safe_dict(route_budget_contract.get("hard_route_assignments_by_segment")),
         },
     }
 
@@ -1009,6 +1014,10 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             f"i2v: {i2v_target}\n"
             f"first_last: {first_last_target}\n"
             f"{first_last_line}"
+            "If route_budget_contract.hard_route_assignments_by_segment is present:\n"
+            "- use exact route from hard_route_assignments_by_segment for every segment_id;\n"
+            "- do not change route for any segment;\n"
+            "- route budget is already solved by backend.\n"
             "If character_1 appearanceMode is lip_sync_only:\n"
             "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
             "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; lip_sync_allowed=false; visual subject should be environment/city/street/port/courtyard/people/atmosphere.\n"
@@ -1103,6 +1112,8 @@ def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, 
     if total_scenes <= 0:
         return {"i2v": 0, "ia2v": 0, "first_last": 0}, False
     hard_map = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
+    if not hard_map:
+        hard_map = _safe_dict(creative_config.get("route_assignments_by_segment"))
     if hard_map:
         budget = {"i2v": 0, "ia2v": 0, "first_last": 0}
         for route in hard_map.values():
@@ -1822,6 +1833,8 @@ def _normalize_scene_plan(
     lip_sync_selected_count = 0
     max_consecutive_allowed = int(creative_config.get("max_consecutive_lipsync") or 2)
     hard_route_map = _safe_dict(creative_config.get("hard_route_assignments_by_segment"))
+    if not hard_route_map:
+        hard_route_map = _safe_dict(creative_config.get("route_assignments_by_segment"))
     appearance_modes = _safe_dict(character_appearance_modes_by_role)
     scene_character_visibility_policy: list[dict[str, Any]] = []
 
@@ -2337,7 +2350,7 @@ def _normalize_scene_plan(
         "route_budget_resolved_from": route_budget_resolved_from,
         "route_budget_preset": route_budget_preset,
         "hardRouteMapApplied": bool(hard_route_map),
-        "routeAssignmentSource": "creative_config.route_assignments_by_segment" if hard_route_map else "gemini",
+        "routeAssignmentSource": "creative_config.hard_route_assignments_by_segment" if hard_route_map else "gemini",
         "hard_route_assignments_by_segment": hard_route_map,
         "scene_plan_route_budget_target": route_budget_target,
         "scene_plan_route_budget_actual": route_counts,
