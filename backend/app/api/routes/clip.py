@@ -112,14 +112,8 @@ IDENTITY_LOCK_ALLOWED_VARIATIONS = [
     "framing",
     "environment placement",
 ]
-CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR = (
-    "same beige cropped sleeveless top with the same open neckline / same visible upper-chest coverage / same crop length, "
-    "not high-neck, not turtleneck, not closed collar, not blouse, not full-coverage top"
-)
-CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES = (
-    "do not raise neckline; do not close chest coverage; do not convert cropped top into high-neck top; "
-    "do not reinterpret into blouse, sweater, turtleneck, or closed tank"
-)
+CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR = ""
+CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES = ""
 
 LTX_I2V_CANON_HINT_POSITIVE = """
 Write LTX i2v prompts as short, physically readable motion instructions, not as abstract cinematic prose.
@@ -1377,7 +1371,7 @@ def _has_strong_dress_evidence(text: str) -> bool:
 def _has_strong_casual_separates_evidence(text: str) -> bool:
     normalized = f" {str(text or '').lower()} "
     has_jeans = any(token in normalized for token in (" jeans ", " denim ", " denim jeans "))
-    has_top = any(token in normalized for token in (" cropped top ", " crop top ", " t-shirt ", " tshirt ", " tee ", " top "))
+    has_top = any(token in normalized for token in (" short top ", " top ", " t-shirt ", " tshirt ", " tee "))
     has_sneakers = any(token in normalized for token in (" sneaker ", " sneakers ", " trainers "))
     # Two strong signals are enough; jeans + top is already a clear "separates" signal.
     evidence_score = int(has_jeans) + int(has_top) + int(has_sneakers)
@@ -2304,9 +2298,9 @@ def _build_hard_identity_lock_block(*, scene_human_visual_anchors: list[str] | N
         "- no face drift",
         "- no costume drift",
         "- preserve exact body proportions and exact body silhouette",
-        "- preserve shoulder width, waist-to-hip ratio, torso shape, arm thickness, and leg thickness",
+        "- preserve shoulder width, torso-to-lower-body ratio, torso shape, arm thickness, and leg thickness",
         "- no body volume drift, no perceived weight drift, no body shape reinterpretation",
-        "- do not widen torso / hips / arms",
+        "- do not widen torso / lower body / arms",
         "- keep the same perceived slimness / build",
         "- woman/man labels may be used as weak descriptors only, never as primary identity ids",
     ]
@@ -3021,14 +3015,19 @@ def _compose_video_effective_prompt(
         scene_human_visual_anchors=scene_human_visual_anchors,
     )
     has_character_1_human_anchor = any("character_1" in str(anchor or "").lower() for anchor in (scene_human_visual_anchors or []))
-    explicit_outfit_anchor_block = ""
-    if has_humans and has_character_1_human_anchor:
-        explicit_outfit_anchor_block = (
-            "CHARACTER_1 OUTFIT ANCHOR (STRICT): "
-            f"{CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR}. "
-            f"{CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES}."
-        )
     contract = scene_contract if isinstance(scene_contract, dict) else {}
+    explicit_outfit_anchor_block = ""
+    current_scoped_wardrobe_anchor = str(
+        contract.get("currentScopedWardrobeAnchor")
+        or contract.get("current_scoped_wardrobe_anchor")
+        or ""
+    ).strip()
+    wardrobe_anchor_signature_matches_current = bool(
+        contract.get("currentScopedWardrobeAnchorSignatureMatchesPackage")
+        or contract.get("current_scoped_wardrobe_anchor_signature_matches_package")
+    )
+    if has_humans and has_character_1_human_anchor and current_scoped_wardrobe_anchor and wardrobe_anchor_signature_matches_current:
+        explicit_outfit_anchor_block = "CHARACTER_1 CURRENT-SCOPED WARDROBE ANCHOR (STRICT): " + current_scoped_wardrobe_anchor
     identity_lock_block = _build_hard_identity_lock_block(scene_human_visual_anchors=scene_human_visual_anchors) if has_humans else ""
     opening_shot = not bool(contract.get("previousContinuityMemory"))
     hard_continuity_contract_block = _build_hard_continuity_contract_block(scene_contract=contract, opening_shot=opening_shot)
@@ -8033,7 +8032,7 @@ def _scene_semantic_guardrail(
     prop_anchor_label: str,
 ) -> tuple[dict, bool]:
     banned_terms = [
-        "microchip", "microchips", "chipset", "motherboard", "circuit", "pcb", "silicon",
+        "mchp", "mchp_units", "chip_set", "motherboard", "circuit", "pcb", "silicon",
         "server rack", "datacenter", "data center", "cyberpunk computer", "quantum processor",
     ]
     token_space = " ".join([
@@ -8545,7 +8544,7 @@ Reject ungrounded elements.
 
 SEMANTIC CONSISTENCY CHECK (PER SCENE):
 Before finalizing each scene, verify scene objects and environment stay within the extracted semantic domain.
-Invalid example: sky/night/love lyrics + microchips/server racks/cyberpunk computers with no grounding source.
+Invalid example: sky/night/love lyrics + mchp_units/server racks/cyberpunk computers with no grounding source.
 Valid example: sky, clouds, night city lights, open field, mountain horizon, stage under open sky.
 
 HALLUCINATION PREVENTION / FALLBACK RULE:
@@ -8941,8 +8940,8 @@ If the scene is emotional or reflective:
 Use slower camera movement and closer framing.
 
 WIDE SHOT SCALE RULE:
-When large entities exist (monsters, ships, giant environments):
-Occasionally include wide shots that reveal true scale relationships.
+When large entities exist (monsters, vessels, giant environments):
+Occasionally include wide shots that reveal true scale proportions.
 
 This reinforces world scale context.
 
@@ -11326,7 +11325,7 @@ def _build_high_identity_risk_rescue_block(rescue: dict[str, Any]) -> str:
         "- no garment-class reinterpretation and no fallback into generic fashion archetype",
         "- original hero reference remains the absolute identity source; generated continuity images are hint-only",
         "- no hairstyle redesign, no neckline/top-cut reinterpretation, no garment simplification when framing gets tighter",
-        "- keep intimate close-up emotion while preserving enough shoulders/neckline/upper-chest/garment edge context for continuity",
+        "- keep intimate close-up emotion while preserving enough shoulders/upper-torso/garment edge context for continuity",
         "- do not collapse into face-only glamour crop if it weakens identity/outfit continuity",
         "- keep camera physically readable and upright; no sideways/lying/rotated portrait reinterpretation unless explicitly requested",
         "- lighting/style shifts are allowed only as mood shifts inside the same world; no disconnected portrait-world reinvention",
@@ -11544,14 +11543,14 @@ def _build_comfy_image_prompt_assembly(
             if normalized_gender == "female":
                 anatomy_contract_lines.extend([
                     f"- {role}: preserve gender-consistent anatomy across all visible body parts",
-                    f"- {role}: all visible hands, fingers, wrists, forearms, shoulders, neck, clavicles, torso, waist, hips and legs must match the established female anatomy of the character",
+                    f"- {role}: all visible hands, fingers, wrists, forearms, shoulders, neck, clavicles, torso, waist, lower body and legs must match the established female anatomy of the character",
                     f"- {role}: no masculine hands, masculine forearms, masculine shoulders, masculine neck, masculine torso cues, or mixed-sex anatomy",
                     f"- {role}: every visible body fragment must remain identity-consistent and sex-consistent even in partial-body crops or detail shots",
                 ])
             elif normalized_gender == "male":
                 anatomy_contract_lines.extend([
                     f"- {role}: preserve gender-consistent anatomy across all visible body parts",
-                    f"- {role}: all visible hands, fingers, wrists, forearms, shoulders, neck, clavicles, torso, waist, hips and legs must match the established male anatomy of the character",
+                    f"- {role}: all visible hands, fingers, wrists, forearms, shoulders, neck, clavicles, torso, waist, lower body and legs must match the established male anatomy of the character",
                     f"- {role}: no feminine hands, feminine shoulder line, feminine torso cues, or mixed-sex anatomy unless explicitly requested",
                     f"- {role}: every visible body fragment must remain identity-consistent and sex-consistent even in partial-body crops or detail shots",
                 ])
@@ -11915,11 +11914,19 @@ def _build_comfy_image_prompt_assembly(
     strict_reference_identity_block = ""
     has_character_1_ref = bool((refs_by_role.get("character_1") or []))
     explicit_character_1_outfit_anchor_block = ""
-    if has_character_1_ref:
+    current_scoped_wardrobe_anchor = str(
+        contract.get("currentScopedWardrobeAnchor")
+        or contract.get("current_scoped_wardrobe_anchor")
+        or ""
+    ).strip()
+    wardrobe_anchor_signature_matches_current = bool(
+        contract.get("currentScopedWardrobeAnchorSignatureMatchesPackage")
+        or contract.get("current_scoped_wardrobe_anchor_signature_matches_package")
+    )
+    if has_character_1_ref and current_scoped_wardrobe_anchor and wardrobe_anchor_signature_matches_current:
         explicit_character_1_outfit_anchor_block = "\n".join([
-            "CHARACTER_1 EXPLICIT OUTFIT ANCHOR (STRICT):",
-            f"- {CHARACTER_1_EXPLICIT_OUTFIT_ANCHOR}",
-            f"- {CHARACTER_1_EXPLICIT_OUTFIT_NEGATIVES}",
+            "CHARACTER_1 CURRENT-SCOPED WARDROBE ANCHOR (STRICT):",
+            f"- {current_scoped_wardrobe_anchor}",
         ])
     if has_character_1_ref and bool(contract.get("identityLockApplied", contract.get("identityLock"))):
         reference_profile = profiles.get("character_1") if isinstance(profiles.get("character_1"), dict) else {}
@@ -12007,7 +12014,7 @@ def _build_comfy_image_prompt_assembly(
             )
         strict_reference_identity_lines.extend([
             "- do not replace outfit with a different garment family",
-            "- do not change neckline, shoulder coverage, crop length, fabric read, color family, footwear, or accessories when known",
+            "- do not change collar line, shoulder coverage, garment length, fabric read, color family, footwear, or accessories when known",
             "- do not glamorize into a different actress/model",
         ])
         if profile_invariants or summary_invariants:
@@ -16968,7 +16975,7 @@ def clip_video(payload: ClipVideoIn):
     Allow subtle expressive hand gestures near the torso and chest, and slight shoulder movement, as long as the hands do not block the mouth or distort the outfit.
 
     Keep the body mostly facing the camera.
-    Avoid strong body rotations, avoid turning the hips or legs sideways, and avoid large pose changes.
+    Avoid strong body rotations, avoid turning the lower body or legs sideways, and avoid large pose changes.
     Avoid dramatic full-body movement.
 
     Preserve the clothing exactly as in the reference image.

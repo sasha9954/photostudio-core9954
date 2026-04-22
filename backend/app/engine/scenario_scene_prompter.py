@@ -71,9 +71,21 @@ _GLOBAL_PROMPT_RULES = [
     "Enforce LTX-safe motion and anatomy-safe constraints for all routes.",
 ]
 _CHARACTER_STYLE_LEAK_TOKENS = (
-    "same woman",
+    "same performer",
     "same man",
+    "same person",
     "woman",
+    "man",
+    "person",
+    "age",
+    "hair",
+    "hairstyle",
+    "face",
+    "body",
+    "clothing",
+    "outfit",
+    "top",
+    "jacket",
     "female",
     "girl",
     "lady",
@@ -86,12 +98,12 @@ _CHARACTER_STYLE_LEAK_TOKENS = (
     "jewelry",
 )
 _IDENTITY_REFERENCE_LEAK_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?i)\bshow the same (woman|man|person)\b"),
+    re.compile(r"(?i)\bshow the same (woman|man|person|performer)\b"),
     re.compile(r"(?i)\bprovided character_1 reference\b"),
-    re.compile(r"(?i)\bsame (woman|man) as the provided\b"),
+    re.compile(r"(?i)\bsame (woman|man|performer) as the provided\b"),
 )
 _MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
-    "same woman",
+    "same performer",
     "woman's",
     "women",
     "light linen dress",
@@ -114,8 +126,31 @@ _MALE_CONFLICT_STALE_TERMS: tuple[str, ...] = (
     "bust",
     "hips",
 )
+_MALE_STALE_VALIDATION_TERMS: tuple[str, ...] = (
+    "woman",
+    "woman's",
+    "female",
+    "girl",
+    "lady",
+    "heroine",
+    "her",
+    "she",
+    "dress",
+    "cropped top",
+    "crop top",
+    "open neckline",
+    "bust",
+    "hips",
+)
+_LIP_SYNC_ONLY_I2V_VIOLATION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bcharacter_1\b.{0,40}\b(main|primary)\b"),
+    re.compile(r"(?i)\bsame current performer\b"),
+    re.compile(r"(?i)\bsame character_1\b"),
+    re.compile(r"(?i)\blip[- ]?sync\b"),
+    re.compile(r"(?i)\bmouth close[- ]?up\b"),
+)
 _STALE_IDENTITY_TERMS = {
-    "same woman",
+    "same performer",
     "woman",
     "woman's",
     "women",
@@ -741,7 +776,11 @@ def _build_scene_anchor_bundle(
 ) -> dict[str, str]:
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     active_roles = [str(role).strip() for role in _safe_list(role_row.get("active_roles")) if str(role).strip()]
-    hero_ref_hint = "same heroine from character_1 reference" if _safe_dict(refs_inventory.get("ref_character_1")) else ""
+    hero_ref_hint = (
+        "same character_1 from the current connected character_1 reference"
+        if _safe_dict(refs_inventory.get("ref_character_1"))
+        else ""
+    )
     location_ref_hint = "same location from reference" if _safe_dict(refs_inventory.get("ref_location")) else ""
 
     identity_lock = _safe_dict(story_core.get("identity_lock"))
@@ -2667,7 +2706,7 @@ _ROUTE_DELIVERY_PATTERNS = ("route payload", "delivery payload", "api call", "js
 _GENERIC_SUBJECT_TOKENS = ("person", "someone", "subject", "individual", "figure", "human")
 _IDENTITY_DRIFT_TOKENS = (
     "different subject",
-    "new heroine",
+    "new performer",
     "new hero",
     "another woman",
     "another man",
@@ -3033,10 +3072,7 @@ def _rebuild_global_style_anchor_from_story_core(story_core: dict[str, Any]) -> 
     deduped = list(dict.fromkeys(parts))
     if deduped:
         return "; ".join(deduped)[:1200]
-    return (
-        "Grounded realistic urban world, coherent documentary realism, stable lighting, "
-        "consistent atmosphere, no identity or wardrobe drift."
-    )
+    return "Grounded realistic urban world, coherent documentary realism, stable lighting, consistent atmosphere."
 
 
 def _is_lip_sync_only_character_1(package: dict[str, Any]) -> bool:
@@ -3057,10 +3093,15 @@ def _character_1_identity_diag(package: dict[str, Any]) -> dict[str, Any]:
     refs = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
     ref_tokens = [str(v).strip() for v in refs if str(v).strip()]
     signature = hashlib.sha256("|".join(sorted(ref_tokens)).encode("utf-8")).hexdigest() if ref_tokens else ""
+    appearance = str(char.get("appearanceMode") or char.get("appearance_mode") or "").strip().lower()
+    presence = str(char.get("screenPresenceMode") or char.get("screen_presence_mode") or "").strip().lower()
     return {
         "current_character_1_gender_hint": str(char.get("gender_hint") or "").strip().lower(),
         "current_character_1_identity_label": str(char.get("identity_label") or "").strip(),
+        "current_character_1_appearance_mode": appearance,
+        "current_character_1_screen_presence_mode": presence,
         "current_character_1_ref_count": len(ref_tokens),
+        "current_character_1_ref_present": bool(ref_tokens),
         "current_character_1_ref_signature": signature,
         "current_identity_source": "current_connected_ref",
     }
@@ -3254,18 +3295,36 @@ def _build_prompts_v11_compact_retry_prompt(
     *,
     prompt_rows: list[dict[str, Any]],
     global_style_anchor: str,
+    package: dict[str, Any],
     validation_feedback: str = "",
 ) -> str:
+    identity_diag = _character_1_identity_diag(package)
+    gender_hint = str(identity_diag.get("current_character_1_gender_hint") or "").strip().lower()
+    appearance_mode = str(identity_diag.get("current_character_1_appearance_mode") or "").strip().lower()
+    presence_mode = str(identity_diag.get("current_character_1_screen_presence_mode") or "").strip().lower()
+    ref_present = bool(identity_diag.get("current_character_1_ref_present"))
+    lip_sync_only = appearance_mode == "lip_sync_only" or presence_mode == "lip_sync_only"
+    global_audio_owner = str(_safe_dict(package.get("audio_map")).get("vocal_owner_role") or "").strip() or "character_1"
+    male_lipsync_contract_block = ""
+    if gender_hint == "male" and lip_sync_only:
+        male_lipsync_contract_block = (
+            "- current character_1 is a current male performer from connected reference.\n"
+            "- character_1 appears physically only in ia2v/lip-sync scenes.\n"
+            "- i2v scenes must be environment/story cutaways, no main performer visible.\n"
+        )
     compact_rows: list[dict[str, Any]] = []
     for row_raw in prompt_rows:
         row = _safe_dict(row_raw)
+        row_route = str(row.get("route") or "i2v").strip().lower() or "i2v"
+        row_vocal_owner = str(row.get("vocal_owner_role") or global_audio_owner).strip()
         compact_rows.append(
             {
                 "segment_id": str(row.get("segment_id") or "").strip(),
                 "scene_id": str(row.get("scene_id") or "").strip(),
-                "route": str(row.get("route") or "i2v").strip().lower() or "i2v",
+                "route": row_route,
                 "primary_role": str(row.get("primary_role") or "").strip(),
                 "speaker_role": str(row.get("speaker_role") or "").strip(),
+                "vocal_owner_role": row_vocal_owner,
                 "spoken_line": _trim_sentence(str(row.get("spoken_line") or row.get("transcript_slice") or "").strip(), max_len=120),
             }
         )
@@ -3277,10 +3336,18 @@ def _build_prompts_v11_compact_retry_prompt(
         "- Generate rows ONLY for listed segment_id values.\n"
         "- Keep route exactly as provided.\n"
         "- Keep prompts concise, continuity-safe, and route-aware.\n"
+        "- IDENTITY CONTRACT is mandatory and comes from CURRENT package only.\n"
+        "- Do not invent visual appearance details for character_1.\n"
+        "- If current character_1 ref exists, describe character_1 only as: current character_1 from connected reference.\n"
         "- ia2v: audio-driven performance, readable mouth only for speaker_role.\n"
+        "- If character_1 appearanceMode/screenPresenceMode is lip_sync_only: character_1 appears physically only in ia2v/lip-sync scenes.\n"
+        "- For i2v under lip_sync_only: environment/story cutaway only; no main performer visible; singer remains voiceover only.\n"
+        f"{male_lipsync_contract_block}"
         "- first_last: include first_frame_prompt and last_frame_prompt.\n"
         "- Do not include technical tags or renderer params.\n"
         f"{feedback_block}"
+        "IDENTITY_CONTRACT_CURRENT:\n"
+        f"{json.dumps({'current_character_1_gender_hint': gender_hint, 'current_character_1_identity_label': identity_diag.get('current_character_1_identity_label'), 'current_character_1_appearanceMode': appearance_mode, 'current_character_1_screenPresenceMode': presence_mode, 'current_character_1_ref_count': int(identity_diag.get('current_character_1_ref_count') or 0), 'current_character_1_ref_present': ref_present, 'vocal_owner_role': global_audio_owner, 'lip_sync_only_policy': lip_sync_only}, ensure_ascii=False)}\n"
         f"GLOBAL_STYLE_ANCHOR:\n{global_style_anchor}\n"
         f"SCENE_ROWS_COMPACT:\n{json.dumps(compact_rows, ensure_ascii=False)}"
     )
@@ -3912,6 +3979,12 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
     if set(actual_segment_ids) != set(expected_segment_ids):
         return "PROMPTS_SEGMENT_ID_MISMATCH", "segment_ids_mismatch", {}
 
+    male_identity_leak_terms: set[str] = set()
+    male_identity_leak_segments: list[str] = []
+    male_identity_leak_fields: list[str] = []
+    lip_sync_only_i2v_violation_segments: list[str] = []
+    lip_sync_only = _is_lip_sync_only_character_1(package)
+    character_1_gender_hint = _get_character_1_gender_hint(package)
     transition_required_count = 0
     transition_present_count = 0
     for segment in actual_segments:
@@ -3932,6 +4005,28 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             or not str(row.get("negative_prompt") or "").strip()
         ):
             return "PROMPTS_SCHEMA_INVALID", f"missing_prompt_fields:{segment_id}", {}
+        if character_1_gender_hint == "male":
+            for field in ("photo_prompt", "video_prompt", "negative_prompt", "first_frame_prompt", "last_frame_prompt"):
+                field_text = str(row.get(field) or "")
+                lower_field = field_text.lower()
+                found = [term for term in _MALE_STALE_VALIDATION_TERMS if term in lower_field]
+                if found:
+                    male_identity_leak_terms.update(found)
+                    male_identity_leak_segments.append(segment_id)
+                    male_identity_leak_fields.append(f"{segment_id}:{field}")
+        if lip_sync_only and route == "i2v":
+            i2v_blob = " ".join(
+                [
+                    str(row.get("photo_prompt") or ""),
+                    str(row.get("video_prompt") or ""),
+                    str(row.get("negative_prompt") or ""),
+                    str(row.get("primary_role") or ""),
+                    str(row.get("speaker_role") or ""),
+                    str(row.get("vocal_owner_role") or ""),
+                ]
+            )
+            if any(pattern.search(i2v_blob) for pattern in _LIP_SYNC_ONLY_I2V_VIOLATION_PATTERNS):
+                lip_sync_only_i2v_violation_segments.append(segment_id)
 
         blob = " ".join(
             [
@@ -3978,6 +4073,21 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
                 transition_present_count += 1
             else:
                 return "PROMPTS_MISSING_TRANSITION_DESCRIPTION", f"missing_transition_description:{segment_id}", {}
+
+    if male_identity_leak_terms:
+        return "PROMPTS_STALE_IDENTITY_LEAK_AFTER_SANITIZER", "stale_identity_leak_after_sanitizer", {
+            "stale_identity_leak_after_sanitizer": True,
+            "stale_identity_leak_terms": sorted(male_identity_leak_terms),
+            "stale_identity_leak_segments": list(dict.fromkeys([seg for seg in male_identity_leak_segments if seg])),
+            "stale_identity_leak_fields": list(dict.fromkeys([fld for fld in male_identity_leak_fields if fld])),
+        }
+    if lip_sync_only_i2v_violation_segments:
+        return "PROMPTS_LIP_SYNC_ONLY_I2V_VISIBILITY_VIOLATION", "lip_sync_only_i2v_visibility_violation", {
+            "lip_sync_only_i2v_visibility_violation": True,
+            "lip_sync_only_i2v_visibility_violation_segments": list(
+                dict.fromkeys([seg for seg in lip_sync_only_i2v_violation_segments if seg])
+            ),
+        }
 
     return "", "", {
         "scene_prompts_transition_required_count": transition_required_count,
@@ -4333,6 +4443,7 @@ def build_gemini_scene_prompts(
             _build_prompts_v11_compact_retry_prompt(
                 prompt_rows=prompt_rows,
                 global_style_anchor=global_style_anchor,
+                package=package,
                 validation_feedback=validation_feedback,
             )
             if compact_retry
