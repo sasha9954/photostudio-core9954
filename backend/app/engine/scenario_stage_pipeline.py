@@ -1941,7 +1941,13 @@ def _scene_prompt_has_explicit_reference_anchor(text: Any, role: str) -> bool:
         f"{clean_role} reference",
         "provided reference",
     )
-    continuity_tokens = ("same woman", "same person", "keep the same", "same character")
+    continuity_tokens = (
+        "same current character_1 from the connected character_1 reference",
+        "same current performer from the connected character_1 reference",
+        "same person",
+        "keep the same",
+        "same character",
+    )
     if not any(token in body for token in role_reference_tokens):
         return False
     return any(token in body for token in continuity_tokens)
@@ -2394,8 +2400,9 @@ def _build_scene_prompts_retry_feedback(validation_error: str, error_code: str) 
     if validation_error.strip().lower().startswith("identity_drift:"):
         return (
             "Your previous prompts weakened the character identity anchor. Rewrite all affected segments so that every "
-            "prompt for character_1 explicitly states that it is the same woman as the provided character_1 reference, "
-            "preserving the same face, age impression, body proportions, hairstyle, clothing, and silhouette. "
+            "prompt for character_1 explicitly states that it is the same current character_1 from the connected "
+            "character_1 reference, preserving the same face, age impression, body proportions, hairstyle, clothing, "
+            "and silhouette. "
             "Use cinematic language only."
         )
     return base

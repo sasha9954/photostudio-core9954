@@ -308,10 +308,9 @@ function buildWardrobeLockPromptForHumanScene(basePrompt) {
   const base = String(basePrompt || "").trim();
   const lock = [
     "WARDROBE LOCK:",
-    "Keep the exact same outfit from the source image/reference.",
-    "Do not change neckline, collar, straps, sleeves, crop length, fabric coverage, color, material, jewelry, or fit.",
-    "If the character wears a cropped top, it must remain the same cropped top with the same neckline and same visible skin coverage.",
-    "Do not turn it into a high-neck top, turtleneck, shirt, blouse, jacket, closed collar, or longer garment."
+    "Keep the current character outfit from the current reference/current approved image.",
+    "Preserve outfit category, silhouette, construction, color palette, material feel, accessories, and fit.",
+    "Do not introduce unrelated wardrobe drift or substitute an unrelated garment family unless explicitly provided by current scene source."
   ].join(" ");
   return `${lock} ${base}`.trim();
 }
@@ -330,7 +329,6 @@ function buildWardrobeLockNegativePrompt(baseNegative) {
     "longer shirt",
     "different top",
     "fabric covering neck",
-    "altered crop top",
     "missing jewelry",
     "changed jewelry"
   ].join(", ");
