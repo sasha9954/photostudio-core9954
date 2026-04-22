@@ -9018,6 +9018,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_route_budget_second_retry_suppressed"] = False
 
     scene_diag = _safe_dict(result.get("diagnostics"))
+    final_route_counts = _scene_plan_route_counts(scene_plan)
     route_counts = _safe_dict(scene_diag.get("route_counts"))
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_backend"] = "gemini"
@@ -9026,9 +9027,14 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_used_fallback"] = bool(result.get("used_fallback"))
     diagnostics["scene_plan_scene_count"] = int(scene_diag.get("scene_count") or len(_safe_list(scene_plan.get("storyboard"))))
     diagnostics["scene_plan_route_counts"] = {
-        "i2v": int(route_counts.get("i2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("i2v") or 0),
-        "ia2v": int(route_counts.get("ia2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("ia2v") or 0),
-        "first_last": int(route_counts.get("first_last") or _safe_dict(scene_plan.get("route_mix_summary")).get("first_last") or 0),
+        "i2v": int(final_route_counts.get("i2v") or route_counts.get("i2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("i2v") or 0),
+        "ia2v": int(final_route_counts.get("ia2v") or route_counts.get("ia2v") or _safe_dict(scene_plan.get("route_mix_summary")).get("ia2v") or 0),
+        "first_last": int(
+            final_route_counts.get("first_last")
+            or route_counts.get("first_last")
+            or _safe_dict(scene_plan.get("route_mix_summary")).get("first_last")
+            or 0
+        ),
     }
     diagnostics["scene_plan_presence_modes"] = _safe_list(scene_diag.get("presence_modes"))
     diagnostics["scene_plan_route_flat"] = bool(scene_diag.get("route_flat"))
@@ -9116,7 +9122,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_hard_route_map_source"] = str(backend_hard_route_source or "")
     diagnostics["scene_plan_hard_route_map_by_segment"] = dict(backend_hard_route_map)
     diagnostics["scene_plan_hard_route_map_target_counts"] = dict(backend_hard_route_target_counts)
-    diagnostics["scene_plan_hard_route_map_actual_counts_after_normalize"] = _scene_plan_route_counts(scene_plan)
+    diagnostics["scene_plan_hard_route_map_actual_counts_after_normalize"] = dict(final_route_counts)
     diagnostics["scene_plan_route_assignment_source"] = str(
         "hard_route_map"
         if bool(backend_hard_route_map)
@@ -9157,11 +9163,39 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_validation_error"] = "scene_plan_timeout_empty_response"
         diagnostics["scene_plan_error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE"
         diagnostics["scene_plan_failure_reason"] = "scene_plan_timeout_empty_response"
+    segment_coverage_ok = bool(diagnostics.get("scene_plan_segment_coverage_ok"))
+    enum_unrepaired_count = int(diagnostics.get("scene_plan_enum_unrepaired_count") or 0)
+    scene_plan_empty = not bool(scene_plan and _safe_list(scene_plan.get("storyboard")))
+    has_real_error = bool(timeout_empty or enum_unrepaired_count > 0 or scene_plan_empty or (not segment_coverage_ok))
+    route_budget_validation_error = str(result.get("validation_error") or "").strip().lower() == "route_budget_mismatch"
+    route_budget_diag_error = str(diagnostics.get("scene_plan_error") or "").strip().lower() == "route_budget_mismatch"
+    route_budget_diag_failure = str(diagnostics.get("scene_plan_failure_reason") or "").strip().lower() == "route_budget_mismatch"
+    route_budget_diag_last_failed = str(diagnostics.get("scene_plan_last_failed_candidate_error") or "").strip().lower() == "route_budget_mismatch"
+    if route_budget_ok and route_budget_validation_error:
+        result["validation_error"] = ""
+        result["error"] = ""
+        result["error_code"] = ""
+    if route_budget_ok and (route_budget_diag_error or route_budget_diag_failure or route_budget_diag_last_failed):
+        diagnostics["scene_plan_error"] = ""
+        diagnostics["scene_plan_failure_reason"] = ""
+        diagnostics["scene_plan_last_failed_candidate_error"] = ""
+    if route_budget_ok and (not has_real_error):
+        result["ok"] = True
+        result["validation_error"] = ""
+        result["error"] = ""
+        result["error_code"] = ""
+        diagnostics["scene_plan_validation_error"] = ""
+        diagnostics["scene_plan_error_code"] = ""
+        diagnostics["scene_plan_error"] = ""
+        diagnostics["scene_plan_failure_reason"] = ""
+        diagnostics["scene_plan_last_failed_candidate_error"] = ""
+        if str(hard_fail_error).strip().lower() in {"route_budget_mismatch", "route_budget_mismatch_after_compact_retry"}:
+            hard_fail_error = ""
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     if timeout_empty and int(diagnostics.get("scene_plan_segment_count_actual") or 0) == 0:
         diagnostics["scene_plan_error"] = "scene_plan_timeout"
-    diagnostics["scene_plan_empty"] = not bool(scene_plan and _safe_list(scene_plan.get("storyboard")))
+    diagnostics["scene_plan_empty"] = scene_plan_empty
     if timeout_empty and diagnostics["scene_plan_empty"]:
         hard_fail_error = "scene_plan_timeout_empty_response"
     if not hard_fail_error:
