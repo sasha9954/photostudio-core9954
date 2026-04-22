@@ -55,6 +55,8 @@ CORE_ROLE_SPAWNING = "CORE_ROLE_SPAWNING"
 CORE_TECHNICAL_SPAWNING = "CORE_TECHNICAL_SPAWNING"
 CORE_IDENTITY_CONFLICT = "CORE_IDENTITY_CONFLICT"
 CORE_ROLE_BINDING_CONTRADICTION = "CORE_ROLE_BINDING_CONTRADICTION"
+_FEMALE_CODED_TERMS = ("woman", "women", "female", "feminine", "girl", "lady", "her", "she", "heroine")
+_MALE_CODED_TERMS = ("man", "men", "male", "masculine", "boy", "gentleman", "his", "he", "hero")
 
 
 def _resolve_stage_gemini_api_key(
@@ -5385,6 +5387,121 @@ def _scene_prompts_upstream_signature(package: dict[str, Any]) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
+def _final_video_prompt_scene_prompts_signature(package: dict[str, Any]) -> str:
+    payload = json.dumps(_safe_dict(package.get("scene_prompts")), ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _final_video_prompt_character_1_context(package: dict[str, Any]) -> dict[str, Any]:
+    input_pkg = _safe_dict(package.get("input"))
+    connected = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(package.get("connected_context_summary"))
+    role_map = _safe_dict(connected.get("role_identity_mapping"))
+    char1 = _safe_dict(role_map.get("character_1"))
+    refs_present = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
+    connected_refs = _safe_list(_safe_dict(connected.get("connectedRefsPresentByRole")).get("character_1"))
+    ref_character_1_inventory = _safe_dict(_safe_dict(package.get("refs_inventory")).get("ref_character_1"))
+    inventory_refs = _safe_list(ref_character_1_inventory.get("refs"))
+    inventory_value = str(ref_character_1_inventory.get("value") or "").strip()
+    all_refs = [
+        str(v).strip()
+        for v in [*refs_present, *connected_refs, *inventory_refs, inventory_value]
+        if str(v).strip()
+    ]
+    all_refs = list(dict.fromkeys(all_refs))
+    ref_signature = hashlib.sha256("|".join(sorted(all_refs)).encode("utf-8")).hexdigest() if all_refs else ""
+    return {
+        "gender_hint": str(char1.get("gender_hint") or "").strip().lower(),
+        "identity_label": str(char1.get("identity_label") or "").strip(),
+        "ref_signature": ref_signature,
+        "connected_refs": sorted(all_refs),
+    }
+
+
+def _final_video_prompt_route_map_signature(package: dict[str, Any]) -> tuple[str, list[str]]:
+    scene_prompts = _safe_dict(package.get("scene_prompts"))
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    rows = _safe_list(scene_prompts.get("segments")) or _safe_list(scene_prompts.get("scenes"))
+    if not rows:
+        rows = _safe_list(scene_plan.get("segments")) or _safe_list(scene_plan.get("scenes"))
+    route_pairs: list[str] = []
+    segment_ids: list[str] = []
+    for row in rows:
+        item = _safe_dict(row)
+        segment_id = str(item.get("segment_id") or item.get("scene_id") or "").strip()
+        if not segment_id:
+            continue
+        route = str(item.get("route") or "").strip().lower()
+        if route in {"f_l", "first-last"}:
+            route = "first_last"
+        if route in {"lip_sync", "lip_sync_music"}:
+            route = "ia2v"
+        if route not in {"i2v", "ia2v", "first_last"}:
+            route = "i2v"
+        segment_ids.append(segment_id)
+        route_pairs.append(f"{segment_id}:{route}")
+    return hashlib.sha1("|".join(route_pairs).encode("utf-8")).hexdigest(), segment_ids
+
+
+def _final_video_prompt_upstream_signature(package: dict[str, Any]) -> str:
+    snapshot = {
+        "input": _safe_dict(package.get("input")),
+        "audio_map": _safe_dict(package.get("audio_map")),
+        "story_core": _safe_dict(package.get("story_core")),
+        "role_plan": _safe_dict(package.get("role_plan")),
+        "scene_plan": _safe_dict(package.get("scene_plan")),
+        "scene_prompts": _safe_dict(package.get("scene_prompts")),
+    }
+    payload = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _collect_final_video_prompt_snapshot_meta(package: dict[str, Any]) -> dict[str, Any]:
+    character_ctx = _final_video_prompt_character_1_context(package)
+    route_sig, segment_ids = _final_video_prompt_route_map_signature(package)
+    return {
+        "upstream_signature": _final_video_prompt_upstream_signature(package),
+        "scene_prompts_signature": _final_video_prompt_scene_prompts_signature(package),
+        "route_map_signature": route_sig,
+        "segment_ids": segment_ids,
+        "character_1_gender_hint": str(character_ctx.get("gender_hint") or ""),
+        "character_1_identity_label": str(character_ctx.get("identity_label") or ""),
+        "character_1_ref_signature": str(character_ctx.get("ref_signature") or ""),
+        "character_1_connected_refs": _safe_list(character_ctx.get("connected_refs")),
+    }
+
+
+def _snapshot_has_gender_identity_conflict(snapshot_payload: dict[str, Any], *, gender_hint: str) -> tuple[bool, list[str]]:
+    if gender_hint == "male":
+        terms = _FEMALE_CODED_TERMS
+    elif gender_hint == "female":
+        terms = _MALE_CODED_TERMS
+    else:
+        return False, []
+    found_terms: list[str] = []
+    for seg_raw in _safe_list(snapshot_payload.get("segments")):
+        seg = _safe_dict(seg_raw)
+        route_payload = _safe_dict(seg.get("route_payload"))
+        fields = [
+            str(route_payload.get("positive_prompt") or ""),
+            str(route_payload.get("negative_prompt") or ""),
+            str(route_payload.get("first_frame_prompt") or ""),
+            str(route_payload.get("last_frame_prompt") or ""),
+            str(route_payload.get("image_prompt") or ""),
+            str(route_payload.get("video_prompt") or ""),
+            str(seg.get("starts_from_previous_logic") or ""),
+            str(seg.get("ends_with_state") or ""),
+            str(seg.get("continuity_with_next") or ""),
+            str(seg.get("image_prompt") or ""),
+            str(seg.get("video_prompt") or ""),
+        ]
+        blob = " ".join(fields).lower()
+        for term in terms:
+            if re.search(rf"(?i)\b{re.escape(term)}\b", blob):
+                found_terms.append(term)
+    dedup_terms = list(dict.fromkeys(found_terms))
+    return bool(dedup_terms), dedup_terms
+
+
 def _normalize_route_contract(route_value: Any) -> dict[str, Any]:
     raw = str(route_value or "").strip().lower()
     if raw in {"f_l", "first-last"}:
@@ -9620,6 +9737,13 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_timed_out"] = False
     diagnostics["final_video_prompt_timeout_retry_attempted"] = False
     diagnostics["final_video_prompt_response_was_empty_after_timeout"] = False
+    diagnostics["final_video_prompt_snapshot_restore_blocked_by_signature"] = False
+    diagnostics["final_video_prompt_snapshot_restore_block_reason"] = ""
+    diagnostics["final_video_prompt_identity_gender_conflict_detected"] = False
+    diagnostics["final_video_prompt_identity_gender_conflict_terms_removed"] = []
+    diagnostics["final_video_prompt_identity_gender_conflict_segments"] = []
+    diagnostics["final_video_prompt_validation_checked_after_sanitizer"] = False
+    diagnostics["final_video_prompt_stale_identity_remaining_segments"] = []
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
@@ -9628,52 +9752,130 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     previous_payload = _safe_dict(package.get("final_video_prompt"))
     current_signature = _current_scenario_input_signature(package)
+    current_snapshot_meta = _collect_final_video_prompt_snapshot_meta(package)
+    current_character_ctx = _final_video_prompt_character_1_context(package)
+
+    def _apply_result_diagnostics(result_payload: dict[str, Any]) -> None:
+        diag = _safe_dict(result_payload.get("diagnostics"))
+        local_diagnostics = _safe_dict(package.get("diagnostics"))
+        local_diagnostics["final_video_prompt_backend"] = str(diag.get("final_video_prompt_backend") or "gemini")
+        local_diagnostics["final_video_prompt_prompt_version"] = str(
+            diag.get("final_video_prompt_prompt_version") or FINAL_VIDEO_PROMPT_STAGE_VERSION
+        )
+        local_diagnostics["final_video_prompt_segment_count"] = int(diag.get("final_video_prompt_segment_count") or 0)
+        local_diagnostics["final_video_prompt_used_fallback"] = bool(diag.get("final_video_prompt_used_fallback"))
+        local_diagnostics["final_video_prompt_error"] = str(result_payload.get("error") or "")
+        local_diagnostics["final_video_prompt_configured_timeout_sec"] = int(
+            diag.get("final_video_prompt_configured_timeout_sec") or local_diagnostics.get("final_video_prompt_configured_timeout_sec") or 0
+        )
+        local_diagnostics["final_video_prompt_timeout_stage_policy_name"] = str(
+            diag.get("final_video_prompt_timeout_stage_policy_name") or local_diagnostics.get("final_video_prompt_timeout_stage_policy_name") or ""
+        )
+        local_diagnostics["final_video_prompt_timed_out"] = bool(diag.get("final_video_prompt_timed_out"))
+        local_diagnostics["final_video_prompt_timeout_retry_attempted"] = bool(diag.get("final_video_prompt_timeout_retry_attempted"))
+        local_diagnostics["final_video_prompt_response_was_empty_after_timeout"] = bool(
+            diag.get("final_video_prompt_response_was_empty_after_timeout")
+        )
+        local_diagnostics["final_video_prompt_identity_gender_conflict_detected"] = bool(
+            diag.get("final_video_prompt_identity_gender_conflict_detected")
+        )
+        local_diagnostics["final_video_prompt_identity_gender_conflict_terms_removed"] = _safe_list(
+            diag.get("final_video_prompt_identity_gender_conflict_terms_removed")
+        )
+        local_diagnostics["final_video_prompt_identity_gender_conflict_segments"] = _safe_list(
+            diag.get("final_video_prompt_identity_gender_conflict_segments")
+        )
+        local_diagnostics["final_video_prompt_validation_checked_after_sanitizer"] = bool(
+            diag.get("final_video_prompt_validation_checked_after_sanitizer")
+        )
+        local_diagnostics["final_video_prompt_stale_identity_remaining_segments"] = _safe_list(
+            diag.get("final_video_prompt_stale_identity_remaining_segments")
+        )
+        local_diagnostics["current_character_1_gender_hint"] = str(current_character_ctx.get("gender_hint") or "")
+        local_diagnostics["current_character_1_identity_label"] = str(current_character_ctx.get("identity_label") or "")
+        local_diagnostics["current_character_1_ref_signature"] = str(current_character_ctx.get("ref_signature") or "")
+        package["diagnostics"] = local_diagnostics
+
     result = generate_ltx_video_prompt_metadata(
         api_key=gemini_api_key,
         package=package,
     )
-
-    diag = _safe_dict(result.get("diagnostics"))
-    diagnostics = _safe_dict(package.get("diagnostics"))
-    diagnostics["final_video_prompt_backend"] = str(diag.get("final_video_prompt_backend") or "gemini")
-    diagnostics["final_video_prompt_prompt_version"] = str(
-        diag.get("final_video_prompt_prompt_version") or FINAL_VIDEO_PROMPT_STAGE_VERSION
-    )
-    diagnostics["final_video_prompt_segment_count"] = int(diag.get("final_video_prompt_segment_count") or 0)
-    diagnostics["final_video_prompt_used_fallback"] = bool(diag.get("final_video_prompt_used_fallback"))
-    diagnostics["final_video_prompt_error"] = str(result.get("error") or "")
-    diagnostics["final_video_prompt_configured_timeout_sec"] = int(
-        diag.get("final_video_prompt_configured_timeout_sec") or diagnostics.get("final_video_prompt_configured_timeout_sec") or 0
-    )
-    diagnostics["final_video_prompt_timeout_stage_policy_name"] = str(
-        diag.get("final_video_prompt_timeout_stage_policy_name") or diagnostics.get("final_video_prompt_timeout_stage_policy_name") or ""
-    )
-    diagnostics["final_video_prompt_timed_out"] = bool(diag.get("final_video_prompt_timed_out"))
-    diagnostics["final_video_prompt_timeout_retry_attempted"] = bool(diag.get("final_video_prompt_timeout_retry_attempted"))
-    diagnostics["final_video_prompt_response_was_empty_after_timeout"] = bool(
-        diag.get("final_video_prompt_response_was_empty_after_timeout")
-    )
-    package["diagnostics"] = diagnostics
+    _apply_result_diagnostics(result)
 
     final_video_prompt = _safe_dict(result.get("final_video_prompt"))
     if _safe_list(final_video_prompt.get("segments")):
         final_video_prompt["created_for_signature"] = current_signature
+        final_video_prompt["snapshot_compatibility"] = current_snapshot_meta
         package["final_video_prompt"] = final_video_prompt
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["final_video_prompt_snapshot_restored"] = False
+        diagnostics["final_video_prompt_snapshot_restore_blocked_by_signature"] = False
+        diagnostics["final_video_prompt_snapshot_restore_block_reason"] = ""
         package["diagnostics"] = diagnostics
         _append_diag_event(package, "final_video_prompt generated", stage_id="final_video_prompt")
         return package
 
     previous_signature = str(previous_payload.get("created_for_signature") or "").strip()
-    can_restore_snapshot = bool(previous_payload) and (not current_signature or not previous_signature or previous_signature == current_signature)
+    previous_meta = _safe_dict(previous_payload.get("snapshot_compatibility"))
+    stale_conflict, stale_terms = _snapshot_has_gender_identity_conflict(
+        previous_payload, gender_hint=str(current_character_ctx.get("gender_hint") or "")
+    )
+    signature_compatible = bool(not current_signature or not previous_signature or previous_signature == current_signature)
+    compatibility_checks = {
+        "upstream_signature": str(previous_meta.get("upstream_signature") or "") == str(current_snapshot_meta.get("upstream_signature") or ""),
+        "character_1_ref_signature": str(previous_meta.get("character_1_ref_signature") or "")
+        == str(current_snapshot_meta.get("character_1_ref_signature") or ""),
+        "character_1_gender_hint": str(previous_meta.get("character_1_gender_hint") or "")
+        == str(current_snapshot_meta.get("character_1_gender_hint") or ""),
+        "character_1_identity_label": str(previous_meta.get("character_1_identity_label") or "")
+        == str(current_snapshot_meta.get("character_1_identity_label") or ""),
+        "route_map_signature": str(previous_meta.get("route_map_signature") or "") == str(current_snapshot_meta.get("route_map_signature") or ""),
+        "segment_ids": _safe_list(previous_meta.get("segment_ids")) == _safe_list(current_snapshot_meta.get("segment_ids")),
+        "scene_prompts_signature": str(previous_meta.get("scene_prompts_signature") or "")
+        == str(current_snapshot_meta.get("scene_prompts_signature") or ""),
+    }
+    missing_meta = not previous_meta
+    incompatible_reasons = [k for k, ok_flag in compatibility_checks.items() if not ok_flag]
+    restore_block_reason = ""
+    if not signature_compatible:
+        restore_block_reason = "created_for_signature_mismatch"
+    elif stale_conflict:
+        restore_block_reason = f"stale_identity_gender_conflict:{','.join(stale_terms)}"
+    elif missing_meta:
+        restore_block_reason = "missing_snapshot_compatibility_metadata"
+    elif incompatible_reasons:
+        restore_block_reason = f"incompatible_snapshot:{','.join(incompatible_reasons)}"
+    can_restore_snapshot = bool(previous_payload) and signature_compatible and (not restore_block_reason)
     package["final_video_prompt"] = previous_payload if can_restore_snapshot else package.get("final_video_prompt", {})
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["final_video_prompt_snapshot_restored"] = bool(can_restore_snapshot)
-    diagnostics["final_video_prompt_snapshot_restore_blocked_by_signature"] = bool(
-        previous_payload and not can_restore_snapshot
-    )
+    diagnostics["final_video_prompt_snapshot_restore_blocked_by_signature"] = bool(previous_payload and not can_restore_snapshot)
+    diagnostics["final_video_prompt_snapshot_restore_block_reason"] = restore_block_reason
+    if stale_conflict:
+        diagnostics["final_video_prompt_identity_gender_conflict_detected"] = True
+    diagnostics["current_character_1_gender_hint"] = str(current_character_ctx.get("gender_hint") or "")
+    diagnostics["current_character_1_identity_label"] = str(current_character_ctx.get("identity_label") or "")
+    diagnostics["current_character_1_ref_signature"] = str(current_character_ctx.get("ref_signature") or "")
     package["diagnostics"] = diagnostics
+    if previous_payload and not can_restore_snapshot:
+        package["final_video_prompt"] = STAGE_SECTION_RESETTERS["final_video_prompt"]()
+        retry_result = generate_ltx_video_prompt_metadata(
+            api_key=gemini_api_key,
+            package=package,
+        )
+        _apply_result_diagnostics(retry_result)
+        retry_payload = _safe_dict(retry_result.get("final_video_prompt"))
+        if _safe_list(retry_payload.get("segments")):
+            retry_payload["created_for_signature"] = current_signature
+            retry_payload["snapshot_compatibility"] = current_snapshot_meta
+            package["final_video_prompt"] = retry_payload
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["final_video_prompt_snapshot_restored"] = False
+            package["diagnostics"] = diagnostics
+            _append_diag_event(package, "final_video_prompt generated after blocked snapshot restore", stage_id="final_video_prompt")
+            return package
+        _append_diag_event(package, "final_video_prompt empty after blocked snapshot retry", stage_id="final_video_prompt")
+        raise RuntimeError(str(retry_result.get("error") or "final_video_prompt_empty"))
     _append_diag_event(package, "final_video_prompt empty", stage_id="final_video_prompt")
     raise RuntimeError(str(result.get("error") or "final_video_prompt_empty"))
 
