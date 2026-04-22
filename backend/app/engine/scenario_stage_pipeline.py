@@ -1461,6 +1461,9 @@ def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str
         return {"i2v": 0, "ia2v": 0, "first_last": 0}
     if total_scenes == 1:
         return {"i2v": 1, "ia2v": 0, "first_last": 0}
+    preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    if preset_name == "no_first_last_50_50_0":
+        return compute_no_first_last_50_50_targets(total_scenes)
 
     base_scene_count = max(1, int(creative_config.get("base_scene_count") or 8))
     targets = _safe_dict(creative_config.get("route_targets_per_block"))
@@ -1537,6 +1540,15 @@ def _compute_route_budget_for_total(total_scenes: int, creative_config: dict[str
         else:
             i2v = max(0, i2v - 1)
     return {"i2v": i2v, "ia2v": ia2v, "first_last": first_last}
+
+
+def compute_no_first_last_50_50_targets(scene_count: int) -> dict[str, int]:
+    n = max(0, int(scene_count or 0))
+    return {
+        "i2v": n // 2,
+        "ia2v": (n + 1) // 2,
+        "first_last": 0,
+    }
 
 
 _SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS = [
@@ -2394,6 +2406,12 @@ def _validate_scene_plan_route_budget(
     target_budget = _compute_route_budget_for_total(len(scene_rows), creative_config)
     mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
     preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    original_targets = {
+        "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
+        "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
+        "first_last": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("first_last") or 0)),
+    }
+    resolved_from = "audio_map_segments_count" if preset_name == "no_first_last_50_50_0" else "creative_config"
     strict_no_first_last_50_50_0 = preset_name == "no_first_last_50_50_0"
     all_lipsync_override = _is_all_lipsync_override_mode(
         total_scenes=len(scene_rows),
@@ -2450,6 +2468,11 @@ def _validate_scene_plan_route_budget(
         "creative_config": creative_config,
         "route_strategy_preset": preset_name,
         "strict_preset_enforced": strict_no_first_last_50_50_0,
+        "route_budget_original_targets": original_targets,
+        "route_budget_resolved_scene_count": len(scene_rows),
+        "route_budget_resolved_targets": target_budget,
+        "route_budget_resolved_from": resolved_from,
+        "route_budget_preset": preset_name,
     }
     return (len(errors) == 0), feedback, details
 
@@ -8745,6 +8768,19 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_ok"] = bool(route_budget_ok)
     diagnostics["scene_plan_route_budget_target"] = _safe_dict(route_budget_meta.get("target_route_mix"))
     diagnostics["scene_plan_route_budget_actual"] = _safe_dict(route_budget_meta.get("actual_route_mix"))
+    diagnostics["route_budget_original_targets"] = _safe_dict(
+        route_budget_meta.get("route_budget_original_targets") or scene_diag.get("route_budget_original_targets")
+    )
+    diagnostics["route_budget_resolved_scene_count"] = int(
+        route_budget_meta.get("route_budget_resolved_scene_count") or scene_diag.get("route_budget_resolved_scene_count") or 0
+    )
+    diagnostics["route_budget_resolved_targets"] = _safe_dict(
+        route_budget_meta.get("route_budget_resolved_targets") or scene_diag.get("route_budget_resolved_targets")
+    )
+    diagnostics["route_budget_resolved_from"] = str(
+        route_budget_meta.get("route_budget_resolved_from") or scene_diag.get("route_budget_resolved_from") or ""
+    )
+    diagnostics["route_budget_preset"] = str(route_budget_meta.get("route_budget_preset") or scene_diag.get("route_budget_preset") or "")
     diagnostics["scene_plan_max_consecutive_lipsync"] = int(route_budget_meta.get("max_consecutive_lipsync") or 0)
     diagnostics["scene_plan_longest_lipsync_streak"] = int(route_budget_meta.get("longest_lipsync_streak") or 0)
     diagnostics["scene_plan_all_lipsync_mode"] = bool(route_budget_meta.get("all_lipsync_mode"))
