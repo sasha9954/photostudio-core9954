@@ -549,6 +549,13 @@ function buildReferencePayload(input, fallbackLabel) {
     const normalized = normalizeText(value).toLowerCase();
     return ["auto", "female", "male", "not_applicable"].includes(normalized) ? normalized : "auto";
   };
+  const normalizeAppearanceMode = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    if (normalized === "only_lipsync" || normalized === "lip-sync only") return "lip_sync_only";
+    if (normalized === "voice_only") return "offscreen_voice";
+    if (normalized === "silhouette") return "background_only";
+    return ["auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"].includes(normalized) ? normalized : "auto";
+  };
   const ownershipRoleToPipelineRole = (value) => {
     if (value === "main") return "character_1";
     if (value === "support") return "character_2";
@@ -572,7 +579,8 @@ function buildReferencePayload(input, fallbackLabel) {
         const storyRole = normalizeStoryRole(item?.story_role || item?.storyRole);
         const identityLabel = normalizeIdentityLabel(item?.identity_label || item?.identityLabel);
         const genderHint = normalizeGenderHint(item?.gender_hint || item?.genderHint);
-        return { url, roleType, ownershipRole, bindingType, storyRole, identityLabel, genderHint };
+        const appearanceMode = normalizeAppearanceMode(item?.appearanceMode || item?.screenPresenceMode || item?.appearance_mode || item?.screen_presence_mode);
+        return { url, roleType, ownershipRole, bindingType, storyRole, identityLabel, genderHint, appearanceMode };
       })
       .filter(Boolean)
     : [];
@@ -603,6 +611,15 @@ function buildReferencePayload(input, fallbackLabel) {
     || ((kind === "ref_location" || kind === "ref_style") ? "not_applicable" : "auto")
   );
   const linkedCharacter = normalizeText(input?.linkedCharacter || input?.linked_character || input?.meta?.linkedCharacter || input?.meta?.linked_character).toLowerCase();
+  const appearanceMode = normalizeAppearanceMode(
+    input?.appearanceMode
+    || input?.screenPresenceMode
+    || input?.appearance_mode
+    || input?.screen_presence_mode
+    || input?.meta?.appearanceMode
+    || input?.meta?.screenPresenceMode
+    || normalizedRefs.find((item) => !!item.appearanceMode)?.appearanceMode
+  );
   const locationLabel = normalizeText(input?.location_label || input?.locationLabel || input?.meta?.location_label || input?.meta?.identity_label).toLowerCase();
   const value = normalizeText(input.value) || normalizeText(refs[0]) || "";
   if (!value && !refs.length && !normalizeText(input.preview)) return null;
@@ -614,6 +631,8 @@ function buildReferencePayload(input, fallbackLabel) {
   meta.story_role = storyRole;
   meta.identity_label = identityLabel;
   meta.gender_hint = genderHint;
+  meta.appearanceMode = appearanceMode;
+  meta.screenPresenceMode = appearanceMode;
   if (linkedCharacter) meta.linked_character = linkedCharacter;
   if (locationLabel) meta.location_label = locationLabel;
   return {
@@ -981,6 +1000,18 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
           || value?.genderHint
           || value?.meta?.gender_hint
           || value?.meta?.genderHint
+        ).toLowerCase() || "auto",
+        appearanceMode: normalizeText(
+          value?.appearanceMode
+          || value?.screenPresenceMode
+          || value?.meta?.appearanceMode
+          || value?.meta?.screenPresenceMode
+        ).toLowerCase() || "auto",
+        screenPresenceMode: normalizeText(
+          value?.appearanceMode
+          || value?.screenPresenceMode
+          || value?.meta?.appearanceMode
+          || value?.meta?.screenPresenceMode
         ).toLowerCase() || "auto",
       }])
   );

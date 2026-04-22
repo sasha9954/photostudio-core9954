@@ -4364,6 +4364,19 @@ def _normalize_intro_text_list(items: Any, max_items: int = 8) -> list[str]:
     return out
 
 
+def normalize_character_appearance_mode(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"only_lipsync", "lip-sync only"}:
+        return "lip_sync_only"
+    if token == "voice_only":
+        return "offscreen_voice"
+    if token == "silhouette":
+        return "background_only"
+    if token in {"auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"}:
+        return token
+    return "auto"
+
+
 def _normalized_gender_presentation(raw: Any) -> str:
     value = re.sub(r"\s+", " ", str(raw or "").strip().lower())
     if not value:
@@ -12599,6 +12612,36 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] canonical refsByRole=" + json.dumps(canonical_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] canonical rejectedRefCandidatesByRole=" + json.dumps(canonical_ref_diagnostics.get("rejectedRefCandidatesByRole") or {}, ensure_ascii=False))
     comfy_refs_by_role = _clean_refs_by_role_for_image(canonical_refs_by_role)
+    character_1_appearance_mode = "auto"
+    connected_inputs_for_appearance = getattr(refs_obj, "connectedInputs", None)
+    connected_inputs_for_appearance = connected_inputs_for_appearance if isinstance(connected_inputs_for_appearance, dict) else {}
+    appearance_sources: list[dict[str, Any]] = [
+        _safe_dict(raw_scene_contract.get("role_identity_mapping")),
+        _safe_dict(raw_scene_contract.get("character_identity_by_role")),
+        _safe_dict(_safe_dict(raw_scene_contract.get("connected_context_summary")).get("role_identity_mapping")),
+        _safe_dict(_safe_dict(raw_scene_contract.get("connected_context_summary")).get("character_identity_by_role")),
+    ]
+    connected_ref_character_1 = _safe_dict(connected_inputs_for_appearance.get("ref_character_1"))
+    appearance_sources.append({"character_1": _safe_dict(connected_ref_character_1.get("meta"))})
+    for source in appearance_sources:
+        row = _safe_dict(source.get("character_1"))
+        candidate_mode = normalize_character_appearance_mode(
+            row.get("appearanceMode")
+            or row.get("screenPresenceMode")
+            or row.get("appearance_mode")
+            or row.get("screen_presence_mode")
+        )
+        if candidate_mode != "auto":
+            character_1_appearance_mode = candidate_mode
+            break
+    character_ref_attached_because_route = False
+    character_ref_skipped_because_appearance_mode = False
+    if route_value in {"ia2v", "lip_sync_music"}:
+        character_ref_attached_because_route = bool(comfy_refs_by_role.get("character_1"))
+    if route_value == "i2v" and character_1_appearance_mode in {"lip_sync_only", "offscreen_voice"}:
+        if comfy_refs_by_role.get("character_1"):
+            character_ref_skipped_because_appearance_mode = True
+        comfy_refs_by_role["character_1"] = []
     print("[COMFY IMAGE DEBUG] cleaned refsByRole=" + json.dumps(comfy_refs_by_role, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
@@ -12615,6 +12658,9 @@ def clip_image(payload: ClipImageIn):
         "connectedInputsCount": len((getattr(refs_obj, "connectedInputs", None) or {}) if isinstance(getattr(refs_obj, "connectedInputs", None), dict) else {}),
         "promptSource": prompt_source,
         "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
+        "appearanceMode": character_1_appearance_mode,
+        "characterRefAttachedBecauseRoute": character_ref_attached_because_route,
+        "characterRefSkippedBecauseAppearanceMode": character_ref_skipped_because_appearance_mode,
     }, ensure_ascii=False))
     reference_profiles = build_reference_profiles({
         role: [{"url": url, "name": ""} for url in (comfy_refs_by_role.get(role) or [])]
@@ -12662,6 +12708,11 @@ def clip_image(payload: ClipImageIn):
         image_prompt=prompt,
         video_prompt=getattr(refs_obj, "sceneNarrativeStep", None),
     )
+    scene_contract["characterAppearanceModesByRole"] = {"character_1": character_1_appearance_mode}
+    scene_contract["characterRefAttachedBecauseRoute"] = character_ref_attached_because_route
+    scene_contract["characterRefSkippedBecauseAppearanceMode"] = character_ref_skipped_because_appearance_mode
+    scene_contract["appearanceMode"] = character_1_appearance_mode
+    scene_contract["route"] = route_value
     incoming_identity_lock = (
         _coerce_optional_bool(raw_scene_contract.get("identityLockApplied"))
         if isinstance(raw_scene_contract, dict)

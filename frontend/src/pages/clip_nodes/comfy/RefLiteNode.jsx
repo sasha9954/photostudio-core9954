@@ -36,6 +36,13 @@ const GENDER_HINT_OPTIONS = [
   { value: "male", label: "Мужской" },
   { value: "not_applicable", label: "Не применимо / неизвестно" },
 ];
+const APPEARANCE_MODE_OPTIONS = [
+  { value: "auto", label: "Авто", tooltip: "Система решает по роли и сцене." },
+  { value: "story_visible", label: "Везде по смыслу", tooltip: "Персонаж может появляться и в lip-sync, и в обычных i2v сценах." },
+  { value: "lip_sync_only", label: "Только lip-sync", tooltip: "Персонаж появляется только в вокальных/lip-sync сценах; в i2v история раскрывается через среду и детали." },
+  { value: "background_only", label: "Фон / силуэт", tooltip: "Персонаж виден частично: силуэт, спина, плечо, фигура в тени, но не главный объект." },
+  { value: "offscreen_voice", label: "За кадром", tooltip: "Персонаж не появляется визуально и работает как голос/рассказчик." },
+];
 const BINDING_TYPE_OPTIONS = [
   { value: "auto", label: "Авто" },
   { value: "held", label: "В руках" },
@@ -86,6 +93,14 @@ function normalizeBindingType(value) {
 function normalizeLinkedCharacter(value) {
   const normalized = String(value || "").trim().toLowerCase();
   return ["auto", "character_1", "character_2", "character_3", "shared", "world"].includes(normalized) ? normalized : "auto";
+}
+
+function normalizeAppearanceMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "only_lipsync" || normalized === "lip-sync only") return "lip_sync_only";
+  if (normalized === "voice_only") return "offscreen_voice";
+  if (normalized === "silhouette") return "background_only";
+  return ["auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"].includes(normalized) ? normalized : "auto";
 }
 
 function resolveGenderHintDefault(identityLabel = "") {
@@ -200,6 +215,7 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const genderHint = normalizeGenderHint(data?.genderHint || data?.gender_hint);
   const bindingType = normalizeBindingType(data?.bindingType || data?.binding_type);
   const linkedCharacter = normalizeLinkedCharacter(data?.linkedCharacter || data?.linked_character);
+  const appearanceMode = normalizeAppearanceMode(data?.appearanceMode || data?.screenPresenceMode || data?.appearance_mode || data?.screen_presence_mode);
   const onOpenLightbox = data?.onOpenLightbox;
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
@@ -261,6 +277,20 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
               disabled={refStatus === "loading"}
             >
               {GENDER_HINT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div className="clipSB_small" style={{ marginBottom: 4 }}>Появление на экране:</div>
+            <select
+              className="clipSB_select"
+              value={appearanceMode}
+              onChange={(event) => data?.onField?.(id, "appearanceMode", normalizeAppearanceMode(event?.target?.value))}
+              disabled={refStatus === "loading"}
+              title={APPEARANCE_MODE_OPTIONS.find((option) => option.value === appearanceMode)?.tooltip || ""}
+            >
+              {APPEARANCE_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value} title={option.tooltip}>{option.label}</option>
+              ))}
             </select>
           </div>
         </>

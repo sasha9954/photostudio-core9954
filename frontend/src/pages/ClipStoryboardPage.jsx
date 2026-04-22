@@ -6737,6 +6737,9 @@ function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
       const storyRole = normalizeRefStoryRole(value?.meta?.story_role || value?.meta?.storyRole);
       const identityLabel = normalizeRefIdentityLabel(value?.meta?.identity_label || value?.meta?.identityLabel);
       const genderHint = normalizeRefGenderHint(value?.meta?.gender_hint || value?.meta?.genderHint);
+      const appearanceMode = normalizeRefAppearanceMode(
+        value?.meta?.appearanceMode || value?.meta?.screenPresenceMode || value?.meta?.appearance_mode || value?.meta?.screen_presence_mode
+      );
       return {
         handleId: String(handleId || ""),
         sourceNodeId: String(value?.sourceNodeId || ""),
@@ -6747,6 +6750,7 @@ function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
         storyRole,
         identityLabel,
         genderHint,
+        appearanceMode,
         refs,
       };
     })
@@ -7276,6 +7280,13 @@ const REF_GENDER_HINT_OPTIONS = [
   { value: "male", label: "Мужской" },
   { value: "not_applicable", label: "Не применимо / неизвестно" },
 ];
+const REF_APPEARANCE_MODE_OPTIONS = [
+  { value: "auto", label: "Авто", tooltip: "Система решает по роли и сцене." },
+  { value: "story_visible", label: "Везде по смыслу", tooltip: "Персонаж может появляться и в lip-sync, и в обычных i2v сценах." },
+  { value: "lip_sync_only", label: "Только lip-sync", tooltip: "Персонаж появляется только в lip-sync сценах; в i2v история раскрывается через среду и детали." },
+  { value: "background_only", label: "Фон / силуэт", tooltip: "Персонаж может быть виден частично: силуэт, спина, плечо, фигура в тени." },
+  { value: "offscreen_voice", label: "За кадром", tooltip: "Персонаж не появляется визуально и работает как голос/рассказчик." },
+];
 const REF_LOCATION_LABEL_OPTIONS = [
   { value: "location", label: "Локация" },
   { value: "interior", label: "Интерьер" },
@@ -7285,6 +7296,7 @@ const REF_LOCATION_LABEL_OPTIONS = [
 const REF_STORY_ROLES = new Set(["auto", "main", "secondary", "support", "antagonist", "minor", "group", "style_anchor"]);
 const REF_IDENTITY_LABELS = new Set(["auto", "девушка", "парень", "женщина", "мужчина", "ребёнок", "животное", "группа людей", "другое"]);
 const REF_GENDER_HINTS = new Set(["auto", "female", "male", "not_applicable"]);
+const REF_APPEARANCE_MODES = new Set(["auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"]);
 const REF_LINKED_CHARACTER_VALUES = new Set(["auto", "character_1", "character_2", "character_3", "shared", "world"]);
 const REF_LOCATION_LABEL_VALUES = new Set(["location", "interior", "exterior", "world"]);
 const REF_IDENTITY_GENDER_DEFAULT = {
@@ -7357,6 +7369,14 @@ function normalizeRefLinkedCharacter(value) {
   return REF_LINKED_CHARACTER_VALUES.has(clean) ? clean : "auto";
 }
 
+function normalizeRefAppearanceMode(value) {
+  const clean = String(value || "").trim().toLowerCase();
+  if (clean === "only_lipsync" || clean === "lip-sync only") return "lip_sync_only";
+  if (clean === "voice_only") return "offscreen_voice";
+  if (clean === "silhouette") return "background_only";
+  return REF_APPEARANCE_MODES.has(clean) ? clean : "auto";
+}
+
 function normalizeRefLocationLabel(value) {
   const clean = String(value || "").trim().toLowerCase();
   return REF_LOCATION_LABEL_VALUES.has(clean) ? clean : "location";
@@ -7378,6 +7398,7 @@ function buildRefOwnershipBindingMeta(data = {}) {
     ? normalizeRefLocationLabel(data?.locationLabel || data?.location_label || data?.identityLabel || data?.identity_label)
     : normalizeRefIdentityLabel(data?.identityLabel || data?.identity_label);
   const genderHint = normalizeRefGenderHint(data?.genderHint || data?.gender_hint, kind);
+  const appearanceMode = normalizeRefAppearanceMode(data?.appearanceMode || data?.screenPresenceMode || data?.appearance_mode || data?.screen_presence_mode);
   const linkedCharacter = normalizeRefLinkedCharacter(data?.linkedCharacter || data?.linked_character);
   return {
     ownershipRole,
@@ -7388,6 +7409,8 @@ function buildRefOwnershipBindingMeta(data = {}) {
     location_label: kind === "ref_location" ? identityLabel : "",
     gender_hint: genderHint,
     linked_character: linkedCharacter,
+    appearanceMode,
+    screenPresenceMode: appearanceMode,
   };
 }
 
@@ -7414,6 +7437,11 @@ function normalizeRefFieldValue(key, value, kind = "") {
     case "linkedCharacter":
     case "linked_character":
       return normalizeRefLinkedCharacter(value);
+    case "appearanceMode":
+    case "appearance_mode":
+    case "screenPresenceMode":
+    case "screen_presence_mode":
+      return normalizeRefAppearanceMode(value);
     default:
       return value;
   }
@@ -7461,6 +7489,8 @@ function normalizeRefNodeData(data = {}, kindHint = "") {
     locationLabel: normalizeRefLocationLabel(normalized?.locationLabel || normalized?.location_label || normalized?.identityLabel || normalized?.identity_label),
     genderHint: normalizeRefGenderHint(normalized?.genderHint || normalized?.gender_hint, kind),
     linkedCharacter: normalizeRefLinkedCharacter(normalized?.linkedCharacter || normalized?.linked_character),
+    appearanceMode: normalizeRefAppearanceMode(normalized?.appearanceMode || normalized?.screenPresenceMode || normalized?.appearance_mode || normalized?.screen_presence_mode),
+    screenPresenceMode: normalizeRefAppearanceMode(normalized?.screenPresenceMode || normalized?.appearanceMode || normalized?.screen_presence_mode || normalized?.appearance_mode),
     refStatus,
     refShortLabel,
     refDetailsOpen: !!normalized?.refDetailsOpen,
@@ -7503,6 +7533,8 @@ function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
     identityLabel: normalizeRefIdentityLabel(data?.identityLabel || data?.identity_label),
     genderHint: normalizeRefGenderHint(data?.genderHint || data?.gender_hint),
     linkedCharacter: normalizeRefLinkedCharacter(data?.linkedCharacter || data?.linked_character),
+    appearanceMode: normalizeRefAppearanceMode(data?.appearanceMode || data?.screenPresenceMode || data?.appearance_mode || data?.screen_presence_mode),
+    screenPresenceMode: normalizeRefAppearanceMode(data?.screenPresenceMode || data?.appearanceMode || data?.screen_presence_mode || data?.appearance_mode),
     refStatus: deriveRefNodeStatus({ ...(data || {}), refs }),
     refShortLabel: String(data?.refShortLabel || "").trim(),
     refDetailsOpen: !!data?.refDetailsOpen,
@@ -8976,6 +9008,7 @@ function RefNode({ id, data }) {
     ? normalizeRefLocationLabel(data?.locationLabel || data?.location_label || data?.identityLabel || data?.identity_label)
     : normalizeRefIdentityLabel(data?.identityLabel || data?.identity_label);
   const genderHint = normalizeRefGenderHint(data?.genderHint || data?.gender_hint, kind);
+  const appearanceMode = normalizeRefAppearanceMode(data?.appearanceMode || data?.screenPresenceMode || data?.appearance_mode || data?.screen_presence_mode);
   const bindingType = normalizeRefBindingType(data?.bindingType);
   const linkedCharacter = normalizeRefLinkedCharacter(data?.linkedCharacter || data?.linked_character);
   const onOpenLightbox = data?.onOpenLightbox;
@@ -9085,6 +9118,20 @@ function RefNode({ id, data }) {
                 disabled={refStatus === "loading"}
               >
                 {REF_GENDER_HINT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <div className="clipSB_small" style={{ marginBottom: 4 }}>Появление на экране:</div>
+              <select
+                className="clipSB_select"
+                value={appearanceMode}
+                onChange={(event) => data?.onField?.(id, "appearanceMode", normalizeRefAppearanceMode(event?.target?.value))}
+                disabled={refStatus === "loading"}
+                title={REF_APPEARANCE_MODE_OPTIONS.find((option) => option.value === appearanceMode)?.tooltip || ""}
+              >
+                {REF_APPEARANCE_MODE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value} title={option.tooltip}>{option.label}</option>
+                ))}
               </select>
             </div>
           </>
@@ -23530,7 +23577,7 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "videoRef") {
       node = { id, type: "videoRefNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { fileName: "", assetUrl: "", url: "", durationSec: null, mime: "", size: 0, posterUrl: "", previewImage: "", width: 0, height: 0, uploading: false, uploadError: "", savedPayload: null, outputPayload: null } };
     } else if (type === "ref_character") {
-      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], roleType: "auto", uploading: false, refStatus: "empty" } };
+      node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ПЕРСОНАЖ", icon: "🧍", kind: "ref_character", refs: [], roleType: "auto", appearanceMode: "auto", screenPresenceMode: "auto", uploading: false, refStatus: "empty" } };
     } else if (type === "ref_location") {
       node = { id, type: "refNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { title: "REF — ЛОКАЦИЯ", icon: "📍", kind: "ref_location", refs: [], uploading: false, refStatus: "empty" } };
     } else if (type === "ref_style") {
@@ -23555,9 +23602,9 @@ const hydrate = useCallback((source = "unknown") => {
     } else if (type === "comfyVideoPreview") {
       node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
     } else if (type === "refCharacter2") {
-      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], roleType: "auto", uploading: false, refStatus: 'empty' } };
+      node = { id, type: "refCharacter2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], roleType: "auto", appearanceMode: "auto", screenPresenceMode: "auto", uploading: false, refStatus: 'empty' } };
     } else if (type === "refCharacter3") {
-      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], roleType: "auto", uploading: false, refStatus: 'empty' } };
+      node = { id, type: "refCharacter3", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'ally', name: '', identityLock: false, priority: 'normal', notes: '', refs: [], roleType: "auto", appearanceMode: "auto", screenPresenceMode: "auto", uploading: false, refStatus: 'empty' } };
     } else if (type === "refAnimal") {
       node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "refGroup") {

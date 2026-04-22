@@ -178,6 +178,44 @@ def _normalize_text(value: Any, *, max_len: int = 240) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())[:max_len]
 
 
+def normalize_character_appearance_mode(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if token in {"only_lipsync", "lip-sync only"}:
+        return "lip_sync_only"
+    if token == "voice_only":
+        return "offscreen_voice"
+    if token == "silhouette":
+        return "background_only"
+    if token in {"auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"}:
+        return token
+    return "auto"
+
+
+def _extract_character_appearance_modes(input_pkg: dict[str, Any]) -> dict[str, str]:
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    sources = [
+        _safe_dict(input_pkg.get("role_identity_mapping")),
+        _safe_dict(input_pkg.get("character_identity_by_role")),
+        _safe_dict(connected_summary.get("role_identity_mapping")),
+        _safe_dict(connected_summary.get("character_identity_by_role")),
+    ]
+    out: dict[str, str] = {}
+    for role in ("character_1", "character_2", "character_3"):
+        for source in sources:
+            row = _safe_dict(source.get(role))
+            mode = normalize_character_appearance_mode(
+                row.get("appearanceMode")
+                or row.get("screenPresenceMode")
+                or row.get("appearance_mode")
+                or row.get("screen_presence_mode")
+            )
+            if mode != "auto":
+                out[role] = mode
+                break
+        out.setdefault(role, "auto")
+    return out
+
+
 def _contains_word_token(text: str, token: str) -> bool:
     token = str(token or "").strip()
     if not token:
@@ -316,6 +354,9 @@ def _build_roles_prompt(context: dict[str, Any]) -> str:
         "ROLES output must be story-facing only.\n"
         "Do not copy technical identity/reference/source wording from CORE.\n"
         "Use technical identity locks only internally, never in output text.\n"
+        "Respect character appearance contract from context.characterAppearanceModesByRole.\n"
+        "If character_1 appearance is lip_sync_only: in ia2v scenes use physical presence; in i2v scenes prefer voiceover/implied/offscreen and do not force visible hero.\n"
+        "If character_1 appearance is offscreen_voice: avoid physical presence and avoid lip-sync performer framing.\n"
         "Do not output terms: reference image, visual reference, connected character, canonical source of truth, refsPresentByRole, connected_context_summary, body proportions, auxiliary only, technical contract, input package, source of truth.\n"
         "Write continuity in plain story language (example: 'The same woman remains the central character throughout the clip.').\n"
         "Output EXACT schema:"
@@ -855,6 +896,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "allowed_entity_registry": list(allowed_registry.values()),
         "assigned_roles": _safe_dict(package.get("assigned_roles")),
         "connected_refs_summary": _safe_dict(_safe_dict(input_pkg.get("connected_context_summary"))),
+        "characterAppearanceModesByRole": _extract_character_appearance_modes(input_pkg),
         "entity_registry_sources": ["input.refs_by_role", "refs_inventory", "assigned_roles", "connected_context_summary"],
     }
 
