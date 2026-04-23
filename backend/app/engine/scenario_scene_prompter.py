@@ -2523,11 +2523,33 @@ def _normalize_scene_prompts(
             "Do not introduce a different season or contradictory weather."
         )
         anti_duplicate_clause = "Differentiate this scene clearly from adjacent scenes in shot purpose, composition, and subject emphasis."
-        world_cast_clause = (
-            "Background figures should match the established world's social role and atmosphere, reading as associates, dockside entourage, underworld presence, or intimidating local crew when appropriate, not generic labor-only documentary workers unless explicitly intended by the scene."
+        adjacent_separation_clause = (
+            "Adjacent scene separation is mandatory: change at least primary subject presence, composition, zone, human density, and visual function so world-detail cutaways do not look like near-duplicate base plates of performer shots."
         )
-        cast_tone_tokens = ("underworld", "criminal", "crime", "gang", "mafia", "smuggling", "threat", "dangerous", "dockside")
-        explicit_labor_tokens = ("labor documentary", "documentary labor", "industrial labor", "workshift documentary", "union labor")
+        world_detail_human_presence_clause = (
+            "Prefer socially legible human presence and lived-in contemporary world texture over empty background spaces, unless the scene explicitly calls for isolation or emptiness."
+        )
+        world_detail_city_identity_clause = (
+            "For world-detail/cutaway city atmosphere, prioritize active public space, populated street texture, social movement, and recognizable contemporary urban identity over generic warehouse/industrial wallpaper."
+        )
+        world_detail_subject_hierarchy_clause = (
+            "For environment/cutaway/world-detail scenes, prioritize socially readable urban life, contemporary populated city texture, and meaningful human presence; use labor/cargo/manual handling only when explicitly implied by the scene text."
+        )
+        world_cast_clause = (
+            "Background figures should match the established world's social role and atmosphere, reading as tense local presence, watchful groups, intimidating entourage, socially charged bystanders, or guarded street presence when tone is dangerous/criminal, not labor-only documentary workers unless explicitly required by the scene."
+        )
+        cast_tone_tokens = ("underworld", "criminal", "crime", "gang", "smuggling", "threat", "dangerous", "tense")
+        explicit_labor_tokens = (
+            "labor documentary",
+            "documentary labor",
+            "industrial labor",
+            "workshift documentary",
+            "union labor",
+            "cargo handling",
+            "container loading",
+            "manual loading",
+            "dock labor",
+        )
         scene_is_cutaway = (
             actual_route == "i2v"
             and ("environment" in scene_blob or "cutaway" in scene_blob or str(scene.get("visual_focus_role") or "").strip().lower() == "environment")
@@ -2538,24 +2560,57 @@ def _normalize_scene_prompts(
             cutaway_clause = (
                 "Environment-first cutaway: no main performer visible, or performer remains non-dominant peripheral presence only."
             )
-            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, cutaway_clause, anti_duplicate_clause])
-            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, cutaway_clause, anti_duplicate_clause])
+            photo_prompt = _append_compact_clauses(
+                photo_prompt,
+                [
+                    season_world_clause,
+                    cutaway_clause,
+                    anti_duplicate_clause,
+                    adjacent_separation_clause,
+                    world_detail_subject_hierarchy_clause,
+                    world_detail_human_presence_clause,
+                    world_detail_city_identity_clause,
+                ],
+            )
+            video_prompt = _append_compact_clauses(
+                video_prompt,
+                [
+                    season_world_clause,
+                    cutaway_clause,
+                    anti_duplicate_clause,
+                    adjacent_separation_clause,
+                    world_detail_subject_hierarchy_clause,
+                    world_detail_human_presence_clause,
+                    world_detail_city_identity_clause,
+                ],
+            )
             positive_video_prompt = _append_compact_clauses(
                 positive_video_prompt or video_prompt,
-                [season_world_clause, cutaway_clause, anti_duplicate_clause],
+                [
+                    season_world_clause,
+                    cutaway_clause,
+                    anti_duplicate_clause,
+                    adjacent_separation_clause,
+                    world_detail_subject_hierarchy_clause,
+                    world_detail_human_presence_clause,
+                    world_detail_city_identity_clause,
+                ],
             )
         elif scene_is_performance:
             performance_clause = "Performer-first performance shot: hero performer is clearly visible and dominant; avoid environment-only composition."
-            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, performance_clause, anti_duplicate_clause])
-            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, performance_clause, anti_duplicate_clause])
+            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, performance_clause, anti_duplicate_clause, adjacent_separation_clause])
+            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, performance_clause, anti_duplicate_clause, adjacent_separation_clause])
             positive_video_prompt = _append_compact_clauses(
                 positive_video_prompt or video_prompt,
-                [season_world_clause, performance_clause, anti_duplicate_clause],
+                [season_world_clause, performance_clause, anti_duplicate_clause, adjacent_separation_clause],
             )
         else:
-            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, anti_duplicate_clause])
-            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, anti_duplicate_clause])
-            positive_video_prompt = _append_compact_clauses(positive_video_prompt or video_prompt, [season_world_clause, anti_duplicate_clause])
+            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, anti_duplicate_clause, adjacent_separation_clause])
+            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, anti_duplicate_clause, adjacent_separation_clause])
+            positive_video_prompt = _append_compact_clauses(
+                positive_video_prompt or video_prompt,
+                [season_world_clause, anti_duplicate_clause, adjacent_separation_clause],
+            )
 
         if any(token in scene_blob for token in cast_tone_tokens) and not any(token in scene_blob for token in explicit_labor_tokens):
             photo_prompt = _append_compact_clauses(photo_prompt, [world_cast_clause])
