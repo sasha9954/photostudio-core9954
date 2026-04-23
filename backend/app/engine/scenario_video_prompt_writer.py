@@ -1121,7 +1121,25 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         or role_row.get("speaker_role")
         or ""
     ).strip()
-    environment_cutaway_i2v = route == "i2v" and visual_focus_role == "environment" and not speaker_role
+    cast_roles = {"character_1", "character_2", "character_3", "group"}
+    must_appear_cast = [
+        str(role or "").strip().lower()
+        for role in must_appear
+        if str(role or "").strip().lower() in cast_roles
+    ]
+    refs_by_role_cast_present = any(_safe_list(_safe_dict(refs_by_role).get(role)) for role in ("character_1", "character_2", "character_3"))
+    explicit_cast_focus_present = bool(
+        primary_role in cast_roles
+        or hero_entity_id in {"character_1", "character_2", "character_3"}
+        or must_appear_cast
+        or refs_by_role_cast_present
+    )
+    environment_cutaway_i2v = bool(
+        route == "i2v"
+        and visual_focus_role == "environment"
+        and not speaker_role
+        and not explicit_cast_focus_present
+    )
     has_human_subject = False if lip_sync_only_i2v or environment_cutaway_i2v else _scene_has_human_subject(fallback_row, route)
     fallback_blob = json.dumps(
         {
