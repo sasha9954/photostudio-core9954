@@ -186,6 +186,15 @@ _OWNERSHIP_ROLE_MAP = {
 _BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 WORLD_FOCUS_ROLE_PRIORITY = ("environment", "location", "locals", "crowd", "props", "object", "threshold", "aftermath")
 WORLD_BEAT_HINTS = {"social_texture", "world_pressure", "threshold", "aftermath", "release", "world_observation", "instrumental", "outro"}
+INSTRUMENTAL_NO_VOCAL_MARKERS = (
+    "[instrumental",
+    "instrumental intro",
+    "instrumental outro",
+    "no vocal",
+    "no-vocal",
+    "outro",
+    "intro",
+)
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -295,6 +304,13 @@ def _is_world_beat(source_row: dict[str, Any]) -> bool:
     return any(token in blob for token in WORLD_BEAT_HINTS)
 
 
+def _is_instrumental_or_no_vocal_text(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in INSTRUMENTAL_NO_VOCAL_MARKERS)
+
+
 def _can_enforce_ia2v_row(
     *,
     source_row: dict[str, Any],
@@ -306,6 +322,8 @@ def _can_enforce_ia2v_row(
     reasons: list[str] = []
     if not (spoken_line or transcript_slice):
         reasons.append("ia2v_missing_spoken_content")
+    if _is_instrumental_or_no_vocal_text(spoken_line) or _is_instrumental_or_no_vocal_text(transcript_slice):
+        reasons.append("ia2v_instrumental_or_no_vocal_segment")
     if not is_lip_sync_candidate:
         reasons.append("audio_map_permission_missing")
     duration_sec = float(source_row.get("duration_sec") or 0.0)
@@ -2019,6 +2037,7 @@ def _normalize_scene_plan(
         row_vocal_owner_role = str(raw_row.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE).strip() or UNKNOWN_VOCAL_OWNER_ROLE
 
         ia2v_evidence_reject_reasons: list[str] = []
+        forced_ia2v_invalid_downgraded = False
         if route == "ia2v":
             can_enforce_ia2v, ia2v_evidence_reject_reasons = _can_enforce_ia2v_row(
                 source_row=source_row,
@@ -2036,6 +2055,9 @@ def _normalize_scene_plan(
                 if transcript_slice and not spoken_line:
                     spoken_line = transcript_slice
             else:
+                if hard_route == "ia2v":
+                    forced_ia2v_invalid_downgraded = True
+                    ia2v_evidence_reject_reasons.append("forced_ia2v_invalid_downgraded_to_i2v")
                 route = "i2v"
                 speaker_role = ""
                 row_vocal_owner_role = ""
@@ -2270,8 +2292,16 @@ def _normalize_scene_plan(
                 "primary_role": primary_role,
                 "visual_focus_role": visual_focus_role,
                 "route": route,
-                "route_reason": str(raw_row.get("route_reason") or "").strip(),
-                "route_selection_reason": str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip(),
+                "route_reason": (
+                    f'{str(raw_row.get("route_reason") or "").strip()} | forced_ia2v_invalid_downgraded_to_i2v'.strip(" |")
+                    if forced_ia2v_invalid_downgraded
+                    else str(raw_row.get("route_reason") or "").strip()
+                ),
+                "route_selection_reason": (
+                    f'{str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()} | forced_ia2v_invalid_downgraded_to_i2v'.strip(" |")
+                    if forced_ia2v_invalid_downgraded
+                    else str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()
+                ),
                 "scene_goal": str(raw_row.get("scene_goal") or "").strip(),
                 "narrative_function": str(raw_row.get("narrative_function") or "").strip(),
                 "story_beat_type": str(
@@ -2309,7 +2339,11 @@ def _normalize_scene_plan(
                 "speaker_confidence": round(float(speaker_confidence), 3),
             }
         )
-        route_selection_reasons_by_segment[segment_id] = str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()
+        route_selection_reasons_by_segment[segment_id] = (
+            f'{str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()} | forced_ia2v_invalid_downgraded_to_i2v'.strip(" |")
+            if forced_ia2v_invalid_downgraded
+            else str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()
+        )
 
     if max_consecutive_lip_sync_count > max_consecutive_allowed:
         validation_error = validation_error or "speaker_role_invalid"
@@ -2364,7 +2398,7 @@ def _normalize_scene_plan(
                 "primary_role": str(row.get("primary_role") or ""),
                 "visual_focus_role": str(row.get("visual_focus_role") or ""),
                 "speaker_role": str(row.get("speaker_role") or ""),
-                "vocal_owner_role": str(row.get("vocal_owner_role") or UNKNOWN_VOCAL_OWNER_ROLE),
+                "vocal_owner_role": str(row.get("vocal_owner_role") or ""),
                 "spoken_line": str(row.get("spoken_line") or ""),
                 "lip_sync_allowed": bool(row.get("lip_sync_allowed")),
                 "lip_sync_priority": str(row.get("lip_sync_priority") or "none"),
