@@ -106,6 +106,9 @@ ANTI_DUPLICATE_ADJACENT_CLAUSE = "Differentiate this scene clearly from adjacent
 WORLD_CAST_COHERENCE_CLAUSE = (
     "Background figures should match the established world's social role and atmosphere, reading as tense local presence, watchful groups, intimidating entourage, socially charged bystanders, or guarded street presence when tone is dangerous/criminal, not labor-only documentary workers unless explicitly required by the scene."
 )
+WORLD_DETAIL_CUTAWAY_CAST_COHERENCE_CLAUSE = (
+    "For environment/cutaway scenes, if people appear they remain distant peripheral background presence only and must not become dominant foreground subjects."
+)
 WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE = (
     "For environment/cutaway/world-detail scenes, allow only incidental distant background pedestrians when ambient life is contextually needed; keep any human presence subtle, far-secondary, and non-dominant."
 )
@@ -117,6 +120,12 @@ WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE = (
 )
 WORLD_DETAIL_EMPTY_AFTERMATH_CLAUSE = (
     "If the scene implies emptiness/aftermath/lingering quiet/deserted mood or no main performer visible, prioritize near-empty space over populated urban life."
+)
+WORLD_DETAIL_FOREGROUND_TAKEOVER_GUARD_CLAUSE = (
+    "Foreground takeover guard: no centered solitary man/woman introduced by default, no new foreground person may enter and take over the frame mid-shot, and no dominant human subject may emerge after the opening frame; any pedestrians remain incidental distant background continuity only throughout the full shot."
+)
+WORLD_DETAIL_LOCATION_CONTINUITY_GUARD_CLAUSE = (
+    "Location continuity guard: preserve the same starting location, local zone, and environmental setup from the first frame; do not jump or replace the scene with a different street/courtyard/facade mid-shot; camera motion should reveal the current space rather than replacing it."
 )
 ENVIRONMENT_CUTAWAY_COMPACT_CONTINUITY_CLAUSE = (
     "Compact continuity: keep same world family, weather/season/time continuity, and clear separation from adjacent shots without performer-identity boilerplate."
@@ -1333,13 +1342,18 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE)
         positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
         positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_CITY_IDENTITY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_FOREGROUND_TAKEOVER_GUARD_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_LOCATION_CONTINUITY_GUARD_CLAUSE)
         if cutaway_prefers_emptiness:
             positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_EMPTY_AFTERMATH_CLAUSE)
         positive_prompt = _append_clause(positive_prompt, ENVIRONMENT_CUTAWAY_COMPACT_CONTINUITY_CLAUSE)
     if any(token in lower_scene_semantics for token in danger_social_tone_tokens) and not any(
         token in lower_scene_semantics for token in explicit_labor_tokens
     ):
-        positive_prompt = _append_clause(positive_prompt, WORLD_CAST_COHERENCE_CLAUSE)
+        if environment_cutaway_i2v:
+            positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_CUTAWAY_CAST_COHERENCE_CLAUSE)
+        else:
+            positive_prompt = _append_clause(positive_prompt, WORLD_CAST_COHERENCE_CLAUSE)
     domestic_scene = any(
         token in lower_scene_semantics
         for token in ("domestic", "apartment", "kitchen", "home interior", "argument", "breakup", "hallway", "late-night")
