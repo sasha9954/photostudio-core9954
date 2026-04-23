@@ -1913,6 +1913,7 @@ def _normalize_scene_plan(
     lip_sync_rejected_reasons: dict[str, list[str]] = {}
     lip_sync_voice_role_mismatch_segments: list[str] = []
     route_selection_reasons_by_segment: dict[str, str] = {}
+    final_route_by_segment: dict[str, str] = {}
     primary_role_by_segment: dict[str, str] = {}
     visual_focus_role_by_segment: dict[str, str] = {}
     speaker_role_by_segment: dict[str, str] = {}
@@ -2344,6 +2345,7 @@ def _normalize_scene_plan(
             if forced_ia2v_invalid_downgraded
             else str(raw_row.get("route_selection_reason") or raw_row.get("route_reason") or "").strip()
         )
+        final_route_by_segment[segment_id] = route
 
     if max_consecutive_lip_sync_count > max_consecutive_allowed:
         validation_error = validation_error or "speaker_role_invalid"
@@ -2356,6 +2358,11 @@ def _normalize_scene_plan(
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
     route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
+    requested_route_locks_by_segment = {
+        str(seg).strip(): str(route).strip().lower()
+        for seg, route in hard_route_map.items()
+        if str(seg).strip() and str(route).strip().lower() in ALLOWED_ROUTES
+    }
     expected_scene_count = len(scene_segment_rows)
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
     route_budget_original_targets = {
@@ -2425,6 +2432,7 @@ def _normalize_scene_plan(
             "ia2v": route_counts["ia2v"],
             "first_last": route_counts["first_last"],
         },
+        "route_locks_by_segment": final_route_by_segment,
         "scenes": legacy_scenes,
         "scene_arc_summary": "",
         "route_strategy_notes": ["scene_candidate_windows and compiled_contract are legacy bridge inputs"],
@@ -2487,6 +2495,7 @@ def _normalize_scene_plan(
         "lip_sync_decision_by_segment": lip_sync_decision_by_segment,
         "lip_sync_rejected_reasons": lip_sync_rejected_reasons,
         "scene_plan_route_selection_reasons_by_segment": route_selection_reasons_by_segment,
+        "final_route_by_segment": final_route_by_segment,
         "lip_sync_selected_count": lip_sync_selected_count,
         "consecutive_lip_sync_count": max_consecutive_lip_sync_count,
         "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow": ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow,
@@ -2502,7 +2511,8 @@ def _normalize_scene_plan(
         "route_budget_preset": route_budget_preset,
         "hardRouteMapApplied": bool(hard_route_map),
         "routeAssignmentSource": "creative_config.hard_route_assignments_by_segment" if hard_route_map else "gemini",
-        "hard_route_assignments_by_segment": hard_route_map,
+        "hard_route_assignments_by_segment": requested_route_locks_by_segment,
+        "requested_route_locks_by_segment": requested_route_locks_by_segment,
         "scene_plan_route_budget_target": route_budget_target,
         "scene_plan_route_budget_actual": route_counts,
         "scene_plan_route_budget_mismatch": route_budget_mismatch,
@@ -2674,6 +2684,9 @@ def build_gemini_scene_plan(
             "scene_plan_user_route_strategy_was_sent": bool(normalization_diag.get("scene_plan_user_route_strategy_was_sent")),
             "scene_plan_user_route_strategy_hard_constraint": bool(normalization_diag.get("scene_plan_user_route_strategy_hard_constraint")),
             "scene_plan_route_selection_reasons_by_segment": _safe_dict(normalization_diag.get("scene_plan_route_selection_reasons_by_segment")),
+            "scene_plan_final_route_by_segment": _safe_dict(normalization_diag.get("final_route_by_segment")),
+            "scene_plan_requested_route_locks_by_segment": _safe_dict(normalization_diag.get("requested_route_locks_by_segment")),
+            "scene_plan_route_locks_by_segment": _safe_dict(scene_plan.get("route_locks_by_segment")),
         }
         if include_debug_raw:
             payload["scene_plan_debug"] = {
