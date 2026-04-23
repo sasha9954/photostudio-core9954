@@ -1673,12 +1673,18 @@ def _strip_ia2v_positive_noise(text: str) -> str:
 
 def _clean_ia2v_negative_prompt(text: str) -> str:
     parts = [p.strip() for p in str(text or "").split(",") if p.strip()]
+    # For ia2v we intentionally keep the final negative prompt minimal and technical-only.
+    # Legacy generic world/style bans (e.g. color/architecture/atmosphere) must not pass through.
     kept: list[str] = []
+    canon_tokens = [p.strip() for p in _IA2V_LIP_SYNC_NEGATIVE_CANON.split(",") if p.strip()]
+    canon_norm = {re.sub(r"\s+", " ", token.lower()).strip(" ,;:.") for token in canon_tokens}
     for part in parts:
         if any(pattern.search(part) for pattern in _IA2V_ANTI_LIPSYNC_NEGATIVE_PATTERNS):
             continue
-        kept.append(part)
-    kept.extend([p.strip() for p in _IA2V_LIP_SYNC_NEGATIVE_CANON.split(",") if p.strip()])
+        normalized = re.sub(r"\s+", " ", part.lower()).strip(" ,;:.")
+        if normalized in canon_norm:
+            kept.append(part)
+    kept.extend(canon_tokens)
     deduped: list[str] = []
     seen: set[str] = set()
     for item in kept:
@@ -2953,7 +2959,7 @@ _DETECH_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bcamera moves?\b", re.IGNORECASE), "the view shifts with her"),
     (re.compile(r"\bcamera movement\b", re.IGNORECASE), "the perspective shifts gently with the moment"),
     (re.compile(r"\bframing reset\b", re.IGNORECASE), "the view settles into a refreshed composition"),
-    (re.compile(r"\bclose[\-\s]?up\b", re.IGNORECASE), "an intimate near view"),
+    (re.compile(r"\bclose[\-\s]?up\b", re.IGNORECASE), "a close view"),
     (re.compile(r"\bmedium shot\b", re.IGNORECASE), "a more open view of her upper body"),
     (re.compile(r"\bwide shot\b", re.IGNORECASE), "a wider view of her within the surrounding space"),
     (re.compile(r"\bdolly\b", re.IGNORECASE), "smooth forward or backward perspective shift"),
@@ -3117,6 +3123,17 @@ def _de_technicalize_text(text: str) -> tuple[str, bool]:
     for pattern, replacement in (
         (re.compile(r"\bA an\b"), "An"),
         (re.compile(r"\bA a\b"), "A"),
+    ):
+        updated = pattern.sub(replacement, out)
+        if updated != out:
+            changed = True
+            out = updated
+    for pattern, replacement in (
+        (re.compile(r"\b(an?\s+)?intimate near view\b", re.IGNORECASE), "a close view"),
+        (re.compile(r"\ba\s+medium\s+a\s+close view\b", re.IGNORECASE), "a medium close view"),
+        (re.compile(r"\bclose view\s+and\s+waist-up\b", re.IGNORECASE), "waist-up view"),
+        (re.compile(r"\bwaist-up\s+and\s+close view\b", re.IGNORECASE), "waist-up view"),
+        (re.compile(r"\b(close view|medium close view|waist-up view)\s+\1\b", re.IGNORECASE), r"\1"),
     ):
         updated = pattern.sub(replacement, out)
         if updated != out:
