@@ -76,7 +76,19 @@ WORLD_SEASON_CONTINUITY_CLAUSE = (
 )
 ANTI_DUPLICATE_ADJACENT_CLAUSE = "Differentiate this scene clearly from adjacent scenes in shot purpose, composition, and subject emphasis."
 WORLD_CAST_COHERENCE_CLAUSE = (
-    "Background figures should match the established world's social role and atmosphere, reading as associates, dockside entourage, underworld presence, or intimidating local crew when appropriate, not generic labor-only documentary workers unless explicitly intended by the scene."
+    "Background figures should match the established world's social role and atmosphere, reading as tense local presence, watchful groups, intimidating entourage, socially charged bystanders, or guarded street presence when tone is dangerous/criminal, not labor-only documentary workers unless explicitly required by the scene."
+)
+WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE = (
+    "Prefer socially legible human presence and lived-in contemporary world texture over empty background spaces, unless the scene explicitly calls for isolation or emptiness."
+)
+WORLD_DETAIL_CITY_IDENTITY_CLAUSE = (
+    "For world-detail/cutaway city atmosphere, prioritize active public space, populated street texture, social movement, and recognizable contemporary urban identity over generic warehouse/industrial wallpaper."
+)
+WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE = (
+    "For environment/cutaway/world-detail scenes, prioritize socially readable urban life, contemporary populated city texture, and meaningful human presence; use labor/cargo/manual handling only when explicitly implied by the scene text."
+)
+ADJACENT_SCENE_DIFFERENTIATION_CLAUSE = (
+    "Adjacent scene separation is mandatory: change at least primary subject presence, composition, zone, human density, and visual function so world-detail cutaways do not look like near-duplicate base plates of performer shots."
 )
 
 
@@ -1078,10 +1090,31 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             "Grounded realistic world, no main performer visible, vocalist offscreen voiceover only."
         )
         fallback_photo_prompt = _append_clause(fallback_photo_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_CITY_IDENTITY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, ADJACENT_SCENE_DIFFERENTIATION_CLAUSE)
+        fallback_photo_prompt = _append_clause(fallback_photo_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
-    if any(token in lower_scene_semantics for token in ("underworld", "criminal", "crime", "gang", "mafia", "smuggling", "dangerous", "dockside")) and not any(
-        token in lower_scene_semantics for token in ("labor documentary", "documentary labor", "industrial labor", "workshift documentary")
+    explicit_labor_tokens = (
+        "labor documentary",
+        "documentary labor",
+        "industrial labor",
+        "workshift documentary",
+        "cargo handling",
+        "container loading",
+        "manual loading",
+        "dock labor",
+    )
+    danger_social_tone_tokens = ("underworld", "criminal", "crime", "gang", "smuggling", "dangerous", "threat", "tense")
+    if environment_cutaway_i2v:
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_CITY_IDENTITY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, ADJACENT_SCENE_DIFFERENTIATION_CLAUSE)
+    if any(token in lower_scene_semantics for token in danger_social_tone_tokens) and not any(
+        token in lower_scene_semantics for token in explicit_labor_tokens
     ):
         positive_prompt = _append_clause(positive_prompt, WORLD_CAST_COHERENCE_CLAUSE)
     domestic_scene = any(
