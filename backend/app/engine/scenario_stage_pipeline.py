@@ -4712,6 +4712,151 @@ def _detect_core_role_spawning_matches(
     return [*matches, *contradiction_matches][:12]
 
 
+_STORY_CORE_TECHNICAL_LANGUAGE_PATTERNS = (
+    r"\bcamera[_\s-]*intent\b",
+    r"\bcamera[_\s-]*move(s|ment)?\b",
+    r"\bcamera[_\s-]*tracks?\b",
+    r"\bcamera[_\s-]*motion\b",
+    r"\bshot[_\s-]*framing\b",
+    r"\bclose[_\s-]?up\b",
+    r"\bmedium[_\s-]*shot\b",
+    r"\bwide[_\s-]*shot\b",
+    r"\btracking[_\s-]*shot\b",
+    r"\bdolly\b",
+    r"\bzoom\b",
+    r"\bpan(?:\s+(?:left|right|up|down))?\b",
+    r"\btilt(?:\s+(?:up|down))?\b",
+    r"\bsubject[_\s-]*motion\b",
+    r"\bmotion[_\s-]*profile\b",
+    r"\b(?:positive|negative)[_\s-]*prompt\b",
+    r"\brenderer\b",
+    r"\bdelivery\b",
+    r"\bworkflow\b",
+    r"\bmodel[_\s-]*id\b",
+    r"\bframe[_\s-]*strategy\b",
+)
+_STORY_CORE_ROUTE_LEAKAGE_PATTERNS = (
+    r"\b(?:segment|scene)\s*\d+[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
+    r"\bsegment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
+    r"\broute\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
+)
+_STORY_CORE_ROUTE_TOKENS = ("i2v", "ia2v", "first_last")
+
+
+def _story_core_forbidden_zones_text(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    forbidden_zones: list[tuple[str, Any]] = [
+        ("story_summary", payload.get("story_summary")),
+        ("opening_anchor", payload.get("opening_anchor")),
+        ("ending_callback_rule", payload.get("ending_callback_rule")),
+        ("global_arc", payload.get("global_arc")),
+        ("identity_doctrine", payload.get("identity_doctrine")),
+        ("narrative_segments", payload.get("narrative_segments")),
+    ]
+    normalized_zones: list[tuple[str, str]] = []
+    for zone_name, zone_value in forbidden_zones:
+        if zone_value is None:
+            continue
+        if isinstance(zone_value, str):
+            zone_text = zone_value
+        else:
+            try:
+                zone_text = json.dumps(zone_value, ensure_ascii=False)
+            except Exception:
+                zone_text = str(zone_value)
+        normalized_zones.append((zone_name, zone_text.lower()))
+    return normalized_zones
+
+
+def _find_story_core_forbidden_technical_match(payload: dict[str, Any]) -> dict[str, Any]:
+    normalized_zones = _story_core_forbidden_zones_text(payload)
+    for pattern in _STORY_CORE_TECHNICAL_LANGUAGE_PATTERNS:
+        compiled = re.compile(pattern)
+        for zone_name, zone_text in normalized_zones:
+            hit = compiled.search(zone_text)
+            if hit:
+                return {
+                    "match_type": "technical_language_pattern",
+                    "pattern": pattern,
+                    "zone": zone_name,
+                    "zone_text": zone_text,
+                    "match_obj": hit,
+                    "raw_term": hit.group(0) if hasattr(hit, "group") else "",
+                }
+    for token in _STORY_CORE_ROUTE_TOKENS:
+        for zone_name, zone_text in normalized_zones:
+            if token in zone_text:
+                return {
+                    "match_type": "route_token",
+                    "pattern": token,
+                    "zone": zone_name,
+                    "zone_text": zone_text,
+                    "match_obj": None,
+                    "raw_term": token,
+                }
+    for pattern in _STORY_CORE_ROUTE_LEAKAGE_PATTERNS:
+        compiled = re.compile(pattern)
+        for zone_name, zone_text in normalized_zones:
+            hit = compiled.search(zone_text)
+            if hit:
+                return {
+                    "match_type": "route_leakage_pattern",
+                    "pattern": pattern,
+                    "zone": zone_name,
+                    "zone_text": zone_text,
+                    "match_obj": hit,
+                    "raw_term": hit.group(0) if hasattr(hit, "group") else "",
+                }
+    return {}
+
+
+def _sanitize_story_core_forbidden_technical_language(payload: dict[str, Any]) -> tuple[dict[str, Any], list[str], bool]:
+    sanitized = deepcopy(_safe_dict(payload))
+    if not sanitized:
+        return sanitized, [], False
+
+    removed_terms: list[str] = []
+
+    def _sanitize_text(value: str) -> str:
+        out = str(value or "")
+        for pattern in _STORY_CORE_TECHNICAL_LANGUAGE_PATTERNS:
+            compiled = re.compile(pattern, flags=re.IGNORECASE)
+            hits = compiled.findall(out)
+            if hits:
+                if isinstance(hits[0], tuple):
+                    removed_terms.extend([str(item[0]) for item in hits if item and str(item[0]).strip()])
+                else:
+                    removed_terms.extend([str(item) for item in hits if str(item).strip()])
+            out = compiled.sub(" ", out)
+        for pattern in _STORY_CORE_ROUTE_LEAKAGE_PATTERNS:
+            compiled = re.compile(pattern, flags=re.IGNORECASE)
+            for hit in compiled.finditer(out):
+                removed_terms.append(str(hit.group(0) or "").strip())
+            out = compiled.sub(" ", out)
+        for token in _STORY_CORE_ROUTE_TOKENS:
+            token_compiled = re.compile(rf"\b{re.escape(token)}\b", flags=re.IGNORECASE)
+            if token_compiled.search(out):
+                removed_terms.append(token)
+            out = token_compiled.sub(" ", out)
+        out = re.sub(r"\s{2,}", " ", out).strip()
+        return out
+
+    def _walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            return {k: _walk(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_walk(v) for v in node]
+        if isinstance(node, str):
+            return _sanitize_text(node)
+        return node
+
+    for key in ("story_summary", "opening_anchor", "ending_callback_rule", "global_arc", "identity_doctrine", "narrative_segments"):
+        if key in sanitized:
+            sanitized[key] = _walk(sanitized.get(key))
+    deduped_terms = sorted({term.strip() for term in removed_terms if term and term.strip()})[:32]
+    changed = json.dumps(_safe_dict(payload), ensure_ascii=False, sort_keys=True) != json.dumps(sanitized, ensure_ascii=False, sort_keys=True)
+    return sanitized, deduped_terms, changed
+
+
 def _validate_story_core_v11_payload(
     *,
     payload: dict[str, Any],
@@ -4728,14 +4873,6 @@ def _validate_story_core_v11_payload(
     # Should FAIL:
     # - "the guy (character_1)"
     # - "character_2 is the girl"
-    def _zone_text(value: Any) -> str:
-        if isinstance(value, str):
-            return value
-        try:
-            return json.dumps(value, ensure_ascii=False)
-        except Exception:
-            return str(value)
-
     errors: list[str] = []
     required_strings = ("core_version", "story_summary", "opening_anchor", "ending_callback_rule")
     for key in required_strings:
@@ -4793,54 +4930,12 @@ def _validate_story_core_v11_payload(
             mismatch_errors.append("id_mismatch_kind:renamed_segment_ids")
         return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
 
-    route_tokens = ("i2v", "ia2v", "first_last")
-    technical_language_patterns = (
-        r"\bcamera[_\s-]*intent\b",
-        r"\bcamera[_\s-]*move(s|ment)?\b",
-        r"\bcamera[_\s-]*tracks?\b",
-        r"\bcamera[_\s-]*motion\b",
-        r"\bshot[_\s-]*framing\b",
-        r"\bclose[_\s-]?up\b",
-        r"\bmedium[_\s-]*shot\b",
-        r"\bwide[_\s-]*shot\b",
-        r"\btracking[_\s-]*shot\b",
-        r"\bdolly\b",
-        r"\bzoom\b",
-        r"\bpan(?:\s+(?:left|right|up|down))?\b",
-        r"\btilt(?:\s+(?:up|down))?\b",
-        r"\bsubject[_\s-]*motion\b",
-        r"\bmotion[_\s-]*profile\b",
-        r"\b(?:positive|negative)[_\s-]*prompt\b",
-        r"\brenderer\b",
-        r"\bdelivery\b",
-        r"\bworkflow\b",
-        r"\bmodel[_\s-]*id\b",
-        r"\bframe[_\s-]*strategy\b",
-    )
-    route_leakage_patterns = (
-        r"\b(?:segment|scene)\s*\d+[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
-        r"\bsegment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
-        r"\broute\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
-    )
     drift_keys = {"t0", "t1", "scene_slots", "scene_candidate_windows", "phrase_units"}
     json_dump = json.dumps(payload, ensure_ascii=False).lower()
     if any(token in json_dump for token in drift_keys):
         return False, CORE_TIMING_DRIFT, ["core_payload_attempts_timing_or_legacy_grid_control"]
 
-    forbidden_zones: list[tuple[str, Any]] = [
-        ("story_summary", payload.get("story_summary")),
-        ("opening_anchor", payload.get("opening_anchor")),
-        ("ending_callback_rule", payload.get("ending_callback_rule")),
-        ("global_arc", payload.get("global_arc")),
-        ("identity_doctrine", payload.get("identity_doctrine")),
-        ("narrative_segments", payload.get("narrative_segments")),
-    ]
-    normalized_zones: list[tuple[str, str]] = [
-        (zone_name, _zone_text(zone_value).lower())
-        for zone_name, zone_value in forbidden_zones
-        if zone_value is not None
-    ]
-    forbidden_text = " ".join(text for _, text in normalized_zones)
+    normalized_zones = _story_core_forbidden_zones_text(payload)
 
     def _capture_technical_debug(*, match_type: str, pattern: str, zone_name: str, zone_text: str, match_obj: re.Match[str] | None = None) -> None:
         if debug_capture is None:
@@ -4855,43 +4950,25 @@ def _validate_story_core_v11_payload(
         debug_capture["story_core_technical_spawn_match_pattern"] = pattern
         debug_capture["story_core_technical_spawn_match_zone"] = zone_name
         debug_capture["story_core_technical_spawn_match_excerpt"] = excerpt[:240]
+        debug_capture["story_core_technical_spawn_match_term"] = (
+            str(match_obj.group(0) or "").strip() if match_obj else str(pattern or "").strip()
+        )[:120]
 
-    for pattern in technical_language_patterns:
-        compiled = re.compile(pattern)
-        for zone_name, zone_text in normalized_zones:
-            hit = compiled.search(zone_text)
-            if hit:
-                _capture_technical_debug(
-                    match_type="technical_language_pattern",
-                    pattern=pattern,
-                    zone_name=zone_name,
-                    zone_text=zone_text,
-                    match_obj=hit,
-                )
-                return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_technical_language_in_forbidden_zone"]
-    for token in route_tokens:
-        for zone_name, zone_text in normalized_zones:
-            if token in zone_text:
-                _capture_technical_debug(
-                    match_type="route_token",
-                    pattern=token,
-                    zone_name=zone_name,
-                    zone_text=zone_text,
-                )
-                return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
-    for pattern in route_leakage_patterns:
-        compiled = re.compile(pattern)
-        for zone_name, zone_text in normalized_zones:
-            hit = compiled.search(zone_text)
-            if hit:
-                _capture_technical_debug(
-                    match_type="route_leakage_pattern",
-                    pattern=pattern,
-                    zone_name=zone_name,
-                    zone_text=zone_text,
-                    match_obj=hit,
-                )
-                return False, CORE_TECHNICAL_SPAWNING, ["core_payload_contains_route_language_in_forbidden_zone"]
+    technical_match = _find_story_core_forbidden_technical_match(payload)
+    if technical_match:
+        _capture_technical_debug(
+            match_type=str(technical_match.get("match_type") or ""),
+            pattern=str(technical_match.get("pattern") or ""),
+            zone_name=str(technical_match.get("zone") or ""),
+            zone_text=str(technical_match.get("zone_text") or ""),
+            match_obj=technical_match.get("match_obj") if isinstance(technical_match.get("match_obj"), re.Match) else None,
+        )
+        error_key = (
+            "core_payload_contains_technical_language_in_forbidden_zone"
+            if str(technical_match.get("match_type") or "") == "technical_language_pattern"
+            else "core_payload_contains_route_language_in_forbidden_zone"
+        )
+        return False, CORE_TECHNICAL_SPAWNING, [error_key]
 
     direct_route_assignment_patterns = (
         r"segment[_\s-]*id[^a-z0-9]{0,8}(seg[_\s-]*\d+)[^\n]{0,40}(->|=>|:|uses?|route)[^\n]{0,24}(i2v|ia2v|first_last)",
@@ -6039,7 +6116,17 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_technical_spawn_match_pattern"] = ""
     diagnostics["story_core_technical_spawn_match_excerpt"] = ""
     diagnostics["story_core_technical_spawn_match_zone"] = ""
+    diagnostics["story_core_technical_spawn_match_field"] = ""
+    diagnostics["story_core_technical_spawn_match_term"] = ""
+    diagnostics["story_core_technical_spawn_rule_name"] = ""
+    diagnostics["story_core_technical_spawn_origin"] = ""
+    diagnostics["story_core_technical_spawn_introduced_by"] = ""
+    diagnostics["story_core_technical_spawn_detected_in"] = ""
     diagnostics["story_core_role_binding_contradiction_matches"] = []
+    diagnostics["story_core_retry_sanitize_applied"] = False
+    diagnostics["story_core_retry_removed_terms"] = []
+    diagnostics["story_core_retry_prompt_mode"] = "default"
+    diagnostics["story_core_second_attempt_changed_payload"] = False
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
     diagnostics["story_core_capability_guard_applied"] = True
@@ -6116,15 +6203,35 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         package["diagnostics"] = diagnostics
         validation_feedback = ""
         retry_used = False
+        retry_prompt_mode = "default"
+        retry_sanitize_applied = False
+        retry_removed_terms: list[str] = []
+        retry_sanitized_seed: dict[str, Any] = {}
+        first_attempt_normalized_fingerprint = ""
         last_error_code = CORE_SCHEMA_INVALID
         last_errors: list[str] = []
         configured_timeout = get_scenario_stage_timeout("story_core")
         for attempt in range(2):
-            prompt_with_feedback = (
-                f"{prompt}\nVALIDATION_FEEDBACK_FROM_PREVIOUS_ATTEMPT:\n{validation_feedback}\n"
-                if validation_feedback
-                else prompt
-            )
+            prompt_with_feedback = prompt
+            if validation_feedback:
+                prompt_with_feedback = f"{prompt_with_feedback}\nVALIDATION_FEEDBACK_FROM_PREVIOUS_ATTEMPT:\n{validation_feedback}\n"
+            if retry_used and retry_prompt_mode == "narrative_only_de_technicalized_retry":
+                prompt_with_feedback = (
+                    f"{prompt_with_feedback}\nRETRY_MODE: narrative_only_de_technicalized_retry\n"
+                    "The previous response leaked technical/backstage wording into narrative forbidden zones.\n"
+                    "Return strictly human narrative language only.\n"
+                    "Do NOT use camera/shot/framing/motion/profile/prompt/renderer/delivery/workflow/model/route terms.\n"
+                    "Do NOT mention i2v/ia2v/first_last anywhere in CORE payload.\n"
+                    "If a phrase sounds like production instruction, rewrite it as plain story meaning.\n"
+                    "Keep exact segment_id mapping and order.\n"
+                )
+                if retry_removed_terms:
+                    prompt_with_feedback = f"{prompt_with_feedback}BANNED_TERMS_FROM_PREVIOUS_ATTEMPT: {json.dumps(retry_removed_terms[:24], ensure_ascii=False)}\n"
+                if retry_sanitized_seed:
+                    prompt_with_feedback = (
+                        f"{prompt_with_feedback}SANITIZED_REFERENCE_JSON_FROM_PREVIOUS_ATTEMPT (narrative-only baseline, keep meaning but improve prose):\n"
+                        f"{json.dumps(retry_sanitized_seed, ensure_ascii=False)[:2600]}\n"
+                    )
             parts: list[dict[str, Any]] = [{"text": prompt_with_feedback}, *inline_ref_parts]
             body = {
                 "contents": [{"role": "user", "parts": parts}],
@@ -6156,6 +6263,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     audio_segments=core_segments,
                     creative_config=creative_config,
                 )
+                normalized_fingerprint = json.dumps(normalized_core, ensure_ascii=False, sort_keys=True)
+                if attempt == 0:
+                    first_attempt_normalized_fingerprint = normalized_fingerprint
                 diagnostics["story_core_normalized_payload"] = normalized_core
                 technical_spawn_debug: dict[str, Any] = {}
                 present_cast_roles = _collect_present_cast_roles(
@@ -6177,17 +6287,47 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_technical_spawn_match_pattern"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_pattern") or "")
                 diagnostics["story_core_technical_spawn_match_excerpt"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_excerpt") or "")
                 diagnostics["story_core_technical_spawn_match_zone"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_zone") or "")
+                diagnostics["story_core_technical_spawn_match_field"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_zone") or "")
+                diagnostics["story_core_technical_spawn_match_term"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_term") or "")
+                diagnostics["story_core_technical_spawn_rule_name"] = str(technical_spawn_debug.get("story_core_technical_spawn_match_type") or "")
                 diagnostics["story_core_role_binding_contradiction_matches"] = _safe_list(
                     technical_spawn_debug.get("story_core_role_binding_contradiction_matches")
                 )
                 diagnostics["story_core_role_spawning_matches"] = _safe_list(
                     technical_spawn_debug.get("story_core_role_spawning_matches")
                 )
+                diagnostics["story_core_retry_prompt_mode"] = retry_prompt_mode
+                diagnostics["story_core_retry_sanitize_applied"] = retry_sanitize_applied
+                diagnostics["story_core_retry_removed_terms"] = retry_removed_terms[:24]
+                diagnostics["story_core_second_attempt_changed_payload"] = bool(
+                    retry_used and bool(first_attempt_normalized_fingerprint) and normalized_fingerprint != first_attempt_normalized_fingerprint
+                )
                 if not ok and error_code == CORE_ID_MISMATCH:
                     for validation_error in validation_errors:
                         if str(validation_error).startswith("id_mismatch_kind:"):
                             diagnostics["story_core_id_mismatch_kind"] = str(validation_error).split(":", 1)[1].strip()
                             break
+                if not ok and error_code == CORE_TECHNICAL_SPAWNING:
+                    raw_match = _find_story_core_forbidden_technical_match(_safe_dict(parsed))
+                    norm_match = _find_story_core_forbidden_technical_match(normalized_core)
+                    detected_in = "none"
+                    spawn_origin = "unknown"
+                    introduced_by = "unknown"
+                    if raw_match and norm_match:
+                        detected_in = "raw_and_normalized"
+                        spawn_origin = "original_model_output"
+                        introduced_by = "model_output"
+                    elif raw_match:
+                        detected_in = "raw"
+                        spawn_origin = "original_model_output"
+                        introduced_by = "model_output"
+                    elif norm_match:
+                        detected_in = "normalized_only"
+                        spawn_origin = "after_normalization"
+                        introduced_by = "backend_normalization_or_merge"
+                    diagnostics["story_core_technical_spawn_origin"] = spawn_origin
+                    diagnostics["story_core_technical_spawn_introduced_by"] = introduced_by
+                    diagnostics["story_core_technical_spawn_detected_in"] = detected_in
                 diagnostics["story_core_audio_canonical_source"] = "audio_map.segments[]"
                 diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
                 diagnostics["story_core_audio_segments_source"] = core_segments_source
@@ -6253,11 +6393,17 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     return package
                 last_error_code = error_code or CORE_SCHEMA_INVALID
                 last_errors = validation_errors or ["story_core_validation_failed"]
+                if attempt == 0 and last_error_code == CORE_TECHNICAL_SPAWNING:
+                    retry_sanitized_seed, retry_removed_terms, retry_sanitize_applied = _sanitize_story_core_forbidden_technical_language(normalized_core)
+                    retry_prompt_mode = "narrative_only_de_technicalized_retry" if retry_sanitize_applied else "default"
 
             validation_feedback = _build_core_validation_feedback(last_error_code, last_errors)
             diagnostics = _safe_dict(package.get("diagnostics"))
             diagnostics["story_core_retry_used"] = retry_used
             diagnostics["story_core_retry_feedback"] = validation_feedback
+            diagnostics["story_core_retry_prompt_mode"] = retry_prompt_mode
+            diagnostics["story_core_retry_sanitize_applied"] = retry_sanitize_applied
+            diagnostics["story_core_retry_removed_terms"] = retry_removed_terms[:24]
             diagnostics["story_core_last_error_code"] = last_error_code
             diagnostics["story_core_validation_errors"] = last_errors
             package["diagnostics"] = diagnostics
