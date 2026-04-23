@@ -301,8 +301,6 @@ def _can_enforce_ia2v_row(
     spoken_line: str,
     transcript_slice: str,
     is_lip_sync_candidate: bool,
-    speaker_role: str,
-    vocal_owner_role: str,
     active_roles: list[str],
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
@@ -317,10 +315,8 @@ def _can_enforce_ia2v_row(
         reasons.append("duration_too_long_for_lipsync")
     if _is_world_beat(source_row):
         reasons.append("ia2v_non_vocal_world_beat")
-    if speaker_role != "character_1" or speaker_role not in active_roles:
-        reasons.append("ia2v_invalid_speaker_role")
-    if vocal_owner_role != "character_1":
-        reasons.append("SCENE_LIPSYNC_VOICE_ROLE_MISMATCH")
+    if active_roles and "character_1" not in active_roles:
+        reasons.append("ia2v_character_1_not_present")
     return not reasons, reasons
 
 
@@ -2027,8 +2023,6 @@ def _normalize_scene_plan(
                 spoken_line=spoken_line,
                 transcript_slice=transcript_slice,
                 is_lip_sync_candidate=is_lip_sync_candidate,
-                speaker_role=speaker_role,
-                vocal_owner_role=row_vocal_owner_role,
                 active_roles=active_roles,
             )
             if can_enforce_ia2v:
