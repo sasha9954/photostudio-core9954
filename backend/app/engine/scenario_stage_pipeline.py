@@ -30,6 +30,7 @@ from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, bui
 from app.engine.scenario_video_prompt_writer import (
     FINAL_VIDEO_PROMPT_DELIVERY_VERSION,
     FINAL_VIDEO_PROMPT_STAGE_VERSION,
+    IA2V_MINIMAL_NEGATIVE_PROMPT,
     generate_ltx_video_prompt_metadata,
 )
 from app.engine.scenario_story_guidance import story_guidance_to_notes_list
@@ -6721,6 +6722,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         ).strip()
         final_video_prompt_text = _strip_literal_quoted_dialogue(final_video_prompt_text)
         final_negative_prompt = str(route_payload.get("negative_prompt") or prompts_row.get("negative_prompt") or "").strip()
+        if route == "ia2v":
+            final_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
         final_route_positive_prompt = _strip_literal_quoted_dialogue(
             str(route_payload.get("positive_prompt") or final_video_prompt_text or "").strip()
         )
@@ -6729,6 +6732,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "image_prompt": final_image_prompt,
             "video_prompt": final_video_prompt_text,
             "negative_prompt": final_negative_prompt,
+            "negative_video_prompt": final_negative_prompt,
             "route": route,
             "linked_assets": deepcopy(linked_assets),
             "audio_url": str(linked_assets.get("audio_url") or "").strip(),
@@ -6748,6 +6752,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "route_payload": {
                 "positive_prompt": final_route_positive_prompt,
                 "negative_prompt": final_negative_prompt,
+                "negative_video_prompt": final_negative_prompt,
                 "image_prompt": final_image_prompt,
                 "video_prompt": final_video_prompt_text,
                 "first_frame_prompt": route_payload.get("first_frame_prompt"),

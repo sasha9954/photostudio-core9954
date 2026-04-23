@@ -234,6 +234,12 @@ LTX_I2V_COMPACT_NEGATIVE_FALLBACK = (
     "camera shake, aggressive motion, bullet time, dramatic camera rotation, background morphing, unstable geometry"
 )
 
+IA2V_MINIMAL_NEGATIVE_PROMPT = (
+    "hidden mouth, unreadable lips, mouth fully obscured for long, "
+    "face fully turned away from readability, severe identity drift, "
+    "duplicate main subject, severe facial deformation"
+)
+
 # Canon-derived structured presets for compact i2v intent selection.
 # The builder uses these lists as source-of-truth for allowed/forbidden motion logic.
 LTX_I2V_CANON_ALLOWED_BODY_ACTIONS: tuple[str, ...] = (
@@ -3125,6 +3131,19 @@ def _resolve_scene_video_negative_prompt(
     model_key: str | None = None,
 ) -> str:
     contract = scene_contract if isinstance(scene_contract, dict) else {}
+    normalized_workflow_key = _normalize_ltx_workflow_key(workflow_key)
+    route_hint = str(
+        contract.get("route")
+        or contract.get("sourceRoute")
+        or contract.get("planned_video_generation_route")
+        or contract.get("plannedVideoGenerationRoute")
+        or contract.get("video_generation_route")
+        or contract.get("videoGenerationRoute")
+        or getattr(payload, "route", None)
+        or ""
+    ).strip().lower()
+    if normalized_workflow_key in {"lip_sync", "lip_sync_music"} or route_hint in {"ia2v", "lip_sync", "lip_sync_music"}:
+        return IA2V_MINIMAL_NEGATIVE_PROMPT
     resolved = str(
         payload.videoNegativePrompt
         or payload.video_negative_prompt
@@ -3136,7 +3155,6 @@ def _resolve_scene_video_negative_prompt(
         or contract.get("negative_prompt")
         or ""
     ).strip()
-    normalized_workflow_key = _normalize_ltx_workflow_key(workflow_key)
     normalized_model_key = str(model_key or "").strip().lower()
     if normalized_workflow_key == "i2v" and normalized_model_key == "ltx23_dev_fp8":
         return _resolve_ltx_i2v_compact_negative_prompt(resolved)
@@ -16025,6 +16043,8 @@ def clip_video(payload: ClipVideoIn):
                 workflow_key=final_workflow_key,
                 model_key=resolved_model_key,
             )
+        if final_workflow_key in {"lip_sync", "lip_sync_music"}:
+            scene_video_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
         print(
             "[CLIP VIDEO PROMPT SOURCE] "
             + json.dumps(
@@ -16814,6 +16834,8 @@ def clip_video(payload: ClipVideoIn):
             payload,
             scene_contract_for_prompt,
         )
+    if final_workflow_key in {"lip_sync", "lip_sync_music"}:
+        scene_video_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
     print(
         "[CLIP VIDEO PROMPT SOURCE] "
         + json.dumps(
