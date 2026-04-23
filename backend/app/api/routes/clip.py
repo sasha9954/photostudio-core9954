@@ -15937,7 +15937,7 @@ def clip_video(payload: ClipVideoIn):
         width, height = _resolve_clip_video_dimensions(output_format)
         requested_duration, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
         generation_duration_sec, target_duration_sec, overgenerate_reason, trim_plan_reason = _resolve_generation_and_target_duration(payload, final_workflow_key)
-        requested_duration = float(target_duration_sec)
+        requested_duration = float(requested_duration)
         overgenerate_seconds = max(0.0, float(generation_duration_sec) - float(target_duration_sec))
         print(
             "[SCENARIO VIDEO OVERGENERATE PLAN] "

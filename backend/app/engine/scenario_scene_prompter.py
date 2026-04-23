@@ -45,7 +45,11 @@ _IA2V_VIDEO_PROMPT_CANON = (
     "Hands may emphasize phrases when visible, but no jerky or chaotic dance-like motion unless explicitly requested by story. "
     "The face and mouth remain readable and important. "
     "Framing is flexible from tight close-up to full body as long as mouth readability, emotion readability, and identity clarity are preserved. "
-    "Cinematic realism with smooth LTX-safe camera motion."
+    "Camera may remain frontal, gently drift sideways, or perform a slow restrained partial orbit around the performer when the emotional beat supports it. "
+    "Slow arc moves and occasional slow 180-feel are allowed, and in stronger scenes a stylized partial 270-feel may be used when still smooth and controlled. "
+    "Keep motion cinematic, restrained, and LTX-safe: no fast spins, no whip motion, and no chaotic handheld. "
+    "In intimate beats prefer softer camera behavior. Singer may occasionally turn gaze toward the moving camera and continue singing naturally. "
+    "If visible, background should show natural low-level life and ambient movement rather than frozen stillness; keep it subtle, secondary, and never stealing focus from singer."
 )
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
