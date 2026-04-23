@@ -101,7 +101,7 @@ _ROLE_PLAN_INVENTED_STYLING_EXACT_MARKER_RE = re.compile(
 _CHARACTER_REF_SAFE_CONTINUITY_RULES: tuple[str, ...] = (
     "Preserve the same face identity from the connected reference.",
     "Keep the same age impression.",
-    "Keep the same body proportions.",
+    "Keep the same overall build and silhouette.",
     "Keep the same hairstyle silhouette.",
     "Keep the same clothing silhouette.",
     "Preserve the same overall visual identity from the connected reference.",

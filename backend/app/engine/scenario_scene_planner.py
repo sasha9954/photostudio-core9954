@@ -51,10 +51,25 @@ SCENES_FORBIDDEN_LEAK_TOKENS = {
     "workflow",
     "ltx",
     "renderer_family",
+    "identity_source",
+    "identity_rule",
+    "identity_reference_rule",
+    "connected_visual_reference",
+    "canonical source of truth",
+    "source of truth",
+    "payload",
+    "diagnostics",
+    "route strategy",
 }
 SCENES_FREE_TEXT_LEAK_FIELD_PATHS = (
+    ("route_selection_reason",),
     ("route_reason",),
     ("scene_goal",),
+    ("narrative_function",),
+    ("photo_staging_goal",),
+    ("ltx_video_goal",),
+    ("background_story_evidence",),
+    ("foreground_performance_rule",),
     ("audio_visual_sync",),
     ("visual_motion", "subject_motion"),
     ("visual_motion", "camera_intent"),
@@ -2124,27 +2139,25 @@ def _normalize_scene_plan(
         elif primary_role:
             visual_focus_role = primary_role
 
-        if route == "i2v" and visual_focus_role and visual_focus_role != speaker_role:
-            reaction_role = visual_focus_role
+        if route == "i2v":
+            if character_1_appearance_mode == "lip_sync_only" and visual_focus_role == "character_1":
+                visual_focus_role = _select_world_focus_role(active_roles)
+            if visual_focus_role == "character_1":
+                visual_focus_role = ""
+            reaction_role = ""
 
         if row_rejected_reasons:
-            lip_sync_allowed = False
-            if route == "ia2v" and (
-                "reaction_role_not_in_present_cast" in row_rejected_reasons
-                or "reaction_role_equals_speaker_role" in row_rejected_reasons
-            ):
-                route = "i2v"
-            elif route == "ia2v" and "route_ia2v_lipsync_requires_speaker_role" not in row_rejected_reasons:
-                route = "i2v"
-            lip_sync_priority = "none"
-            mouth_visible_required = False
             if route == "ia2v":
                 speaker_role = "character_1"
                 row_vocal_owner_role = "character_1"
                 lip_sync_allowed = True
                 lip_sync_priority = "high"
                 mouth_visible_required = True
+                row_rejected_reasons = []
             else:
+                lip_sync_allowed = False
+                lip_sync_priority = "none"
+                mouth_visible_required = False
                 speaker_role = ""
                 row_vocal_owner_role = ""
             if not speaker_role:
