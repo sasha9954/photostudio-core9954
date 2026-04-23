@@ -2357,7 +2357,16 @@ def _normalize_scene_plan(
         validation_error = validation_error or "speaker_role_invalid"
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
-    route_counts = {route_name: sum(1 for row in normalized_storyboard if row.get("route") == route_name) for route_name in ("i2v", "ia2v", "first_last")}
+    validated_route_by_segment = {
+        str(row.get("segment_id") or "").strip(): str(row.get("route") or "").strip().lower()
+        for row in normalized_storyboard
+        if str(row.get("segment_id") or "").strip() and str(row.get("route") or "").strip().lower() in ALLOWED_ROUTES
+    }
+    final_route_by_segment = dict(validated_route_by_segment)
+    route_counts = {
+        route_name: sum(1 for route_value in validated_route_by_segment.values() if route_value == route_name)
+        for route_name in ("i2v", "ia2v", "first_last")
+    }
     requested_route_locks_by_segment = {
         str(seg).strip(): str(route).strip().lower()
         for seg, route in hard_route_map.items()
@@ -2388,6 +2397,8 @@ def _normalize_scene_plan(
 
     legacy_scenes: list[dict[str, Any]] = []
     for row, source_row in zip(normalized_storyboard, scene_segment_rows, strict=False):
+        segment_id = str(row.get("segment_id") or "").strip()
+        validated_route = str(final_route_by_segment.get(segment_id) or row.get("route") or "").strip().lower()
         motion = _safe_dict(row.get("visual_motion"))
         legacy_scenes.append(
             {
@@ -2396,7 +2407,7 @@ def _normalize_scene_plan(
                 "t0": _round3(source_row.get("t0")),
                 "t1": _round3(source_row.get("t1")),
                 "duration_sec": _round3(source_row.get("duration_sec")),
-                "route": str(row.get("route") or ""),
+                "route": validated_route,
                 "route_reason": str(row.get("route_reason") or ""),
                 "route_selection_reason": str(row.get("route_selection_reason") or row.get("route_reason") or ""),
                 "scene_function": str(row.get("narrative_function") or ""),
