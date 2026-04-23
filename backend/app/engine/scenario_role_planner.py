@@ -82,6 +82,30 @@ _ROLE_PLAN_TECHNICAL_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\btechnical\s+contract\b", re.IGNORECASE), ""),
     (re.compile(r"\binput\s+package\b", re.IGNORECASE), ""),
 )
+_ROLE_PLAN_INVENTED_STYLING_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bflat\s*cap\b", re.IGNORECASE),
+    re.compile(r"\bsunglasses?\b", re.IGNORECASE),
+    re.compile(r"\bblack\s+track\s+jacket\b", re.IGNORECASE),
+    re.compile(r"\b(seasoned|street)\s+(tough\s+)?man\s+package\b", re.IGNORECASE),
+    re.compile(r"\bstarter\s+pack\b", re.IGNORECASE),
+    re.compile(r"\b(costume|wardrobe|outfit|streetwear)\s+package\b", re.IGNORECASE),
+)
+_ROLE_PLAN_INVENTED_STYLING_EXACT_MARKER_RE = re.compile(
+    r"\b("
+    r"hat|cap|beanie|hood|headwear|sunglasses|glasses|goggles|"
+    r"jacket|coat|hoodie|shirt|pants|jeans|boots|sneakers|"
+    r"tattoo|tattoos|mustache|moustache|beard|facial\s+hair"
+    r")\b",
+    re.IGNORECASE,
+)
+_CHARACTER_REF_SAFE_CONTINUITY_RULES: tuple[str, ...] = (
+    "Preserve the same face identity from the connected reference.",
+    "Keep the same age impression.",
+    "Keep the same body proportions.",
+    "Keep the same hairstyle silhouette.",
+    "Keep the same clothing silhouette.",
+    "Preserve the same overall visual identity from the connected reference.",
+)
 _TECH_IDENTITY_LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (term, re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)) for term in _ROLE_PLAN_TECHNICAL_BANNED_TERMS
 )
@@ -355,6 +379,8 @@ def _build_roles_prompt(context: dict[str, Any]) -> str:
         "Do not copy technical identity/reference/source wording from CORE.\n"
         "Use technical identity locks only internally, never in output text.\n"
         "Respect character appearance contract from context.characterAppearanceModesByRole.\n"
+        "For continuity_rules keep reference-safe identity continuity only: same face, same age impression, same body proportions, same hairstyle silhouette, same clothing silhouette, same overall visual identity.\n"
+        "Demeanor/personality language is allowed (stoic, restrained, watchful, authoritative), but do not invent exact wardrobe/accessories/headwear/tattoos/facial-hair packages unless explicitly provided by user/source text.\n"
         "If character_1 appearance is lip_sync_only: in ia2v scenes use physical presence; in i2v scenes prefer voiceover/implied/offscreen and do not force visible hero.\n"
         "If character_1 appearance is offscreen_voice: avoid physical presence and avoid lip-sync performer framing.\n"
         "Do not output terms: reference image, visual reference, connected character, canonical source of truth, refsPresentByRole, connected_context_summary, body proportions, auxiliary only, technical contract, input package, source of truth.\n"
@@ -444,6 +470,44 @@ def _sanitize_role_plan_payload_fields(payload: dict[str, Any]) -> tuple[dict[st
         out["role_arc_summary"] = rewritten_summary
 
     return out, changed
+
+
+def _contains_invented_styling(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    if any(pattern.search(normalized) for pattern in _ROLE_PLAN_INVENTED_STYLING_PATTERNS):
+        return True
+    return bool(_ROLE_PLAN_INVENTED_STYLING_EXACT_MARKER_RE.search(normalized))
+
+
+def _sanitize_invented_styling_from_roster(roles_payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    payload = deepcopy(_safe_dict(roles_payload))
+    changed = False
+    roster_rows = _safe_list(payload.get("roster"))
+
+    for roster_row in roster_rows:
+        row = _safe_dict(roster_row)
+        entity_id = str(row.get("entity_id") or "").strip()
+        continuity_rules: list[str] = []
+        for item in _safe_list(row.get("continuity_rules")):
+            raw_rule = str(item or "").strip()
+            if not raw_rule:
+                continue
+            sanitized_rule = sanitize_role_plan_technical_leaks(raw_rule)
+            if _contains_invented_styling(sanitized_rule):
+                changed = True
+                continue
+            continuity_rules.append(sanitized_rule)
+
+        if entity_id == "character_1":
+            for safe_rule in _CHARACTER_REF_SAFE_CONTINUITY_RULES:
+                if safe_rule not in continuity_rules:
+                    continuity_rules.append(safe_rule)
+                    changed = True
+            continuity_rules = continuity_rules[:10]
+        row["continuity_rules"] = continuity_rules
+    return payload, changed
 
 
 def _extract_error_from_leakage(roles_payload: dict[str, Any]) -> str:
@@ -931,6 +995,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 allowed_registry=allowed_registry,
             )
             sanitized, technical_leaks_sanitized = _sanitize_role_plan_payload_fields(sanitized)
+            sanitized, invented_styling_removed = _sanitize_invented_styling_from_roster(sanitized)
             sanitized, focal_rewrites_applied = _rewrite_allowed_focal_phrases(sanitized)
             if focal_rewrites_applied:
                 diagnostics["false_positive_technical_leak_allowed"] = True
@@ -940,6 +1005,8 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 diagnostics["false_positive_technical_leak_allowed"] = True
                 diagnostics["allowed_technical_token"] = "identity_reference_wording"
                 diagnostics["allowed_technical_phrase"] = "story_facing_sanitized"
+            if invented_styling_removed:
+                diagnostics["invented_styling_removed_from_roster"] = True
             diagnostics["dropped_non_canonical_fields"] = dropped_fields[:60]
             normalized_scene_casting, primary_mismatches = _normalize_scene_casting_from_core(
                 scene_casting=[_safe_dict(row) for row in _safe_list(sanitized.get("scene_casting"))],

@@ -169,6 +169,8 @@ _OWNERSHIP_ROLE_MAP = {
     "world": "environment",
 }
 _BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
+WORLD_FOCUS_ROLE_PRIORITY = ("environment", "location", "locals", "crowd", "props", "object", "threshold", "aftermath")
+WORLD_BEAT_HINTS = {"social_texture", "world_pressure", "threshold", "aftermath", "release", "world_observation", "instrumental", "outro"}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -254,6 +256,28 @@ def _extract_character_appearance_modes(input_pkg: dict[str, Any]) -> dict[str, 
     for role in _ROLE_KEYS:
         out.setdefault(role, "auto")
     return out
+
+
+def _select_world_focus_role(active_roles: list[str]) -> str:
+    active = [str(role or "").strip() for role in active_roles if str(role or "").strip()]
+    for preferred in WORLD_FOCUS_ROLE_PRIORITY:
+        if preferred in active:
+            return preferred
+    for fallback in active:
+        if fallback != "character_1":
+            return fallback
+    return ""
+
+
+def _is_world_beat(source_row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        [
+            str(source_row.get("arc_role") or ""),
+            str(source_row.get("beat_purpose") or ""),
+            str(source_row.get("emotional_key") or ""),
+        ]
+    ).lower()
+    return any(token in blob for token in WORLD_BEAT_HINTS)
 
 
 def _extract_role_identity_gender_map(input_pkg: dict[str, Any]) -> dict[str, str]:
@@ -1020,7 +1044,8 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             "- route budget is already solved by backend.\n"
             "If character_1 appearanceMode is lip_sync_only:\n"
             "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
-            "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; lip_sync_allowed=false; visual subject should be environment/city/street/port/courtyard/people/atmosphere.\n"
+            "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; vocal_owner_role=\"\"; lip_sync_allowed=false; mouth_visible_required=false; visual subject should be environment/locals/threshold/aftermath/social texture.\n"
+            "World beats must be truly world-driven (social texture, pressure, threshold, aftermath, instrumental release) with no fake singer-presence.\n"
             f"Fix exactly: {validation_feedback}\n"
             "Output contract:\n"
             "{\n"
@@ -1050,10 +1075,15 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "If lip_sync_allowed=true then speaker_role must equal audio_map.vocal_owner_role.\\n"
         "For i2v scenes, set speaker_role to an empty string. Do not use 'unknown'.\\n"
         "For ia2v scenes, speaker_role must be character_1.\\n"
+        "For ia2v scenes enforce: vocal_owner_role=character_1, lip_sync_allowed=true, mouth_visible_required=true, singing_readiness_required=true.\\n"
+        "For i2v scenes enforce: speaker_role=\"\", vocal_owner_role=\"\", lip_sync_allowed=false, mouth_visible_required=false.\\n"
         "Respect character_appearance_modes_by_role contract from context.\\n"
-        "If character_1 appearance mode is lip_sync_only: character_1 is visually mandatory for ia2v, but in i2v do not make character_1 primary physical subject. Prefer environment/city/street/port/courtyard/objects/crowd as primary.\\n"
+        "If character_1 appearance mode is lip_sync_only: character_1 is visually mandatory for ia2v, but in i2v do not make character_1 primary physical subject. Prefer environment/locals/threshold/aftermath/objects/crowd as primary.\\n"
         "If character_1 appearance mode is offscreen_voice: avoid ia2v for character_1 and keep character_1 offscreen/implied in i2v.\\n"
         "If character_1 appearance mode is background_only: allow only shadow/silhouette/background presence in i2v; avoid close-up hero lip-sync framing unless route is ia2v.\\n"
+        "Do not write stock noir shorthand loops (same empty streets/courtyard/port/gate beats repeated with renamed locations).\\n"
+        "Strengthen scene writing with specific lived-in behavior, social tension signals, witness detail, threshold pauses, and aftermath traces.\\n"
+        "For each row keep scene_goal / narrative_function / photo_staging_goal / ltx_video_goal distinct and dramaturgic, not generic filler.\\n"
         "For two-active conflict scenes keep lip-sync sparse: strong lines only, no more than 2 consecutive lip-sync scenes.\\n"
         "Do not output prompt language, quality buzzwords, renderer parameters, API/workflow payload, or final video payload.\\n"
         "Do not use raw director text as free authoring source beyond this package context.\\n"
@@ -1948,11 +1978,15 @@ def _normalize_scene_plan(
 
         if route == "ia2v":
             speaker_role = "character_1"
+            row_vocal_owner_role = "character_1"
+            lip_sync_allowed = True
+            lip_sync_priority = "high"
             mouth_visible_required = True
             if transcript_slice and not spoken_line:
                 spoken_line = transcript_slice
         else:
             speaker_role = ""
+            row_vocal_owner_role = ""
             lip_sync_allowed = False
             lip_sync_priority = "none"
             mouth_visible_required = False
@@ -1960,14 +1994,14 @@ def _normalize_scene_plan(
             if route == "ia2v":
                 route = "i2v"
             speaker_role = ""
+            row_vocal_owner_role = ""
             lip_sync_allowed = False
             lip_sync_priority = "none"
             mouth_visible_required = False
         elif character_1_appearance_mode == "lip_sync_only" and route == "i2v":
-            if primary_role == "character_1":
-                visual_focus_role = "location" if "location" in active_roles else ("props" if "props" in active_roles else "")
+            visual_focus_role = _select_world_focus_role(active_roles)
         elif character_1_appearance_mode == "background_only" and route == "i2v" and primary_role == "character_1":
-            visual_focus_role = "location" if "location" in active_roles else ("props" if "props" in active_roles else visual_focus_role)
+            visual_focus_role = _select_world_focus_role(active_roles) or visual_focus_role
 
         enum_checks: list[tuple[str, str, set[str], str]] = [
             ("story_beat_type", raw_story_beat_type, ALLOWED_STORY_BEAT_TYPES, _repair_story_beat_type(raw_story_beat_type, route)),
@@ -2026,6 +2060,11 @@ def _normalize_scene_plan(
         layout = repaired_values.get("composition.layout", layout)
         depth_strategy = repaired_values.get("composition.depth_strategy", depth_strategy)
         lip_sync_priority = repaired_values.get("lip_sync_priority", lip_sync_priority)
+        if route == "i2v":
+            if character_1_appearance_mode == "lip_sync_only":
+                subject_priority = "environment"
+            elif subject_priority == "hero" and _is_world_beat(source_row):
+                subject_priority = "environment"
 
         row_rejected_reasons: list[str] = []
         if speaker_role and speaker_role not in active_roles:
@@ -2072,6 +2111,16 @@ def _normalize_scene_plan(
             lip_sync_allowed = False
             if primary_role:
                 visual_focus_role = primary_role
+        elif route == "i2v":
+            world_focus = _select_world_focus_role(active_roles)
+            if world_focus:
+                visual_focus_role = world_focus
+            elif primary_role and primary_role != "character_1":
+                visual_focus_role = primary_role
+            elif _is_world_beat(source_row):
+                visual_focus_role = ""
+            elif primary_role:
+                visual_focus_role = primary_role
         elif primary_role:
             visual_focus_role = primary_role
 
@@ -2091,8 +2140,13 @@ def _normalize_scene_plan(
             mouth_visible_required = False
             if route == "ia2v":
                 speaker_role = "character_1"
+                row_vocal_owner_role = "character_1"
+                lip_sync_allowed = True
+                lip_sync_priority = "high"
+                mouth_visible_required = True
             else:
                 speaker_role = ""
+                row_vocal_owner_role = ""
             if not speaker_role:
                 speaker_confidence = 0.0
             if route == "ia2v" and speaker_role != "character_1":
@@ -2106,11 +2160,18 @@ def _normalize_scene_plan(
 
         if route == "ia2v":
             speaker_role = "character_1"
+            row_vocal_owner_role = "character_1"
+            lip_sync_allowed = True
+            lip_sync_priority = "high"
             mouth_visible_required = True
             if transcript_slice and not spoken_line:
                 spoken_line = transcript_slice
         else:
             speaker_role = ""
+            row_vocal_owner_role = ""
+            lip_sync_allowed = False
+            lip_sync_priority = "none"
+            mouth_visible_required = False
 
         if lip_sync_allowed:
             consecutive_lip_sync_count += 1
@@ -2164,7 +2225,7 @@ def _normalize_scene_plan(
                 "photo_staging_goal": str(raw_row.get("photo_staging_goal") or "").strip(),
                 "ltx_video_goal": str(raw_row.get("ltx_video_goal") or "").strip(),
                 "background_story_evidence": str(raw_row.get("background_story_evidence") or "").strip(),
-                "foreground_performance_rule": str(raw_row.get("foreground_performance_rule") or "").strip(),
+                "foreground_performance_rule": str(raw_row.get("foreground_performance_rule") or "").strip() if route == "ia2v" else "",
                 "object_action_allowed": False if route == "ia2v" else bool(raw_row.get("object_action_allowed", True)),
                 "singing_readiness_required": True if route == "ia2v" else False,
                 "ia2v_photo_readability_notes": str(raw_row.get("ia2v_photo_readability_notes") or "").strip(),
