@@ -71,6 +71,17 @@ HERO_REF_PRIORITY_CLAUSE = (
 IA2V_CONTINUITY_LOCK_CLAUSE = (
     "Hard continuity lock for continuing hero performance: preserve same face, age impression, body proportions, hair/facial hair, tattoos/signature details, outfit, accessories, and silhouette; no hero replacement or similar-but-different person."
 )
+HERO_CONTINUATION_LOCK_CLAUSE = (
+    "Hard continuity lock for same-hero continuation: preserve same face, same outfit, same accessories, same tattoos/signature details, and same silhouette; no similar-but-different replacement hero."
+)
+_I2V_CAMERA_LIFE_MOVES = (
+    "Use a slow push-in to increase intimacy while preserving stable identity readability.",
+    "Use a slow pull-back that reveals location scale and depth without changing hero identity.",
+    "Use a gentle lateral track to reveal parallax and world layering.",
+    "Use a subtle side drift with restrained character+camera co-motion when suitable.",
+    "Use a restrained reveal move from foreground obstruction into a clearer world read.",
+    "Use a gentle horizontal arc for cinematic depth and spatial continuity.",
+)
 CONTROLLED_MOTION_SAFETY_BLOCK = (
     "CONTROLLED MOTION SAFETY: smooth readable cinematic motion, grounded body movement, moderate step/sway/turn/weight shift, "
     "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
@@ -425,6 +436,25 @@ def _strip_clear_vocal_fragments(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^[\s:.,;]+", "", text).strip()
     return text
+
+
+def _strip_ia2v_anchor_fragments(text: str) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(re.escape(IA2V_BASE_PROMPT_V1.strip()), " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?i)\bUse the uploaded image as the exact first frame and identity anchor\.?", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bA performance shot of the same performer singing an emotional line with clear expressive lip sync and readable vocal delivery\.?", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned
+
+
+def _select_i2v_camera_life_clause(*, scene_seq_index: int, scene_specific_blob: str) -> str:
+    if any(token in scene_specific_blob for token in ("wide", "establish", "city", "landscape", "scale", "street", "crowd")):
+        return _I2V_CAMERA_LIFE_MOVES[1]
+    if any(token in scene_specific_blob for token in ("corridor", "hallway", "passage", "tunnel", "alley")):
+        return _I2V_CAMERA_LIFE_MOVES[2]
+    if any(token in scene_specific_blob for token in ("door", "window", "foreground", "reveal")):
+        return _I2V_CAMERA_LIFE_MOVES[4]
+    return _I2V_CAMERA_LIFE_MOVES[max(0, (int(scene_seq_index) - 1) % len(_I2V_CAMERA_LIFE_MOVES))]
 
 
 def _strip_positive_contract_blocks(text: str) -> str:
@@ -1118,6 +1148,15 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             or (explicit_hero_ref_present and continuing_hero_scene)
         )
     )
+    same_hero_continuation_scene = bool(
+        route == "i2v"
+        and has_human_subject
+        and explicit_hero_ref_present
+        and continuing_hero_scene
+        and scene_seq_index >= 5
+    )
+    if same_hero_continuation_scene:
+        confirmed_look_used = True
     confirmed_look_clause_applied = bool(confirmed_look_used)
     positive_contract_duplicates_removed = False
     positive_prompt_seed = positive_prompt
@@ -1308,12 +1347,21 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     route_behavior_template = ""
     route_template_source = "route_default_template"
     if route == "i2v":
+        scene_specific_blob = " ".join(scene_specific_parts + [str(plan_row.get("camera_plan") or ""), str(plan_row.get("camera_intent") or "")]).lower()
         route_behavior_template = CONTROLLED_MOTION_SAFETY_BLOCK
         positive_prompt = _append_clause(positive_prompt, route_behavior_template)
+        positive_prompt = _append_clause(positive_prompt, _select_i2v_camera_life_clause(scene_seq_index=scene_seq_index, scene_specific_blob=scene_specific_blob))
+        positive_prompt = _append_clause(
+            positive_prompt,
+            "Use smooth restrained cinematic camera life with subtle parallax, environmental motion, and depth cues to avoid frozen slideshow feeling; keep motion LTX-safe with no fast spin, no whip movement, and no chaotic handheld.",
+        )
         positive_prompt = _append_clause(
             positive_prompt,
             "If this is an environment/world-detail cutaway, keep no main performer visible or non-dominant peripheral presence only.",
         )
+        if same_hero_continuation_scene:
+            positive_prompt = _append_clause(positive_prompt, HERO_REF_PRIORITY_CLAUSE)
+            positive_prompt = _append_clause(positive_prompt, HERO_CONTINUATION_LOCK_CLAUSE)
         if domestic_scene:
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
@@ -1469,6 +1517,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     video_prompt_output, video_prompt_diag = _sanitize_prompt_text_for_current_identity(
         _strip_literal_quoted_dialogue(positive_prompt), identity_ctx, route, "route_payload.video_prompt"
     )
+    if route == "i2v":
+        positive_prompt = _strip_ia2v_anchor_fragments(positive_prompt)
+        image_prompt = _strip_ia2v_anchor_fragments(image_prompt)
+        video_prompt_output = _strip_ia2v_anchor_fragments(video_prompt_output)
+    positive_prompt = _dedupe_prompt_sentences(re.sub(r"\s+", " ", positive_prompt).strip(" ,.;"))
+    image_prompt = _dedupe_prompt_sentences(re.sub(r"\s+", " ", image_prompt).strip(" ,.;"))
+    video_prompt_output = _dedupe_prompt_sentences(re.sub(r"\s+", " ", video_prompt_output).strip(" ,.;"))
     if lip_sync_only_i2v:
         positive_prompt = _strip_positive_lipsync_instructions(positive_prompt)
         video_prompt_output = _strip_positive_lipsync_instructions(video_prompt_output)
@@ -1547,7 +1602,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     for diag in sanitize_diags:
         removed_terms_all.extend(_safe_list(_safe_dict(diag).get("identity_gender_conflict_terms_removed")))
     identity_conflict_detected = bool(removed_terms_all)
-    hero_continuity_lock_applied = bool(route == "ia2v" and explicit_hero_ref_present and continuing_hero_scene)
+    hero_continuity_lock_applied = bool(
+        (route == "ia2v" and explicit_hero_ref_present and continuing_hero_scene)
+        or same_hero_continuation_scene
+    )
     identity_lock_applied = bool(has_human_subject and (route != "ia2v" or hero_continuity_lock_applied))
     body_lock_applied = bool(has_human_subject and (route != "ia2v" or hero_continuity_lock_applied))
     continuity_fix_applied = bool(row.get("continuity_fix_applied") or hero_continuity_lock_applied)
