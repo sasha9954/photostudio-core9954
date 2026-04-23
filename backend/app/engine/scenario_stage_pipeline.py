@@ -4490,20 +4490,87 @@ def _infer_story_core_dominance(row: dict[str, Any]) -> str:
     return "balanced"
 
 
-def _infer_association_level(row: dict[str, Any]) -> int:
+def _score_story_core_association(row: dict[str, Any]) -> dict[str, Any]:
     text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
-    literal_patterns = (
-        "danger dark alley",
-        "dark alley bad guys",
-        "port workers containers",
-        "lonely person alone room",
-        "crime men shadows",
+    generic_env_tokens = (
+        "alley", "street", "room", "warehouse", "corridor", "office", "bar", "club", "rooftop", "parking", "rain", "neon", "shadow",
     )
-    if any(pattern in text for pattern in literal_patterns):
-        return 0
-    if any(token in text for token in ("metaphor", "subtext", "echo", "negative space", "indirect", "symbol", "counterpoint")):
-        return 2
-    return 1
+    threat_tokens = (
+        "danger", "threat", "bad guys", "attack", "crime", "gun", "knife", "chase", "violence", "panic", "fear",
+    )
+    emotion_tokens = (
+        "sad", "lonely", "alone", "angry", "afraid", "happy", "crying", "tears", "heartbroken", "desperate",
+    )
+    subtext_tokens = (
+        "metaphor", "subtext", "indirect", "symbol", "counterpoint", "echo", "negative space", "off-screen", "implied", "second-order",
+    )
+    world_detail_tokens = (
+        "ritual", "micro-detail", "texture", "environment reaction", "ambient", "incidental", "background action", "observer", "trace",
+    )
+    direct_mapping_markers = (
+        "shows fear", "shows sadness", "to show", "illustrates", "literally", "because she is", "because he is",
+    )
+
+    generic_env_hits = sum(1 for token in generic_env_tokens if token in text)
+    threat_hits = sum(1 for token in threat_tokens if token in text)
+    emotion_hits = sum(1 for token in emotion_tokens if token in text)
+    subtext_hits = sum(1 for token in subtext_tokens if token in text)
+    world_detail_hits = sum(1 for token in world_detail_tokens if token in text)
+    direct_mapping_hits = sum(1 for token in direct_mapping_markers if token in text)
+
+    generic_cliche = generic_env_hits >= 2 and (threat_hits > 0 or emotion_hits > 0)
+    direct_emotion_illustration = emotion_hits > 0 and (direct_mapping_hits > 0 or generic_env_hits > 0)
+    direct_threat_shorthand = threat_hits >= 2 or (threat_hits > 0 and generic_env_hits > 0)
+    low_subtext = subtext_hits == 0 and world_detail_hits == 0
+
+    literal_score = 0
+    if generic_cliche:
+        literal_score += 2
+    if direct_emotion_illustration:
+        literal_score += 2
+    if direct_threat_shorthand:
+        literal_score += 2
+    if low_subtext:
+        literal_score += 1
+    if direct_mapping_hits > 0:
+        literal_score += 1
+
+    depth_score = 0
+    if subtext_hits > 0:
+        depth_score += 2
+    if world_detail_hits > 0:
+        depth_score += 1
+    if "contrast" in text or "counterpoint" in text:
+        depth_score += 1
+
+    if depth_score >= 2:
+        association_level = 2
+    elif literal_score >= 5:
+        association_level = 0
+    else:
+        association_level = 1
+
+    reasons: list[str] = []
+    if generic_cliche:
+        reasons.append("generic_cliche_environment")
+    if direct_emotion_illustration:
+        reasons.append("direct_emotion_illustration")
+    if direct_threat_shorthand:
+        reasons.append("direct_threat_shorthand")
+    if low_subtext:
+        reasons.append("low_subtext")
+    if depth_score >= 2:
+        reasons.append("subtext_or_second_order_detail")
+    if association_level == 1 and not reasons:
+        reasons.append("direct_but_acceptable_setup")
+
+    return {
+        "association_level": association_level,
+        "reason_tags": reasons,
+        "literal_generic_cliche": generic_cliche,
+        "direct_emotion_illustration": direct_emotion_illustration,
+        "low_subtext": low_subtext,
+    }
 
 
 def _infer_frame_axes(row: dict[str, Any]) -> dict[str, str]:
@@ -4539,6 +4606,9 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
         "story_core_axis_change_meaning": [],
         "story_core_duplicate_adjacent_pairs": [],
         "story_core_semantic_duplicate_pairs": [],
+        "story_core_visual_duplicate_pairs": [],
+        "story_core_two_axis_fail_reason_by_pair": [],
+        "story_core_two_axis_pair_status": [],
         "story_core_hero_world_balance_score": 1.0,
         "story_core_hero_first_streak": 0,
         "story_core_world_first_streak": 0,
@@ -4548,12 +4618,21 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
         "story_core_literal_fallback_count": 0,
         "story_core_literal_fallback_segments": [],
         "story_core_second_degree_segments": [],
+        "story_core_association_scoring_reason_by_segment": [],
+        "story_core_literal_generic_cliche_segments": [],
+        "story_core_direct_emotion_illustration_segments": [],
+        "story_core_low_subtext_segments": [],
         "story_core_anti_literal_retry_used": False,
         "story_core_visual_breath_triggered": False,
         "story_core_visual_breath_reason": "",
         "story_core_visual_breath_inserted_in_logic": False,
         "story_core_contrast_event_required": False,
         "story_core_contrast_event_present": False,
+        "story_core_overload_spans": [],
+        "story_core_local_breath_windows_checked": [],
+        "story_core_local_breath_found": False,
+        "story_core_local_breath_segment_ids": [],
+        "story_core_visual_breath_fail_spans": [],
     }
     causes: list[str] = []
     if len(narrative_segments) < 2:
@@ -4561,6 +4640,7 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
 
     vectors: list[dict[str, Any]] = []
     for row in narrative_segments:
+        association = _score_story_core_association(row)
         vectors.append(
             {
                 "segment_id": str(row.get("segment_id") or "").strip(),
@@ -4570,7 +4650,11 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
                 "frame_axes": _infer_frame_axes(row),
                 "meaning_axes": _infer_meaning_axes(row),
                 "dominance": _infer_story_core_dominance(row),
-                "association_level": _infer_association_level(row),
+                "association_level": int(association.get("association_level") or 1),
+                "association_reason_tags": _safe_list(association.get("reason_tags")),
+                "literal_generic_cliche": bool(association.get("literal_generic_cliche")),
+                "direct_emotion_illustration": bool(association.get("direct_emotion_illustration")),
+                "low_subtext": bool(association.get("low_subtext")),
             }
         )
 
@@ -4602,17 +4686,33 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
         ]
         diagnostics["story_core_axis_change_frame"].append({"pair": pair_label, "axes": frame_changed_axes})
         diagnostics["story_core_axis_change_meaning"].append({"pair": pair_label, "axes": meaning_changed_axes})
+        pair_status = "pass"
+        fail_reason = ""
         if not frame_changed_axes and not meaning_changed_axes:
             diagnostics["story_core_duplicate_adjacent_pairs"].append(pair_label)
+            pair_status = "hard_duplicate"
+            fail_reason = "no_change_in_frame_or_meaning"
         elif frame_changed_axes and not meaning_changed_axes:
             diagnostics["story_core_semantic_duplicate_pairs"].append(pair_label)
+            pair_status = "semantic_duplicate"
+            fail_reason = "meaning_group_flat"
+        elif meaning_changed_axes and not frame_changed_axes:
+            diagnostics["story_core_visual_duplicate_pairs"].append(pair_label)
+            pair_status = "visual_duplicate"
+            fail_reason = "frame_group_flat"
+        diagnostics["story_core_two_axis_pair_status"].append({"pair": pair_label, "status": pair_status})
+        if fail_reason:
+            diagnostics["story_core_two_axis_fail_reason_by_pair"].append({"pair": pair_label, "reason": fail_reason})
     has_hard_duplicates = bool(diagnostics["story_core_duplicate_adjacent_pairs"])
     has_semantic_duplicates = bool(diagnostics["story_core_semantic_duplicate_pairs"])
-    diagnostics["story_core_two_axis_validation_passed"] = not has_hard_duplicates and not has_semantic_duplicates
+    has_visual_duplicates = bool(diagnostics["story_core_visual_duplicate_pairs"])
+    diagnostics["story_core_two_axis_validation_passed"] = not has_hard_duplicates and not has_semantic_duplicates and not has_visual_duplicates
     if has_hard_duplicates:
         causes.append("two_axis_duplicate_adjacent_pairs")
     if has_semantic_duplicates:
         causes.append("two_axis_semantic_duplicates")
+    if has_visual_duplicates:
+        causes.append("two_axis_visual_duplicates")
 
     dominant_rows = [row["dominance"] for row in vectors]
     hero_count = sum(1 for row in dominant_rows if row == "hero_first")
@@ -4649,6 +4749,17 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
     diagnostics["story_core_literal_fallback_count"] = len(level_0_segments)
     diagnostics["story_core_literal_fallback_segments"] = level_0_segments[:16]
     diagnostics["story_core_second_degree_segments"] = level_2_plus_segments[:16]
+    diagnostics["story_core_association_scoring_reason_by_segment"] = [
+        {"segment_id": row["segment_id"], "level": row["association_level"], "reasons": row["association_reason_tags"]}
+        for row in vectors
+    ][:32]
+    diagnostics["story_core_literal_generic_cliche_segments"] = [
+        row["segment_id"] for row in vectors if row["literal_generic_cliche"]
+    ][:16]
+    diagnostics["story_core_direct_emotion_illustration_segments"] = [
+        row["segment_id"] for row in vectors if row["direct_emotion_illustration"]
+    ][:16]
+    diagnostics["story_core_low_subtext_segments"] = [row["segment_id"] for row in vectors if row["low_subtext"]][:16]
     low_streak = 0
     max_low_streak = 0
     for level in association_levels:
@@ -4661,32 +4772,100 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
         diagnostics["story_core_anti_literal_retry_used"] = True
         causes.append("anti_literal_low_depth_streak")
 
-    high_pressure_streak = 0
-    high_density_streak = 0
-    hero_first_streak = 0
-    for row in vectors:
-        high_pressure_streak = high_pressure_streak + 1 if row["pressure_mode"] == "high" else 0
-        high_density_streak = high_density_streak + 1 if row["frame_axes"]["density"] == "high" else 0
-        hero_first_streak = hero_first_streak + 1 if row["dominance"] == "hero_first" else 0
-    overload_detected = bool(
-        diagnostics["story_core_entropy_threshold_triggered"]
-        or high_pressure_streak >= 3
-        or high_density_streak >= 3
-        or hero_first_streak >= 3
-    )
+    overload_spans: list[dict[str, Any]] = []
+
+    if diagnostics["story_core_entropy_threshold_triggered"]:
+        overload_spans.append(
+            {
+                "start_segment_id": diagnostics["story_core_flatline_span_start"],
+                "end_segment_id": diagnostics["story_core_flatline_span_end"],
+                "reason": "entropy_threshold_triggered",
+            }
+        )
+
+    for signal_name, predicate in (
+        ("high_pressure_streak_3", lambda row: row["pressure_mode"] == "high"),
+        ("high_density_streak_3", lambda row: row["frame_axes"]["density"] == "high"),
+        ("hero_first_streak_3", lambda row: row["dominance"] == "hero_first"),
+    ):
+        run_start = -1
+        run_len = 0
+        for idx, row in enumerate(vectors):
+            if predicate(row):
+                if run_len == 0:
+                    run_start = idx
+                run_len += 1
+            else:
+                if run_len >= 3:
+                    overload_spans.append(
+                        {
+                            "start_segment_id": vectors[run_start]["segment_id"],
+                            "end_segment_id": vectors[idx - 1]["segment_id"],
+                            "reason": signal_name,
+                        }
+                    )
+                run_start = -1
+                run_len = 0
+        if run_len >= 3:
+            overload_spans.append(
+                {
+                    "start_segment_id": vectors[run_start]["segment_id"],
+                    "end_segment_id": vectors[len(vectors) - 1]["segment_id"],
+                    "reason": signal_name,
+                }
+            )
+
+    overload_detected = bool(overload_spans)
+    diagnostics["story_core_overload_spans"] = overload_spans[:16]
     diagnostics["story_core_visual_breath_triggered"] = overload_detected
     diagnostics["story_core_contrast_event_required"] = overload_detected
     if overload_detected:
         diagnostics["story_core_visual_breath_reason"] = (
             "overload_detected_repeated_peak_pressure_density_or_dominance"
         )
-    has_contrast_event = any(
-        row["story_function"] in {"release", "afterglow"} or row["pressure_mode"] == "low" or row["association_level"] >= 2
-        for row in vectors
-    )
+
+    windows_checked: list[dict[str, Any]] = []
+    local_breath_segment_ids: list[str] = []
+    fail_spans: list[dict[str, Any]] = []
+    for span in overload_spans:
+        end_id = str(span.get("end_segment_id") or "")
+        end_idx = next((idx for idx, row in enumerate(vectors) if row["segment_id"] == end_id), -1)
+        if end_idx < 0:
+            continue
+        window_start = end_idx + 1
+        window_end = min(len(vectors) - 1, end_idx + 2)
+        candidate_ids = [vectors[idx]["segment_id"] for idx in range(window_start, window_end + 1)] if window_start <= window_end else []
+        windows_checked.append(
+            {
+                "overload_end_segment_id": end_id,
+                "window_segment_ids": candidate_ids,
+            }
+        )
+        local_hit = False
+        for idx in range(window_start, window_end + 1):
+            row = vectors[idx]
+            contrast_hit = (
+                row["story_function"] in {"release", "afterglow"}
+                or row["pressure_mode"] == "low"
+                or row["frame_axes"]["density"] == "low"
+                or row["dominance"] == "world_first"
+                or row["emotional_mode"] == "intimate"
+                or row["association_level"] >= 2
+            )
+            if contrast_hit:
+                local_hit = True
+                local_breath_segment_ids.append(row["segment_id"])
+        if not local_hit:
+            fail_spans.append(span)
+
+    has_contrast_event = bool(local_breath_segment_ids)
+    diagnostics["story_core_local_breath_windows_checked"] = windows_checked[:24]
+    diagnostics["story_core_local_breath_segment_ids"] = sorted(set(local_breath_segment_ids))[:16]
+    diagnostics["story_core_local_breath_found"] = has_contrast_event
+    diagnostics["story_core_visual_breath_fail_spans"] = fail_spans[:16]
     diagnostics["story_core_contrast_event_present"] = has_contrast_event
     diagnostics["story_core_visual_breath_inserted_in_logic"] = has_contrast_event
-    if overload_detected and not has_contrast_event:
+    if overload_detected and fail_spans:
         causes.append("visual_breath_contrast_event_missing")
 
     return causes, diagnostics
@@ -6387,6 +6566,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_axis_change_meaning"] = []
     diagnostics["story_core_duplicate_adjacent_pairs"] = []
     diagnostics["story_core_semantic_duplicate_pairs"] = []
+    diagnostics["story_core_visual_duplicate_pairs"] = []
+    diagnostics["story_core_two_axis_fail_reason_by_pair"] = []
+    diagnostics["story_core_two_axis_pair_status"] = []
     diagnostics["story_core_hero_world_balance_score"] = 1.0
     diagnostics["story_core_hero_first_streak"] = 0
     diagnostics["story_core_world_first_streak"] = 0
@@ -6396,12 +6578,21 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_literal_fallback_count"] = 0
     diagnostics["story_core_literal_fallback_segments"] = []
     diagnostics["story_core_second_degree_segments"] = []
+    diagnostics["story_core_association_scoring_reason_by_segment"] = []
+    diagnostics["story_core_literal_generic_cliche_segments"] = []
+    diagnostics["story_core_direct_emotion_illustration_segments"] = []
+    diagnostics["story_core_low_subtext_segments"] = []
     diagnostics["story_core_anti_literal_retry_used"] = False
     diagnostics["story_core_visual_breath_triggered"] = False
     diagnostics["story_core_visual_breath_reason"] = ""
     diagnostics["story_core_visual_breath_inserted_in_logic"] = False
     diagnostics["story_core_contrast_event_required"] = False
     diagnostics["story_core_contrast_event_present"] = False
+    diagnostics["story_core_overload_spans"] = []
+    diagnostics["story_core_local_breath_windows_checked"] = []
+    diagnostics["story_core_local_breath_found"] = False
+    diagnostics["story_core_local_breath_segment_ids"] = []
+    diagnostics["story_core_visual_breath_fail_spans"] = []
     diagnostics["story_core_second_attempt_changed_payload"] = False
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
@@ -6596,6 +6787,15 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_semantic_duplicate_pairs"] = _safe_list(
                     technical_spawn_debug.get("story_core_semantic_duplicate_pairs")
                 )
+                diagnostics["story_core_visual_duplicate_pairs"] = _safe_list(
+                    technical_spawn_debug.get("story_core_visual_duplicate_pairs")
+                )
+                diagnostics["story_core_two_axis_fail_reason_by_pair"] = _safe_list(
+                    technical_spawn_debug.get("story_core_two_axis_fail_reason_by_pair")
+                )
+                diagnostics["story_core_two_axis_pair_status"] = _safe_list(
+                    technical_spawn_debug.get("story_core_two_axis_pair_status")
+                )
                 diagnostics["story_core_hero_world_balance_score"] = float(
                     technical_spawn_debug.get("story_core_hero_world_balance_score") or 0.0
                 )
@@ -6619,6 +6819,18 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_second_degree_segments"] = _safe_list(
                     technical_spawn_debug.get("story_core_second_degree_segments")
                 )
+                diagnostics["story_core_association_scoring_reason_by_segment"] = _safe_list(
+                    technical_spawn_debug.get("story_core_association_scoring_reason_by_segment")
+                )
+                diagnostics["story_core_literal_generic_cliche_segments"] = _safe_list(
+                    technical_spawn_debug.get("story_core_literal_generic_cliche_segments")
+                )
+                diagnostics["story_core_direct_emotion_illustration_segments"] = _safe_list(
+                    technical_spawn_debug.get("story_core_direct_emotion_illustration_segments")
+                )
+                diagnostics["story_core_low_subtext_segments"] = _safe_list(
+                    technical_spawn_debug.get("story_core_low_subtext_segments")
+                )
                 diagnostics["story_core_anti_literal_retry_used"] = bool(
                     technical_spawn_debug.get("story_core_anti_literal_retry_used")
                 )
@@ -6636,6 +6848,19 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 )
                 diagnostics["story_core_contrast_event_present"] = bool(
                     technical_spawn_debug.get("story_core_contrast_event_present")
+                )
+                diagnostics["story_core_overload_spans"] = _safe_list(technical_spawn_debug.get("story_core_overload_spans"))
+                diagnostics["story_core_local_breath_windows_checked"] = _safe_list(
+                    technical_spawn_debug.get("story_core_local_breath_windows_checked")
+                )
+                diagnostics["story_core_local_breath_found"] = bool(
+                    technical_spawn_debug.get("story_core_local_breath_found")
+                )
+                diagnostics["story_core_local_breath_segment_ids"] = _safe_list(
+                    technical_spawn_debug.get("story_core_local_breath_segment_ids")
+                )
+                diagnostics["story_core_visual_breath_fail_spans"] = _safe_list(
+                    technical_spawn_debug.get("story_core_visual_breath_fail_spans")
                 )
                 diagnostics["story_core_retry_prompt_mode"] = retry_prompt_mode
                 diagnostics["story_core_retry_sanitize_applied"] = retry_sanitize_applied
