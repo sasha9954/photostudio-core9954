@@ -3744,6 +3744,7 @@ def _build_story_core_v11(
                 "arc_role": str(row.get("arc_role") or ""),
                 "beat_purpose": str(row.get("beat_purpose") or ""),
                 "emotional_key": str(row.get("emotional_key") or ""),
+                **_normalize_story_core_segment_structured_fields(row),
             }
             for row in parsed_narrative_segments
         ]
@@ -3770,8 +3771,19 @@ def _build_story_core_v11(
                 "arc_role": role_map.get(str(item.get("story_function") or ""), "release"),
                 "beat_purpose": str(item.get("beat_focus_hint") or item.get("story_function") or ""),
                 "emotional_key": str(item.get("narrative_load") or "medium"),
+                "visual_scale": ("medium" if idx % 3 == 0 else ("wide" if idx % 3 == 1 else "intimate")),
+                "visual_density": ("dense" if idx % 3 == 0 else ("moderate" if idx % 3 == 1 else "sparse")),
+                "motion_profile": ("controlled" if idx % 3 == 0 else ("dynamic" if idx % 3 == 1 else "still")),
+                "hero_world_mode": ("hero_foreground" if idx % 2 == 0 else "world_foreground"),
+                "beat_mode": (
+                    "performance"
+                    if "vocal" in str(item.get("beat_focus_hint") or "").lower() or idx % 2 == 0
+                    else "world_observation"
+                ),
+                "subtext_mode": ("second_order" if idx in {1, max(1, total_slots - 2)} else "coded"),
+                "association_target": ("level_2_plus" if idx in {1, max(1, total_slots - 2)} else "level_1"),
             }
-            for item in beats
+            for idx, item in enumerate(beats)
         ]
 
     story_core_v1 = {
@@ -4546,6 +4558,13 @@ def _story_core_emotional_mode(row: dict[str, Any]) -> str:
 
 
 def _infer_story_core_dominance(row: dict[str, Any]) -> str:
+    hero_world_mode = str(row.get("hero_world_mode") or "").strip().lower()
+    if hero_world_mode == "hero_foreground":
+        return "hero_first"
+    if hero_world_mode == "world_foreground":
+        return "world_first"
+    if hero_world_mode == "balanced":
+        return "balanced"
     text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
     hero_score = sum(1 for token in ("hero", "decision", "assert", "lead", "choose", "command", "push") if token in text)
     world_score = sum(1 for token in ("crowd", "city", "weather", "system", "pressure", "response", "environment", "world") if token in text)
@@ -4558,6 +4577,8 @@ def _infer_story_core_dominance(row: dict[str, Any]) -> str:
 
 def _score_story_core_association(row: dict[str, Any]) -> dict[str, Any]:
     text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    subtext_mode = str(row.get("subtext_mode") or "").strip().lower()
+    association_target = str(row.get("association_target") or "").strip().lower()
     generic_env_tokens = (
         "alley", "street", "room", "warehouse", "corridor", "office", "bar", "club", "rooftop", "parking", "rain", "neon", "shadow",
     )
@@ -4587,7 +4608,9 @@ def _score_story_core_association(row: dict[str, Any]) -> dict[str, Any]:
     generic_cliche = generic_env_hits >= 2 and (threat_hits > 0 or emotion_hits > 0)
     direct_emotion_illustration = emotion_hits > 0 and (direct_mapping_hits > 0 or generic_env_hits > 0)
     direct_threat_shorthand = threat_hits >= 2 or (threat_hits > 0 and generic_env_hits > 0)
-    low_subtext = subtext_hits == 0 and world_detail_hits == 0
+    structured_second_order = subtext_mode in {"second_order", "aftermath_trace", "witness_detail", "symbolic_environment"}
+    structured_direct = subtext_mode == "direct"
+    low_subtext = subtext_hits == 0 and world_detail_hits == 0 and not structured_second_order
 
     literal_score = 0
     if generic_cliche:
@@ -4608,6 +4631,17 @@ def _score_story_core_association(row: dict[str, Any]) -> dict[str, Any]:
         depth_score += 1
     if "contrast" in text or "counterpoint" in text:
         depth_score += 1
+
+    if structured_second_order:
+        depth_score += 2
+    elif subtext_mode == "coded":
+        depth_score += 1
+    if association_target == "level_2_plus":
+        depth_score += 1
+    elif association_target == "level_1":
+        literal_score += 0
+    if structured_direct:
+        literal_score += 1
 
     if depth_score >= 2:
         association_level = 2
@@ -4640,19 +4674,37 @@ def _score_story_core_association(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _infer_frame_axes(row: dict[str, Any]) -> dict[str, str]:
+    visual_scale = str(row.get("visual_scale") or "").strip().lower()
+    visual_density = str(row.get("visual_density") or "").strip().lower()
+    motion_profile = str(row.get("motion_profile") or "").strip().lower()
+    if visual_scale in {"intimate", "medium", "wide"} and visual_density in {"sparse", "moderate", "dense"} and motion_profile in {"still", "controlled", "dynamic"}:
+        return {"scale": visual_scale, "density": visual_density, "motion": motion_profile}
     text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
-    scale = "intimate" if any(token in text for token in ("intimate", "close", "private", "whisper")) else "wide"
-    density = "high" if any(token in text for token in ("crowd", "dense", "chaos", "packed", "flood")) else "low"
-    motion = "dynamic" if any(token in text for token in ("run", "rush", "chase", "impact", "surge", "spin")) else "still"
+    scale = "intimate" if any(token in text for token in ("intimate", "close", "private", "whisper")) else ("wide" if any(token in text for token in ("wide", "city", "crowd", "landscape")) else "medium")
+    density = "dense" if any(token in text for token in ("crowd", "dense", "chaos", "packed", "flood")) else ("sparse" if any(token in text for token in ("empty", "quiet", "isolated", "vacant")) else "moderate")
+    motion = "dynamic" if any(token in text for token in ("run", "rush", "chase", "impact", "surge", "spin")) else ("still" if any(token in text for token in ("still", "hold", "pause", "freeze", "quiet")) else "controlled")
     return {"scale": scale, "density": density, "motion": motion}
 
 
 def _infer_meaning_axes(row: dict[str, Any]) -> dict[str, str]:
-    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
-    social_pressure = "high" if any(token in text for token in ("judged", "crowd", "threat", "conflict", "pressure", "constraint")) else "low"
-    hero_world_ratio = _infer_story_core_dominance(row)
+    beat_mode = str(row.get("beat_mode") or "").strip().lower()
+    hero_world_mode = str(row.get("hero_world_mode") or "").strip().lower()
+    narrative_function = str(row.get("arc_role") or "").strip().lower()
+    if beat_mode in {"performance", "world_observation", "world_pressure", "aftermath", "threshold", "social_texture", "release", "transition"}:
+        social_pressure = "high" if beat_mode in {"world_pressure", "threshold"} else ("low" if beat_mode in {"aftermath", "release"} else "medium")
+    else:
+        text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+        social_pressure = "high" if any(token in text for token in ("judged", "crowd", "threat", "conflict", "pressure", "constraint")) else "low"
+    if hero_world_mode in {"hero_foreground", "world_foreground", "balanced"}:
+        hero_world_ratio = {
+            "hero_foreground": "hero_first",
+            "world_foreground": "world_first",
+            "balanced": "balanced",
+        }[hero_world_mode]
+    else:
+        hero_world_ratio = _infer_story_core_dominance(row)
     return {
-        "narrative_function": str(row.get("arc_role") or "").strip().lower(),
+        "narrative_function": narrative_function,
         "social_pressure": social_pressure,
         "hero_vs_world_ratio": hero_world_ratio,
     }
@@ -4826,6 +4878,9 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
         row["segment_id"] for row in vectors if row["direct_emotion_illustration"]
     ][:16]
     diagnostics["story_core_low_subtext_segments"] = [row["segment_id"] for row in vectors if row["low_subtext"]][:16]
+    min_second_degree_required = 2 if len(vectors) >= 5 else 1
+    if len(level_2_plus_segments) < min_second_degree_required:
+        causes.append("anti_literal_low_depth_streak")
     low_streak = 0
     max_low_streak = 0
     for level in association_levels:
@@ -4836,7 +4891,10 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
             low_streak = 0
     if len(level_0_segments) > max(1, len(vectors) // 2) or max_low_streak >= 3:
         diagnostics["story_core_anti_literal_retry_used"] = True
-        causes.append("anti_literal_low_depth_streak")
+        if "anti_literal_low_depth_streak" not in causes:
+            causes.append("anti_literal_low_depth_streak")
+    if "anti_literal_low_depth_streak" in causes:
+        diagnostics["story_core_anti_literal_retry_used"] = True
 
     overload_spans: list[dict[str, Any]] = []
 
@@ -4851,7 +4909,7 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
 
     for signal_name, predicate in (
         ("high_pressure_streak_3", lambda row: row["pressure_mode"] == "high"),
-        ("high_density_streak_3", lambda row: row["frame_axes"]["density"] == "high"),
+        ("high_density_streak_3", lambda row: row["frame_axes"]["density"] in {"high", "dense"}),
         ("hero_first_streak_3", lambda row: row["dominance"] == "hero_first"),
     ):
         run_start = -1
@@ -5383,6 +5441,15 @@ def _validate_story_core_v11_payload(
     if not narrative_segments:
         return False, CORE_SCHEMA_INVALID, ["narrative_segments_missing_or_empty"]
     allowed_roles = {"setup", "build", "pivot", "climax", "release", "afterglow"}
+    allowed_segment_fields = {
+        "visual_scale": {"intimate", "medium", "wide"},
+        "visual_density": {"sparse", "moderate", "dense"},
+        "motion_profile": {"still", "controlled", "dynamic"},
+        "hero_world_mode": {"hero_foreground", "world_foreground", "balanced"},
+        "beat_mode": {"performance", "world_observation", "world_pressure", "aftermath", "threshold", "social_texture", "release", "transition"},
+        "subtext_mode": {"direct", "coded", "second_order", "aftermath_trace", "witness_detail", "symbolic_environment"},
+        "association_target": {"level_1", "level_2_plus"},
+    }
     for idx, row in enumerate(narrative_segments, start=1):
         if not str(row.get("segment_id") or "").strip():
             errors.append(f"narrative_segments[{idx}] missing segment_id")
@@ -5392,6 +5459,10 @@ def _validate_story_core_v11_payload(
             errors.append(f"narrative_segments[{idx}] missing beat_purpose")
         if not str(row.get("emotional_key") or "").strip():
             errors.append(f"narrative_segments[{idx}] missing emotional_key")
+        for field_name, allowed_values in allowed_segment_fields.items():
+            value = str(row.get(field_name) or "").strip().lower()
+            if value not in allowed_values:
+                errors.append(f"narrative_segments[{idx}] invalid {field_name}")
     if errors:
         return False, CORE_SCHEMA_INVALID, errors
 
@@ -5499,6 +5570,49 @@ def _validate_story_core_v11_payload(
     return True, "", []
 
 
+def _normalize_story_core_segment_structured_fields(row: dict[str, Any]) -> dict[str, str]:
+    normalized = {
+        "visual_scale": str(row.get("visual_scale") or "").strip().lower(),
+        "visual_density": str(row.get("visual_density") or "").strip().lower(),
+        "motion_profile": str(row.get("motion_profile") or "").strip().lower(),
+        "hero_world_mode": str(row.get("hero_world_mode") or "").strip().lower(),
+        "beat_mode": str(row.get("beat_mode") or "").strip().lower(),
+        "subtext_mode": str(row.get("subtext_mode") or "").strip().lower(),
+        "association_target": str(row.get("association_target") or "").strip().lower(),
+    }
+    valid_values = {
+        "visual_scale": {"intimate", "medium", "wide"},
+        "visual_density": {"sparse", "moderate", "dense"},
+        "motion_profile": {"still", "controlled", "dynamic"},
+        "hero_world_mode": {"hero_foreground", "world_foreground", "balanced"},
+        "beat_mode": {"performance", "world_observation", "world_pressure", "aftermath", "threshold", "social_texture", "release", "transition"},
+        "subtext_mode": {"direct", "coded", "second_order", "aftermath_trace", "witness_detail", "symbolic_environment"},
+        "association_target": {"level_1", "level_2_plus"},
+    }
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    fallback = {
+        "visual_scale": _infer_frame_axes(row)["scale"],
+        "visual_density": _infer_frame_axes(row)["density"],
+        "motion_profile": _infer_frame_axes(row)["motion"],
+        "hero_world_mode": (
+            "hero_foreground"
+            if _infer_story_core_dominance(row) == "hero_first"
+            else ("world_foreground" if _infer_story_core_dominance(row) == "world_first" else "balanced")
+        ),
+        "beat_mode": (
+            "performance"
+            if "performance" in text or "vocal" in text
+            else ("world_pressure" if any(token in text for token in ("pressure", "threat", "constraint")) else "world_observation")
+        ),
+        "subtext_mode": "coded" if any(token in text for token in ("coded", "indirect", "implied")) else "direct",
+        "association_target": "level_2_plus" if any(token in text for token in ("subtext", "symbol", "second-order", "witness", "aftermath")) else "level_1",
+    }
+    return {
+        field: (normalized[field] if normalized[field] in valid_values[field] else fallback[field])
+        for field in valid_values
+    }
+
+
 def _normalize_story_core_contract_payload(
     *,
     parsed: dict[str, Any],
@@ -5533,6 +5647,18 @@ def _normalize_story_core_contract_payload(
             else configured_route_mix_doctrine.get("prioritize_lipsync_for_strong_performance_windows")
         ),
     }
+    normalized_segments = []
+    for row in _safe_list(parsed.get("narrative_segments")):
+        if not isinstance(row, dict):
+            continue
+        normalized_row = {
+            "segment_id": str(row.get("segment_id") or "").strip(),
+            "arc_role": str(row.get("arc_role") or "").strip(),
+            "beat_purpose": str(row.get("beat_purpose") or "").strip(),
+            "emotional_key": str(row.get("emotional_key") or "").strip(),
+        }
+        normalized_row.update(_normalize_story_core_segment_structured_fields(row))
+        normalized_segments.append(normalized_row)
     return {
         "core_version": "1.1",
         "story_summary": str(parsed.get("story_summary") or "").strip(),
@@ -5549,16 +5675,7 @@ def _normalize_story_core_contract_payload(
             "style_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("style_doctrine") or "").strip(),
         },
         "route_mix_doctrine_for_scenes": route_mix_doctrine,
-        "narrative_segments": [
-            {
-                "segment_id": str(row.get("segment_id") or "").strip(),
-                "arc_role": str(row.get("arc_role") or "").strip(),
-                "beat_purpose": str(row.get("beat_purpose") or "").strip(),
-                "emotional_key": str(row.get("emotional_key") or "").strip(),
-            }
-            for row in _safe_list(parsed.get("narrative_segments"))
-            if isinstance(row, dict)
-        ],
+        "narrative_segments": normalized_segments,
         "audio_segment_count": len(audio_segments),
     }
 
@@ -5610,13 +5727,19 @@ def _build_story_core_prompt(
         "IDENTITY INVENTION GUARD (hard): if character refs exist, do not invent exact wardrobe/accessories/headwear/jewelry/tattoos/facial-hair packages unless explicitly grounded in refs or user text.\n"
         "Allowed identity language at CORE: narrative presence, social role energy, emotional mode, and scene function.\n"
         "PERFORMANCE vs WORLD SPLIT (hard): performance/vocal segments may foreground hero; world/cutaway segments must not re-center hero by habit and should prioritize reactive city/human environment beats.\n"
+        "WORLD-BEAT DIVERSITY (hard): world/cutaway segments must diversify by dramaturgic function, not only by location noun; use observation, social_texture, pressure, threshold, witness/aftermath/release functions as needed.\n"
+        "PERFORMANCE DIVERSITY (hard): performance segments cannot differ only by emotion wording; vary structured visual profile and hero/world balance across performance beats.\n"
         "TWO-AXIS ADJACENCY CONTRACT (hard): each adjacent segment pair must change at least one frame axis (scale/intimacy OR density OR motion character) and at least one meaning axis (narrative function OR social pressure OR hero_vs_world_ratio).\n"
         "Adjacent beats must not repeat the same frame logic plus the same narrative function.\n"
+        "STRUCTURED FRAME CONTRACT (hard): every narrative segment must include visual_scale(intimate|medium|wide), visual_density(sparse|moderate|dense), motion_profile(still|controlled|dynamic).\n"
+        "STRUCTURED MEANING CONTRACT (hard): every narrative segment must include hero_world_mode(hero_foreground|world_foreground|balanced) and beat_mode(performance|world_observation|world_pressure|aftermath|threshold|social_texture|release|transition).\n"
+        "SUBTEXT CONTRACT (hard): every narrative segment must include subtext_mode(direct|coded|second_order|aftermath_trace|witness_detail|symbolic_environment) and association_target(level_1|level_2_plus).\n"
+        "At least two segments (preferably non-performance world beats) must be second-order/subtext-aware with association_target=level_2_plus.\n"
         "AUDIO_MAP DRAMATURGY CONTRACT (hard): use audio_map not only for boundaries but for contrast opportunities, stillness/hold beats, semantic turns, release windows, and finality logic.\n"
         "Do not auto-convert assertive/high windows into repeated generic threat tableaux; release/stillness windows should permit breath/aftermath/sparse echo.\n"
         "INTERNAL SELF-CHECK BEFORE FINAL JSON: for every adjacent pair verify frame-axis change, meaning-axis change, anti-cliché depth, no unsupported identity invention, clear beat type (performance/world/observation/pressure/release/aftermath), and no stereotype vocabulary loops. Rewrite failing pairs before output.\n"
         "Output must include narrative_segments[] with EXACT 1:1 mapping to provided segment_id list and same order.\n"
-        "Each narrative_segments item requires: segment_id, arc_role(setup|build|pivot|climax|release|afterglow), beat_purpose, emotional_key.\n"
+        "Each narrative_segments item requires: segment_id, arc_role(setup|build|pivot|climax|release|afterglow), beat_purpose, emotional_key, visual_scale, visual_density, motion_profile, hero_world_mode, beat_mode, subtext_mode, association_target.\n"
         "Top-level required fields: core_version, story_summary, opening_anchor, ending_callback_rule, global_arc, identity_doctrine, narrative_segments.\n"
         "global_arc fields: exposition, climax, resolution.\n"
         "identity_doctrine fields: hero_anchor, world_doctrine, style_doctrine.\n"
