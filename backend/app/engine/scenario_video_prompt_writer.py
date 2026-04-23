@@ -56,12 +56,21 @@ IA2V_BASE_PROMPT_V1 = (
     "Allow expressive but controlled gestures and smooth body-led micro-performance in shoulders, torso, head, neck, breath tension, slight lean, and controlled weight shift. "
     "Hands may emphasize phrases when visible; avoid jerky or chaotic dance-like motion unless story explicitly requests it. "
     "Framing is flexible from tight close-up to full body while mouth readability, emotion readability, and identity clarity remain intact. "
-    "Cinematic realism with smooth LTX-safe camera motion."
+    "Camera may remain frontal, gently drift sideways, execute a slow arc move, or perform a restrained partial semi-orbit when the emotional beat supports it; intimate beats may stay softer and more frontal. "
+    "Occasional slow 180-feel is allowed, and only in stronger moments a stylized partial 270-feel may be used; keep all camera motion smooth, restrained, cinematic, and LTX-safe with no fast spins, no whip motion, and no chaotic handheld. "
+    "Singer may occasionally turn gaze toward the moving camera and continue singing naturally without losing readability. "
+    "If visible, background should carry subtle ambient life (small shifts, head turns, slow walking, low-level natural activity) while remaining secondary and never stealing focus from the singer."
 )
 IA2V_MINIMAL_NEGATIVE_PROMPT = (
     "hidden mouth, unreadable lips, mouth fully obscured for long, face fully turned away from readability, severe identity drift, duplicate main subject, severe facial deformation"
 )
 IDENTITY_NEGATIVE_GUARD = "different person, different face, changed face, changed body type, changed silhouette, different outfit, hairstyle drift, age drift, body proportion drift"
+HERO_REF_PRIORITY_CLAUSE = (
+    "Identity source priority: explicit hero role reference is canonical for face, body, outfit, and identity truth; previous scene image is continuity support only and must never override hero role reference."
+)
+IA2V_CONTINUITY_LOCK_CLAUSE = (
+    "Hard continuity lock for continuing hero performance: preserve same face, age impression, body proportions, hair/facial hair, tattoos/signature details, outfit, accessories, and silhouette; no hero replacement or similar-but-different person."
+)
 CONTROLLED_MOTION_SAFETY_BLOCK = (
     "CONTROLLED MOTION SAFETY: smooth readable cinematic motion, grounded body movement, moderate step/sway/turn/weight shift, "
     "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
@@ -325,13 +334,41 @@ def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
     identity_label = str(char1.get("identity_label") or "").strip()
     appearance = str(char1.get("appearanceMode") or char1.get("appearance_mode") or "").strip().lower()
     presence = str(char1.get("screenPresenceMode") or char1.get("screen_presence_mode") or "").strip().lower()
+    input_refs_by_role = _safe_dict(input_pkg.get("refsByRole"))
+    connected_refs_by_role = _safe_dict(connected.get("refsByRole"))
+    explicit_character_1_refs = [
+        str(v).strip()
+        for v in [
+            *(_safe_list(input_refs_by_role.get("character_1"))),
+            *(_safe_list(connected_refs_by_role.get("character_1"))),
+            *(_safe_list(_safe_dict(input_pkg.get("refs")).get("character_1"))),
+        ]
+        if str(v).strip()
+    ]
     return {
         "gender_hint": gender_hint,
         "identity_label": identity_label,
         "ref_count": len(all_refs),
         "ref_signature": ref_signature,
+        "has_explicit_character_1_ref": bool(explicit_character_1_refs),
         "lip_sync_only": appearance == "lip_sync_only" or presence == "lip_sync_only",
     }
+
+
+def _dedupe_prompt_sentences(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    chunks = [chunk.strip(" ,.;") for chunk in re.split(r"(?<=[.!?])\s+", raw) if chunk.strip(" ,.;")]
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for chunk in chunks:
+        key = re.sub(r"\s+", " ", chunk).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(chunk)
+    return ". ".join(deduped).strip(" ,.;")
 
 
 def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) -> str:
@@ -1010,6 +1047,36 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     lip_sync_only_i2v = bool(identity_ctx.get("lip_sync_only")) and route == "i2v"
     plan_row = _safe_dict(fallback_row.get("plan_row"))
     role_row = _safe_dict(fallback_row.get("role_row"))
+    prompt_refs_by_role = _safe_dict(fallback_prompt_row.get("refsByRole"))
+    plan_refs_by_role = _safe_dict(plan_row.get("refsByRole"))
+    refs_by_role = prompt_refs_by_role or plan_refs_by_role
+    refs_used = _safe_list(
+        fallback_prompt_row.get("refsUsed")
+        if isinstance(fallback_prompt_row.get("refsUsed"), list)
+        else plan_row.get("refsUsed")
+    )
+    must_appear = _safe_list(
+        fallback_prompt_row.get("mustAppear")
+        if isinstance(fallback_prompt_row.get("mustAppear"), list)
+        else plan_row.get("mustAppear")
+    )
+    primary_role = str(
+        fallback_prompt_row.get("primaryRole")
+        or plan_row.get("primaryRole")
+        or role_row.get("primary_role")
+        or plan_row.get("primary_role")
+        or ""
+    ).strip()
+    hero_entity_id = str(
+        fallback_prompt_row.get("heroEntityId")
+        or plan_row.get("heroEntityId")
+        or (primary_role if primary_role in {"character_1", "character_2", "character_3"} else "")
+    ).strip()
+    previous_scene_image_url = str(
+        fallback_prompt_row.get("previousSceneImageUrl")
+        or plan_row.get("previousSceneImageUrl")
+        or ""
+    ).strip()
     visual_focus_role = str(
         row.get("visual_focus_role")
         or fallback_prompt_row.get("visual_focus_role")
@@ -1026,7 +1093,31 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     ).strip()
     environment_cutaway_i2v = route == "i2v" and visual_focus_role == "environment" and not speaker_role
     has_human_subject = False if lip_sync_only_i2v or environment_cutaway_i2v else _scene_has_human_subject(fallback_row, route)
-    confirmed_look_used = bool(has_human_subject and scene_seq_index >= 2 and _has_real_confirmed_hero_image_url(fallback_row))
+    fallback_blob = json.dumps(
+        {
+            "prompt_row": fallback_prompt_row,
+            "plan_row": plan_row,
+            "role_row": role_row,
+            "raw_row": row,
+        },
+        ensure_ascii=False,
+    ).lower()
+    continuing_hero_scene = bool(
+        has_human_subject
+        and (
+            "character_1" in fallback_blob
+            or str(plan_row.get("primary_role") or role_row.get("primary_role") or "").strip().lower() == "character_1"
+            or str(plan_row.get("heroEntityId") or fallback_prompt_row.get("heroEntityId") or "").strip().lower() == "character_1"
+        )
+    )
+    explicit_hero_ref_present = bool(identity_ctx.get("has_explicit_character_1_ref"))
+    confirmed_look_used = bool(
+        has_human_subject
+        and (
+            (scene_seq_index >= 2 and _has_real_confirmed_hero_image_url(fallback_row))
+            or (explicit_hero_ref_present and continuing_hero_scene)
+        )
+    )
     confirmed_look_clause_applied = bool(confirmed_look_used)
     positive_contract_duplicates_removed = False
     positive_prompt_seed = positive_prompt
@@ -1201,6 +1292,9 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         )
         if not positive_prompt.startswith("Use the uploaded image as the exact first frame and identity anchor."):
             positive_prompt = f"{IA2V_BASE_PROMPT_V1} {positive_prompt}".strip()
+        if explicit_hero_ref_present and continuing_hero_scene:
+            positive_prompt = _append_clause(positive_prompt, HERO_REF_PRIORITY_CLAUSE)
+            positive_prompt = _append_clause(positive_prompt, IA2V_CONTINUITY_LOCK_CLAUSE)
     else:
         lip_sync_shot_variant = ""
         performance_pose = ""
@@ -1244,7 +1338,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         body = _strip_clear_vocal_fragments(positive_prompt)
         body = _strip_ia2v_positive_noise(body)
         positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
-        positive_prompt = re.sub(r"\s+", " ", positive_prompt).strip(" ,.;")
+        positive_prompt = _dedupe_prompt_sentences(re.sub(r"\s+", " ", positive_prompt).strip(" ,.;"))
 
     # apply literal dialogue cleanup after all append/rebuild steps and before venue-term guard.
     positive_prompt = _strip_literal_quoted_dialogue(positive_prompt)
@@ -1453,6 +1547,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     for diag in sanitize_diags:
         removed_terms_all.extend(_safe_list(_safe_dict(diag).get("identity_gender_conflict_terms_removed")))
     identity_conflict_detected = bool(removed_terms_all)
+    hero_continuity_lock_applied = bool(route == "ia2v" and explicit_hero_ref_present and continuing_hero_scene)
+    identity_lock_applied = bool(has_human_subject and (route != "ia2v" or hero_continuity_lock_applied))
+    body_lock_applied = bool(has_human_subject and (route != "ia2v" or hero_continuity_lock_applied))
+    continuity_fix_applied = bool(row.get("continuity_fix_applied") or hero_continuity_lock_applied)
 
     return {
         "segment_id": segment_id,
@@ -1510,9 +1608,17 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         "continuity_with_next": str(row.get("continuity_with_next") or "").strip() or None,
         "potential_contradiction": str(row.get("potential_contradiction") or "").strip() or None,
         "fix_if_needed": str(row.get("fix_if_needed") or "").strip() or None,
-        "identity_lock_applied": bool(has_human_subject and route != "ia2v"),
-        "body_lock_applied": bool(has_human_subject and route != "ia2v"),
+        "identity_lock_applied": identity_lock_applied,
+        "identityLockApplied": identity_lock_applied,
+        "body_lock_applied": body_lock_applied,
+        "bodyLockApplied": body_lock_applied,
         "wardrobe_lock_applied": bool(has_human_subject and route != "ia2v"),
+        "primaryRole": primary_role or None,
+        "heroEntityId": hero_entity_id or None,
+        "mustAppear": must_appear,
+        "refsUsed": refs_used,
+        "refsByRole": refs_by_role,
+        "previousSceneImageUrl": previous_scene_image_url or None,
         "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
         "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_used and confirmed_look_clause_applied),
         "confirmedHeroLookReferenceSkippedReason": None if confirmed_look_used else "signature_or_gender_mismatch",
@@ -1525,7 +1631,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         "negativeContainsPositiveIdentityBlock": bool(negative_contains_positive_identity_block),
         "lip_sync_shot_variant_repeated_with_previous": False,
         "continuity_warning": str(row.get("continuity_warning") or "").strip() or None,
-        "continuity_fix_applied": bool(row.get("continuity_fix_applied") or False),
+        "continuity_fix_applied": continuity_fix_applied,
+        "continuityFixApplied": continuity_fix_applied,
         "prompt_source": FINAL_VIDEO_PROMPT_STAGE_VERSION,
         "scene_specific_prompt_present": bool(scene_specific_payload),
         "scene_specific_prompt_chars": scene_chars,
