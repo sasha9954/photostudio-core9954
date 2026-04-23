@@ -81,6 +81,10 @@ class AudioDiagnosticsV11(BaseModel):
     audio_map_release_candidate_count: int | None = None
     audio_map_stillness_candidate_count: int | None = None
     audio_map_finality_candidate_count: int | None = None
+    audio_map_finality_candidate_distribution: dict[str, int] = Field(default_factory=dict)
+    audio_map_first_last_candidate_count: int | None = None
+    audio_map_overassigned_finality_warning: bool | None = None
+    audio_map_overassigned_first_last_warning: bool | None = None
     audio_map_flat_energy_warning: bool | None = None
     audio_map_flat_delivery_warning: bool | None = None
     audio_map_flat_semantic_weight_warning: bool | None = None
