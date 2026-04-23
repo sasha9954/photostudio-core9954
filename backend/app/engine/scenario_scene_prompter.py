@@ -66,9 +66,11 @@ _WARDROBE_CONTINUITY_LOCK = (
 
 _GLOBAL_PROMPT_RULES = [
     "Preserve hero identity, world anchor, style family, and realistic lighting continuity across all scenes.",
+    "Preserve current world continuity, season continuity, weather continuity, and environment family from the established package. Do not introduce a different season or contradictory weather.",
     "Keep prompts short, production-friendly, and route-aware; one clear action + one clear camera idea per video prompt.",
     "Respect wardrobe continuity when current input/story locks wardrobe; do not invent wardrobe progression defaults unless explicitly provided by current story/refs.",
     "Enforce LTX-safe motion and anatomy-safe constraints for all routes.",
+    "Differentiate each scene from adjacent scenes in shot purpose, composition, and subject emphasis.",
 ]
 _CHARACTER_STYLE_LEAK_TOKENS = (
     "same performer",
@@ -1302,6 +1304,18 @@ def _append_compact_clauses(prompt: str, clauses: list[str], *, max_len: int = 9
     return text[:max_len]
 
 
+def _scene_semantic_blob(scene: dict[str, Any]) -> str:
+    parts = [
+        str(scene.get("scene_function") or ""),
+        str(scene.get("narrative_function") or ""),
+        str(scene.get("scene_goal") or ""),
+        str(scene.get("visual_focus_role") or ""),
+        str(scene.get("subject_priority") or ""),
+        str(scene.get("background_story_evidence") or ""),
+    ]
+    return " ".join(parts).lower()
+
+
 def _build_prompt(context: dict[str, Any]) -> str:
     canon = _safe_dict(context.get("video_capability_canon"))
     route_profiles = _safe_dict(canon.get("route_profiles"))
@@ -2503,6 +2517,51 @@ def _normalize_scene_prompts(
         else:
             normalized_notes["risk_simplified"] = False
 
+        scene_blob = _scene_semantic_blob(scene)
+        season_world_clause = (
+            "Preserve current world continuity, season continuity, weather continuity, and environment family from the established package. "
+            "Do not introduce a different season or contradictory weather."
+        )
+        anti_duplicate_clause = "Differentiate this scene clearly from adjacent scenes in shot purpose, composition, and subject emphasis."
+        world_cast_clause = (
+            "Background figures should match the established world's social role and atmosphere, reading as associates, dockside entourage, underworld presence, or intimidating local crew when appropriate, not generic labor-only documentary workers unless explicitly intended by the scene."
+        )
+        cast_tone_tokens = ("underworld", "criminal", "crime", "gang", "mafia", "smuggling", "threat", "dangerous", "dockside")
+        explicit_labor_tokens = ("labor documentary", "documentary labor", "industrial labor", "workshift documentary", "union labor")
+        scene_is_cutaway = (
+            actual_route == "i2v"
+            and ("environment" in scene_blob or "cutaway" in scene_blob or str(scene.get("visual_focus_role") or "").strip().lower() == "environment")
+            and not bool(scene.get("speaker_role"))
+        )
+        scene_is_performance = actual_route == "ia2v"
+        if scene_is_cutaway:
+            cutaway_clause = (
+                "Environment-first cutaway: no main performer visible, or performer remains non-dominant peripheral presence only."
+            )
+            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, cutaway_clause, anti_duplicate_clause])
+            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, cutaway_clause, anti_duplicate_clause])
+            positive_video_prompt = _append_compact_clauses(
+                positive_video_prompt or video_prompt,
+                [season_world_clause, cutaway_clause, anti_duplicate_clause],
+            )
+        elif scene_is_performance:
+            performance_clause = "Performer-first performance shot: hero performer is clearly visible and dominant; avoid environment-only composition."
+            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, performance_clause, anti_duplicate_clause])
+            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, performance_clause, anti_duplicate_clause])
+            positive_video_prompt = _append_compact_clauses(
+                positive_video_prompt or video_prompt,
+                [season_world_clause, performance_clause, anti_duplicate_clause],
+            )
+        else:
+            photo_prompt = _append_compact_clauses(photo_prompt, [season_world_clause, anti_duplicate_clause])
+            video_prompt = _append_compact_clauses(video_prompt, [season_world_clause, anti_duplicate_clause])
+            positive_video_prompt = _append_compact_clauses(positive_video_prompt or video_prompt, [season_world_clause, anti_duplicate_clause])
+
+        if any(token in scene_blob for token in cast_tone_tokens) and not any(token in scene_blob for token in explicit_labor_tokens):
+            photo_prompt = _append_compact_clauses(photo_prompt, [world_cast_clause])
+            video_prompt = _append_compact_clauses(video_prompt, [world_cast_clause])
+            positive_video_prompt = _append_compact_clauses(positive_video_prompt or video_prompt, [world_cast_clause])
+
         hard_constraints = _safe_dict(global_contract.get("hard_constraints"))
         image_contract_clauses: list[str] = []
         if required_world_anchor:
@@ -2575,6 +2634,15 @@ def _normalize_scene_prompts(
                 line_clause = _trim_sentence(f"Vocal phrase anchor: {spoken_line}", max_len=160)
                 video_prompt = _append_prompt_clause(video_prompt, line_clause)
                 positive_video_prompt = _append_prompt_clause(positive_video_prompt, line_clause)
+            low_energy_markers = {"low", "minimal", "restrained", "subtle"}
+            performance_openness = str(scene.get("performance_openness") or "").strip().lower()
+            energy_alignment = str(_safe_dict(scene.get("visual_motion")).get("energy_alignment") or "").strip().lower()
+            if performance_openness in low_energy_markers or energy_alignment in low_energy_markers:
+                low_energy_clause = (
+                    "Allow subtle expressive hand gestures, shoulder emphasis, and torso rhythm that support emotional delivery, while keeping the performance controlled and grounded."
+                )
+                video_prompt = _append_prompt_clause(video_prompt, low_energy_clause)
+                positive_video_prompt = _append_prompt_clause(positive_video_prompt, low_energy_clause)
             photo_prompt = _strip_ia2v_positive_noise(photo_prompt)
             video_prompt = _strip_ia2v_positive_noise(video_prompt)
             positive_video_prompt = _strip_ia2v_positive_noise(positive_video_prompt)
