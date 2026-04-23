@@ -9,6 +9,13 @@ from pydantic import BaseModel, Field, ValidationError
 RHYTHMIC_ANCHORS = ("beat", "drop", "transition", "none")
 VOCAL_GENDERS = ("female", "male", "mixed", "unknown")
 VOCAL_OWNER_ROLES = ("character_1", "character_2", "character_3", "unknown")
+LOCAL_ENERGY_BANDS = ("low", "medium", "high", "surge", "settle")
+ENERGY_DELTAS = ("rise", "hold", "soften", "release", "spike", "reset")
+DELIVERY_MODES = ("declarative", "reflective", "assertive", "intimate", "suspended", "final", "observational", "pressurized")
+SEMANTIC_WEIGHTS = ("low", "medium", "high")
+FINALITY_CANDIDATES = ("none", "continuation", "hinge", "closure", "tail_hit")
+VISUAL_DENSITY_HINTS = ("sparse", "moderate", "dense")
+LYRICAL_DENSITIES = ("low", "medium", "high")
 
 ERROR_AUDIO_EMPTY_MAP = "AUDIO_EMPTY_MAP"
 ERROR_AUDIO_GAP = "AUDIO_GAP_ERROR"
@@ -33,6 +40,16 @@ class AudioSegmentV11(BaseModel):
     rhythmic_anchor: Literal["beat", "drop", "transition", "none"]
     first_last_candidate: bool = False
     route_hints: dict[str, Literal["good", "ok", "too_short", "too_long"]] | None = None
+    local_energy_band: Literal["low", "medium", "high", "surge", "settle"] | None = None
+    energy_delta_vs_prev: Literal["rise", "hold", "soften", "release", "spike", "reset"] | None = None
+    delivery_mode: Literal["declarative", "reflective", "assertive", "intimate", "suspended", "final", "observational", "pressurized"] | None = None
+    semantic_weight: Literal["low", "medium", "high"] | None = None
+    semantic_turn_candidate: bool | None = None
+    release_candidate: bool | None = None
+    finality_candidate: Literal["none", "continuation", "hinge", "closure", "tail_hit"] | None = None
+    visual_density_hint: Literal["sparse", "moderate", "dense"] | None = None
+    stillness_candidate: bool | None = None
+    lyrical_density: Literal["low", "medium", "high"] | None = None
 
 
 class PhraseUnitV11(BaseModel):
@@ -57,6 +74,18 @@ class AudioDiagnosticsV11(BaseModel):
     transcript_used: bool
     dynamics_used: bool
     validation_notes: list[str] = Field(default_factory=list)
+    audio_map_local_energy_variation_score: float | None = None
+    audio_map_delivery_mode_distribution: dict[str, int] = Field(default_factory=dict)
+    audio_map_semantic_weight_distribution: dict[str, int] = Field(default_factory=dict)
+    audio_map_semantic_turn_candidate_count: int | None = None
+    audio_map_release_candidate_count: int | None = None
+    audio_map_stillness_candidate_count: int | None = None
+    audio_map_finality_candidate_count: int | None = None
+    audio_map_flat_energy_warning: bool | None = None
+    audio_map_flat_delivery_warning: bool | None = None
+    audio_map_flat_semantic_weight_warning: bool | None = None
+    audio_map_contrast_potential_summary: str | None = None
+    audio_map_progression_hint_summary: str | None = None
 
 
 class VocalProfileV11(BaseModel):

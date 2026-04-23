@@ -8921,6 +8921,118 @@ def _summarize_audio_map_v11(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _derive_audio_hint_profile(
+    *,
+    idx: int,
+    segments: list[dict[str, Any]],
+    t0: float,
+    t1: float,
+    intensity: float,
+    text: str,
+) -> dict[str, Any]:
+    duration = max(0.001, t1 - t0)
+    prev_seg = _safe_dict(segments[idx - 2]) if idx > 1 else {}
+    next_seg = _safe_dict(segments[idx]) if idx < len(segments) else {}
+    prev_intensity = _to_float(prev_seg.get("intensity"), intensity)
+    next_intensity = _to_float(next_seg.get("intensity"), intensity)
+    word_count = len([w for w in re.split(r"\s+", text) if w.strip()])
+    words_per_sec = word_count / duration
+    is_last = idx == len(segments)
+    has_pause_like_tail = bool(re.search(r"(\.\.\.|[!?…]|\b(oh|ah|mm|hmm|yeah|okay)\b)\s*$", text.strip(), flags=re.IGNORECASE))
+    reflective_markers = bool(re.search(r"\b(why|if|maybe|remember|think|wonder|seems|felt|feel)\b", text, flags=re.IGNORECASE))
+    assertive_markers = bool(re.search(r"\b(now|never|must|will|can't|dont|don't|stop|go)\b", text, flags=re.IGNORECASE))
+    observation_markers = bool(re.search(r"\b(there is|i see|you see|look|watch|when)\b", text, flags=re.IGNORECASE))
+
+    if intensity <= 0.28:
+        local_energy_band = "low"
+    elif intensity >= 0.84 and intensity >= prev_intensity + 0.14 and intensity >= next_intensity - 0.03:
+        local_energy_band = "surge"
+    elif intensity <= prev_intensity - 0.14 and intensity <= next_intensity + 0.08:
+        local_energy_band = "settle"
+    elif intensity >= 0.67:
+        local_energy_band = "high"
+    else:
+        local_energy_band = "medium"
+
+    if idx == 1:
+        energy_delta = "reset"
+    else:
+        delta = intensity - prev_intensity
+        if delta >= 0.24:
+            energy_delta = "spike"
+        elif delta >= 0.08:
+            energy_delta = "rise"
+        elif delta <= -0.24:
+            energy_delta = "release"
+        elif delta <= -0.08:
+            energy_delta = "soften"
+        else:
+            energy_delta = "hold"
+
+    if is_last and (has_pause_like_tail or intensity < 0.62):
+        delivery_mode = "final"
+    elif words_per_sec >= 3.2 and intensity >= 0.68:
+        delivery_mode = "pressurized"
+    elif reflective_markers:
+        delivery_mode = "reflective"
+    elif assertive_markers and intensity >= 0.62:
+        delivery_mode = "assertive"
+    elif words_per_sec <= 1.35 and intensity <= 0.55:
+        delivery_mode = "intimate"
+    elif has_pause_like_tail and words_per_sec <= 2.0:
+        delivery_mode = "suspended"
+    elif observation_markers:
+        delivery_mode = "observational"
+    else:
+        delivery_mode = "declarative"
+
+    punctuation_weight = len(re.findall(r"[,:;!?…]", text))
+    semantic_score = (0.45 if reflective_markers else 0.0) + (0.35 if assertive_markers else 0.0) + min(0.6, punctuation_weight * 0.1)
+    semantic_score += min(0.5, max(0.0, words_per_sec - 2.0) * 0.25)
+    if semantic_score >= 0.9:
+        semantic_weight = "high"
+    elif semantic_score >= 0.4:
+        semantic_weight = "medium"
+    else:
+        semantic_weight = "low"
+
+    semantic_turn_candidate = bool(
+        idx > 1
+        and (
+            reflective_markers
+            or bool(re.search(r"\b(but|yet|still|then|instead|suddenly|however)\b", text, flags=re.IGNORECASE))
+            or abs(intensity - prev_intensity) >= 0.2
+        )
+    )
+    release_candidate = bool(
+        has_pause_like_tail
+        or (energy_delta in {"release", "soften"} and words_per_sec <= 2.5)
+        or (local_energy_band == "settle" and duration >= 3.6)
+    )
+    finality_candidate = "tail_hit" if (is_last and has_pause_like_tail) else ("closure" if is_last else ("hinge" if semantic_turn_candidate else ("continuation" if energy_delta in {"rise", "hold"} else "none")))
+    visual_density_hint = "dense" if (words_per_sec >= 3.2 or intensity >= 0.8) else ("sparse" if words_per_sec <= 1.4 and intensity <= 0.45 else "moderate")
+    stillness_candidate = bool(
+        release_candidate
+        or delivery_mode in {"intimate", "suspended", "reflective", "final"}
+        or (duration >= 4.2 and words_per_sec <= 1.7)
+    )
+    lyrical_density = "high" if words_per_sec >= 3.1 else ("low" if words_per_sec <= 1.45 else "medium")
+    return {
+        "word_count": word_count,
+        "local_energy_band": local_energy_band,
+        "energy_delta_vs_prev": energy_delta,
+        "delivery_mode": delivery_mode,
+        "semantic_weight": semantic_weight,
+        "semantic_turn_candidate": semantic_turn_candidate,
+        "release_candidate": release_candidate,
+        "finality_candidate": finality_candidate,
+        "visual_density_hint": visual_density_hint,
+        "stillness_candidate": stillness_candidate,
+        "lyrical_density": lyrical_density,
+        "intensity_bucket": "high" if intensity >= 0.67 else ("medium" if intensity >= 0.33 else "low"),
+    }
+
+
 def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any], *, duration_sec: float, analysis_mode: str) -> dict[str, Any]:
     """
     Build temporary legacy compatibility fields from AUDIO v1.1 segments.
@@ -8935,6 +9047,14 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
     scene_candidate_windows: list[dict[str, Any]] = []
     sections: list[dict[str, Any]] = []
     phrase_endpoints: list[float] = []
+    energy_band_counts: dict[str, int] = {}
+    delivery_mode_counts: dict[str, int] = {}
+    semantic_weight_counts: dict[str, int] = {}
+    finality_count = 0
+    release_count = 0
+    stillness_count = 0
+    semantic_turn_count = 0
+    energy_delta_non_hold = 0
     for idx, seg in enumerate(segments, start=1):
         t0 = round(_to_float(seg.get("t0"), 0.0), 3)
         t1 = round(_to_float(seg.get("t1"), t0), 3)
@@ -8945,7 +9065,36 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
         rhythmic_anchor = str(seg.get("rhythmic_anchor") or "none").strip().lower() or "none"
         if rhythmic_anchor not in {"beat", "drop", "transition", "none"}:
             rhythmic_anchor = "none"
-        energy = "high" if intensity >= 0.67 else ("medium" if intensity >= 0.33 else "low")
+        inferred = _derive_audio_hint_profile(idx=idx, segments=segments, t0=t0, t1=t1, intensity=intensity, text=text)
+        energy = inferred["intensity_bucket"]
+        local_energy_band = str(seg.get("local_energy_band") or inferred["local_energy_band"]).strip().lower()
+        energy_delta = str(seg.get("energy_delta_vs_prev") or inferred["energy_delta_vs_prev"]).strip().lower()
+        delivery_mode = str(seg.get("delivery_mode") or inferred["delivery_mode"]).strip().lower()
+        semantic_weight = str(seg.get("semantic_weight") or inferred["semantic_weight"]).strip().lower()
+        semantic_turn_candidate = bool(seg.get("semantic_turn_candidate")) if seg.get("semantic_turn_candidate") is not None else bool(inferred["semantic_turn_candidate"])
+        release_candidate = bool(seg.get("release_candidate")) if seg.get("release_candidate") is not None else bool(inferred["release_candidate"])
+        finality_candidate = str(seg.get("finality_candidate") or inferred["finality_candidate"]).strip().lower()
+        visual_density_hint = str(seg.get("visual_density_hint") or inferred["visual_density_hint"]).strip().lower()
+        stillness_candidate = bool(seg.get("stillness_candidate")) if seg.get("stillness_candidate") is not None else bool(inferred["stillness_candidate"])
+        lyrical_density = str(seg.get("lyrical_density") or inferred["lyrical_density"]).strip().lower()
+        energy_band_counts[local_energy_band] = energy_band_counts.get(local_energy_band, 0) + 1
+        delivery_mode_counts[delivery_mode] = delivery_mode_counts.get(delivery_mode, 0) + 1
+        semantic_weight_counts[semantic_weight] = semantic_weight_counts.get(semantic_weight, 0) + 1
+        semantic_turn_count += 1 if semantic_turn_candidate else 0
+        release_count += 1 if release_candidate else 0
+        stillness_count += 1 if stillness_candidate else 0
+        finality_count += 1 if finality_candidate != "none" else 0
+        energy_delta_non_hold += 1 if energy_delta in {"rise", "soften", "release", "spike", "reset"} else 0
+        seg["local_energy_band"] = local_energy_band
+        seg["energy_delta_vs_prev"] = energy_delta
+        seg["delivery_mode"] = delivery_mode
+        seg["semantic_weight"] = semantic_weight
+        seg["semantic_turn_candidate"] = semantic_turn_candidate
+        seg["release_candidate"] = release_candidate
+        seg["finality_candidate"] = finality_candidate
+        seg["visual_density_hint"] = visual_density_hint
+        seg["stillness_candidate"] = stillness_candidate
+        seg["lyrical_density"] = lyrical_density
         phrase_units.append(
             {
                 "id": f"ph_{idx}",
@@ -8953,8 +9102,17 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
                 "t1": t1,
                 "duration_sec": round(max(0.0, t1 - t0), 3),
                 "text": text,
-                "word_count": len(text.split()),
-                "semantic_weight": "medium",
+                "word_count": int(inferred["word_count"]),
+                "semantic_weight": semantic_weight,
+                "delivery_mode": delivery_mode,
+                "local_energy_band": local_energy_band,
+                "energy_delta_vs_prev": energy_delta,
+                "semantic_turn_candidate": semantic_turn_candidate,
+                "release_candidate": release_candidate,
+                "finality_candidate": finality_candidate,
+                "visual_density_hint": visual_density_hint,
+                "stillness_candidate": stillness_candidate,
+                "lyrical_density": lyrical_density,
             }
         )
         scene_candidate_windows.append(
@@ -8969,9 +9127,33 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
                 "energy": energy,
                 "scene_function": rhythmic_anchor if rhythmic_anchor in {"beat", "drop", "transition"} else "bridge",
                 "no_mid_word_cut": True,
+                "local_energy_band": local_energy_band,
+                "energy_delta_vs_prev": energy_delta,
+                "delivery_mode": delivery_mode,
+                "semantic_weight": semantic_weight,
+                "semantic_turn_candidate": semantic_turn_candidate,
+                "release_candidate": release_candidate,
+                "finality_candidate": finality_candidate,
+                "visual_density_hint": visual_density_hint,
+                "stillness_candidate": stillness_candidate,
+                "lyrical_density": lyrical_density,
             }
         )
-        sections.append({"id": f"sec_{idx}", "t0": t0, "t1": t1, "label": rhythmic_anchor or "segment", "energy": energy, "mood": "neutral"})
+        mood = "tense" if delivery_mode in {"assertive", "pressurized"} else ("contemplative" if delivery_mode in {"reflective", "intimate", "suspended"} else "neutral")
+        sections.append(
+            {
+                "id": f"sec_{idx}",
+                "t0": t0,
+                "t1": t1,
+                "label": rhythmic_anchor or "segment",
+                "energy": energy,
+                "mood": mood,
+                "local_energy_band": local_energy_band,
+                "delivery_mode": delivery_mode,
+                "semantic_weight": semantic_weight,
+                "finality_candidate": finality_candidate,
+            }
+        )
         if 0.0 < t1 < duration_sec:
             phrase_endpoints.append(round(t1, 3))
 
@@ -8985,6 +9167,35 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
                 "reason": "model_guardrail",
             }
         )
+    total_segments = max(1, len(segments))
+    local_energy_variation_score = round(min(1.0, (len(energy_band_counts) * 0.22) + (energy_delta_non_hold / total_segments) * 0.5), 4)
+    contrast_summary = (
+        f"energy_bands={sorted(energy_band_counts.keys())}; "
+        f"delivery_modes={sorted(delivery_mode_counts.keys())}; "
+        f"release={release_count}/{total_segments}; stillness={stillness_count}/{total_segments}; semantic_turns={semantic_turn_count}"
+    )
+    progression_summary = (
+        f"non_hold_deltas={energy_delta_non_hold}/{total_segments}; "
+        f"finality_non_none={finality_count}; "
+        f"semantic_weight_high={semantic_weight_counts.get('high', 0)}"
+    )
+    diagnostics = _safe_dict(payload.get("diagnostics"))
+    diagnostics["audio_map_local_energy_variation_score"] = local_energy_variation_score
+    diagnostics["audio_map_delivery_mode_distribution"] = dict(sorted(delivery_mode_counts.items()))
+    diagnostics["audio_map_semantic_weight_distribution"] = {
+        "low": semantic_weight_counts.get("low", 0),
+        "medium": semantic_weight_counts.get("medium", 0),
+        "high": semantic_weight_counts.get("high", 0),
+    }
+    diagnostics["audio_map_semantic_turn_candidate_count"] = semantic_turn_count
+    diagnostics["audio_map_release_candidate_count"] = release_count
+    diagnostics["audio_map_stillness_candidate_count"] = stillness_count
+    diagnostics["audio_map_finality_candidate_count"] = finality_count
+    diagnostics["audio_map_flat_energy_warning"] = bool(len(energy_band_counts) <= 1 and energy_delta_non_hold <= 1)
+    diagnostics["audio_map_flat_delivery_warning"] = bool(len(delivery_mode_counts) <= 1)
+    diagnostics["audio_map_flat_semantic_weight_warning"] = bool(sum(1 for v in semantic_weight_counts.values() if v > 0) <= 1)
+    diagnostics["audio_map_contrast_potential_summary"] = contrast_summary
+    diagnostics["audio_map_progression_hint_summary"] = progression_summary
 
     return {
         "audio_map_version": "1.1",
@@ -8995,7 +9206,7 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
         "vocal_owner_confidence": _to_float(payload.get("vocal_owner_confidence"), 0.0),
         "duration_sec": round(duration_sec, 3),
         "analysis_mode": analysis_mode,
-        "diagnostics": _safe_dict(payload.get("diagnostics")),
+        "diagnostics": diagnostics,
         "segments": segments,
         "sections": sections,
         "phrase_endpoints_sec": sorted(set(phrase_endpoints)),

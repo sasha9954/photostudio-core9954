@@ -13,7 +13,7 @@ from app.engine.gemini_rest import post_generate_content
 
 logger = logging.getLogger(__name__)
 
-GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_map_v1_3_video_ready"
+GEMINI_SEGMENTATION_PROMPT_VERSION = "gemini_audio_map_v1_4_dramaturgic_hints"
 GEMINI_SEGMENTATION_MODEL = "gemini-3.1-pro-preview"
 _MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 
@@ -124,9 +124,9 @@ def _build_prompt(
         '  "vocal_owner_role": "character_1|character_2|character_3|unknown",\n'
         '  "vocal_owner_confidence": 0.0,\n'
         '  "phrase_units": [{"id": "ph_01", "t0": 0.0, "t1": 1.3, "duration_sec": 1.3, "transcript_slice": "string", "text": "string", "intensity": 0.0}],\n'
-        '  "segments": [{"segment_id": "string", "t0": 0.0, "t1": 4.2, "duration_sec": 4.2, "transcript_slice": "string", "intensity": 0.0, "is_lip_sync_candidate": false, "rhythmic_anchor": "beat", "first_last_candidate": false, "route_hints": {"i2v_fit": "good", "lip_sync_fit": "ok", "first_last_fit": "too_short"}}],\n'
+        '  "segments": [{"segment_id": "string", "t0": 0.0, "t1": 4.2, "duration_sec": 4.2, "transcript_slice": "string", "intensity": 0.0, "is_lip_sync_candidate": false, "rhythmic_anchor": "beat", "first_last_candidate": false, "route_hints": {"i2v_fit": "good", "lip_sync_fit": "ok", "first_last_fit": "too_short"}, "local_energy_band": "low|medium|high|surge|settle", "energy_delta_vs_prev": "rise|hold|soften|release|spike|reset", "delivery_mode": "declarative|reflective|assertive|intimate|suspended|final|observational|pressurized", "semantic_weight": "low|medium|high", "semantic_turn_candidate": false, "release_candidate": false, "finality_candidate": "none|continuation|hinge|closure|tail_hit", "visual_density_hint": "sparse|moderate|dense", "stillness_candidate": false, "lyrical_density": "low|medium|high"}],\n'
         '  "no_split_ranges": [{"start": 0.0, "end": 0.0}],\n'
-        '  "diagnostics": {"total_segments_duration": 0.0, "coverage_ok": true, "energy_peak_detected": false, "transcript_used": false, "dynamics_used": false, "validation_notes": []}\n'
+        '  "diagnostics": {"total_segments_duration": 0.0, "coverage_ok": true, "energy_peak_detected": false, "transcript_used": false, "dynamics_used": false, "validation_notes": [], "audio_map_local_energy_variation_score": 0.0, "audio_map_delivery_mode_distribution": {"declarative": 0}, "audio_map_semantic_weight_distribution": {"low": 0, "medium": 0, "high": 0}, "audio_map_semantic_turn_candidate_count": 0, "audio_map_release_candidate_count": 0, "audio_map_stillness_candidate_count": 0, "audio_map_finality_candidate_count": 0, "audio_map_flat_energy_warning": false, "audio_map_flat_delivery_warning": false, "audio_map_flat_semantic_weight_warning": false, "audio_map_contrast_potential_summary": "short text", "audio_map_progression_hint_summary": "short text"}\n'
         "}\n"
         "VIDEO-READY SEGMENTATION CANON:\n"
         "You are creating audio_map for video generation, not only phrase transcription.\n"
@@ -171,6 +171,16 @@ def _build_prompt(
         "  * first_last: minimum 4.0s; ideal 4.5-5.5s.\n"
         "- first_last_candidate may be true only when duration_sec >= 4.0.\n"
         "- route_hints is optional and for downstream hints only; values must be one of good|ok|too_short|too_long for i2v_fit/lip_sync_fit/first_last_fit.\n"
+        "- New dramaturgic hint fields are required per segment, but they are hints only (never mandatory scene functions).\n"
+        "- Do NOT output setup/reveal/pivot/peak/afterimage labels or any fixed story arc labels.\n"
+        "- local_energy_band must reflect local neighborhood modulation, not only absolute intensity.\n"
+        "- energy_delta_vs_prev describes change from previous segment.\n"
+        "- delivery_mode must reflect vocal/performance delivery character, not scene design.\n"
+        "- semantic_weight and semantic_turn_candidate are transcript/audio meaning hints only.\n"
+        "- release_candidate/stillness_candidate are opportunities for CORE, not instructions.\n"
+        "- finality_candidate must be one of none|continuation|hinge|closure|tail_hit and stay non-prescriptive.\n"
+        "- visual_density_hint reflects audiovisual pressure opportunity only.\n"
+        "- lyrical_density reflects words-per-duration / pressure; keep universal.\n"
         "- Prefer fewer stronger scenes over many tiny fragments, but avoid overlong i2v scenes without reason.\n"
         "- transcript_slice must be literal transcript evidence snippets, never placeholders.\n"
         "- no_split_ranges must not conflict with segment boundaries.\n"
