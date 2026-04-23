@@ -6771,10 +6771,28 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             plan_row_data.get("speaker_role"),
             role_row_data.get("speaker_role"),
         ).lower()
-        environment_only_cutaway = bool(route_name == "i2v" and visual_focus_role == "environment" and not speaker_role)
+        cast_roles = {"character_1", "character_2", "character_3", "group"}
+        must_appear_cast = [
+            str(role or "").strip().lower()
+            for role in must_appear
+            if str(role or "").strip().lower() in cast_roles
+        ]
+        refs_by_role_cast_present = any(_safe_list(_safe_dict(refs_by_role).get(role)) for role in ("character_1", "character_2", "character_3"))
+        explicit_cast_focus_present = bool(
+            primary_role in cast_roles
+            or hero_entity_id in {"character_1", "character_2", "character_3"}
+            or must_appear_cast
+            or refs_by_role_cast_present
+        )
+        environment_only_cutaway = bool(
+            route_name == "i2v"
+            and visual_focus_role == "environment"
+            and not speaker_role
+            and not explicit_cast_focus_present
+        )
         has_human_subject = bool(
-            any(role in {"character_1", "character_2", "character_3", "group"} for role in role_keys)
-            or primary_role in {"character_1", "character_2", "character_3", "group"}
+            any(role in cast_roles for role in role_keys)
+            or primary_role in cast_roles
             or hero_entity_id in {"character_1", "character_2", "character_3"}
             or must_appear
         ) and not environment_only_cutaway
