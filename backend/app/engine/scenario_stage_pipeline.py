@@ -5280,6 +5280,18 @@ _STORY_CORE_TECHNICAL_LANGUAGE_PATTERNS = (
     r"\bworkflow\b",
     r"\bmodel[_\s-]*id\b",
     r"\bframe[_\s-]*strategy\b",
+    r"\bdelivery(?:[_\s-]*mode)?\b",
+    r"\bvisual[_\s-]*profile\b",
+    r"\bframe[_\s-]*axis\b",
+    r"\bmeaning[_\s-]*axis\b",
+    r"\bhero_world_mode\b",
+    r"\bbeat_mode\b",
+    r"\bassociation_target\b",
+    r"\blevel[_\s-]*2[_\s-]*plus\b",
+    r"\bsecond[_\s-]*order(?:\s+as\s+label)?\b",
+    r"\b(?:validator|schema|contract|prompt|retry)\b",
+    r"\b(?:field|enum)[_\s-]*(?:like|value|label|slot)\b",
+    r"\b(?:foreground|background)\b[^\n]{0,24}\b(?:schema|contract|mode|slot|balance)\b",
 )
 _STORY_CORE_ROUTE_LEAKAGE_PATTERNS = (
     r"\b(?:segment|scene)\s*\d+[^\n]{0,40}\buses?\b[^\n]{0,24}\b(i2v|ia2v|first_last)\b",
@@ -5288,28 +5300,51 @@ _STORY_CORE_ROUTE_LEAKAGE_PATTERNS = (
 )
 _STORY_CORE_ROUTE_TOKENS = ("i2v", "ia2v", "first_last")
 
+_STORY_CORE_STRUCTURED_SEGMENT_FIELDS = {
+    "segment_id",
+    "arc_role",
+    "visual_scale",
+    "visual_density",
+    "motion_profile",
+    "hero_world_mode",
+    "beat_mode",
+    "subtext_mode",
+    "association_target",
+}
+_STORY_CORE_NARRATIVE_TOP_LEVEL_FIELDS = ("story_summary", "opening_anchor", "ending_callback_rule")
+_STORY_CORE_NARRATIVE_GLOBAL_ARC_FIELDS = ("exposition", "climax", "resolution")
+_STORY_CORE_NARRATIVE_IDENTITY_DOCTRINE_FIELDS = ("hero_anchor", "world_doctrine", "style_doctrine")
+_STORY_CORE_NARRATIVE_SEGMENT_PRIORITY_FIELDS = ("beat_purpose", "emotional_key")
+
 
 def _story_core_forbidden_zones_text(payload: dict[str, Any]) -> list[tuple[str, str]]:
-    forbidden_zones: list[tuple[str, Any]] = [
-        ("story_summary", payload.get("story_summary")),
-        ("opening_anchor", payload.get("opening_anchor")),
-        ("ending_callback_rule", payload.get("ending_callback_rule")),
-        ("global_arc", payload.get("global_arc")),
-        ("identity_doctrine", payload.get("identity_doctrine")),
-        ("narrative_segments", payload.get("narrative_segments")),
-    ]
     normalized_zones: list[tuple[str, str]] = []
-    for zone_name, zone_value in forbidden_zones:
-        if zone_value is None:
-            continue
-        if isinstance(zone_value, str):
-            zone_text = zone_value
-        else:
-            try:
-                zone_text = json.dumps(zone_value, ensure_ascii=False)
-            except Exception:
-                zone_text = str(zone_value)
-        normalized_zones.append((zone_name, zone_text.lower()))
+    for field_name in _STORY_CORE_NARRATIVE_TOP_LEVEL_FIELDS:
+        value = str(payload.get(field_name) or "").strip()
+        if value:
+            normalized_zones.append((field_name, value.lower()))
+    global_arc = _safe_dict(payload.get("global_arc"))
+    for field_name in _STORY_CORE_NARRATIVE_GLOBAL_ARC_FIELDS:
+        value = str(global_arc.get(field_name) or "").strip()
+        if value:
+            normalized_zones.append((f"global_arc.{field_name}", value.lower()))
+    identity_doctrine = _safe_dict(payload.get("identity_doctrine"))
+    for field_name in _STORY_CORE_NARRATIVE_IDENTITY_DOCTRINE_FIELDS:
+        value = str(identity_doctrine.get(field_name) or "").strip()
+        if value:
+            normalized_zones.append((f"identity_doctrine.{field_name}", value.lower()))
+    for idx, segment in enumerate(_safe_list(payload.get("narrative_segments"))):
+        row = _safe_dict(segment)
+        for field_name in _STORY_CORE_NARRATIVE_SEGMENT_PRIORITY_FIELDS:
+            value = str(row.get(field_name) or "").strip()
+            if value:
+                normalized_zones.append((f"narrative_segments[{idx}].{field_name}", value.lower()))
+        for key, raw_value in row.items():
+            key_name = str(key or "").strip()
+            if not key_name or key_name in _STORY_CORE_STRUCTURED_SEGMENT_FIELDS or key_name in _STORY_CORE_NARRATIVE_SEGMENT_PRIORITY_FIELDS:
+                continue
+            if isinstance(raw_value, str) and raw_value.strip():
+                normalized_zones.append((f"narrative_segments[{idx}].{key_name}", raw_value.strip().lower()))
     return normalized_zones
 
 
@@ -5386,18 +5421,48 @@ def _sanitize_story_core_forbidden_technical_language(payload: dict[str, Any]) -
         out = re.sub(r"\s{2,}", " ", out).strip()
         return out
 
-    def _walk(node: Any) -> Any:
-        if isinstance(node, dict):
-            return {k: _walk(v) for k, v in node.items()}
-        if isinstance(node, list):
-            return [_walk(v) for v in node]
-        if isinstance(node, str):
-            return _sanitize_text(node)
-        return node
+    def _sanitize_field(row: dict[str, Any], field_name: str) -> None:
+        if field_name not in row:
+            return
+        if isinstance(row.get(field_name), str):
+            row[field_name] = _sanitize_text(str(row.get(field_name) or ""))
 
-    for key in ("story_summary", "opening_anchor", "ending_callback_rule", "global_arc", "identity_doctrine", "narrative_segments"):
-        if key in sanitized:
-            sanitized[key] = _walk(sanitized.get(key))
+    for field_name in _STORY_CORE_NARRATIVE_TOP_LEVEL_FIELDS:
+        _sanitize_field(sanitized, field_name)
+
+    global_arc = _safe_dict(sanitized.get("global_arc"))
+    for field_name in _STORY_CORE_NARRATIVE_GLOBAL_ARC_FIELDS:
+        _sanitize_field(global_arc, field_name)
+    if global_arc:
+        sanitized["global_arc"] = global_arc
+
+    identity_doctrine = _safe_dict(sanitized.get("identity_doctrine"))
+    for field_name in _STORY_CORE_NARRATIVE_IDENTITY_DOCTRINE_FIELDS:
+        _sanitize_field(identity_doctrine, field_name)
+    if identity_doctrine:
+        sanitized["identity_doctrine"] = identity_doctrine
+
+    narrative_segments: list[dict[str, Any]] = []
+    for row in _safe_list(sanitized.get("narrative_segments")):
+        segment = _safe_dict(row)
+        if not segment:
+            narrative_segments.append(segment)
+            continue
+        for field_name in _STORY_CORE_NARRATIVE_SEGMENT_PRIORITY_FIELDS:
+            _sanitize_field(segment, field_name)
+        for key_name, raw_value in list(segment.items()):
+            field_name = str(key_name or "").strip()
+            if (
+                not field_name
+                or field_name in _STORY_CORE_STRUCTURED_SEGMENT_FIELDS
+                or field_name in _STORY_CORE_NARRATIVE_SEGMENT_PRIORITY_FIELDS
+            ):
+                continue
+            if isinstance(raw_value, str):
+                segment[field_name] = _sanitize_text(raw_value)
+        narrative_segments.append(segment)
+    if narrative_segments:
+        sanitized["narrative_segments"] = narrative_segments
     deduped_terms = sorted({term.strip() for term in removed_terms if term and term.strip()})[:32]
     changed = json.dumps(_safe_dict(payload), ensure_ascii=False, sort_keys=True) != json.dumps(sanitized, ensure_ascii=False, sort_keys=True)
     return sanitized, deduped_terms, changed
@@ -5731,12 +5796,22 @@ def _build_story_core_prompt(
         "PERFORMANCE DIVERSITY (hard): performance segments cannot differ only by emotion wording; vary structured visual profile and hero/world balance across performance beats.\n"
         "TWO-AXIS ADJACENCY CONTRACT (hard): each adjacent segment pair must change at least one frame axis (scale/intimacy OR density OR motion character) and at least one meaning axis (narrative function OR social pressure OR hero_vs_world_ratio).\n"
         "Adjacent beats must not repeat the same frame logic plus the same narrative function.\n"
+        "TWO OUTPUT LAYERS (hard):\n"
+        "LAYER A = STRUCTURED MACHINE FIELDS ONLY IN JSON (visual_scale, visual_density, motion_profile, hero_world_mode, beat_mode, subtext_mode, association_target).\n"
+        "LAYER B = HUMAN NARRATIVE TEXT (story_summary, opening_anchor, ending_callback_rule, global_arc prose, identity_doctrine prose, beat_purpose, emotional_key, optional narrative descriptions).\n"
+        "Narrative text must read like natural creative director notes, not schema labels, validator logic, metadata, system instructions, or analysis output.\n"
+        "Write narrative meaning, not field explanations. Describe what the beat feels/does in story terms, not which structured slot it belongs to.\n"
+        "Never explain the plan using metadata language.\n"
+        "FORBIDDEN VOCABULARY IN LAYER B (hard): do not mention delivery, delivery mode, structured, visual profile, frame axis, meaning axis, motion_profile, hero_world_mode, beat_mode, association_target, level_2_plus, second_order as label, validator, schema, contract, prompt, retry, or any field-like/enum-like wording.\n"
+        "Human words are allowed when natural (e.g., dense, quiet, wide, movement), but never as technical labels.\n"
         "STRUCTURED FRAME CONTRACT (hard): every narrative segment must include visual_scale(intimate|medium|wide), visual_density(sparse|moderate|dense), motion_profile(still|controlled|dynamic).\n"
         "STRUCTURED MEANING CONTRACT (hard): every narrative segment must include hero_world_mode(hero_foreground|world_foreground|balanced) and beat_mode(performance|world_observation|world_pressure|aftermath|threshold|social_texture|release|transition).\n"
         "SUBTEXT CONTRACT (hard): every narrative segment must include subtext_mode(direct|coded|second_order|aftermath_trace|witness_detail|symbolic_environment) and association_target(level_1|level_2_plus).\n"
         "At least two segments (preferably non-performance world beats) must be second-order/subtext-aware with association_target=level_2_plus.\n"
         "AUDIO_MAP DRAMATURGY CONTRACT (hard): use audio_map not only for boundaries but for contrast opportunities, stillness/hold beats, semantic turns, release windows, and finality logic.\n"
         "Do not auto-convert assertive/high windows into repeated generic threat tableaux; release/stillness windows should permit breath/aftermath/sparse echo.\n"
+        "NARRATIVE-ONLY SANITIZE SELF-CHECK BEFORE FINAL JSON (hard): scan all Layer B text fields, detect leaked technical vocabulary, and rewrite leaked fragments into natural story language while keeping Layer A structured values unchanged.\n"
+        "If you cannot rewrite a leaked technical fragment cleanly, remove only the technical fragment and keep the beat meaning coherent.\n"
         "INTERNAL SELF-CHECK BEFORE FINAL JSON: for every adjacent pair verify frame-axis change, meaning-axis change, anti-cliché depth, no unsupported identity invention, clear beat type (performance/world/observation/pressure/release/aftermath), and no stereotype vocabulary loops. Rewrite failing pairs before output.\n"
         "Output must include narrative_segments[] with EXACT 1:1 mapping to provided segment_id list and same order.\n"
         "Each narrative_segments item requires: segment_id, arc_role(setup|build|pivot|climax|release|afterglow), beat_purpose, emotional_key, visual_scale, visual_density, motion_profile, hero_world_mode, beat_mode, subtext_mode, association_target.\n"
@@ -6931,10 +7006,18 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     audio_segments=core_segments,
                     creative_config=creative_config,
                 )
+                sanitized_normalized_core, sanitize_removed_terms, sanitize_applied = _sanitize_story_core_forbidden_technical_language(
+                    normalized_core
+                )
+                if sanitize_applied:
+                    normalized_core = sanitized_normalized_core
+                    retry_removed_terms = sorted({*retry_removed_terms, *sanitize_removed_terms})[:24]
                 normalized_fingerprint = json.dumps(normalized_core, ensure_ascii=False, sort_keys=True)
                 if attempt == 0:
                     first_attempt_normalized_fingerprint = normalized_fingerprint
                 diagnostics["story_core_normalized_payload"] = normalized_core
+                diagnostics["story_core_narrative_sanitizer_applied"] = bool(sanitize_applied)
+                diagnostics["story_core_narrative_sanitizer_removed_terms"] = sanitize_removed_terms[:24]
                 technical_spawn_debug: dict[str, Any] = {}
                 present_cast_roles = _collect_present_cast_roles(
                     _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles")
