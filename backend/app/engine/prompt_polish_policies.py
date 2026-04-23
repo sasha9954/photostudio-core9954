@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 
 IA2V_READABILITY_POLICY = (
-    "Framing may range from close-up to full body if the performer still clearly reads as singing.",
+    "Framing is flexible from tight close-up to full body if performer identity, mouth readability, and emotion readability remain clear.",
     "Start image must show mouth open or slightly open in a natural singing shape with readable emotion.",
     "Face and mouth remain visually readable; avoid occlusion from hands, hair, props, or profile-only turns.",
-    "Background may be rich and story-relevant, but video prompt focus stays on vocal performance mechanics.",
+    "Background may be rich and story-relevant, but video prompt focus stays on emotionally active vocal performance with smooth controlled body-led motion.",
+    "Avoid frozen mannequin posture; allow restrained expressive movement in shoulders, torso, head, neck, and breath tension.",
 )
 
 _IA2V_FOCUS_TOKENS = (
@@ -32,10 +33,11 @@ _IA2V_FOCUS_TOKENS = (
 )
 
 _IA2V_POLICY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (IA2V_READABILITY_POLICY[0], ("framing", "full body", "singing")),
+    (IA2V_READABILITY_POLICY[0], ("framing", "full body", "tight close-up", "singing")),
     (IA2V_READABILITY_POLICY[1], ("mouth", "open", "singing shape", "emotion")),
     (IA2V_READABILITY_POLICY[2], ("face", "mouth", "occlusion", "hands", "hair", "props")),
-    (IA2V_READABILITY_POLICY[3], ("background", "story-relevant", "vocal performance")),
+    (IA2V_READABILITY_POLICY[3], ("background", "story-relevant", "vocal performance", "emotion")),
+    (IA2V_READABILITY_POLICY[4], ("frozen", "mannequin", "shoulders", "torso", "breath")),
 )
 
 NEGATIVE_PROMPT_ARTIFACT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
