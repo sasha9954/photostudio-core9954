@@ -107,13 +107,19 @@ WORLD_CAST_COHERENCE_CLAUSE = (
     "Background figures should match the established world's social role and atmosphere, reading as tense local presence, watchful groups, intimidating entourage, socially charged bystanders, or guarded street presence when tone is dangerous/criminal, not labor-only documentary workers unless explicitly required by the scene."
 )
 WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE = (
-    "Prefer socially legible human presence and lived-in contemporary world texture over empty background spaces, unless the scene explicitly calls for isolation or emptiness."
+    "For environment/cutaway/world-detail scenes, allow only incidental distant background pedestrians when ambient life is contextually needed; keep any human presence subtle, far-secondary, and non-dominant."
 )
 WORLD_DETAIL_CITY_IDENTITY_CLAUSE = (
-    "For world-detail/cutaway city atmosphere, prioritize active public space, populated street texture, social movement, and recognizable contemporary urban identity over generic warehouse/industrial wallpaper."
+    "Do not introduce a centered solitary man/woman by default in cutaways; preserve recognizable city/location identity through environment detail, atmosphere, and spatial behavior instead of foreground lead humans."
 )
 WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE = (
-    "For environment/cutaway/world-detail scenes, prioritize socially readable urban life, contemporary populated city texture, and meaningful human presence; use labor/cargo/manual handling only when explicitly implied by the scene text."
+    "Environment/cutaway subject hierarchy: no dominant foreground human subject by default; humans, if present, must remain incidental, distant, and non-dominant."
+)
+WORLD_DETAIL_EMPTY_AFTERMATH_CLAUSE = (
+    "If the scene implies emptiness/aftermath/lingering quiet/deserted mood or no main performer visible, prioritize near-empty space over populated urban life."
+)
+ENVIRONMENT_CUTAWAY_COMPACT_CONTINUITY_CLAUSE = (
+    "Compact continuity: keep same world family, weather/season/time continuity, and clear separation from adjacent shots without performer-identity boilerplate."
 )
 ADJACENT_SCENE_DIFFERENTIATION_CLAUSE = (
     "Adjacent scene separation is mandatory: change at least primary subject presence, composition, zone, human density, and visual function so world-detail cutaways do not look like near-duplicate base plates of performer shots."
@@ -145,6 +151,19 @@ _ACTION_CONFLICT_WORDS = (
     "glass",
     "bag",
     "suitcase",
+)
+_ENVIRONMENT_EMPTY_OVERRIDE_TOKENS = (
+    "aftermath",
+    "empty",
+    "emptiness",
+    "lingering quiet",
+    "quiet lingering",
+    "deserted",
+    "abandoned",
+    "no main performer visible",
+    "no performer visible",
+    "near-empty",
+    "near empty",
 )
 _IA2V_NEGATIVE_KILLER_TOKEN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("mouth-syncing", re.compile(r"\bmouth[- ]syncing\b", re.IGNORECASE)),
@@ -563,6 +582,34 @@ def _is_bad_prompt_cleanup(text: str) -> bool:
 def _contains_action_conflict_words(text: str) -> bool:
     lowered = str(text or "").lower()
     return any(word in lowered for word in _ACTION_CONFLICT_WORDS)
+
+
+def _scene_prefers_emptiness(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in _ENVIRONMENT_EMPTY_OVERRIDE_TOKENS)
+
+
+def _strip_environment_cutaway_performer_language(text: str) -> str:
+    cleaned = str(text or "")
+    patterns = (
+        r"(?is)\bGLOBAL HERO IDENTITY LOCK:.*?(?=(?:\.\s|$))",
+        r"(?is)\bBODY CONTINUITY:.*?(?=(?:\.\s|$))",
+        r"(?is)\bWARDROBE CONTINUITY:.*?(?=(?:\.\s|$))",
+        r"(?is)\bUse the confirmed hero look reference[^.]*\.?",
+        r"(?is)\bHard continuity lock for continuing hero performance[^.]*\.?",
+        r"(?is)\bHard continuity lock for same-hero continuation[^.]*\.?",
+        r"(?is)\bIdentity source priority:[^.]*\.?",
+        r"(?is)\bPerformer-first composition is required[^.]*\.?",
+        r"(?is)\bwithout changing hero identity\b",
+        r"(?is)\bvocalist\b",
+        r"(?is)\bsinger\b",
+    )
+    for pattern in patterns:
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return cleaned
 
 
 def _resolve_lipsync_gesture_intensity(segment: dict[str, Any], scene_plan_row: dict[str, Any], audio_segment: dict[str, Any]) -> str:
@@ -1253,6 +1300,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         fallback_photo_prompt = _append_clause(fallback_photo_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
+    cutaway_prefers_emptiness = bool(environment_cutaway_i2v and _scene_prefers_emptiness(lower_scene_semantics))
     explicit_labor_tokens = (
         "labor documentary",
         "documentary labor",
@@ -1265,10 +1313,29 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     )
     danger_social_tone_tokens = ("underworld", "criminal", "crime", "gang", "smuggling", "dangerous", "threat", "tense")
     if environment_cutaway_i2v:
+        cutaway_scene_purpose = str(
+            fallback_prompt_row.get("ltx_video_goal")
+            or plan_row.get("scene_goal")
+            or fallback_video_prompt
+            or fallback_photo_prompt
+            or "environment continuity cutaway"
+        ).strip()
+        cutaway_camera_move = _select_i2v_camera_life_clause(
+            scene_seq_index=scene_seq_index,
+            scene_specific_blob=lower_scene_semantics,
+        )
+        positive_prompt = (
+            f"Environment/world-detail cutaway purpose: {cutaway_scene_purpose}. "
+            f"Camera move: {cutaway_camera_move}. "
+            "No main performer visible and no dominant foreground human subject."
+        )
+        positive_prompt = _strip_environment_cutaway_performer_language(positive_prompt)
         positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_SUBJECT_HIERARCHY_CLAUSE)
         positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
         positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_CITY_IDENTITY_CLAUSE)
-        positive_prompt = _append_clause(positive_prompt, ADJACENT_SCENE_DIFFERENTIATION_CLAUSE)
+        if cutaway_prefers_emptiness:
+            positive_prompt = _append_clause(positive_prompt, WORLD_DETAIL_EMPTY_AFTERMATH_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, ENVIRONMENT_CUTAWAY_COMPACT_CONTINUITY_CLAUSE)
     if any(token in lower_scene_semantics for token in danger_social_tone_tokens) and not any(
         token in lower_scene_semantics for token in explicit_labor_tokens
     ):
@@ -1368,16 +1435,18 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         scene_specific_blob = " ".join(scene_specific_parts + [str(plan_row.get("camera_plan") or ""), str(plan_row.get("camera_intent") or "")]).lower()
         route_behavior_template = CONTROLLED_MOTION_SAFETY_BLOCK
         positive_prompt = _append_clause(positive_prompt, route_behavior_template)
-        positive_prompt = _append_clause(positive_prompt, _select_i2v_camera_life_clause(scene_seq_index=scene_seq_index, scene_specific_blob=scene_specific_blob))
+        if not environment_cutaway_i2v:
+            positive_prompt = _append_clause(positive_prompt, _select_i2v_camera_life_clause(scene_seq_index=scene_seq_index, scene_specific_blob=scene_specific_blob))
         positive_prompt = _append_clause(
             positive_prompt,
             "Use smooth restrained cinematic camera life with subtle parallax, environmental motion, and depth cues to avoid frozen slideshow feeling; keep motion LTX-safe with no fast spin, no whip movement, and no chaotic handheld.",
         )
-        positive_prompt = _append_clause(
-            positive_prompt,
-            "If this is an environment/world-detail cutaway, keep no main performer visible or non-dominant peripheral presence only.",
-        )
-        if same_hero_continuation_scene:
+        if not environment_cutaway_i2v:
+            positive_prompt = _append_clause(
+                positive_prompt,
+                "If this is an environment/world-detail cutaway, keep no main performer visible or non-dominant peripheral presence only.",
+            )
+        if same_hero_continuation_scene and not environment_cutaway_i2v:
             positive_prompt = _append_clause(positive_prompt, HERO_REF_PRIORITY_CLAUSE)
             positive_prompt = _append_clause(positive_prompt, HERO_CONTINUATION_LOCK_CLAUSE)
         if domestic_scene:
@@ -1393,8 +1462,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             "Performer-first composition is required: main performer visible and dominant; do not convert this shot into an empty environment plate.",
         )
     positive_prompt = _append_clause(positive_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
-    positive_prompt = _append_clause(positive_prompt, GLOBAL_CONTINUITY_LOCK_CLAUSE)
+    if not environment_cutaway_i2v:
+        positive_prompt = _append_clause(positive_prompt, GLOBAL_CONTINUITY_LOCK_CLAUSE)
+    else:
+        positive_prompt = _append_clause(positive_prompt, ENVIRONMENT_CUTAWAY_COMPACT_CONTINUITY_CLAUSE)
     positive_prompt = _append_clause(positive_prompt, ANTI_DUPLICATE_ADJACENT_CLAUSE)
+    if environment_cutaway_i2v:
+        positive_prompt = _strip_environment_cutaway_performer_language(positive_prompt)
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
         negative_prompt=negative_prompt,
