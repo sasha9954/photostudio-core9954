@@ -17336,14 +17336,12 @@ Aspect ratio: ${imageFormat}`,
           targetScene?.speaker_role
           || targetScene?.speakerRole
           || scenarioContractPayloadForPayload?.speaker_role
-          || scenarioContractPayloadForPayload?.vocal_owner_role
           || ""
         ).trim(),
         vocal_owner_role: String(
           targetScene?.vocal_owner_role
           || targetScene?.vocalOwnerRole
           || scenarioContractPayloadForPayload?.vocal_owner_role
-          || scenarioContractPayloadForPayload?.speaker_role
           || ""
         ).trim(),
         sceneActiveRoles: Array.isArray(targetScene?.sceneActiveRoles)
@@ -17358,9 +17356,24 @@ Aspect ratio: ${imageFormat}`,
         heroEntityId: String(targetScene?.heroEntityId || scenarioContractPayloadForPayload?.heroEntityId || "").trim(),
       };
       if (lipSyncRoute) {
-        roleFieldsFromScene.speaker_role = roleFieldsFromScene.speaker_role || "character_1";
-        roleFieldsFromScene.vocal_owner_role = roleFieldsFromScene.vocal_owner_role || "character_1";
         roleFieldsFromScene.heroEntityId = roleFieldsFromScene.heroEntityId || "character_1";
+        const speakerRole = String(roleFieldsFromScene.speaker_role || "").trim();
+        const vocalOwnerRole = String(roleFieldsFromScene.vocal_owner_role || "").trim();
+        const isSuspiciousRole = (roleValue) => roleValue && !/^character_[1-3]$/i.test(roleValue);
+        if (!speakerRole || !vocalOwnerRole || isSuspiciousRole(speakerRole) || isSuspiciousRole(vocalOwnerRole)) {
+          console.warn("[SCENARIO LIPSYNC ROLE CONTRACT] missing_or_suspicious_roles_for_lipsync_route", {
+            sceneId,
+            workflowKey: String(effectiveWorkflowKey || ""),
+            speaker_role: speakerRole,
+            vocal_owner_role: vocalOwnerRole,
+            source: {
+              sceneSpeaker: String(targetScene?.speaker_role || targetScene?.speakerRole || "").trim(),
+              sceneVocalOwner: String(targetScene?.vocal_owner_role || targetScene?.vocalOwnerRole || "").trim(),
+              contractSpeaker: String(scenarioContractPayloadForPayload?.speaker_role || "").trim(),
+              contractVocalOwner: String(scenarioContractPayloadForPayload?.vocal_owner_role || "").trim(),
+            },
+          });
+        }
       }
       const videoStartPayload = {
         ...scenarioContractPayloadSanitized,
