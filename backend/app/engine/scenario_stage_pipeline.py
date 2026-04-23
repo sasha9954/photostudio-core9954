@@ -1104,7 +1104,7 @@ def _apply_visual_ref_identity_lock_to_story_core(
     rule = _visual_ref_identity_rule(role)
     if apply_hero_anchor_lock:
         identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
-        existing_hero_anchor = str(identity_doctrine.get("hero_anchor") or "").strip()
+        existing_hero_anchor = _ref_safe_identity_text(str(identity_doctrine.get("hero_anchor") or "").strip(), role)
         hero_anchor_suffix = _append_visual_ref_auxiliary_note(existing_hero_anchor, role)
         identity_doctrine["hero_anchor"] = f"{rule} {hero_anchor_suffix}".strip() if hero_anchor_suffix else rule
         story_core["identity_doctrine"] = identity_doctrine
@@ -3383,6 +3383,53 @@ def _build_world_model_normalized(
     return f"type:{content_type}; setting:{setting[:64]}; mood:{mood[:64]}; premise:{compact_premise}; guard:no {drift_guard}"
 
 
+def _legacy_story_function_from_canonical(segment: dict[str, Any], default: str) -> str:
+    arc_role = str(segment.get("arc_role") or "").strip().lower()
+    beat_mode = str(segment.get("beat_mode") or "").strip().lower()
+    if arc_role == "setup":
+        return "opening_anchor"
+    if arc_role == "build":
+        return "narrative_development" if beat_mode in {"social_texture", "world_observation", "world_pressure"} else "build_progression"
+    if arc_role == "pivot":
+        return "transition_turn"
+    if arc_role == "climax":
+        return "climax_pressure"
+    if arc_role in {"release", "afterglow"}:
+        return "afterimage_release" if beat_mode in {"aftermath", "release"} else "build_progression"
+    return default
+
+
+def _subject_presence_for_canonical_beat(*, beat_mode: str, hero_world_mode: str, lip_sync_only: bool, default: str) -> tuple[str, str]:
+    world_modes = {"social_texture", "world_pressure", "threshold", "aftermath", "world_observation", "release", "transition"}
+    if beat_mode == "performance":
+        return "character_1", "primary_subject_visible_for_performance_beat"
+    world_first = hero_world_mode == "world_foreground" or beat_mode in world_modes
+    if world_first and lip_sync_only:
+        return "world", "world_or_context_primary_hero_may_be_offscreen"
+    if world_first:
+        return "world", "context_driven_visibility_hero_optional"
+    return default, "primary_subject_visible_unless_explicit_handoff"
+
+
+def _ref_safe_identity_text(text: str, role: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return _visual_ref_identity_rule(role)
+    banned_patterns = (
+        r"\bflat\s*cap\b",
+        r"\btrack\s*jacket\b",
+        r"\bsunglasses?\b",
+        r"\bbaseball\s*cap\b",
+        r"\btattoo(?:s)?\b",
+        r"\bbeard(?:ed)?\b",
+        r"\bmustache\b",
+    )
+    lowered = raw.lower()
+    if any(re.search(pattern, lowered) for pattern in banned_patterns):
+        return _visual_ref_identity_rule(role)
+    return raw
+
+
 def _build_story_core_v11(
     *,
     input_pkg: dict[str, Any],
@@ -3398,6 +3445,11 @@ def _build_story_core_v11(
     content_format = str(input_pkg.get("format") or input_pkg.get("content_format") or "").strip() or "short_form_video"
     ownership_binding_inventory = [row for row in _safe_list(input_pkg.get("ownership_binding_inventory")) if isinstance(row, dict)]
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    role_identity_mapping = _safe_dict(connected_summary.get("role_identity_mapping"))
+    character_1_identity = _safe_dict(role_identity_mapping.get("character_1"))
+    character_1_appearance_mode = str(character_1_identity.get("appearanceMode") or character_1_identity.get("appearance_mode") or "").strip().lower()
+    character_1_presence_mode = str(character_1_identity.get("screenPresenceMode") or character_1_identity.get("screen_presence_mode") or "").strip().lower()
+    character_1_lip_sync_only = character_1_appearance_mode == "lip_sync_only" or character_1_presence_mode == "lip_sync_only"
     core_segments, core_source = _coerce_core_audio_segments(audio_map)
     total_slots = len(core_segments)
 
@@ -3484,6 +3536,7 @@ def _build_story_core_v11(
     style_rule = _first_text(_safe_dict(parsed_story_core.get("style_lock")).get("rule"), _safe_dict(fallback_story_core.get("style_lock")).get("rule"))
     note_text = " ".join([text_bundle.get("note", ""), text_bundle.get("director_note", "")]).strip()
     forbidden_drift = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
+    parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
 
     beats: list[dict[str, Any]] = []
     slot_groups: list[dict[str, Any]] = []
@@ -3510,12 +3563,33 @@ def _build_story_core_v11(
             }
         }
         fn = _domestic_argument_story_function(idx, total_slots) if domestic_argument_duet else _slot_story_function(slot, idx, total_slots)
+        canonical_row = {}
+        if parsed_narrative_segments:
+            canonical_row = _safe_dict(
+                next(
+                    (row for row in parsed_narrative_segments if str(row.get("segment_id") or "").strip() == slot_id),
+                    {},
+                )
+            )
+            fn = _legacy_story_function_from_canonical(canonical_row, fn)
         phrase_key = re.sub(r"\s+", " ", phrase.lower()).strip()
         energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
         vocal = _to_float(_safe_dict(slot.get("audio_features")).get("vocal_ratio"), 0.4)
-        semantic_density = "high" if (vocal >= 0.55 or len(phrase.split()) >= 8) else ("low" if not phrase else "medium")
+        beat_mode = str(canonical_row.get("beat_mode") or "").strip().lower()
+        hero_world_mode = str(canonical_row.get("hero_world_mode") or "").strip().lower()
+        if beat_mode in {"world_pressure", "threshold", "social_texture"}:
+            semantic_density = "high"
+        elif beat_mode in {"aftermath", "release"}:
+            semantic_density = "low"
+        else:
+            semantic_density = "high" if (vocal >= 0.55 or len(phrase.split()) >= 8) else ("low" if not phrase else "medium")
         narrative_load_score = (energy * mode_weight["audio"]) + (0.3 if fn in {"transition_turn", "climax_pressure"} else 0.0)
-        narrative_load = "high" if narrative_load_score >= 0.9 else ("medium" if narrative_load_score >= 0.6 else "low")
+        if beat_mode in {"performance", "world_pressure", "threshold"}:
+            narrative_load = "high" if narrative_load_score >= 0.65 else "medium"
+        elif beat_mode in {"aftermath", "release"}:
+            narrative_load = "low" if narrative_load_score <= 0.85 else "medium"
+        else:
+            narrative_load = "high" if narrative_load_score >= 0.9 else ("medium" if narrative_load_score >= 0.6 else "low")
         object_presence_required = bool(continuity_objects) and (
             fn in {"transition_turn", "climax_pressure"} or (has_persistent_objects and narrative_load in {"high", "medium"})
         )
@@ -3525,6 +3599,12 @@ def _build_story_core_v11(
             beat_primary_subject = "character_1" if idx % 2 == 0 else "character_2"
         else:
             beat_primary_subject = primary_subject if not (primary_shift_allowed and secondary_subjects) else secondary_subjects[0]
+            beat_primary_subject, presence_requirement = _subject_presence_for_canonical_beat(
+                beat_mode=beat_mode,
+                hero_world_mode=hero_world_mode,
+                lip_sync_only=character_1_lip_sync_only,
+                default=beat_primary_subject,
+            )
 
         if not current_group:
             current_group = [slot_id]
@@ -3542,8 +3622,13 @@ def _build_story_core_v11(
 
         if domestic_argument_duet:
             beat_secondary = ["character_2"] if beat_primary_subject == "character_1" else ["character_1"]
+            subject_presence_requirement = "both_conflict_participants_visible_or_implied_nearby"
         else:
-            beat_secondary = secondary_subjects[:2] if idx % 2 == 0 else secondary_subjects[1:3] or secondary_subjects[:1]
+            if beat_primary_subject == "world":
+                beat_secondary = []
+            else:
+                beat_secondary = secondary_subjects[:2] if idx % 2 == 0 else secondary_subjects[1:3] or secondary_subjects[:1]
+            subject_presence_requirement = presence_requirement
         beats.append(
             {
                 "beat_id": f"beat_{idx + 1}",
@@ -3554,15 +3639,11 @@ def _build_story_core_v11(
                 "beat_secondary_subjects": beat_secondary,
                 "semantic_density": semantic_density,
                 "narrative_load": narrative_load,
-                "subject_presence_requirement": (
-                    "both_conflict_participants_visible_or_implied_nearby"
-                    if domestic_argument_duet
-                    else "primary_subject_visible_unless_explicit_handoff"
-                ),
+                "subject_presence_requirement": subject_presence_requirement,
                 "continuity_visibility_requirement": "object_anchor_required" if object_presence_required else "world_anchor_or_subject_callback",
                 "beat_focus_hint": phrase[:180] or fn,
                 "source_segment_id": slot_id,
-                "group_reason": f"{fn}|density:{semantic_density}|continuity:{continuity_pressure}",
+                "group_reason": f"{fn}|mode:{beat_mode or 'heuristic'}|density:{semantic_density}|continuity:{continuity_pressure}",
             }
         )
         previous_phrase = phrase_key
@@ -3715,11 +3796,21 @@ def _build_story_core_v11(
         and not (has_interaction_duet_signal or has_conflict_visibility_signal or domestic_argument_duet)
         and any(token in support_signal_text for token in support_presence_tokens)
     )
+    has_world_context_beats = any(
+        str(item.get("beat_primary_subject") or "") == "world"
+        or "hero_may_be_offscreen" in str(item.get("subject_presence_requirement") or "")
+        for item in beats
+    )
     if has_interaction_duet_signal or has_conflict_visibility_signal or duet_presence_rule != "not_applicable":
         visibility_mode = "two_active_participants"
         must_be_visible = ["character_1", "character_2"]
         may_be_offscreen: list[str] = []
         contract_presence_requirement = "both_active_participants_visible_or_implied_nearby"
+    elif character_1_lip_sync_only and has_world_context_beats:
+        visibility_mode = "performance_world_split"
+        must_be_visible = []
+        may_be_offscreen = list(dict.fromkeys(["character_1", *secondary_subjects[:3]]))
+        contract_presence_requirement = "performance_beats_require_singer_world_beats_allow_offscreen_hero"
     elif len(active_subjects) >= 3:
         visibility_mode = "ensemble"
         must_be_visible = list(dict.fromkeys([primary_subject, *active_subjects[1:3]]))
@@ -3736,7 +3827,6 @@ def _build_story_core_v11(
         may_be_offscreen = ["character_2"] if "character_2" in secondary_subjects else secondary_subjects[:3]
         contract_presence_requirement = "primary_subject_visible_unless_explicit_handoff"
 
-    parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
     if parsed_narrative_segments:
         narrative_segments = [
             {
@@ -3786,6 +3876,15 @@ def _build_story_core_v11(
             for idx, item in enumerate(beats)
         ]
 
+    canonical_arc_segments = (
+        [
+            _legacy_story_function_from_canonical(_safe_dict(row), "build_progression")
+            for row in parsed_narrative_segments
+            if str(_safe_dict(row).get("segment_id") or "").strip()
+        ]
+        if parsed_narrative_segments
+        else [item.get("story_function") for item in beats[:8]]
+    )
     story_core_v1 = {
         "schema_version": "core_v1.1",
         "director_mode": director_mode,
@@ -3812,7 +3911,7 @@ def _build_story_core_v11(
         "semantic_arc": {
             "global_intent": str(parsed_story_core.get("story_summary") or fallback_story_core.get("story_summary") or ""),
             "opening_statement": opening_anchor,
-            "arc_segments": [item.get("story_function") for item in beats[:8]],
+            "arc_segments": canonical_arc_segments[:8],
             "turn_points": [item["beat_id"] for item in beats if item.get("story_function") in {"transition_turn", "climax_pressure"}][:4],
             "climax_definition": "max narrative pressure synchronized with high-energy audio slot(s)",
             "ending_resolution": ending_callback_rule,
@@ -3829,7 +3928,7 @@ def _build_story_core_v11(
             "story_function": {item["beat_id"]: item["story_function"] for item in beats},
             "semantic_density": {item["beat_id"]: item["semantic_density"] for item in beats},
             "narrative_load": {item["beat_id"]: item["narrative_load"] for item in beats},
-            "subject_presence_requirement": "every_beat_requires_subject_visibility_per_priority_rules",
+            "subject_presence_requirement": "derive_per_beat_from_canonical_beat_mode_and_hero_world_mode",
             "continuity_visibility_requirement": "every_beat_requires_world_or_object_continuity_marker",
             "beat_focus_hint": {item["beat_id"]: item["beat_focus_hint"] for item in beats},
         },
@@ -3876,7 +3975,10 @@ def _build_story_core_v11(
             "may_be_offscreen": may_be_offscreen,
             "continuity_priority": ["subject_identity", "object_binding", "world_anchor"],
             "world_prompt_constraints": world_definition.get("world_continuity_rules", []),
-            "identity_prompt_constraints": _safe_list(parsed_story_core.get("identity_lock")) or [_first_text(_safe_dict(parsed_story_core.get("identity_lock")).get("rule"), _safe_dict(fallback_story_core.get("identity_lock")).get("rule"))],
+            "identity_prompt_constraints": [
+                _visual_ref_identity_rule(primary_subject),
+                "Text identity descriptions are auxiliary only and must not override connected visual references.",
+            ],
             "object_prompt_constraints": ["respect_ownership_role_mapping", "do_not_drop_persistent_objects_without_transition_event"],
             "forbidden_insertions": ["unreferenced_main_character", "ungrounded_magic_object", "unauthorized_world_reset"],
             "forbidden_style_drift": forbidden_drift,
@@ -5735,7 +5837,10 @@ def _normalize_story_core_contract_payload(
             "resolution": str(_safe_dict(parsed.get("global_arc")).get("resolution") or "").strip(),
         },
         "identity_doctrine": {
-            "hero_anchor": str(_safe_dict(parsed.get("identity_doctrine")).get("hero_anchor") or "").strip(),
+            "hero_anchor": _ref_safe_identity_text(
+                str(_safe_dict(parsed.get("identity_doctrine")).get("hero_anchor") or "").strip(),
+                "character_1",
+            ),
             "world_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("world_doctrine") or "").strip(),
             "style_doctrine": str(_safe_dict(parsed.get("identity_doctrine")).get("style_doctrine") or "").strip(),
         },
