@@ -55,6 +55,7 @@ CORE_ROLE_SPAWNING = "CORE_ROLE_SPAWNING"
 CORE_TECHNICAL_SPAWNING = "CORE_TECHNICAL_SPAWNING"
 CORE_IDENTITY_CONFLICT = "CORE_IDENTITY_CONFLICT"
 CORE_ROLE_BINDING_CONTRADICTION = "CORE_ROLE_BINDING_CONTRADICTION"
+CORE_QUALITY_GATES_FAILED = "CORE_QUALITY_GATES_FAILED"
 _FEMALE_CODED_TERMS = ("woman", "women", "female", "feminine", "girl", "lady", "her", "she", "heroine")
 _MALE_CODED_TERMS = ("man", "men", "male", "masculine", "boy", "gentleman", "his", "he", "hero")
 
@@ -4445,8 +4446,250 @@ def _build_core_validation_feedback(code: str, errors: list[str]) -> str:
             "character_2 is explicitly male/парень. "
             "Do not describe character_2 as girl/woman/female/девушка/женщина."
         )[:1400]
+    if code == CORE_QUALITY_GATES_FAILED:
+        details = "; ".join([str(item) for item in errors[:8]])
+        return (
+            "CORE_QUALITY_GATES_FAILED: improve semantic progression without changing identity/world/style locks, refs, genre, "
+            "or established season/weather continuity. Increase adjacent frame+meaning contrast, rebalance hero/world dominance, "
+            "avoid long literal fallback streaks, and restore breathing rhythm only when overload appears. "
+            f"Gate details: {details}"
+        )[:1400]
     details = "; ".join([str(item) for item in errors[:6]])
     return f"{code}: {details}"[:1400]
+
+
+def _story_core_pressure_mode(row: dict[str, Any]) -> str:
+    arc_role = str(row.get("arc_role") or "").strip().lower()
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    if arc_role == "climax" or any(token in text for token in ("panic", "rage", "chase", "impact", "crash", "violent", "urgent", "overload")):
+        return "high"
+    if arc_role in {"release", "afterglow"} or any(token in text for token in ("calm", "silence", "exhale", "quiet", "still", "gentle", "soft")):
+        return "low"
+    return "medium"
+
+
+def _story_core_emotional_mode(row: dict[str, Any]) -> str:
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    if any(token in text for token in ("fear", "threat", "danger", "panic", "pressure", "anxious")):
+        return "threat"
+    if any(token in text for token in ("desire", "love", "intimate", "tender", "warmth", "longing")):
+        return "intimate"
+    if any(token in text for token in ("reflect", "memory", "regret", "echo", "distance", "hollow")):
+        return "reflective"
+    return "driving"
+
+
+def _infer_story_core_dominance(row: dict[str, Any]) -> str:
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    hero_score = sum(1 for token in ("hero", "decision", "assert", "lead", "choose", "command", "push") if token in text)
+    world_score = sum(1 for token in ("crowd", "city", "weather", "system", "pressure", "response", "environment", "world") if token in text)
+    if hero_score > world_score:
+        return "hero_first"
+    if world_score > hero_score:
+        return "world_first"
+    return "balanced"
+
+
+def _infer_association_level(row: dict[str, Any]) -> int:
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    literal_patterns = (
+        "danger dark alley",
+        "dark alley bad guys",
+        "port workers containers",
+        "lonely person alone room",
+        "crime men shadows",
+    )
+    if any(pattern in text for pattern in literal_patterns):
+        return 0
+    if any(token in text for token in ("metaphor", "subtext", "echo", "negative space", "indirect", "symbol", "counterpoint")):
+        return 2
+    return 1
+
+
+def _infer_frame_axes(row: dict[str, Any]) -> dict[str, str]:
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    scale = "intimate" if any(token in text for token in ("intimate", "close", "private", "whisper")) else "wide"
+    density = "high" if any(token in text for token in ("crowd", "dense", "chaos", "packed", "flood")) else "low"
+    motion = "dynamic" if any(token in text for token in ("run", "rush", "chase", "impact", "surge", "spin")) else "still"
+    return {"scale": scale, "density": density, "motion": motion}
+
+
+def _infer_meaning_axes(row: dict[str, Any]) -> dict[str, str]:
+    text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
+    social_pressure = "high" if any(token in text for token in ("judged", "crowd", "threat", "conflict", "pressure", "constraint")) else "low"
+    hero_world_ratio = _infer_story_core_dominance(row)
+    return {
+        "narrative_function": str(row.get("arc_role") or "").strip().lower(),
+        "social_pressure": social_pressure,
+        "hero_vs_world_ratio": hero_world_ratio,
+    }
+
+
+def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]]) -> tuple[list[str], dict[str, Any]]:
+    diagnostics: dict[str, Any] = {
+        "story_core_entropy_threshold_triggered": False,
+        "story_core_flatline_span_start": "",
+        "story_core_flatline_span_end": "",
+        "story_core_flatline_reason": "",
+        "story_core_flatline_repeated_story_functions": [],
+        "story_core_flatline_repeated_pressure_mode": "",
+        "story_core_flatline_retry_used": False,
+        "story_core_two_axis_validation_passed": True,
+        "story_core_axis_change_frame": [],
+        "story_core_axis_change_meaning": [],
+        "story_core_duplicate_adjacent_pairs": [],
+        "story_core_semantic_duplicate_pairs": [],
+        "story_core_hero_world_balance_score": 1.0,
+        "story_core_hero_first_streak": 0,
+        "story_core_world_first_streak": 0,
+        "story_core_reactive_world_rule_passed": True,
+        "story_core_reactive_world_retry_used": False,
+        "story_core_association_level_summary": {"level_0": 0, "level_1": 0, "level_2_plus": 0},
+        "story_core_literal_fallback_count": 0,
+        "story_core_literal_fallback_segments": [],
+        "story_core_second_degree_segments": [],
+        "story_core_anti_literal_retry_used": False,
+        "story_core_visual_breath_triggered": False,
+        "story_core_visual_breath_reason": "",
+        "story_core_visual_breath_inserted_in_logic": False,
+        "story_core_contrast_event_required": False,
+        "story_core_contrast_event_present": False,
+    }
+    causes: list[str] = []
+    if len(narrative_segments) < 2:
+        return causes, diagnostics
+
+    vectors: list[dict[str, Any]] = []
+    for row in narrative_segments:
+        vectors.append(
+            {
+                "segment_id": str(row.get("segment_id") or "").strip(),
+                "story_function": str(row.get("arc_role") or "").strip().lower(),
+                "pressure_mode": _story_core_pressure_mode(row),
+                "emotional_mode": _story_core_emotional_mode(row),
+                "frame_axes": _infer_frame_axes(row),
+                "meaning_axes": _infer_meaning_axes(row),
+                "dominance": _infer_story_core_dominance(row),
+                "association_level": _infer_association_level(row),
+            }
+        )
+
+    for idx in range(2, len(vectors)):
+        chunk = vectors[idx - 2 : idx + 1]
+        same_pressure = len({row["pressure_mode"] for row in chunk}) == 1
+        same_story = len({row["story_function"] for row in chunk}) == 1
+        same_emotion = len({row["emotional_mode"] for row in chunk}) == 1
+        if same_pressure and (same_story or same_emotion):
+            diagnostics["story_core_entropy_threshold_triggered"] = True
+            diagnostics["story_core_flatline_span_start"] = chunk[0]["segment_id"]
+            diagnostics["story_core_flatline_span_end"] = chunk[-1]["segment_id"]
+            diagnostics["story_core_flatline_reason"] = "three_adjacent_segments_have_near_identical_dramatic_vector"
+            diagnostics["story_core_flatline_repeated_story_functions"] = sorted({row["story_function"] for row in chunk})
+            diagnostics["story_core_flatline_repeated_pressure_mode"] = chunk[0]["pressure_mode"]
+            diagnostics["story_core_flatline_retry_used"] = True
+            causes.append("entropy_flatline_detected")
+            break
+
+    for idx in range(1, len(vectors)):
+        left = vectors[idx - 1]
+        right = vectors[idx]
+        pair_label = f"{left['segment_id']}->{right['segment_id']}"
+        frame_changed_axes = [axis for axis in ("scale", "density", "motion") if left["frame_axes"][axis] != right["frame_axes"][axis]]
+        meaning_changed_axes = [
+            axis
+            for axis in ("narrative_function", "social_pressure", "hero_vs_world_ratio")
+            if left["meaning_axes"][axis] != right["meaning_axes"][axis]
+        ]
+        diagnostics["story_core_axis_change_frame"].append({"pair": pair_label, "axes": frame_changed_axes})
+        diagnostics["story_core_axis_change_meaning"].append({"pair": pair_label, "axes": meaning_changed_axes})
+        if not frame_changed_axes and not meaning_changed_axes:
+            diagnostics["story_core_duplicate_adjacent_pairs"].append(pair_label)
+        elif frame_changed_axes and not meaning_changed_axes:
+            diagnostics["story_core_semantic_duplicate_pairs"].append(pair_label)
+    has_hard_duplicates = bool(diagnostics["story_core_duplicate_adjacent_pairs"])
+    has_semantic_duplicates = bool(diagnostics["story_core_semantic_duplicate_pairs"])
+    diagnostics["story_core_two_axis_validation_passed"] = not has_hard_duplicates and not has_semantic_duplicates
+    if has_hard_duplicates:
+        causes.append("two_axis_duplicate_adjacent_pairs")
+    if has_semantic_duplicates:
+        causes.append("two_axis_semantic_duplicates")
+
+    dominant_rows = [row["dominance"] for row in vectors]
+    hero_count = sum(1 for row in dominant_rows if row == "hero_first")
+    world_count = sum(1 for row in dominant_rows if row == "world_first")
+    max_hero_streak = 0
+    max_world_streak = 0
+    run = 0
+    prev = ""
+    for current in dominant_rows:
+        run = run + 1 if current == prev else 1
+        prev = current
+        if current == "hero_first":
+            max_hero_streak = max(max_hero_streak, run)
+        if current == "world_first":
+            max_world_streak = max(max_world_streak, run)
+    diagnostics["story_core_hero_first_streak"] = max_hero_streak
+    diagnostics["story_core_world_first_streak"] = max_world_streak
+    balance_score = 1.0 - (abs(hero_count - world_count) / max(1, len(dominant_rows)))
+    streak_penalty = 0.15 * max(0, max(max_hero_streak, max_world_streak) - 2)
+    diagnostics["story_core_hero_world_balance_score"] = round(max(0.0, balance_score - streak_penalty), 3)
+    if max_hero_streak >= 3 or max_world_streak >= 3:
+        diagnostics["story_core_reactive_world_rule_passed"] = False
+        diagnostics["story_core_reactive_world_retry_used"] = True
+        causes.append("reactive_world_streak_limit_exceeded")
+
+    association_levels = [int(row["association_level"]) for row in vectors]
+    level_0_segments = [vectors[i]["segment_id"] for i, level in enumerate(association_levels) if level <= 0]
+    level_2_plus_segments = [vectors[i]["segment_id"] for i, level in enumerate(association_levels) if level >= 2]
+    diagnostics["story_core_association_level_summary"] = {
+        "level_0": len(level_0_segments),
+        "level_1": sum(1 for level in association_levels if level == 1),
+        "level_2_plus": len(level_2_plus_segments),
+    }
+    diagnostics["story_core_literal_fallback_count"] = len(level_0_segments)
+    diagnostics["story_core_literal_fallback_segments"] = level_0_segments[:16]
+    diagnostics["story_core_second_degree_segments"] = level_2_plus_segments[:16]
+    low_streak = 0
+    max_low_streak = 0
+    for level in association_levels:
+        if level <= 1:
+            low_streak += 1
+            max_low_streak = max(max_low_streak, low_streak)
+        else:
+            low_streak = 0
+    if len(level_0_segments) > max(1, len(vectors) // 2) or max_low_streak >= 3:
+        diagnostics["story_core_anti_literal_retry_used"] = True
+        causes.append("anti_literal_low_depth_streak")
+
+    high_pressure_streak = 0
+    high_density_streak = 0
+    hero_first_streak = 0
+    for row in vectors:
+        high_pressure_streak = high_pressure_streak + 1 if row["pressure_mode"] == "high" else 0
+        high_density_streak = high_density_streak + 1 if row["frame_axes"]["density"] == "high" else 0
+        hero_first_streak = hero_first_streak + 1 if row["dominance"] == "hero_first" else 0
+    overload_detected = bool(
+        diagnostics["story_core_entropy_threshold_triggered"]
+        or high_pressure_streak >= 3
+        or high_density_streak >= 3
+        or hero_first_streak >= 3
+    )
+    diagnostics["story_core_visual_breath_triggered"] = overload_detected
+    diagnostics["story_core_contrast_event_required"] = overload_detected
+    if overload_detected:
+        diagnostics["story_core_visual_breath_reason"] = (
+            "overload_detected_repeated_peak_pressure_density_or_dominance"
+        )
+    has_contrast_event = any(
+        row["story_function"] in {"release", "afterglow"} or row["pressure_mode"] == "low" or row["association_level"] >= 2
+        for row in vectors
+    )
+    diagnostics["story_core_contrast_event_present"] = has_contrast_event
+    diagnostics["story_core_visual_breath_inserted_in_logic"] = has_contrast_event
+    if overload_detected and not has_contrast_event:
+        causes.append("visual_breath_contrast_event_missing")
+
+    return causes, diagnostics
 
 
 def _normalize_gender_hint(value: Any) -> str:
@@ -4929,6 +5172,12 @@ def _validate_story_core_v11_payload(
         ):
             mismatch_errors.append("id_mismatch_kind:renamed_segment_ids")
         return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
+
+    quality_retry_causes, quality_gate_diag = _evaluate_story_core_quality_gates(narrative_segments)
+    if debug_capture is not None:
+        debug_capture.update(quality_gate_diag)
+    if quality_retry_causes:
+        return False, CORE_QUALITY_GATES_FAILED, quality_retry_causes
 
     drift_keys = {"t0", "t1", "scene_slots", "scene_candidate_windows", "phrase_units"}
     json_dump = json.dumps(payload, ensure_ascii=False).lower()
@@ -6126,6 +6375,33 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_retry_sanitize_applied"] = False
     diagnostics["story_core_retry_removed_terms"] = []
     diagnostics["story_core_retry_prompt_mode"] = "default"
+    diagnostics["story_core_entropy_threshold_triggered"] = False
+    diagnostics["story_core_flatline_span_start"] = ""
+    diagnostics["story_core_flatline_span_end"] = ""
+    diagnostics["story_core_flatline_reason"] = ""
+    diagnostics["story_core_flatline_repeated_story_functions"] = []
+    diagnostics["story_core_flatline_repeated_pressure_mode"] = ""
+    diagnostics["story_core_flatline_retry_used"] = False
+    diagnostics["story_core_two_axis_validation_passed"] = True
+    diagnostics["story_core_axis_change_frame"] = []
+    diagnostics["story_core_axis_change_meaning"] = []
+    diagnostics["story_core_duplicate_adjacent_pairs"] = []
+    diagnostics["story_core_semantic_duplicate_pairs"] = []
+    diagnostics["story_core_hero_world_balance_score"] = 1.0
+    diagnostics["story_core_hero_first_streak"] = 0
+    diagnostics["story_core_world_first_streak"] = 0
+    diagnostics["story_core_reactive_world_rule_passed"] = True
+    diagnostics["story_core_reactive_world_retry_used"] = False
+    diagnostics["story_core_association_level_summary"] = {"level_0": 0, "level_1": 0, "level_2_plus": 0}
+    diagnostics["story_core_literal_fallback_count"] = 0
+    diagnostics["story_core_literal_fallback_segments"] = []
+    diagnostics["story_core_second_degree_segments"] = []
+    diagnostics["story_core_anti_literal_retry_used"] = False
+    diagnostics["story_core_visual_breath_triggered"] = False
+    diagnostics["story_core_visual_breath_reason"] = ""
+    diagnostics["story_core_visual_breath_inserted_in_logic"] = False
+    diagnostics["story_core_contrast_event_required"] = False
+    diagnostics["story_core_contrast_event_present"] = False
     diagnostics["story_core_second_attempt_changed_payload"] = False
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
@@ -6295,6 +6571,71 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 )
                 diagnostics["story_core_role_spawning_matches"] = _safe_list(
                     technical_spawn_debug.get("story_core_role_spawning_matches")
+                )
+                diagnostics["story_core_entropy_threshold_triggered"] = bool(
+                    technical_spawn_debug.get("story_core_entropy_threshold_triggered")
+                )
+                diagnostics["story_core_flatline_span_start"] = str(technical_spawn_debug.get("story_core_flatline_span_start") or "")
+                diagnostics["story_core_flatline_span_end"] = str(technical_spawn_debug.get("story_core_flatline_span_end") or "")
+                diagnostics["story_core_flatline_reason"] = str(technical_spawn_debug.get("story_core_flatline_reason") or "")
+                diagnostics["story_core_flatline_repeated_story_functions"] = _safe_list(
+                    technical_spawn_debug.get("story_core_flatline_repeated_story_functions")
+                )
+                diagnostics["story_core_flatline_repeated_pressure_mode"] = str(
+                    technical_spawn_debug.get("story_core_flatline_repeated_pressure_mode") or ""
+                )
+                diagnostics["story_core_flatline_retry_used"] = bool(technical_spawn_debug.get("story_core_flatline_retry_used"))
+                diagnostics["story_core_two_axis_validation_passed"] = bool(
+                    technical_spawn_debug.get("story_core_two_axis_validation_passed", True)
+                )
+                diagnostics["story_core_axis_change_frame"] = _safe_list(technical_spawn_debug.get("story_core_axis_change_frame"))
+                diagnostics["story_core_axis_change_meaning"] = _safe_list(technical_spawn_debug.get("story_core_axis_change_meaning"))
+                diagnostics["story_core_duplicate_adjacent_pairs"] = _safe_list(
+                    technical_spawn_debug.get("story_core_duplicate_adjacent_pairs")
+                )
+                diagnostics["story_core_semantic_duplicate_pairs"] = _safe_list(
+                    technical_spawn_debug.get("story_core_semantic_duplicate_pairs")
+                )
+                diagnostics["story_core_hero_world_balance_score"] = float(
+                    technical_spawn_debug.get("story_core_hero_world_balance_score") or 0.0
+                )
+                diagnostics["story_core_hero_first_streak"] = int(technical_spawn_debug.get("story_core_hero_first_streak") or 0)
+                diagnostics["story_core_world_first_streak"] = int(technical_spawn_debug.get("story_core_world_first_streak") or 0)
+                diagnostics["story_core_reactive_world_rule_passed"] = bool(
+                    technical_spawn_debug.get("story_core_reactive_world_rule_passed", True)
+                )
+                diagnostics["story_core_reactive_world_retry_used"] = bool(
+                    technical_spawn_debug.get("story_core_reactive_world_retry_used")
+                )
+                diagnostics["story_core_association_level_summary"] = _safe_dict(
+                    technical_spawn_debug.get("story_core_association_level_summary")
+                )
+                diagnostics["story_core_literal_fallback_count"] = int(
+                    technical_spawn_debug.get("story_core_literal_fallback_count") or 0
+                )
+                diagnostics["story_core_literal_fallback_segments"] = _safe_list(
+                    technical_spawn_debug.get("story_core_literal_fallback_segments")
+                )
+                diagnostics["story_core_second_degree_segments"] = _safe_list(
+                    technical_spawn_debug.get("story_core_second_degree_segments")
+                )
+                diagnostics["story_core_anti_literal_retry_used"] = bool(
+                    technical_spawn_debug.get("story_core_anti_literal_retry_used")
+                )
+                diagnostics["story_core_visual_breath_triggered"] = bool(
+                    technical_spawn_debug.get("story_core_visual_breath_triggered")
+                )
+                diagnostics["story_core_visual_breath_reason"] = str(
+                    technical_spawn_debug.get("story_core_visual_breath_reason") or ""
+                )
+                diagnostics["story_core_visual_breath_inserted_in_logic"] = bool(
+                    technical_spawn_debug.get("story_core_visual_breath_inserted_in_logic")
+                )
+                diagnostics["story_core_contrast_event_required"] = bool(
+                    technical_spawn_debug.get("story_core_contrast_event_required")
+                )
+                diagnostics["story_core_contrast_event_present"] = bool(
+                    technical_spawn_debug.get("story_core_contrast_event_present")
                 )
                 diagnostics["story_core_retry_prompt_mode"] = retry_prompt_mode
                 diagnostics["story_core_retry_sanitize_applied"] = retry_sanitize_applied
