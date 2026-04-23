@@ -295,6 +295,35 @@ def _is_world_beat(source_row: dict[str, Any]) -> bool:
     return any(token in blob for token in WORLD_BEAT_HINTS)
 
 
+def _can_enforce_ia2v_row(
+    *,
+    source_row: dict[str, Any],
+    spoken_line: str,
+    transcript_slice: str,
+    is_lip_sync_candidate: bool,
+    speaker_role: str,
+    vocal_owner_role: str,
+    active_roles: list[str],
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if not (spoken_line or transcript_slice):
+        reasons.append("ia2v_missing_spoken_content")
+    if not is_lip_sync_candidate:
+        reasons.append("audio_map_permission_missing")
+    duration_sec = float(source_row.get("duration_sec") or 0.0)
+    if duration_sec < 2.8:
+        reasons.append("duration_too_short_for_lipsync")
+    if duration_sec > 5.2:
+        reasons.append("duration_too_long_for_lipsync")
+    if _is_world_beat(source_row):
+        reasons.append("ia2v_non_vocal_world_beat")
+    if speaker_role != "character_1" or speaker_role not in active_roles:
+        reasons.append("ia2v_invalid_speaker_role")
+    if vocal_owner_role != "character_1":
+        reasons.append("SCENE_LIPSYNC_VOICE_ROLE_MISMATCH")
+    return not reasons, reasons
+
+
 def _extract_role_identity_gender_map(input_pkg: dict[str, Any]) -> dict[str, str]:
     out: dict[str, str] = {}
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
@@ -1991,14 +2020,32 @@ def _normalize_scene_plan(
         transcript_slice = str(source_row.get("transcript_slice") or "").strip()
         row_vocal_owner_role = str(raw_row.get("vocal_owner_role") or vocal_owner_role or UNKNOWN_VOCAL_OWNER_ROLE).strip() or UNKNOWN_VOCAL_OWNER_ROLE
 
+        ia2v_evidence_reject_reasons: list[str] = []
         if route == "ia2v":
-            speaker_role = "character_1"
-            row_vocal_owner_role = "character_1"
-            lip_sync_allowed = True
-            lip_sync_priority = "high"
-            mouth_visible_required = True
-            if transcript_slice and not spoken_line:
-                spoken_line = transcript_slice
+            can_enforce_ia2v, ia2v_evidence_reject_reasons = _can_enforce_ia2v_row(
+                source_row=source_row,
+                spoken_line=spoken_line,
+                transcript_slice=transcript_slice,
+                is_lip_sync_candidate=is_lip_sync_candidate,
+                speaker_role=speaker_role,
+                vocal_owner_role=row_vocal_owner_role,
+                active_roles=active_roles,
+            )
+            if can_enforce_ia2v:
+                speaker_role = "character_1"
+                row_vocal_owner_role = "character_1"
+                lip_sync_allowed = True
+                lip_sync_priority = "high"
+                mouth_visible_required = True
+                if transcript_slice and not spoken_line:
+                    spoken_line = transcript_slice
+            else:
+                route = "i2v"
+                speaker_role = ""
+                row_vocal_owner_role = ""
+                lip_sync_allowed = False
+                lip_sync_priority = "none"
+                mouth_visible_required = False
         else:
             speaker_role = ""
             row_vocal_owner_role = ""
@@ -2081,7 +2128,7 @@ def _normalize_scene_plan(
             elif subject_priority == "hero" and _is_world_beat(source_row):
                 subject_priority = "environment"
 
-        row_rejected_reasons: list[str] = []
+        row_rejected_reasons: list[str] = list(ia2v_evidence_reject_reasons)
         if speaker_role and speaker_role not in active_roles:
             speaker_role_invalid_count += 1
             row_rejected_reasons.append("speaker_role_not_in_present_cast")
@@ -2148,12 +2195,12 @@ def _normalize_scene_plan(
 
         if row_rejected_reasons:
             if route == "ia2v":
-                speaker_role = "character_1"
-                row_vocal_owner_role = "character_1"
-                lip_sync_allowed = True
-                lip_sync_priority = "high"
-                mouth_visible_required = True
-                row_rejected_reasons = []
+                route = "i2v"
+                speaker_role = ""
+                row_vocal_owner_role = ""
+                lip_sync_allowed = False
+                lip_sync_priority = "none"
+                mouth_visible_required = False
             else:
                 lip_sync_allowed = False
                 lip_sync_priority = "none"
