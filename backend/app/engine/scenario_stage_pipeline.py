@@ -6686,6 +6686,165 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             role_keys.append("character_1")
         return role_keys
 
+    def _merge_scene_continuity_fields(
+        segment_row: dict[str, Any],
+        plan_row_data: dict[str, Any],
+        prompts_row_data: dict[str, Any],
+        role_row_data: dict[str, Any],
+        *,
+        route_name: str,
+        role_keys: list[str],
+    ) -> dict[str, Any]:
+        def _first_non_empty_str(*values: Any) -> str:
+            for value in values:
+                clean = str(value or "").strip()
+                if clean:
+                    return clean
+            return ""
+
+        def _first_non_empty_list(*values: Any) -> list[Any]:
+            for value in values:
+                if isinstance(value, list) and value:
+                    return list(value)
+            return []
+
+        def _first_non_empty_map(*values: Any) -> dict[str, Any]:
+            for value in values:
+                if isinstance(value, dict) and value:
+                    return _safe_dict(value)
+            return {}
+
+        raw_primary_role = _first_non_empty_str(
+            segment_row.get("primaryRole"),
+            prompts_row_data.get("primaryRole"),
+            plan_row_data.get("primaryRole"),
+            role_row_data.get("primary_role"),
+            plan_row_data.get("primary_role"),
+        ).lower()
+        primary_role = raw_primary_role if raw_primary_role in {"character_1", "character_2", "character_3", "group"} else raw_primary_role
+        raw_hero_entity_id = _first_non_empty_str(
+            segment_row.get("heroEntityId"),
+            prompts_row_data.get("heroEntityId"),
+            plan_row_data.get("heroEntityId"),
+            primary_role if primary_role in {"character_1", "character_2", "character_3"} else "",
+        ).lower()
+        hero_entity_id = raw_hero_entity_id if raw_hero_entity_id in {"character_1", "character_2", "character_3"} else raw_hero_entity_id
+
+        must_appear = [
+            str(role or "").strip().lower()
+            for role in _first_non_empty_list(
+                segment_row.get("mustAppear"),
+                prompts_row_data.get("mustAppear"),
+                plan_row_data.get("mustAppear"),
+            )
+            if str(role or "").strip()
+        ]
+        refs_used = [
+            str(role or "").strip().lower()
+            for role in _first_non_empty_list(
+                segment_row.get("refsUsed"),
+                prompts_row_data.get("refsUsed"),
+                plan_row_data.get("refsUsed"),
+            )
+            if str(role or "").strip()
+        ]
+        refs_by_role = _first_non_empty_map(
+            segment_row.get("refsByRole"),
+            prompts_row_data.get("refsByRole"),
+            plan_row_data.get("refsByRole"),
+        )
+        previous_scene_image_url = _first_non_empty_str(
+            segment_row.get("previousSceneImageUrl"),
+            prompts_row_data.get("previousSceneImageUrl"),
+            plan_row_data.get("previousSceneImageUrl"),
+        )
+
+        visual_focus_role = _first_non_empty_str(
+            segment_row.get("visual_focus_role"),
+            prompts_row_data.get("visual_focus_role"),
+            plan_row_data.get("visual_focus_role"),
+            role_row_data.get("visual_focus_role"),
+        ).lower()
+        speaker_role = _first_non_empty_str(
+            segment_row.get("speaker_role"),
+            prompts_row_data.get("speaker_role"),
+            plan_row_data.get("speaker_role"),
+            role_row_data.get("speaker_role"),
+        ).lower()
+        environment_only_cutaway = bool(route_name == "i2v" and visual_focus_role == "environment" and not speaker_role)
+        has_human_subject = bool(
+            any(role in {"character_1", "character_2", "character_3", "group"} for role in role_keys)
+            or primary_role in {"character_1", "character_2", "character_3", "group"}
+            or hero_entity_id in {"character_1", "character_2", "character_3"}
+            or must_appear
+        ) and not environment_only_cutaway
+
+        explicit_hero_ref_exists = bool(
+            hero_entity_id
+            and (
+                _safe_list(_safe_dict(refs_by_role).get(hero_entity_id))
+                or _safe_list(_safe_dict(final_refs_by_role).get(hero_entity_id))
+            )
+        )
+        same_hero_continuation_scene = bool(
+            route_name in {"i2v", "ia2v"}
+            and has_human_subject
+            and explicit_hero_ref_exists
+            and (primary_role == hero_entity_id or not primary_role)
+            and hero_entity_id in {"character_1", "character_2", "character_3"}
+            and not environment_only_cutaway
+        )
+        continuity_repair_active = bool(
+            same_hero_continuation_scene
+            and (
+                previous_scene_image_url
+                or bool(segment_row.get("continuityFixApplied"))
+                or bool(segment_row.get("continuity_fix_applied"))
+            )
+        )
+
+        if hero_entity_id in {"character_1", "character_2", "character_3"}:
+            if hero_entity_id not in must_appear and same_hero_continuation_scene:
+                must_appear.append(hero_entity_id)
+            if hero_entity_id not in refs_used and same_hero_continuation_scene and explicit_hero_ref_exists:
+                refs_used.append(hero_entity_id)
+            if hero_entity_id not in refs_by_role:
+                refs_by_role = dict(refs_by_role)
+                refs_by_role[hero_entity_id] = list(_safe_list(final_refs_by_role.get(hero_entity_id)))
+
+        identity_lock_applied = bool(
+            segment_row.get("identityLockApplied")
+            or segment_row.get("identity_lock_applied")
+            or (same_hero_continuation_scene and explicit_hero_ref_exists)
+        )
+        body_lock_applied = bool(
+            segment_row.get("bodyLockApplied")
+            or segment_row.get("body_lock_applied")
+            or (route_name != "ia2v" and same_hero_continuation_scene and explicit_hero_ref_exists)
+        )
+        confirmed_hero_look_reference_used = bool(
+            segment_row.get("confirmedHeroLookReferenceUsed")
+            or (same_hero_continuation_scene and explicit_hero_ref_exists)
+        )
+        continuity_fix_applied = bool(
+            segment_row.get("continuityFixApplied")
+            or segment_row.get("continuity_fix_applied")
+            or continuity_repair_active
+        )
+
+        return {
+            "primaryRole": primary_role or None,
+            "heroEntityId": hero_entity_id or None,
+            "mustAppear": list(dict.fromkeys([role for role in must_appear if role])),
+            "refsUsed": list(dict.fromkeys([role for role in refs_used if role])),
+            "refsByRole": _safe_dict(refs_by_role),
+            "previousSceneImageUrl": previous_scene_image_url or None,
+            "identityLockApplied": identity_lock_applied,
+            "bodyLockApplied": body_lock_applied,
+            "confirmedHeroLookReferenceUsed": confirmed_hero_look_reference_used,
+            "continuityFixApplied": continuity_fix_applied,
+        }
+
     for idx, segment in enumerate(final_segments, start=1):
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
         scene_id = str(segment_id or segment.get("scene_id") or "").strip()
@@ -6698,6 +6857,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         video_metadata = _safe_dict(segment.get("video_metadata"))
         route = _resolve_route_for_finalize_row(segment, plan_row, video_metadata)
         role_keys = _collect_scene_role_keys(segment, plan_row, prompts_row, role_casting_row)
+        continuity_fields = _merge_scene_continuity_fields(
+            segment,
+            plan_row,
+            prompts_row,
+            role_casting_row,
+            route_name=route,
+            role_keys=role_keys,
+        )
         linked_assets = _build_linked_assets(segment, plan_row, prompts_row, role_casting_row)
         if _safe_list(linked_assets.get("source_image_refs")):
             final_segments_with_source_image_refs += 1
@@ -6734,13 +6901,16 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "negative_prompt": final_negative_prompt,
             "negative_video_prompt": final_negative_prompt,
             "route": route,
-            "primaryRole": segment.get("primaryRole"),
-            "heroEntityId": segment.get("heroEntityId"),
-            "mustAppear": list(_safe_list(segment.get("mustAppear"))),
-            "refsByRole": _safe_dict(segment.get("refsByRole")),
-            "identityLockApplied": bool(segment.get("identityLockApplied")),
-            "bodyLockApplied": bool(segment.get("bodyLockApplied")),
-            "confirmedHeroLookReferenceUsed": bool(segment.get("confirmedHeroLookReferenceUsed")),
+            "primaryRole": continuity_fields.get("primaryRole"),
+            "heroEntityId": continuity_fields.get("heroEntityId"),
+            "mustAppear": list(_safe_list(continuity_fields.get("mustAppear"))),
+            "refsUsed": list(_safe_list(continuity_fields.get("refsUsed"))),
+            "refsByRole": _safe_dict(continuity_fields.get("refsByRole")),
+            "previousSceneImageUrl": continuity_fields.get("previousSceneImageUrl"),
+            "identityLockApplied": bool(continuity_fields.get("identityLockApplied")),
+            "bodyLockApplied": bool(continuity_fields.get("bodyLockApplied")),
+            "confirmedHeroLookReferenceUsed": bool(continuity_fields.get("confirmedHeroLookReferenceUsed")),
+            "continuityFixApplied": bool(continuity_fields.get("continuityFixApplied")),
             "linked_assets": deepcopy(linked_assets),
             "audio_url": str(linked_assets.get("audio_url") or "").strip(),
             "source_image_refs": list(_safe_list(linked_assets.get("source_image_refs"))),
@@ -6769,13 +6939,16 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "video_metadata": video_metadata,
             "linked_assets": linked_assets,
             "audio_behavior_hints": str(segment.get("audio_behavior_hints") or "").strip(),
-            "primaryRole": segment.get("primaryRole"),
-            "heroEntityId": segment.get("heroEntityId"),
-            "mustAppear": list(_safe_list(segment.get("mustAppear"))),
-            "refsByRole": _safe_dict(segment.get("refsByRole")),
-            "identityLockApplied": bool(segment.get("identityLockApplied")),
-            "bodyLockApplied": bool(segment.get("bodyLockApplied")),
-            "confirmedHeroLookReferenceUsed": bool(segment.get("confirmedHeroLookReferenceUsed")),
+            "primaryRole": continuity_fields.get("primaryRole"),
+            "heroEntityId": continuity_fields.get("heroEntityId"),
+            "mustAppear": list(_safe_list(continuity_fields.get("mustAppear"))),
+            "refsUsed": list(_safe_list(continuity_fields.get("refsUsed"))),
+            "refsByRole": _safe_dict(continuity_fields.get("refsByRole")),
+            "previousSceneImageUrl": continuity_fields.get("previousSceneImageUrl"),
+            "identityLockApplied": bool(continuity_fields.get("identityLockApplied")),
+            "bodyLockApplied": bool(continuity_fields.get("bodyLockApplied")),
+            "confirmedHeroLookReferenceUsed": bool(continuity_fields.get("confirmedHeroLookReferenceUsed")),
+            "continuityFixApplied": bool(continuity_fields.get("continuityFixApplied")),
             "prompt_source": final_prompt_source,
         }
         render_manifest.append(manifest_row)
