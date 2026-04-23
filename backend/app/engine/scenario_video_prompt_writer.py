@@ -52,9 +52,14 @@ CONFIRMED_HERO_LOOK_REFERENCE_CLAUSE = (
 )
 IA2V_BASE_PROMPT_V1 = (
     "Use the uploaded image as the exact first frame and identity anchor. "
-    "A performance shot of the same performer singing an emotional line. Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
-    "Emotional eyes, controlled breathing, slight head tension, and controlled emotional upper-body movement. "
-    "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in."
+    "A performance shot of the same performer singing an emotional line with clear expressive lip sync and readable vocal delivery. "
+    "Allow expressive but controlled gestures and smooth body-led micro-performance in shoulders, torso, head, neck, breath tension, slight lean, and controlled weight shift. "
+    "Hands may emphasize phrases when visible; avoid jerky or chaotic dance-like motion unless story explicitly requests it. "
+    "Framing is flexible from tight close-up to full body while mouth readability, emotion readability, and identity clarity remain intact. "
+    "Cinematic realism with smooth LTX-safe camera motion."
+)
+IA2V_MINIMAL_NEGATIVE_PROMPT = (
+    "hidden mouth, unreadable lips, mouth fully obscured for long, face fully turned away from readability, severe identity drift, duplicate main subject, severe facial deformation"
 )
 IDENTITY_NEGATIVE_GUARD = "different person, different face, changed face, changed body type, changed silhouette, different outfit, hairstyle drift, age drift, body proportion drift"
 CONTROLLED_MOTION_SAFETY_BLOCK = (
@@ -73,6 +78,9 @@ DOMESTIC_WORLD_NEGATIVE_TERMS = (
 WORLD_SEASON_CONTINUITY_CLAUSE = (
     "Preserve current world continuity, season continuity, weather continuity, and environment family from the established package. "
     "Do not introduce a different season or contradictory weather."
+)
+GLOBAL_CONTINUITY_LOCK_CLAUSE = (
+    "GLOBAL CONTINUITY LOCK: unless story explicitly changes it, keep the same main character identity/face, body type and age impression, hair/facial hair, canonical outfit/accessories, canonical object identity and ownership, world/location family, lighting family, weather, season, and time-of-day; avoid random style drift or random extra lead character."
 )
 ANTI_DUPLICATE_ADJACENT_CLAUSE = "Differentiate this scene clearly from adjacent scenes in shot purpose, composition, and subject emphasis."
 WORLD_CAST_COHERENCE_CLAUSE = (
@@ -1216,7 +1224,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
     elif route == "ia2v":
-        route_behavior_template = "Performer-first lip-sync remains the priority, with controlled emotional upper-body movement and readable mouth."
+        route_behavior_template = "Performer-first lip-sync remains the priority: emotionally active singing delivery with readable mouth, no frozen posture, and smooth grounded body-led performance."
         route_template_source = "ia2v_lipsync_template"
         if positive_prompt:
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {route_behavior_template}"
@@ -1225,6 +1233,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             "Performer-first composition is required: main performer visible and dominant; do not convert this shot into an empty environment plate.",
         )
     positive_prompt = _append_clause(positive_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
+    positive_prompt = _append_clause(positive_prompt, GLOBAL_CONTINUITY_LOCK_CLAUSE)
     positive_prompt = _append_clause(positive_prompt, ANTI_DUPLICATE_ADJACENT_CLAUSE)
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
@@ -1249,11 +1258,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         negative_prompt = _append_clause(negative_prompt, DOMESTIC_WORLD_NEGATIVE_TERMS)
 
     if route == "ia2v":
-        negative_prompt = _append_clause(
-            negative_prompt,
-            "hands covering mouth, hands crossing face, hands blocking lips, hands blocking jaw, fingers over mouth, frantic arm waving, excessive choreography, wild gestures, malformed hands, extra hands, broken fingers, hand-face collision, motion blur over mouth",
-        )
         negative_prompt = _clean_ia2v_negative_prompt(negative_prompt)
+        negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
     negative_prompt = clean_negative_prompt_artifacts(negative_prompt)
 
     positive_prompt, positive_diag = _sanitize_prompt_text_for_current_identity(

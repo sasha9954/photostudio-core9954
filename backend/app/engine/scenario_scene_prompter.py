@@ -34,18 +34,18 @@ _GLOBAL_NEGATIVE_PROMPT = (
 )
 
 _LIP_SYNC_NEGATIVE_PROMPT = (
-    "unreadable mouth, broken face motion, frantic dance, flailing arms, unstable anatomy, balance loss, chaotic camera, identity drift, outfit drift, surreal deformation"
+    "hidden mouth, unreadable lips, mouth fully obscured for long, face fully turned away from readability, severe identity drift, duplicate main subject, severe facial deformation"
 )
-_IA2V_LIP_SYNC_NEGATIVE_CANON = (
-    "hidden mouth, obstructed lips, unreadable mouth, face turned away, profile-only face, hands covering mouth, hair covering mouth, distorted lips, distorted jaw, face deformation, duplicate performer, second copy of protagonist, identity drift, teleporting, sudden running, object-to-head bottle motion, extreme motion blur, cutaway away from performer"
-)
+_IA2V_LIP_SYNC_NEGATIVE_CANON = _LIP_SYNC_NEGATIVE_PROMPT
 _IA2V_VIDEO_PROMPT_CANON = (
     "Use the uploaded image as the exact first frame and identity anchor. "
     "A performance shot of the same performer singing an emotional line. "
-    "Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
-    "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
+    "Clear expressive lip sync, natural jaw motion, subtle cheek and throat effort, and readable emotional expression are mandatory. "
+    "Allow expressive but controlled gestures with smooth grounded motion in shoulders, torso, head, neck, breath tension, slight lean, and controlled weight shift. "
+    "Hands may emphasize phrases when visible, but no jerky or chaotic dance-like motion unless explicitly requested by story. "
     "The face and mouth remain readable and important. "
-    "Cinematic realism. Steady camera, very slow push-in."
+    "Framing is flexible from tight close-up to full body as long as mouth readability, emotion readability, and identity clarity are preserved. "
+    "Cinematic realism with smooth LTX-safe camera motion."
 )
 
 _FIRST_LAST_NEGATIVE_PROMPT = (
@@ -67,6 +67,7 @@ _WARDROBE_CONTINUITY_LOCK = (
 _GLOBAL_PROMPT_RULES = [
     "Preserve hero identity, world anchor, style family, and realistic lighting continuity across all scenes.",
     "Preserve current world continuity, season continuity, weather continuity, and environment family from the established package. Do not introduce a different season or contradictory weather.",
+    "Continuity lock is strict unless story explicitly changes it: keep same face/identity, body type/age impression, hair/facial hair, canonical outfit/accessories, object identity/ownership, world family/location family, lighting family, weather, season, and time-of-day.",
     "Keep prompts short, production-friendly, and route-aware; one clear action + one clear camera idea per video prompt.",
     "Respect wardrobe continuity when current input/story locks wardrobe; do not invent wardrobe progression defaults unless explicitly provided by current story/refs.",
     "Enforce LTX-safe motion and anatomy-safe constraints for all routes.",
@@ -1360,7 +1361,7 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "Hard constraints must be compressed into a short safety tail at the end only.\\n"
         "Route rules:\\n"
         "- i2v (normal): motion-first continuation from the still image, one visible action line, camera behavior, energy/atmosphere, short safety tail at end.\\n"
-        "- ia2v (lip_sync_music/performance): performance-first, readable face/mouth, musical phrasing drives upper-body expressivity, stable balance, smooth camera, short safety tail at end.\\n"
+        "- ia2v (lip_sync_music/performance): performance-first and emotionally active; readable lips/mouth and emotion are mandatory; framing is flexible (tight close-up/close-up/medium close-up/waist-up/full-body) as long as mouth and identity stay readable; allow expressive but controlled body-led performance (shoulders/torso/head/neck/breath/slight lean/controlled weight shift), no frozen mannequin posture, smooth LTX-safe motion only.\\n"
         "- first_last (locked transition): controlled camera/framing/state transition between near-matched anchor frames with one subtle visible delta only; same subject/stance/world/costume/shot feeling; must include TWO standalone prompts start_image_prompt and end_image_prompt; short safety tail at end.\\n"
         "- first_last must honor scene_plan.first_last_mode when present: push_in_emotional, pull_back_release, small_side_arc, reveal_face_from_shadow, foreground_parallax, camera_settle, visibility_reveal.\\n"
         "Energy tier behavior (mandatory): low-energy i2v -> restrained motion and held tension/afterimage; medium-energy i2v -> forward motion with controlled camera support; high-energy ia2v -> expressive but readable upper-body performance; first_last -> continuity-first micro-transition and never transit/geography change.\\n"
@@ -1383,6 +1384,10 @@ def _build_prompt(context: dict[str, Any]) -> str:
         "If speaker_role is unknown, do not author lip-sync prompt language.\\n"
         "For first_last scenes, start_image_prompt and end_image_prompt must also satisfy must_be_visible in the same shared scene space; visual state delta may prioritize visual_focus_role but other must_be_visible roles remain visible.\\n"
         "Always include compact negative_prompt with safety constraints as short tail text.\\n"
+        "For ia2v, negative_prompt must stay minimal technical-only: hidden mouth, unreadable lips, mouth fully obscured for long, face fully turned away from readability, severe identity drift, duplicate main subject, severe facial deformation.\\n"
+        "Do not overload ia2v negative_prompt with long motion/framing bans.\\n"
+        "For i2v, keep normal structured route-specific positive+negative separation and avoid visible singing/lip-sync unless explicitly requested by scene contract.\\n"
+        "GLOBAL continuity lock: if not explicitly changed by story, forbid random wardrobe/accessory/object/location/weather/season/day-night/style drift or random extra lead character.\\n"
         "Never mix negative prompt text into positive video_prompt; keep positive and negative fields separated.\\n"
         "For first_last, return both positive_video_prompt and negative_video_prompt fields (negative_video_prompt is mandatory for first_last).\\n"
         "Set prompt_notes.audio_driven=true for ia2v scenes.\\n"
@@ -1925,16 +1930,17 @@ def _build_fallback_scene_prompts(
 
     if route == "ia2v":
         photo_prompt = (
-            f"Story-grounded singing-ready start frame of {speaker_label} in {world_anchor} for {scene_function} with {emotional}. "
-            "Framing may be close-up, medium, waist-up, three-quarter, or full body, but face and mouth stay readable. "
-            "Mouth is open or slightly open in a natural singing shape; emotion and performance intent are clearly readable."
+            f"Story-grounded emotionally charged singing-ready start frame of {speaker_label} in {world_anchor} for {scene_function} with {emotional}. "
+            "Framing is flexible (tight close-up, close-up, medium close-up, waist-up, or full-body) while face identity, mouth readability, and emotion readability stay clear. "
+            "Mouth is open or slightly open in a natural singing shape with visible vocal effort; body involvement is encouraged through neck/shoulders/clavicles/breath tension and meaningful gesture when hands are visible."
         )
         if lip_sync_allowed and speaker_role and speaker_role != "unknown":
             video_prompt = (
                 "Use the uploaded image as the exact first frame and identity anchor. "
-                "A performance shot of the same performer singing an emotional line. Clear expressive lip sync, natural jaw motion, trembling lips, subtle cheek tension, visible throat effort, soft facial trembling, and small emotional eyebrow movement. "
-                "Emotional eyes, controlled breathing, slight head tension, and only very small rhythmic movement. "
-                "The face and mouth remain readable and important. Cinematic realism. Steady camera, very slow push-in. "
+                "A performance shot of the same performer singing an emotional line with clear expressive lip sync and readable vocal delivery. "
+                "Allow expressive but controlled gestures and smooth body-led micro-performance through shoulders, torso, head, neck, breath tension, slight lean, and controlled weight shift. "
+                "Hands may emphasize phrases when visible, but avoid jerky, abrupt, or chaotic dance-like motion. "
+                "The face and mouth remain readable and important in any framing from tight close-up to full body. Cinematic realism with smooth LTX-safe camera motion. "
                 f"{speaker_label} is the only active vocal performer for this phrase{f' ({spoken_line})' if spoken_line else ''}. "
                 f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
                 f"{'Mouth readability is required for the active speaker. ' if mouth_visible_required else ''}"
@@ -1943,8 +1949,9 @@ def _build_fallback_scene_prompts(
         else:
             video_prompt = (
                 "Use the uploaded image as the exact first frame and identity anchor. "
-                "Same performer in emotional vocal performance with readable face and mouth, controlled breathing, subtle jaw and cheek activity, slight head tension, and very small rhythmic movement. "
-                "Steady camera with a very slow push-in; keep performer-first lip readability."
+                "Same performer in emotional vocal performance with readable face and mouth, visible vocal effort, controlled breathing, and smooth body-led micro-performance. "
+                "Subtle shoulders/torso/head/neck motion, slight lean, restrained weight shift, and optional meaningful hand emphasis when visible are allowed. "
+                "Keep performer-first lip readability with flexible framing and smooth LTX-safe camera motion."
                 f"{f'{reaction_role} may stay nearby as silent listener reaction. ' if listener_reaction_allowed and reaction_role else ''}"
                 f"{binding_clause}"
             )
