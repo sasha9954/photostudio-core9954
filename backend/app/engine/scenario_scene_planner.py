@@ -2363,8 +2363,8 @@ def _normalize_scene_plan(
         if str(row.get("segment_id") or "").strip() and str(row.get("route") or "").strip().lower() in ALLOWED_ROUTES
     }
     final_route_by_segment = dict(validated_route_by_segment)
-    route_counts = {
-        route_name: sum(1 for route_value in validated_route_by_segment.values() if route_value == route_name)
+    final_route_counts = {
+        route_name: sum(1 for route_value in final_route_by_segment.values() if route_value == route_name)
         for route_name in ("i2v", "ia2v", "first_last")
     }
     requested_route_locks_by_segment = {
@@ -2381,7 +2381,7 @@ def _normalize_scene_plan(
     }
     route_budget_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
     route_budget_resolved_from = "audio_map_segments_count" if route_budget_preset == "no_first_last_50_50_0" else "creative_config"
-    route_budget_mismatch = bool(hard_short_clip_target and route_counts != route_budget_target)
+    route_budget_mismatch = bool(hard_short_clip_target and final_route_counts != route_budget_target)
     validation_errors: list[str] = []
     error_codes: list[str] = []
     if enum_unrepaired_count > 0:
@@ -2439,9 +2439,9 @@ def _normalize_scene_plan(
         "storyboard": normalized_storyboard,
         "route_mix_summary": {
             "total_scenes": len(normalized_storyboard),
-            "i2v": route_counts["i2v"],
-            "ia2v": route_counts["ia2v"],
-            "first_last": route_counts["first_last"],
+            "i2v": final_route_counts["i2v"],
+            "ia2v": final_route_counts["ia2v"],
+            "first_last": final_route_counts["first_last"],
         },
         "route_locks_by_segment": final_route_by_segment,
         "scenes": legacy_scenes,
@@ -2511,7 +2511,7 @@ def _normalize_scene_plan(
         "consecutive_lip_sync_count": max_consecutive_lip_sync_count,
         "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow": ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow,
         "target_route_mix": route_budget_target,
-        "actual_route_mix": route_counts,
+        "actual_route_mix": final_route_counts,
         "scene_plan_route_strategy_active": _route_strategy_active(creative_config),
         "scene_plan_route_strategy_preset": route_budget_preset,
         "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
@@ -2525,7 +2525,7 @@ def _normalize_scene_plan(
         "hard_route_assignments_by_segment": requested_route_locks_by_segment,
         "requested_route_locks_by_segment": requested_route_locks_by_segment,
         "scene_plan_route_budget_target": route_budget_target,
-        "scene_plan_route_budget_actual": route_counts,
+        "scene_plan_route_budget_actual": final_route_counts,
         "scene_plan_route_budget_mismatch": route_budget_mismatch,
         "scene_plan_route_budget_retry_used": False,
         "scene_plan_route_budget_retry_suppressed": bool(route_budget_mismatch),

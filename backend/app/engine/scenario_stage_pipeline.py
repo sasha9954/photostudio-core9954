@@ -10702,7 +10702,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_enum_repair_rows"] = _safe_list(scene_diag.get("scene_plan_enum_repair_rows"))
     diagnostics["scene_plan_enum_unrepaired_count"] = int(scene_diag.get("scene_plan_enum_unrepaired_count") or 0)
     diagnostics["scene_plan_enum_unrepaired_rows"] = _safe_list(scene_diag.get("scene_plan_enum_unrepaired_rows"))
-    diagnostics["scene_plan_route_locks_by_segment"] = _safe_dict(route_locks_by_segment)
+    current_validated_route_map = _scene_plan_routes_by_segment(scene_plan)
+    diagnostics["scene_plan_route_locks_by_segment"] = _safe_dict(
+        _safe_dict(scene_plan.get("route_locks_by_segment")) or current_validated_route_map
+    )
+    diagnostics["scene_plan_requested_route_locks_by_segment"] = _safe_dict(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_applied"] = bool(route_locks_by_segment)
     diagnostics["scene_plan_route_lock_source"] = str(route_lock_source or "")
     diagnostics["scene_plan_hard_route_map_enabled"] = bool(backend_hard_route_map)
@@ -10721,7 +10725,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     diagnostics["scene_plan_route_semantic_mismatches"] = list(route_semantic_mismatches)
     diagnostics["scene_plan_route_semantic_retry_used"] = bool(semantic_retry_used)
-    diagnostics["scene_plan_route_budget_after_lock"] = dict(locked_route_counts)
+    diagnostics["scene_plan_route_budget_after_lock"] = dict(final_route_counts)
     diagnostics["scenes_vocal_owner_role_used"] = str(scene_diag.get("vocal_owner_role") or "unknown")
     if not route_budget_ok:
         diagnostics["scene_plan_validation_error"] = "route_budget_mismatch"
