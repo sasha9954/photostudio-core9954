@@ -4062,6 +4062,57 @@ def _build_story_core_rules() -> dict[str, Any]:
             "forbid_final_prompt_writing": True,
             "forbid_final_package_assembly": True,
         },
+        "anti_literal_world_building": {
+            "forbid_first_order_cliche_shorthand": True,
+            "forbid_repetitive_noir_stereotype_language": True,
+            "world_must_feel_specific_but_not_cartoon_literal": True,
+            "prefer_second_order_visual_logic": [
+                "rituals_and_social_codes",
+                "distance_thresholds_and_witness_perspective",
+                "ordinary_life_under_latent_pressure",
+                "reactive_environment_details_and_aftermath",
+            ],
+            "atmosphere_is_world_logic_not_costume_shorthand": True,
+        },
+        "identity_inference_guard": {
+            "if_character_ref_exists_do_not_invent_exact_styling_package": True,
+            "forbid_invented_exact_wardrobe_accessories_headwear_jewelry_tattoos": True,
+            "forbid_invented_facial_hair_specifics_without_grounding": True,
+            "allow_only_ref_safe_presence_language": [
+                "commanding",
+                "restrained",
+                "intimate",
+                "watchful",
+                "pressured",
+                "reflective",
+            ],
+        },
+        "segment_contrast_contract": {
+            "adjacent_beats_must_change_min_1_frame_axis": ["scale_or_intimacy", "density", "motion_character"],
+            "adjacent_beats_must_change_min_1_meaning_axis": ["narrative_function", "social_pressure", "hero_vs_world_ratio"],
+            "forbid_adjacent_same_frame_plus_same_meaning": True,
+        },
+        "performance_vs_world_contract": {
+            "performance_windows_can_foreground_vocal_owner": True,
+            "world_cutaway_windows_must_not_recentre_hero_by_habit": True,
+            "require_alternation_between_performance_world_observation_release": True,
+            "if_character_1_lip_sync_only_i2v_should_stay_world_or_observational": True,
+        },
+        "audio_map_dramaturgy_contract": {
+            "audio_map_is_timing_and_dramaturgy_hint_layer": True,
+            "must_use_hints_for_contrast_progression_breath": True,
+            "hints_to_use": [
+                "local_energy_band",
+                "delivery_mode",
+                "semantic_weight",
+                "semantic_turn_candidate",
+                "release_candidate",
+                "stillness_candidate",
+                "finality_candidate",
+            ],
+            "release_and_stillness_windows_allow_sparse_afterimage_beats": True,
+            "final_phrase_not_required_to_increase_density": True,
+        },
     }
 
 
@@ -5552,6 +5603,18 @@ def _build_story_core_prompt(
         "Do not output t0/t1 or timing edits; never merge/delete/reorder segments.\n"
         "You may include global route_mix_doctrine_for_scenes policy only (ratios/anti-streak/performance windows), never segment_id->route assignments.\n"
         "Use creative_config only as doctrine input.\n"
+        "ANTI-LITERAL WORLD CONTRACT (hard): avoid first-order cliché shorthand. Do not map danger/crime/street myth to automatic stock noir bundles (e.g., repeated dark alleys/courtyards/ports/underworld phrasing).\n"
+        "Build world via second-order social logic: rituals, coded behavior, distance, threshold spaces, witness perspective, ordinary life under pressure, and aftermath traces.\n"
+        "World must feel specific through lived texture and human environment, not through repeated stereotype tags.\n"
+        "ATMOSPHERE RULE: criminal/tense/street atmosphere means social pressure and risk logic in the world; it is NOT a request for costume shorthand.\n"
+        "IDENTITY INVENTION GUARD (hard): if character refs exist, do not invent exact wardrobe/accessories/headwear/jewelry/tattoos/facial-hair packages unless explicitly grounded in refs or user text.\n"
+        "Allowed identity language at CORE: narrative presence, social role energy, emotional mode, and scene function.\n"
+        "PERFORMANCE vs WORLD SPLIT (hard): performance/vocal segments may foreground hero; world/cutaway segments must not re-center hero by habit and should prioritize reactive city/human environment beats.\n"
+        "TWO-AXIS ADJACENCY CONTRACT (hard): each adjacent segment pair must change at least one frame axis (scale/intimacy OR density OR motion character) and at least one meaning axis (narrative function OR social pressure OR hero_vs_world_ratio).\n"
+        "Adjacent beats must not repeat the same frame logic plus the same narrative function.\n"
+        "AUDIO_MAP DRAMATURGY CONTRACT (hard): use audio_map not only for boundaries but for contrast opportunities, stillness/hold beats, semantic turns, release windows, and finality logic.\n"
+        "Do not auto-convert assertive/high windows into repeated generic threat tableaux; release/stillness windows should permit breath/aftermath/sparse echo.\n"
+        "INTERNAL SELF-CHECK BEFORE FINAL JSON: for every adjacent pair verify frame-axis change, meaning-axis change, anti-cliché depth, no unsupported identity invention, clear beat type (performance/world/observation/pressure/release/aftermath), and no stereotype vocabulary loops. Rewrite failing pairs before output.\n"
         "Output must include narrative_segments[] with EXACT 1:1 mapping to provided segment_id list and same order.\n"
         "Each narrative_segments item requires: segment_id, arc_role(setup|build|pivot|climax|release|afterglow), beat_purpose, emotional_key.\n"
         "Top-level required fields: core_version, story_summary, opening_anchor, ending_callback_rule, global_arc, identity_doctrine, narrative_segments.\n"
