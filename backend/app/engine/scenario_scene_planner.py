@@ -329,7 +329,7 @@ def _can_enforce_ia2v_row(
     duration_sec = float(source_row.get("duration_sec") or 0.0)
     if duration_sec < 2.8:
         reasons.append("duration_too_short_for_lipsync")
-    if duration_sec > 5.2:
+    if duration_sec > 7.0:
         reasons.append("duration_too_long_for_lipsync")
     if _is_world_beat(source_row):
         reasons.append("ia2v_non_vocal_world_beat")
@@ -457,7 +457,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "targets_are_soft": targets_are_soft,
         "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
         "vocal_policy": str(row.get("vocal_policy") or row.get("vocalPolicy") or "ia2v_only_on_vocal_windows").strip() or "ia2v_only_on_vocal_windows",
-        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec").strip() or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec",
+        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "prefer_ia2v_3_to_6_sec_allow_strong_vocal_opening_anchor_up_to_7_sec").strip() or "prefer_ia2v_3_to_6_sec_allow_strong_vocal_opening_anchor_up_to_7_sec",
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
@@ -2171,7 +2171,7 @@ def _normalize_scene_plan(
             row_rejected_reasons.append("audio_map_permission_missing")
         if lip_sync_allowed and float(source_row.get("duration_sec") or 0.0) < 2.8:
             row_rejected_reasons.append("duration_too_short_for_lipsync")
-        if lip_sync_allowed and float(source_row.get("duration_sec") or 0.0) > 5.2:
+        if lip_sync_allowed and float(source_row.get("duration_sec") or 0.0) > 7.0:
             row_rejected_reasons.append("duration_too_long_for_lipsync")
         if lip_sync_allowed and not mouth_visible_required:
             row_rejected_reasons.append("mouth_visible_required_for_lipsync")
