@@ -70,6 +70,14 @@ DOMESTIC_WORLD_LOCK_BLOCK = (
 DOMESTIC_WORLD_NEGATIVE_TERMS = (
     "nightclub, club, bar, dance floor, stage, neon club ambience, crowd, concert lighting, nightlife venue"
 )
+WORLD_SEASON_CONTINUITY_CLAUSE = (
+    "Preserve current world continuity, season continuity, weather continuity, and environment family from the established package. "
+    "Do not introduce a different season or contradictory weather."
+)
+ANTI_DUPLICATE_ADJACENT_CLAUSE = "Differentiate this scene clearly from adjacent scenes in shot purpose, composition, and subject emphasis."
+WORLD_CAST_COHERENCE_CLAUSE = (
+    "Background figures should match the established world's social role and atmosphere, reading as associates, dockside entourage, underworld presence, or intimidating local crew when appropriate, not generic labor-only documentary workers unless explicitly intended by the scene."
+)
 
 
 _FORBIDDEN_VENUE_TERMS = ("nightclub", "night club", "club", "bar", "dance floor", "dancefloor", "stage", "crowd")
@@ -945,8 +953,12 @@ def _build_instruction(payload: dict[str, Any]) -> str:
             "For non-ia2v human scenes with confirmed hero reference, add confirmed look anchor clause. For ia2v, rely on uploaded image first-frame identity anchor and do not add wardrobe/body/outfit continuity walls into positive prompt.",
             "Do not replace original character references; confirmed look anchor is additional reinforcement only.",
             "WHOLE-STORY CONTINUITY: review all segments as one continuous clip and prevent action/state contradictions between adjacent segments.",
+            "Preserve current world continuity, season continuity, weather continuity, and environment family from the established package; do not introduce contradictory season/weather unless upstream explicitly changes it.",
             "For each segment output starts_from_previous_logic, ends_with_state, continuity_with_next, potential_contradiction, fix_if_needed.",
             "If contradiction exists, repair the later segment before returning final JSON.",
+            "Scene-function separation: environment/world-detail cutaways must keep no main performer visible or non-dominant; lip-sync/performance scenes must keep performer clearly visible and dominant.",
+            "World-cast coherence: background figures should match established world/tone social roles and atmosphere, not default to generic labor-only workers unless the scene explicitly requires documentary labor reality.",
+            "Differentiate adjacent scenes in shot purpose, composition, framing emphasis, and subject emphasis.",
             "For ia2v/lip-sync route, positive prompt MUST start with IA2V_BASE_PROMPT_V1 performer-first block.",
             "For ia2v/lip-sync route, output lip_sync_shot_variant, performance_pose, camera_angle, gesture, location_zone, mouth_readability, why_this_lip_sync_shot_is_different.",
             f"For ia2v/lip-sync route, lip_sync_shot_variant must be one of: {', '.join(_LIP_SYNC_VARIANTS)}.",
@@ -1059,12 +1071,19 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             f"Environment-focused motion shot: {env_motion_focus}. "
             "Subtle atmosphere/city/people/world motion only. No main performer visible. The vocalist is offscreen voiceover only. No visible singing face or mouth performance."
         )
+        positive_prompt = _append_clause(positive_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
+        positive_prompt = _append_clause(positive_prompt, ANTI_DUPLICATE_ADJACENT_CLAUSE)
         fallback_photo_prompt = (
             f"Environment-focused still frame: {env_still_focus}. "
             "Grounded realistic world, no main performer visible, vocalist offscreen voiceover only."
         )
+        fallback_photo_prompt = _append_clause(fallback_photo_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
+    if any(token in lower_scene_semantics for token in ("underworld", "criminal", "crime", "gang", "mafia", "smuggling", "dangerous", "dockside")) and not any(
+        token in lower_scene_semantics for token in ("labor documentary", "documentary labor", "industrial labor", "workshift documentary")
+    ):
+        positive_prompt = _append_clause(positive_prompt, WORLD_CAST_COHERENCE_CLAUSE)
     domestic_scene = any(
         token in lower_scene_semantics
         for token in ("domestic", "apartment", "kitchen", "home interior", "argument", "breakup", "hallway", "late-night")
@@ -1128,6 +1147,13 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {clause}".strip() if positive_prompt else clause
         if apply_gesture_layer and gesture_rule.lower() not in positive_prompt.lower():
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {gesture_rule}".strip() if positive_prompt else gesture_rule
+        performance_openness = str(plan_row.get("performance_openness") or fallback_prompt_row.get("performance_openness") or "").strip().lower()
+        energy_alignment = str(_safe_dict(plan_row.get("visual_motion")).get("energy_alignment") or "").strip().lower()
+        if performance_openness in {"low", "minimal", "restrained", "subtle"} or energy_alignment in {"low", "minimal", "restrained", "subtle"}:
+            positive_prompt = _append_clause(
+                positive_prompt,
+                "Allow subtle expressive hand gestures, shoulder emphasis, and torso rhythm that support emotional delivery, while keeping the performance controlled and grounded.",
+            )
         positive_prompt = _append_clause(
             positive_prompt,
             f"Shot variant: {lip_sync_shot_variant}. performance_pose: {performance_pose or 'camera-readable vocal delivery'}. camera_angle: {camera_angle or 'eye-level readable performance view'}. gesture: {gesture or hand_gesture_rule}. location_zone: {location_zone or 'same venue, different local zone'}. mouth_readability: {mouth_readability}.",
@@ -1149,6 +1175,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     if route == "i2v":
         route_behavior_template = CONTROLLED_MOTION_SAFETY_BLOCK
         positive_prompt = _append_clause(positive_prompt, route_behavior_template)
+        positive_prompt = _append_clause(
+            positive_prompt,
+            "If this is an environment/world-detail cutaway, keep no main performer visible or non-dominant peripheral presence only.",
+        )
         if domestic_scene:
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
@@ -1157,6 +1187,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         route_template_source = "ia2v_lipsync_template"
         if positive_prompt:
             positive_prompt = f"{positive_prompt.rstrip('. ')}. {route_behavior_template}"
+        positive_prompt = _append_clause(
+            positive_prompt,
+            "Performer-first composition is required: main performer visible and dominant; do not convert this shot into an empty environment plate.",
+        )
+    positive_prompt = _append_clause(positive_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
+    positive_prompt = _append_clause(positive_prompt, ANTI_DUPLICATE_ADJACENT_CLAUSE)
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
         negative_prompt=negative_prompt,
