@@ -1070,7 +1070,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         _safe_dict(_safe_dict(context.get("clip_scene_policy")).get("route_budget_contract")).get("hard_route_assignments_by_segment")
     )
     route_assignment_instruction = (
-        "Do not choose routes. Use the provided route for each segment_id exactly.\\n"
+        "Preserve the provided route for each segment_id whenever that route remains scene-valid after vocal/instrumental validation.\n"
         if hard_route_map
         else "Choose segment routes according to target_counts and dramaturgy.\\n"
     )
@@ -1097,9 +1097,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             f"first_last: {first_last_target}\n"
             f"{first_last_line}"
             "If route_budget_contract.hard_route_assignments_by_segment is present:\n"
-            "- use exact route from hard_route_assignments_by_segment for every segment_id;\n"
-            "- do not change route for any segment;\n"
-            "- route budget is already solved by backend.\n"
+            "- treat it as requested creative route map that should be preserved whenever valid;\n"
+            "- never keep ia2v on instrumental / no-vocal / non-lipsync-invalid windows; downgrade those rows to i2v;\n"
+            "- keep target_counts as close as possible after route-validity checks; do not fake ia2v just to satisfy counts.\n"
             "If character_1 appearanceMode is lip_sync_only:\n"
             "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
             "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; vocal_owner_role=\"\"; lip_sync_allowed=false; mouth_visible_required=false; visual subject should be environment/locals/threshold/aftermath/social texture.\n"
@@ -1160,9 +1160,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "- layout: centered|rule_of_thirds|off_balance|symmetrical\\n"
         "- depth_strategy: flat|layered|deep\\n"
         "USER ROUTE STRATEGY IS A HARD CREATIVE CONSTRAINT.\\n"
-        "If route_budget_contract.hard_route_assignments_by_segment is non-empty, route is STRICT per segment_id and MUST NOT be changed.\\n"
-        "If route_budget_contract.targets_are_hard_for_short_clip=true, you MUST satisfy target_counts exactly.\\n"
-        "This is not a suggestion; this is the required dramaturgical structure for this scene plan.\\n"
+        "If route_budget_contract.hard_route_assignments_by_segment is non-empty, preserve requested route per segment_id whenever that route is scene-valid.\n"
+        "If a requested ia2v row is invalid for lip-sync (instrumental/no-vocal, non-speaking world beat, missing valid mouth-readable performance evidence), downgrade it to i2v instead of faking ia2v.\n"
+        "If route_budget_contract.targets_are_hard_for_short_clip=true, satisfy target_counts as closely as possible after route-validity checks; do not force invalid ia2v just to hit counts.\n"
         f"{route_assignment_instruction}"
         "Do not let backend assign dramaturgy; backend only validates budget compliance.\\n"
         "For ia2v: vocal emotional performance scene, not physical action scene. Prefer strong vocal/speech windows, performance moments, emotional peaks, hooks; "
