@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
@@ -334,6 +335,18 @@ def _select_world_focus_role(active_roles: list[str]) -> str:
 
 
 def _is_world_beat(source_row: dict[str, Any]) -> bool:
+    beat_primary_subject = str(source_row.get("beat_primary_subject") or "").strip().lower()
+    hero_world_mode = str(source_row.get("hero_world_mode") or "").strip().lower()
+    beat_mode = str(source_row.get("beat_mode") or "").strip().lower()
+    subject_presence_requirement = str(source_row.get("subject_presence_requirement") or "").strip().lower()
+    if beat_primary_subject in {"world", "environment", "city", "location", "crowd"}:
+        return True
+    if hero_world_mode == "world_foreground":
+        return True
+    if beat_mode in {"world_observation", "social_texture", "world_pressure", "release", "symbolic_environment"}:
+        return True
+    if any(token in subject_presence_requirement for token in ("world", "context", "offscreen", "implied")):
+        return True
     blob = " ".join(
         [
             str(source_row.get("arc_role") or ""),
@@ -705,6 +718,16 @@ def _build_scene_segment_rows(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     audio_segments = [_safe_dict(row) for row in _safe_list(audio_map.get("segments"))]
     core_rows = {_safe_dict(row).get("segment_id"): _safe_dict(row) for row in _safe_list(story_core.get("narrative_segments"))}
+    story_core_v1 = _safe_dict(story_core.get("story_core_v1"))
+    if not story_core_v1 and str(story_core.get("schema_version") or "").startswith("core_v1"):
+        story_core_v1 = story_core
+    beat_map = _safe_dict(story_core_v1.get("beat_map"))
+    beat_rows = [_safe_dict(row) for row in _safe_list(beat_map.get("beats"))]
+    beat_rows_by_segment = {
+        str(row.get("source_segment_id") or "").strip(): row
+        for row in beat_rows
+        if str(row.get("source_segment_id") or "").strip()
+    }
     cast_rows = {_safe_dict(row).get("segment_id"): _safe_dict(row) for row in _safe_list(role_plan.get("scene_casting"))}
 
     normalized: list[dict[str, Any]] = []
@@ -715,6 +738,7 @@ def _build_scene_segment_rows(
         if not isinstance(core_raw, dict):
             missing_core_source_segments.append(segment_id)
         core = _safe_dict(core_raw)
+        beat = _safe_dict(beat_rows_by_segment.get(segment_id))
         cast = _safe_dict(cast_rows.get(segment_id))
         t0 = _round3(segment.get("t0"))
         t1 = _round3(segment.get("t1"))
@@ -737,9 +761,199 @@ def _build_scene_segment_rows(
                 "presence_mode": str(cast.get("presence_mode") or "").strip(),
                 "presence_weight": str(cast.get("presence_weight") or "").strip(),
                 "performance_focus": bool(cast.get("performance_focus")),
+                "beat_mode": str(beat.get("beat_mode") or "").strip(),
+                "hero_world_mode": str(beat.get("hero_world_mode") or "").strip(),
+                "beat_primary_subject": str(beat.get("beat_primary_subject") or "").strip(),
+                "subject_presence_requirement": str(beat.get("subject_presence_requirement") or "").strip(),
             }
         )
     return normalized, list(dict.fromkeys(missing_core_source_segments))
+
+
+def _apply_route_to_row(
+    *,
+    row: dict[str, Any],
+    route: str,
+    source_row: dict[str, Any],
+    role_row: dict[str, Any],
+    character_1_appearance_mode: str,
+) -> dict[str, Any]:
+    active_roles = [
+        str(v).strip()
+        for v in (
+            role_row.get("active_roles")
+            or [role_row.get("primary_role"), *_safe_list(role_row.get("secondary_roles"))]
+        )
+        if str(v).strip()
+    ]
+    out = _safe_dict(deepcopy(row))
+    out["route"] = route
+    out["story_beat_type"] = _repair_story_beat_type(str(out.get("story_beat_type") or ""), route)
+    composition = _safe_dict(out.get("composition"))
+    if route == "ia2v":
+        transcript_slice = str(source_row.get("transcript_slice") or "").strip()
+        out["speaker_role"] = "character_1"
+        out["vocal_owner_role"] = "character_1"
+        out["lip_sync_allowed"] = True
+        out["lip_sync_priority"] = "high"
+        out["mouth_visible_required"] = True
+        out["singing_readiness_required"] = True
+        out["object_action_allowed"] = False
+        out["foreground_performance_rule"] = str(out.get("foreground_performance_rule") or "").strip() or "face_readability_for_vocal_window"
+        out["spoken_line"] = str(out.get("spoken_line") or "").strip() or transcript_slice
+        out["visual_focus_role"] = "character_1"
+        composition["subject_priority"] = "hero"
+    else:
+        out["speaker_role"] = ""
+        out["vocal_owner_role"] = ""
+        out["spoken_line"] = ""
+        out["lip_sync_allowed"] = False
+        out["lip_sync_priority"] = "none"
+        out["mouth_visible_required"] = False
+        out["singing_readiness_required"] = False
+        out["foreground_performance_rule"] = ""
+        if route == "i2v":
+            out["object_action_allowed"] = bool(out.get("object_action_allowed", True))
+            if character_1_appearance_mode == "lip_sync_only":
+                composition["subject_priority"] = "environment"
+            if _is_world_beat(source_row):
+                world_focus = _select_world_focus_role(active_roles)
+                out["visual_focus_role"] = world_focus or ""
+        elif route == "first_last":
+            composition["subject_priority"] = composition.get("subject_priority") or "hero"
+    out["composition"] = composition
+    return out
+
+
+def _final_semantic_route_rebalance(
+    *,
+    normalized_storyboard: list[dict[str, Any]],
+    scene_segment_rows: list[dict[str, Any]],
+    role_lookup: dict[str, dict[str, Any]],
+    route_budget_target: dict[str, int],
+    character_1_appearance_mode: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not normalized_storyboard or len(normalized_storyboard) != len(scene_segment_rows):
+        return normalized_storyboard, {"applied": False, "reason": "storyboard_size_mismatch"}
+    source_by_segment = {str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row) for row in scene_segment_rows}
+    row_by_segment = {str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row) for row in normalized_storyboard}
+    ordered_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_segment_rows]
+    if any(not segment_id or segment_id not in row_by_segment for segment_id in ordered_ids):
+        return normalized_storyboard, {"applied": False, "reason": "segment_coverage_mismatch"}
+    target = {
+        "i2v": max(0, int(_safe_dict(route_budget_target).get("i2v") or 0)),
+        "ia2v": max(0, int(_safe_dict(route_budget_target).get("ia2v") or 0)),
+        "first_last": max(0, int(_safe_dict(route_budget_target).get("first_last") or 0)),
+    }
+    counts = {
+        "i2v": sum(1 for sid in ordered_ids if str(row_by_segment[sid].get("route") or "").strip().lower() == "i2v"),
+        "ia2v": sum(1 for sid in ordered_ids if str(row_by_segment[sid].get("route") or "").strip().lower() == "ia2v"),
+        "first_last": sum(1 for sid in ordered_ids if str(row_by_segment[sid].get("route") or "").strip().lower() == "first_last"),
+    }
+    before_counts = dict(counts)
+    if counts == target:
+        return normalized_storyboard, {"applied": False, "reason": "already_balanced"}
+
+    changed_segments: list[dict[str, str]] = []
+    ia2v_deficit = max(0, target["ia2v"] - counts["ia2v"])
+    if ia2v_deficit > 0 and counts["i2v"] > target["i2v"]:
+        promote_candidates: list[tuple[int, str]] = []
+        for idx, segment_id in enumerate(ordered_ids):
+            row = row_by_segment[segment_id]
+            if str(row.get("route") or "").strip().lower() != "i2v":
+                continue
+            source_row = source_by_segment.get(segment_id, {})
+            role_row = _safe_dict(role_lookup.get(segment_id))
+            active_roles = [
+                str(v).strip()
+                for v in (
+                    role_row.get("active_roles")
+                    or [role_row.get("primary_role"), *_safe_list(role_row.get("secondary_roles"))]
+                )
+                if str(v).strip()
+            ]
+            can_enforce, _reasons = _can_enforce_ia2v_row(
+                source_row=source_row,
+                spoken_line=str(row.get("spoken_line") or "").strip(),
+                transcript_slice=str(source_row.get("transcript_slice") or "").strip(),
+                is_lip_sync_candidate=bool(source_row.get("is_lip_sync_candidate")),
+                active_roles=active_roles,
+            )
+            if not can_enforce:
+                continue
+            beat_mode = str(source_row.get("beat_mode") or "").strip().lower()
+            beat_primary_subject = str(source_row.get("beat_primary_subject") or "").strip().lower()
+            hero_world_mode = str(source_row.get("hero_world_mode") or "").strip().lower()
+            score = 0
+            if beat_primary_subject == "character_1":
+                score += 6
+            if beat_mode == "performance":
+                score += 5
+            if hero_world_mode == "hero_foreground":
+                score += 4
+            if bool(source_row.get("is_lip_sync_candidate")):
+                score += 3
+            if str(source_row.get("transcript_slice") or "").strip():
+                score += 2
+            if _is_world_beat(source_row):
+                score -= 6
+            promote_candidates.append((score - idx, segment_id))
+        for _score, segment_id in sorted(promote_candidates, key=lambda item: item[0], reverse=True)[:ia2v_deficit]:
+            row_by_segment[segment_id] = _apply_route_to_row(
+                row=row_by_segment[segment_id],
+                route="ia2v",
+                source_row=source_by_segment.get(segment_id, {}),
+                role_row=_safe_dict(role_lookup.get(segment_id)),
+                character_1_appearance_mode=character_1_appearance_mode,
+            )
+            changed_segments.append({"segment_id": segment_id, "from": "i2v", "to": "ia2v"})
+
+    counts = {
+        "i2v": sum(1 for sid in ordered_ids if str(row_by_segment[sid].get("route") or "").strip().lower() == "i2v"),
+        "ia2v": sum(1 for sid in ordered_ids if str(row_by_segment[sid].get("route") or "").strip().lower() == "ia2v"),
+        "first_last": sum(1 for sid in ordered_ids if str(row_by_segment[sid].get("route") or "").strip().lower() == "first_last"),
+    }
+    i2v_deficit = max(0, target["i2v"] - counts["i2v"])
+    if i2v_deficit > 0 and counts["ia2v"] > target["ia2v"]:
+        demote_candidates: list[tuple[int, str]] = []
+        for idx, segment_id in enumerate(ordered_ids):
+            row = row_by_segment[segment_id]
+            if str(row.get("route") or "").strip().lower() != "ia2v":
+                continue
+            source_row = source_by_segment.get(segment_id, {})
+            score = 0
+            if _is_world_beat(source_row):
+                score += 7
+            if str(source_row.get("beat_mode") or "").strip().lower() in {"world_observation", "social_texture", "world_pressure", "release", "symbolic_environment"}:
+                score += 5
+            if str(source_row.get("hero_world_mode") or "").strip().lower() == "world_foreground":
+                score += 4
+            if str(source_row.get("beat_primary_subject") or "").strip().lower() in {"world", "environment", "city", "location", "crowd"}:
+                score += 4
+            demote_candidates.append((score + idx, segment_id))
+        for _score, segment_id in sorted(demote_candidates, key=lambda item: item[0], reverse=True)[:i2v_deficit]:
+            row_by_segment[segment_id] = _apply_route_to_row(
+                row=row_by_segment[segment_id],
+                route="i2v",
+                source_row=source_by_segment.get(segment_id, {}),
+                role_row=_safe_dict(role_lookup.get(segment_id)),
+                character_1_appearance_mode=character_1_appearance_mode,
+            )
+            changed_segments.append({"segment_id": segment_id, "from": "ia2v", "to": "i2v"})
+
+    rebalanced_rows = [row_by_segment[segment_id] for segment_id in ordered_ids]
+    final_counts = {
+        "i2v": sum(1 for row in rebalanced_rows if str(row.get("route") or "").strip().lower() == "i2v"),
+        "ia2v": sum(1 for row in rebalanced_rows if str(row.get("route") or "").strip().lower() == "ia2v"),
+        "first_last": sum(1 for row in rebalanced_rows if str(row.get("route") or "").strip().lower() == "first_last"),
+    }
+    return rebalanced_rows, {
+        "applied": bool(changed_segments),
+        "target_counts": target,
+        "before_counts": before_counts,
+        "after_counts": final_counts,
+        "changed_segments": changed_segments,
+    }
 
 
 def _expected_scene_count_from_package(package: dict[str, Any]) -> int:
@@ -2392,6 +2606,9 @@ def _normalize_scene_plan(
         ]
         role_primary = str(role_row.get("primary_role") or "").strip()
         primary_role = role_primary if role_primary in active_roles else (active_roles[0] if active_roles else "")
+        world_led_beat = _is_world_beat(source_row)
+        if world_led_beat and primary_role == "character_1" and route != "ia2v":
+            primary_role = ""
         visual_focus_role = primary_role
         character_1_appearance_mode = normalize_character_appearance_mode(appearance_modes.get("character_1"))
         speaker_role = str(raw_row.get("speaker_role") or "").strip()
@@ -2784,6 +3001,30 @@ def _normalize_scene_plan(
             route_budget_repair_applied = True
             route_budget_repair_details = repair_details
 
+    pre_final_rebalance_route_counts = {
+        route_name: sum(1 for row in normalized_storyboard if str(row.get("route") or "").strip().lower() == route_name)
+        for route_name in ("i2v", "ia2v", "first_last")
+    }
+    final_semantic_rebalance_applied = False
+    final_semantic_rebalance_details: dict[str, Any] = {}
+    if (
+        hard_short_clip_target
+        and len(normalized_storyboard) == expected_scene_count
+        and pre_final_rebalance_route_counts != route_budget_target
+        and not (scene_plan_empty_detected and not scene_plan_fallback_applied)
+    ):
+        rebalanced_storyboard, rebalance_details = _final_semantic_route_rebalance(
+            normalized_storyboard=normalized_storyboard,
+            scene_segment_rows=scene_segment_rows,
+            role_lookup=role_lookup,
+            route_budget_target=route_budget_target,
+            character_1_appearance_mode=normalize_character_appearance_mode(appearance_modes.get("character_1")),
+        )
+        if bool(_safe_dict(rebalance_details).get("applied")):
+            normalized_storyboard = rebalanced_storyboard
+            final_semantic_rebalance_applied = True
+            final_semantic_rebalance_details = rebalance_details
+
     validated_route_by_segment = {
         str(row.get("segment_id") or "").strip(): str(row.get("route") or "").strip().lower()
         for row in normalized_storyboard
@@ -2935,6 +3176,8 @@ def _normalize_scene_plan(
         "route_budget_pre_repair_actual_mix": pre_repair_counts,
         "route_budget_repair_applied": route_budget_repair_applied,
         "route_budget_repair_details": route_budget_repair_details,
+        "final_semantic_rebalance_applied": final_semantic_rebalance_applied,
+        "final_semantic_rebalance_details": final_semantic_rebalance_details,
         "scene_plan_route_strategy_active": _route_strategy_active(creative_config),
         "scene_plan_route_strategy_preset": route_budget_preset,
         "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
