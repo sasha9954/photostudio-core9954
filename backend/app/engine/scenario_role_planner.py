@@ -109,6 +109,20 @@ _CHARACTER_REF_SAFE_CONTINUITY_RULES: tuple[str, ...] = (
 _TECH_IDENTITY_LEAK_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (term, re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)) for term in _ROLE_PLAN_TECHNICAL_BANNED_TERMS
 )
+_SINGLE_CAST_WORLD_BEAT_MODES = {"world_observation", "world_pressure", "social_texture", "release", "aftermath", "threshold"}
+_SINGLE_CAST_WORLD_HINTS = {
+    "world",
+    "environment",
+    "ambient",
+    "city",
+    "street",
+    "social texture",
+    "observation",
+    "aftermath",
+    "release",
+    "crowd",
+    "locals",
+}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -426,6 +440,8 @@ def _build_single_cast_grounded_fallback(
     anchor_role: str,
     allowed_registry: dict[str, dict[str, Any]],
     character_appearance_modes: dict[str, str],
+    story_core: dict[str, Any],
+    core_subject_map: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     anchor = _normalize_text(anchor_role, max_len=80).lower()
     if not anchor or not expected_segment_ids:
@@ -433,7 +449,12 @@ def _build_single_cast_grounded_fallback(
 
     allowed_row = _safe_dict(allowed_registry.get(anchor))
     anchor_mode = normalize_character_appearance_mode(character_appearance_modes.get(anchor))
-    presence_mode = "voiceover" if anchor_mode == "offscreen_voice" else "physical"
+    narrative_segments = [_safe_dict(row) for row in _safe_list(story_core.get("narrative_segments"))]
+    narrative_by_segment = {
+        _normalize_text(row.get("segment_id"), max_len=80): row
+        for row in narrative_segments
+        if _normalize_text(row.get("segment_id"), max_len=80)
+    }
 
     roster = [
         {
@@ -442,18 +463,80 @@ def _build_single_cast_grounded_fallback(
             "continuity_rules": list(_CHARACTER_REF_SAFE_CONTINUITY_RULES),
         }
     ]
-    scene_casting = [
-        {
-            "segment_id": segment_id,
-            "primary_role": anchor,
-            "secondary_roles": [],
-            "presence_mode": presence_mode,
-            "presence_weight": "anchor",
-            "performance_focus": "Follow the same main character through this beat.",
-            "continuity_notes": "Keep ambient city life as environment only, not cast entities.",
-        }
-        for segment_id in expected_segment_ids
-    ]
+    scene_casting: list[dict[str, Any]] = []
+    for segment_id in expected_segment_ids:
+        core_row = _safe_dict(core_subject_map.get(segment_id))
+        narrative_row = _safe_dict(narrative_by_segment.get(segment_id))
+        hero_world_mode = _normalize_text(core_row.get("hero_world_mode"), max_len=80).lower()
+        beat_mode = _normalize_text(core_row.get("beat_mode"), max_len=80).lower()
+        beat_primary_subject = _normalize_text(core_row.get("primary_role"), max_len=80).lower()
+        semantic_blob = " ".join(
+            [
+                _normalize_text(narrative_row.get("arc_role"), max_len=120).lower(),
+                _normalize_text(narrative_row.get("beat_purpose"), max_len=220).lower(),
+                _normalize_text(narrative_row.get("emotional_key"), max_len=220).lower(),
+                beat_mode,
+                hero_world_mode,
+            ]
+        )
+        world_hint = any(token in semantic_blob for token in _SINGLE_CAST_WORLD_HINTS)
+        world_first = (
+            hero_world_mode == "world_foreground"
+            or beat_mode in _SINGLE_CAST_WORLD_BEAT_MODES
+            or (beat_primary_subject and beat_primary_subject not in {anchor, "character_1"})
+            or world_hint
+        )
+        performance_first = (
+            beat_mode == "performance"
+            or hero_world_mode == "hero_foreground"
+            or beat_primary_subject in {anchor, "character_1"}
+        )
+
+        if anchor_mode == "offscreen_voice":
+            presence_mode = "voiceover"
+            presence_weight = "primary" if performance_first else "support"
+        elif anchor_mode == "lip_sync_only":
+            if performance_first and not world_first:
+                presence_mode = "physical"
+                presence_weight = "anchor"
+            elif world_first:
+                presence_mode = "voiceover"
+                presence_weight = "background"
+            else:
+                presence_mode = "implied"
+                presence_weight = "support"
+        elif anchor_mode == "background_only":
+            presence_mode = "shadow" if performance_first else "implied"
+            presence_weight = "support" if performance_first else "background"
+        else:
+            if performance_first and not world_first:
+                presence_mode = "physical"
+                presence_weight = "anchor"
+            elif world_first:
+                presence_mode = "implied"
+                presence_weight = "support"
+            else:
+                presence_mode = "implied"
+                presence_weight = "primary"
+
+        performance_focus = (
+            "Keep character_1 physically present for the beat's performance center."
+            if presence_mode == "physical"
+            else "Let the world carry the beat while character_1 remains offscreen or implied."
+            if presence_mode == "voiceover"
+            else "Keep character_1 implied while the beat emphasis stays on world progression."
+        )
+        scene_casting.append(
+            {
+                "segment_id": segment_id,
+                "primary_role": anchor,
+                "secondary_roles": [],
+                "presence_mode": presence_mode,
+                "presence_weight": presence_weight,
+                "performance_focus": performance_focus,
+                "continuity_notes": "Keep ambient city life as environment only, not cast entities.",
+            }
+        )
 
     return {
         "roles_version": ROLES_VERSION,
@@ -805,6 +888,8 @@ def _build_core_subject_map(story_core: dict[str, Any]) -> dict[str, dict[str, A
             )
         )
         out[segment_id] = {"primary_role": primary_role, "secondary_roles": secondary_roles}
+        out[segment_id]["hero_world_mode"] = _normalize_text(beat.get("hero_world_mode"), max_len=80)
+        out[segment_id]["beat_mode"] = _normalize_text(beat.get("beat_mode"), max_len=80)
     return out
 
 
@@ -1168,6 +1253,8 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                         anchor_role=single_cast_anchor,
                         allowed_registry=allowed_registry,
                         character_appearance_modes=character_appearance_modes,
+                        story_core=story_core,
+                        core_subject_map=core_subject_map,
                     )
                     fallback_normalized, fallback_error = _validate_roles_payload(
                         roles_payload=fallback_candidate,
