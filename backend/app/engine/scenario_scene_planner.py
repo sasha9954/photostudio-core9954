@@ -1848,6 +1848,176 @@ def _repair_story_beat_type(value: str, route: str) -> str:
     return _default_story_beat_type_for_route(route)
 
 
+def _segment_route_semantic_scores(source_row: dict[str, Any], plan_row: dict[str, Any]) -> tuple[int, int, int]:
+    beat_mode = str(source_row.get("beat_mode") or "").strip().lower()
+    hero_world_mode = str(source_row.get("hero_world_mode") or "").strip().lower()
+    beat_primary_subject = str(source_row.get("beat_primary_subject") or "").strip().lower()
+    story_beat_type = str(plan_row.get("story_beat_type") or "").strip().lower()
+    narrative_function = str(plan_row.get("narrative_function") or "").strip().lower()
+
+    performance_score = 0
+    world_score = 0
+    first_last_score = 0
+    if beat_mode == "performance":
+        performance_score += 4
+    if hero_world_mode == "hero_foreground":
+        performance_score += 3
+    if beat_primary_subject == "character_1":
+        performance_score += 3
+    if story_beat_type == "vocal_emotion":
+        performance_score += 2
+
+    if beat_mode in {"world_observation", "social_texture", "world_pressure", "release", "transition"}:
+        world_score += 4
+    if hero_world_mode == "world_foreground":
+        world_score += 3
+    if beat_primary_subject in {"world", "environment", "city", "location", "crowd"}:
+        world_score += 2
+    if story_beat_type == "physical_event":
+        world_score += 1
+
+    if beat_mode in {"transition", "release"}:
+        first_last_score += 2
+    if story_beat_type == "state_transition":
+        first_last_score += 3
+    if any(token in narrative_function for token in ("transition", "release", "afterglow", "afterimage")):
+        first_last_score += 1
+    return performance_score, world_score, first_last_score
+
+
+def _repair_scene_plan_routes_for_budget(
+    *,
+    storyboard_rows: list[dict[str, Any]],
+    scene_segment_rows: list[dict[str, Any]],
+    role_lookup: dict[str, dict[str, Any]],
+    target_budget: dict[str, int],
+    character_1_appearance_mode: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not storyboard_rows:
+        return storyboard_rows, {"applied": False, "reason": "empty_storyboard"}
+    ordered_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_segment_rows]
+    ordered_segment_ids = [segment_id for segment_id in ordered_segment_ids if segment_id]
+    if not ordered_segment_ids:
+        return storyboard_rows, {"applied": False, "reason": "missing_segment_ids"}
+    row_by_segment = {str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row) for row in storyboard_rows}
+    source_by_segment = {str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row) for row in scene_segment_rows}
+    if any(segment_id not in row_by_segment for segment_id in ordered_segment_ids):
+        return storyboard_rows, {"applied": False, "reason": "segment_coverage_mismatch"}
+
+    total = len(ordered_segment_ids)
+    target_ia2v = max(0, int(_safe_dict(target_budget).get("ia2v") or 0))
+    target_first_last = max(0, int(_safe_dict(target_budget).get("first_last") or 0))
+    if target_ia2v + target_first_last > total:
+        target_first_last = max(0, total - target_ia2v)
+    target_i2v = max(0, total - target_ia2v - target_first_last)
+    normalized_target = {"i2v": target_i2v, "ia2v": target_ia2v, "first_last": target_first_last}
+
+    ranked: list[dict[str, Any]] = []
+    for idx, segment_id in enumerate(ordered_segment_ids):
+        row = row_by_segment.get(segment_id, {})
+        source = source_by_segment.get(segment_id, {})
+        perf_score, world_score, first_last_score = _segment_route_semantic_scores(source, row)
+        ranked.append(
+            {
+                "segment_id": segment_id,
+                "idx": idx,
+                "current_route": str(row.get("route") or "").strip().lower(),
+                "performance_score": perf_score,
+                "world_score": world_score,
+                "first_last_score": first_last_score,
+            }
+        )
+
+    ia2v_ids = [
+        item["segment_id"]
+        for item in sorted(
+            ranked,
+            key=lambda item: (
+                -(item["performance_score"] - item["world_score"]),
+                -item["performance_score"],
+                item["current_route"] != "ia2v",
+                item["idx"],
+            ),
+        )[:target_ia2v]
+    ]
+    ia2v_set = set(ia2v_ids)
+    remaining = [item for item in ranked if item["segment_id"] not in ia2v_set]
+    first_last_ids = [
+        item["segment_id"]
+        for item in sorted(
+            remaining,
+            key=lambda item: (-item["first_last_score"], item["current_route"] != "first_last", item["idx"]),
+        )[:target_first_last]
+    ]
+    first_last_set = set(first_last_ids)
+
+    repaired_rows: list[dict[str, Any]] = []
+    repaired_route_by_segment: dict[str, str] = {}
+    for segment_id in ordered_segment_ids:
+        row = _safe_dict(deepcopy(row_by_segment.get(segment_id)))
+        role_row = _safe_dict(role_lookup.get(segment_id))
+        active_roles = [
+            str(v).strip()
+            for v in (
+                role_row.get("active_roles")
+                or [
+                    role_row.get("primary_role"),
+                    *_safe_list(role_row.get("secondary_roles")),
+                ]
+            )
+            if str(v).strip()
+        ]
+        route = "i2v"
+        if segment_id in ia2v_set:
+            route = "ia2v"
+        elif segment_id in first_last_set:
+            route = "first_last"
+        repaired_route_by_segment[segment_id] = route
+        row["route"] = route
+        row["story_beat_type"] = _repair_story_beat_type(str(row.get("story_beat_type") or ""), route)
+        row["route_selection_reason"] = f'{str(row.get("route_selection_reason") or row.get("route_reason") or "").strip()} | route_budget_repair'.strip(" |")
+        row["route_reason"] = f'{str(row.get("route_reason") or "").strip()} | route_budget_repair'.strip(" |")
+        composition = _safe_dict(row.get("composition"))
+        if route == "ia2v":
+            row["speaker_role"] = "character_1"
+            row["vocal_owner_role"] = "character_1"
+            row["lip_sync_allowed"] = True
+            row["lip_sync_priority"] = "high"
+            row["mouth_visible_required"] = True
+            row["singing_readiness_required"] = True
+            row["object_action_allowed"] = False
+            row["visual_focus_role"] = "character_1"
+            composition["subject_priority"] = "hero"
+        else:
+            row["speaker_role"] = ""
+            row["vocal_owner_role"] = ""
+            row["lip_sync_allowed"] = False
+            row["lip_sync_priority"] = "none"
+            row["mouth_visible_required"] = False
+            row["singing_readiness_required"] = False
+            if route == "i2v":
+                row["object_action_allowed"] = bool(row.get("object_action_allowed", True))
+                row["foreground_performance_rule"] = ""
+                if character_1_appearance_mode == "lip_sync_only":
+                    composition["subject_priority"] = "environment"
+                    if str(row.get("visual_focus_role") or "").strip().lower() == "character_1":
+                        row["visual_focus_role"] = _select_world_focus_role(active_roles)
+        row["composition"] = composition
+        repaired_rows.append(row)
+
+    repaired_counts = {
+        "i2v": sum(1 for route in repaired_route_by_segment.values() if route == "i2v"),
+        "ia2v": sum(1 for route in repaired_route_by_segment.values() if route == "ia2v"),
+        "first_last": sum(1 for route in repaired_route_by_segment.values() if route == "first_last"),
+    }
+    return repaired_rows, {
+        "applied": True,
+        "target_counts": normalized_target,
+        "actual_counts": repaired_counts,
+        "route_by_segment": repaired_route_by_segment,
+    }
+
+
 def _normalize_scene_plan(
     raw_plan: dict[str, Any],
     *,
@@ -2357,6 +2527,43 @@ def _normalize_scene_plan(
         validation_error = validation_error or "speaker_role_invalid"
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
+    expected_scene_count = len(scene_segment_rows)
+    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
+    route_budget_original_targets = {
+        "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
+        "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
+        "first_last": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("first_last") or 0)),
+    }
+    route_budget_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    route_budget_resolved_from = "audio_map_segments_count" if route_budget_preset == "no_first_last_50_50_0" else "creative_config"
+    pre_repair_route_by_segment = {
+        str(row.get("segment_id") or "").strip(): str(row.get("route") or "").strip().lower()
+        for row in normalized_storyboard
+        if str(row.get("segment_id") or "").strip()
+    }
+    pre_repair_counts = {
+        route_name: sum(1 for route_value in pre_repair_route_by_segment.values() if route_value == route_name)
+        for route_name in ("i2v", "ia2v", "first_last")
+    }
+    route_budget_repair_applied = False
+    route_budget_repair_details: dict[str, Any] = {}
+    if (
+        hard_short_clip_target
+        and len(normalized_storyboard) == expected_scene_count
+        and pre_repair_counts != route_budget_target
+    ):
+        repaired_storyboard, repair_details = _repair_scene_plan_routes_for_budget(
+            storyboard_rows=normalized_storyboard,
+            scene_segment_rows=scene_segment_rows,
+            role_lookup=role_lookup,
+            target_budget=route_budget_target,
+            character_1_appearance_mode=normalize_character_appearance_mode(appearance_modes.get("character_1")),
+        )
+        if bool(_safe_dict(repair_details).get("applied")):
+            normalized_storyboard = repaired_storyboard
+            route_budget_repair_applied = True
+            route_budget_repair_details = repair_details
+
     validated_route_by_segment = {
         str(row.get("segment_id") or "").strip(): str(row.get("route") or "").strip().lower()
         for row in normalized_storyboard
@@ -2372,15 +2579,6 @@ def _normalize_scene_plan(
         for seg, route in hard_route_map.items()
         if str(seg).strip() and str(route).strip().lower() in ALLOWED_ROUTES
     }
-    expected_scene_count = len(scene_segment_rows)
-    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
-    route_budget_original_targets = {
-        "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
-        "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
-        "first_last": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("first_last") or 0)),
-    }
-    route_budget_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
-    route_budget_resolved_from = "audio_map_segments_count" if route_budget_preset == "no_first_last_50_50_0" else "creative_config"
     route_budget_mismatch = bool(hard_short_clip_target and final_route_counts != route_budget_target)
     validation_errors: list[str] = []
     error_codes: list[str] = []
@@ -2512,6 +2710,9 @@ def _normalize_scene_plan(
         "ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow": ia2v_route_requires_speaker_because_current_provider_uses_lipsync_workflow,
         "target_route_mix": route_budget_target,
         "actual_route_mix": final_route_counts,
+        "route_budget_pre_repair_actual_mix": pre_repair_counts,
+        "route_budget_repair_applied": route_budget_repair_applied,
+        "route_budget_repair_details": route_budget_repair_details,
         "scene_plan_route_strategy_active": _route_strategy_active(creative_config),
         "scene_plan_route_strategy_preset": route_budget_preset,
         "scene_plan_route_targets_per_block": _safe_dict(creative_config.get("route_targets_per_block")),
