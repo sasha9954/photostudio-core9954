@@ -1362,7 +1362,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "targets_are_soft": bool(row.get("targets_are_soft") if row.get("targets_are_soft") is not None else (row.get("targetsAreSoft") if row.get("targetsAreSoft") is not None else True)),
         "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
         "vocal_policy": str(row.get("vocal_policy") or row.get("vocalPolicy") or "ia2v_only_on_vocal_windows").strip() or "ia2v_only_on_vocal_windows",
-        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec").strip() or "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec",
+        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "split_long_vocal_ranges_into_ia2v_scenes_3_to_7_sec").strip() or "split_long_vocal_ranges_into_ia2v_scenes_3_to_7_sec",
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
@@ -4842,7 +4842,13 @@ def _infer_meaning_axes(row: dict[str, Any]) -> dict[str, str]:
     }
 
 
-def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]]) -> tuple[list[str], dict[str, Any]]:
+def _evaluate_story_core_quality_gates(
+    narrative_segments: list[dict[str, Any]],
+    *,
+    content_type: str = "",
+    director_mode: str = "",
+    audio_map_quality_context: dict[str, Any] | None = None,
+) -> tuple[list[str], dict[str, Any]]:
     diagnostics: dict[str, Any] = {
         "story_core_entropy_threshold_triggered": False,
         "story_core_flatline_span_start": "",
@@ -4883,6 +4889,8 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
         "story_core_local_breath_found": False,
         "story_core_local_breath_segment_ids": [],
         "story_core_visual_breath_fail_spans": [],
+        "story_core_entropy_flatline_downgraded_to_warning": False,
+        "story_core_entropy_flatline_downgrade_reason": "",
     }
     causes: list[str] = []
     if len(narrative_segments) < 2:
@@ -5123,6 +5131,32 @@ def _evaluate_story_core_quality_gates(narrative_segments: list[dict[str, Any]])
     diagnostics["story_core_visual_breath_inserted_in_logic"] = has_contrast_event
     if overload_detected and fail_spans:
         causes.append("visual_breath_contrast_event_missing")
+
+    content_type_norm = str(content_type or "").strip().lower()
+    director_mode_norm = str(director_mode or "").strip().lower()
+    is_music_clip_mode = content_type_norm == "music_video" and director_mode_norm == "clip"
+    if is_music_clip_mode and "entropy_flatline_detected" in causes:
+        quality_ctx = _safe_dict(audio_map_quality_context)
+        ids_preserved = bool(quality_ctx.get("segment_ids_preserved", True))
+        coverage_ok = bool(quality_ctx.get("coverage_ok"))
+        gap_sum_sec = _to_float(quality_ctx.get("gap_sum_sec"), 1.0)
+        overlap_sum_sec = _to_float(quality_ctx.get("overlap_sum_sec"), 1.0)
+        phrase_endings_ok = bool(quality_ctx.get("phrase_endings_ok", True))
+        source_valid = bool(quality_ctx.get("audio_map_source_valid", True))
+        has_structural_validity = (
+            ids_preserved
+            and coverage_ok
+            and gap_sum_sec <= 1e-6
+            and overlap_sum_sec <= 1e-6
+            and phrase_endings_ok
+            and source_valid
+        )
+        if has_structural_validity:
+            causes = [code for code in causes if code != "entropy_flatline_detected"]
+            diagnostics["story_core_entropy_flatline_downgraded_to_warning"] = True
+            diagnostics["story_core_entropy_flatline_downgrade_reason"] = (
+                "music_video_clip_phrase_regularization_with_valid_audio_map_structure"
+            )
 
     return causes, diagnostics
 
@@ -5608,6 +5642,9 @@ def _validate_story_core_v11_payload(
     role_identity_expectations: dict[str, str] | None = None,
     present_cast_roles: set[str] | None = None,
     debug_capture: dict[str, Any] | None = None,
+    content_type: str = "",
+    director_mode: str = "",
+    audio_map_quality_context: dict[str, Any] | None = None,
 ) -> tuple[bool, str, list[str]]:
     # Role binding quick checks:
     # Should PASS:
@@ -5686,7 +5723,12 @@ def _validate_story_core_v11_payload(
             mismatch_errors.append("id_mismatch_kind:renamed_segment_ids")
         return False, CORE_ID_MISMATCH, mismatch_errors or ["segment_id_1_to_1_mismatch"]
 
-    quality_retry_causes, quality_gate_diag = _evaluate_story_core_quality_gates(narrative_segments)
+    quality_retry_causes, quality_gate_diag = _evaluate_story_core_quality_gates(
+        narrative_segments,
+        content_type=content_type,
+        director_mode=director_mode,
+        audio_map_quality_context=audio_map_quality_context,
+    )
     if debug_capture is not None:
         debug_capture.update(quality_gate_diag)
     if quality_retry_causes:
@@ -5844,17 +5886,31 @@ def _normalize_story_core_contract_payload(
             else configured_route_mix_doctrine.get("prioritize_lipsync_for_strong_performance_windows")
         ),
     }
-    normalized_segments = []
-    for row in _safe_list(parsed.get("narrative_segments")):
-        if not isinstance(row, dict):
-            continue
+    parsed_segments = [row for row in _safe_list(parsed.get("narrative_segments")) if isinstance(row, dict)]
+    parsed_by_segment_id = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in parsed_segments
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    unresolved_rows = [row for row in parsed_segments if not str(_safe_dict(row).get("segment_id") or "").strip()]
+    normalized_segments: list[dict[str, Any]] = []
+    fallback_arc_roles = ("setup", "build", "pivot", "climax", "release", "afterglow")
+    for idx, segment in enumerate(audio_segments):
+        canonical_segment_id = str(_safe_dict(segment).get("segment_id") or "").strip()
+        source_row = _safe_dict(parsed_by_segment_id.get(canonical_segment_id))
+        if not source_row and idx < len(parsed_segments):
+            source_row = _safe_dict(parsed_segments[idx])
+        if not source_row and unresolved_rows:
+            source_row = _safe_dict(unresolved_rows.pop(0))
+        arc_fallback = fallback_arc_roles[min(idx, len(fallback_arc_roles) - 1)]
+        phrase_hint = str(_safe_dict(segment).get("transcript_slice") or "").strip()
         normalized_row = {
-            "segment_id": str(row.get("segment_id") or "").strip(),
-            "arc_role": str(row.get("arc_role") or "").strip(),
-            "beat_purpose": str(row.get("beat_purpose") or "").strip(),
-            "emotional_key": str(row.get("emotional_key") or "").strip(),
+            "segment_id": canonical_segment_id,
+            "arc_role": str(source_row.get("arc_role") or arc_fallback).strip(),
+            "beat_purpose": str(source_row.get("beat_purpose") or phrase_hint or f"progress_{idx + 1}").strip(),
+            "emotional_key": str(source_row.get("emotional_key") or "musical progression").strip(),
         }
-        normalized_row.update(_normalize_story_core_segment_structured_fields(row))
+        normalized_row.update(_normalize_story_core_segment_structured_fields(source_row or normalized_row))
         normalized_segments.append(normalized_row)
     return {
         "core_version": "1.1",
@@ -7366,6 +7422,32 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 present_cast_roles = _collect_present_cast_roles(
                     _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles")
                 )
+                audio_map_diag = _safe_dict(_safe_dict(audio_map).get("diagnostics"))
+                audio_map_source = str(
+                    _safe_dict(audio_map).get("audio_map_source_of_truth")
+                    or audio_map_diag.get("audio_map_source_of_truth")
+                    or _safe_dict(package.get("diagnostics")).get("audio_map_source_of_truth")
+                    or ""
+                ).strip().lower()
+                audio_map_quality_context = {
+                    "segment_ids_preserved": bool(
+                        [str(_safe_dict(seg).get("segment_id") or "").strip() for seg in core_segments if str(_safe_dict(seg).get("segment_id") or "").strip()]
+                        == [
+                            str(_safe_dict(seg).get("segment_id") or "").strip()
+                            for seg in _safe_list(_safe_dict(audio_map).get("segments"))
+                            if str(_safe_dict(seg).get("segment_id") or "").strip()
+                        ]
+                    ),
+                    "coverage_ok": bool(audio_map_diag.get("coverage_ok")),
+                    "gap_sum_sec": _to_float(audio_map_diag.get("gap_sum_sec"), _to_float(audio_map_diag.get("audio_map_gap_sum_sec"), 0.0)),
+                    "overlap_sum_sec": _to_float(audio_map_diag.get("overlap_sum_sec"), _to_float(audio_map_diag.get("audio_map_overlap_sum_sec"), 0.0)),
+                    "phrase_endings_ok": bool(
+                        _safe_dict(audio_map).get("segmentation_validation", {}).get("prefer_phrase_endings")
+                        if isinstance(_safe_dict(audio_map).get("segmentation_validation"), dict)
+                        else True
+                    ),
+                    "audio_map_source_valid": audio_map_source in {"segments_v1_1", "audio_map.segments[]"},
+                }
                 ok, error_code, validation_errors = _validate_story_core_v11_payload(
                     payload=normalized_core,
                     audio_segments=core_segments,
@@ -7373,6 +7455,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     role_identity_expectations=role_identity_expectations,
                     present_cast_roles=present_cast_roles,
                     debug_capture=technical_spawn_debug,
+                    content_type=str(input_pkg.get("content_type") or "music_video"),
+                    director_mode=_resolve_director_mode(
+                        input_pkg.get("director_mode"),
+                        content_type=str(input_pkg.get("content_type") or "music_video"),
+                    ),
+                    audio_map_quality_context=audio_map_quality_context,
                 )
                 diagnostics["story_core_validation_errors"] = validation_errors
                 diagnostics["story_core_retry_used"] = retry_used
@@ -7404,6 +7492,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     technical_spawn_debug.get("story_core_flatline_repeated_pressure_mode") or ""
                 )
                 diagnostics["story_core_flatline_retry_used"] = bool(technical_spawn_debug.get("story_core_flatline_retry_used"))
+                diagnostics["story_core_entropy_flatline_downgraded_to_warning"] = bool(
+                    technical_spawn_debug.get("story_core_entropy_flatline_downgraded_to_warning")
+                )
+                diagnostics["story_core_entropy_flatline_downgrade_reason"] = str(
+                    technical_spawn_debug.get("story_core_entropy_flatline_downgrade_reason") or ""
+                )
                 diagnostics["story_core_two_axis_validation_passed"] = bool(
                     technical_spawn_debug.get("story_core_two_axis_validation_passed", True)
                 )

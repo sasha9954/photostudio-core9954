@@ -457,7 +457,7 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "targets_are_soft": targets_are_soft,
         "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
         "vocal_policy": str(row.get("vocal_policy") or row.get("vocalPolicy") or "ia2v_only_on_vocal_windows").strip() or "ia2v_only_on_vocal_windows",
-        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "prefer_ia2v_3_to_6_sec_allow_strong_vocal_opening_anchor_up_to_7_sec").strip() or "prefer_ia2v_3_to_6_sec_allow_strong_vocal_opening_anchor_up_to_7_sec",
+        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "prefer_ia2v_3_to_7_sec_allow_strong_vocal_opening_anchor_up_to_7_sec").strip() or "prefer_ia2v_3_to_7_sec_allow_strong_vocal_opening_anchor_up_to_7_sec",
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
