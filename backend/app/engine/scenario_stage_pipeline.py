@@ -1265,6 +1265,17 @@ def _route_strategy_signature_for_package(package: dict[str, Any]) -> str:
     return _route_strategy_signature_from_input(_safe_dict(_safe_dict(package).get("input")))
 
 
+def _normalize_long_vocal_split_policy(policy: Any, default: str) -> str:
+    raw_policy = str(policy or "").strip()
+    if not raw_policy:
+        raw_policy = default
+    aliases = {
+        "split_long_vocal_ranges_into_ia2v_scenes_3_to_6_sec": "split_long_vocal_ranges_into_ia2v_scenes_3_to_7_sec",
+        "prefer_ia2v_3_to_6_sec_allow_strong_vocal_opening_anchor_up_to_7_sec": "prefer_ia2v_3_to_7_sec_allow_strong_vocal_opening_anchor_up_to_7_sec",
+    }
+    return aliases.get(raw_policy, raw_policy)
+
+
 def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
     row = _safe_dict(raw_config)
     new_route_strategy_keys = {
@@ -1362,7 +1373,10 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "targets_are_soft": bool(row.get("targets_are_soft") if row.get("targets_are_soft") is not None else (row.get("targetsAreSoft") if row.get("targetsAreSoft") is not None else True)),
         "instrumental_policy": str(row.get("instrumental_policy") or row.get("instrumentalPolicy") or "use_i2v_for_non_vocal_or_instrumental_gaps").strip() or "use_i2v_for_non_vocal_or_instrumental_gaps",
         "vocal_policy": str(row.get("vocal_policy") or row.get("vocalPolicy") or "ia2v_only_on_vocal_windows").strip() or "ia2v_only_on_vocal_windows",
-        "long_vocal_split_policy": str(row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy") or "split_long_vocal_ranges_into_ia2v_scenes_3_to_7_sec").strip() or "split_long_vocal_ranges_into_ia2v_scenes_3_to_7_sec",
+        "long_vocal_split_policy": _normalize_long_vocal_split_policy(
+            row.get("long_vocal_split_policy") or row.get("longVocalSplitPolicy"),
+            default="split_long_vocal_ranges_into_ia2v_scenes_3_to_7_sec",
+        ),
         "route_mix_mode": route_mix_mode,
         "lipsync_ratio": round(lipsync_ratio, 3),
         "first_last_ratio": round(first_last_ratio, 3),
@@ -1371,6 +1385,30 @@ def _normalize_creative_config(raw_config: Any) -> dict[str, Any]:
         "max_consecutive_lipsync": max_consecutive_ia2v,
     }
 
+
+
+def _clear_stale_stage_failure_diagnostics(package: dict[str, Any], stage_id: str) -> None:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    errors = _safe_list(diagnostics.get("errors"))
+    warnings = _safe_list(diagnostics.get("warnings"))
+    stage_prefix = f"{stage_id}:"
+    failure_tokens = (CORE_QUALITY_GATES_FAILED, "hard_fail:")
+
+    def _drop_error(item: Any) -> bool:
+        text = str(item or "").strip()
+        return bool(text and text.startswith(stage_prefix))
+
+    def _drop_warning(item: Any) -> bool:
+        if isinstance(item, dict):
+            warning_stage_id = str(item.get("stage_id") or "").strip()
+            message = str(item.get("message") or "").strip()
+            return warning_stage_id == stage_id and any(token in message for token in failure_tokens)
+        text = str(item or "").strip()
+        return bool(text and text.startswith(stage_prefix) and any(token in text for token in failure_tokens))
+
+    diagnostics["errors"] = [item for item in errors if not _drop_error(item)][-80:]
+    diagnostics["warnings"] = [item for item in warnings if not _drop_warning(item)][-80:]
+    package["diagnostics"] = diagnostics
 
 
 def _inject_route_strategy_diagnostics(package: dict[str, Any]) -> None:
@@ -11695,6 +11733,8 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         elif stage_id == "finalize":
             pkg = _run_finalize_stage(pkg)
         _set_stage_status(pkg, stage_id, "done")
+        if stage_id == "story_core":
+            _clear_stale_stage_failure_diagnostics(pkg, stage_id)
     except Exception as exc:  # noqa: BLE001
         _set_stage_status(pkg, stage_id, "error", error=str(exc))
         diagnostics = _safe_dict(pkg.get("diagnostics"))
