@@ -195,6 +195,31 @@ INSTRUMENTAL_NO_VOCAL_MARKERS = (
     "outro",
     "intro",
 )
+SCENE_PLAN_COMPOSITION_ENUM_ALIASES: dict[str, dict[str, str]] = {
+    "composition.framing": {
+        "close-up": "close_up",
+        "close up": "close_up",
+        "medium_close_up": "medium",
+        "medium close up": "medium",
+        "medium_wide": "wide",
+        "medium wide": "wide",
+        "wide_shot": "wide",
+        "wide shot": "wide",
+    },
+    "composition.depth_strategy": {
+        "shallow": "flat",
+        "shallow_focus": "flat",
+        "shallow focus": "flat",
+        "deep_focus": "deep",
+        "deep focus": "deep",
+    },
+    "composition.layout": {
+        "asymmetrical": "off_balance",
+        "balanced": "symmetrical",
+        "rule of thirds": "rule_of_thirds",
+        "rule-of-thirds": "rule_of_thirds",
+    },
+}
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -242,6 +267,21 @@ def _normalize_identity_label_hint(value: Any) -> str:
     if any(t in token for t in male_tokens):
         return "male"
     return ""
+
+
+def _normalize_scene_plan_composition_enum_alias(field_name: str, field_value: Any) -> tuple[str, bool]:
+    raw_value = str(field_value or "").strip().lower()
+    if not raw_value:
+        return "", False
+    aliases = SCENE_PLAN_COMPOSITION_ENUM_ALIASES.get(field_name) or {}
+    if raw_value in aliases:
+        normalized = str(aliases.get(raw_value) or "").strip().lower()
+        return normalized or raw_value, bool(normalized and normalized != raw_value)
+    canonical_like = "_".join(token for token in raw_value.replace("-", " ").replace("_", " ").split() if token).strip("_")
+    if canonical_like in aliases:
+        normalized = str(aliases.get(canonical_like) or "").strip().lower()
+        return normalized or canonical_like, bool(normalized and normalized != raw_value)
+    return canonical_like or raw_value, bool(canonical_like and canonical_like != raw_value)
 
 
 def normalize_character_appearance_mode(value: Any) -> str:
@@ -2076,6 +2116,8 @@ def _normalize_scene_plan(
     enum_repair_rows: list[dict[str, Any]] = []
     enum_unrepaired_count = 0
     enum_unrepaired_rows: list[dict[str, Any]] = []
+    enum_alias_normalized_count = 0
+    enum_alias_normalized_rows: list[dict[str, Any]] = []
     illegal_route_count = 0
     cast_mutation_count = 0
     speaker_role_invalid_count = 0
@@ -2126,6 +2168,28 @@ def _normalize_scene_plan(
         subject_priority = str(composition.get("subject_priority") or "").strip().lower()
         layout = str(composition.get("layout") or "").strip().lower()
         depth_strategy = str(composition.get("depth_strategy") or "").strip().lower()
+        for field_name, current_value in (
+            ("composition.framing", framing),
+            ("composition.layout", layout),
+            ("composition.depth_strategy", depth_strategy),
+        ):
+            normalized_value, changed = _normalize_scene_plan_composition_enum_alias(field_name, current_value)
+            if changed:
+                enum_alias_normalized_count += 1
+                enum_alias_normalized_rows.append(
+                    {
+                        "segment_id": segment_id,
+                        "field": field_name,
+                        "value": current_value,
+                        "normalized_to": normalized_value,
+                    }
+                )
+            if field_name == "composition.framing":
+                framing = normalized_value
+            elif field_name == "composition.layout":
+                layout = normalized_value
+            elif field_name == "composition.depth_strategy":
+                depth_strategy = normalized_value
 
         content_blob = " ".join(
             [
@@ -2685,6 +2749,8 @@ def _normalize_scene_plan(
         "scene_plan_enum_repair_rows": enum_repair_rows,
         "scene_plan_enum_unrepaired_count": enum_unrepaired_count,
         "scene_plan_enum_unrepaired_rows": enum_unrepaired_rows,
+        "scene_plan_enum_alias_normalized_count": enum_alias_normalized_count,
+        "scene_plan_enum_alias_normalized_rows": enum_alias_normalized_rows,
         "illegal_route_count": illegal_route_count,
         "cast_mutation_count": cast_mutation_count,
         "speaker_role_invalid_count": speaker_role_invalid_count,
