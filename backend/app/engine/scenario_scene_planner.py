@@ -1925,6 +1925,123 @@ def _segment_route_semantic_scores(source_row: dict[str, Any], plan_row: dict[st
     return performance_score, world_score, first_last_score
 
 
+def _source_row_route_seed(
+    source_row: dict[str, Any],
+    *,
+    target_budget: dict[str, int],
+) -> tuple[str, str, str]:
+    text_blob = " ".join(
+        [
+            str(source_row.get("transcript_slice") or ""),
+            str(source_row.get("beat_purpose") or ""),
+            str(source_row.get("arc_role") or ""),
+            str(source_row.get("emotional_key") or ""),
+        ]
+    ).strip().lower()
+    world_tokens = {"world_observation", "social_texture", "world_pressure", "release", "symbolic_environment", "city", "environment"}
+    performance_tokens = {"performance", "hero_foreground", "sing", "voice", "vocal", "confession", "emotion", "character_1"}
+    performance_score = 0
+    world_score = 0
+    if bool(source_row.get("performance_focus")):
+        performance_score += 3
+    if bool(source_row.get("is_lip_sync_candidate")) and not _is_instrumental_or_no_vocal_text(source_row.get("transcript_slice")):
+        performance_score += 3
+    if any(token in text_blob for token in performance_tokens):
+        performance_score += 2
+    if any(token in text_blob for token in world_tokens) or _is_world_beat(source_row):
+        world_score += 3
+    if not text_blob:
+        world_score += 1
+    force_no_first_last = int(_safe_dict(target_budget).get("first_last") or 0) == 0
+    route = "ia2v" if performance_score >= world_score else "i2v"
+    if not force_no_first_last and "transition" in text_blob and world_score >= performance_score:
+        route = "first_last"
+    story_beat_type = _default_story_beat_type_for_route(route)
+    route_reason = "grounded_empty_plan_fallback_seed"
+    return route, story_beat_type, route_reason
+
+
+def _build_grounded_empty_scene_plan_fallback(
+    *,
+    scene_segment_rows: list[dict[str, Any]],
+    role_lookup: dict[str, dict[str, Any]],
+    creative_config: dict[str, Any],
+    character_appearance_modes_by_role: dict[str, str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    expected_scene_count = len(scene_segment_rows)
+    if expected_scene_count <= 0:
+        return [], {"applied": False, "reason": "no_scene_segments"}
+    if any(not str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_segment_rows):
+        return [], {"applied": False, "reason": "segment_id_missing"}
+    if any(not _safe_dict(role_lookup.get(str(_safe_dict(row).get("segment_id") or "").strip())) for row in scene_segment_rows):
+        return [], {"applied": False, "reason": "role_lookup_missing_segments"}
+
+    route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
+    if not hard_short_clip_target:
+        return [], {"applied": False, "reason": "route_budget_not_hard"}
+
+    seeded_rows: list[dict[str, Any]] = []
+    for source_row in scene_segment_rows:
+        segment_id = str(source_row.get("segment_id") or "").strip()
+        route, story_beat_type, route_reason = _source_row_route_seed(source_row, target_budget=route_budget_target)
+        seeded_rows.append(
+            {
+                "segment_id": segment_id,
+                "route": route,
+                "route_reason": route_reason,
+                "route_selection_reason": route_reason,
+                "scene_goal": str(source_row.get("emotional_key") or "").strip(),
+                "narrative_function": str(source_row.get("beat_purpose") or source_row.get("arc_role") or "").strip(),
+                "story_beat_type": story_beat_type,
+                "photo_staging_goal": "",
+                "ltx_video_goal": "",
+                "background_story_evidence": "",
+                "foreground_performance_rule": "face_readability_for_vocal_window" if route == "ia2v" else "",
+                "object_action_allowed": False if route == "ia2v" else True,
+                "singing_readiness_required": bool(route == "ia2v"),
+                "ia2v_photo_readability_notes": "",
+                "visual_motion": {
+                    "subject_motion": "",
+                    "camera_intent": "",
+                    "pacing": "stable",
+                    "energy_alignment": "match",
+                },
+                "composition": {
+                    "framing": "medium",
+                    "subject_priority": "hero" if route == "ia2v" else "environment",
+                    "layout": "centered",
+                    "depth_strategy": "layered",
+                },
+                "audio_visual_sync": "",
+                "speaker_role": "character_1" if route == "ia2v" else "",
+                "vocal_owner_role": "character_1" if route == "ia2v" else UNKNOWN_VOCAL_OWNER_ROLE,
+                "spoken_line": str(source_row.get("transcript_slice") or "").strip() if route == "ia2v" else "",
+                "lip_sync_allowed": bool(route == "ia2v"),
+                "lip_sync_priority": "high" if route == "ia2v" else "none",
+                "mouth_visible_required": bool(route == "ia2v"),
+                "listener_reaction_allowed": True,
+                "reaction_role": "",
+                "speaker_confidence": 0.6 if route == "ia2v" else 0.0,
+            }
+        )
+
+    repaired_rows, repair_details = _repair_scene_plan_routes_for_budget(
+        storyboard_rows=seeded_rows,
+        scene_segment_rows=scene_segment_rows,
+        role_lookup=role_lookup,
+        target_budget=route_budget_target,
+        character_1_appearance_mode=normalize_character_appearance_mode(character_appearance_modes_by_role.get("character_1")),
+    )
+    if not bool(_safe_dict(repair_details).get("applied")):
+        return [], {"applied": False, "reason": f'budget_repair_failed:{str(_safe_dict(repair_details).get("reason") or "unknown")}'}
+    return repaired_rows, {
+        "applied": True,
+        "type": "grounded_zero_row_from_segments",
+        "target_budget": route_budget_target,
+        "repair_details": repair_details,
+    }
+
+
 def _repair_scene_plan_routes_for_budget(
     *,
     storyboard_rows: list[dict[str, Any]],
@@ -2068,8 +2185,11 @@ def _normalize_scene_plan(
     vocal_owner_role: str = UNKNOWN_VOCAL_OWNER_ROLE,
     include_debug_raw: bool = False,
     character_appearance_modes_by_role: dict[str, str] | None = None,
+    empty_plan_fallback_allowed: bool = False,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
-    raw_storyboard = [_safe_dict(row) for row in _safe_list(raw_plan.get("storyboard"))]
+    raw_storyboard_value = raw_plan.get("storyboard")
+    storyboard_missing = "storyboard" not in raw_plan
+    raw_storyboard = [_safe_dict(row) for row in _safe_list(raw_storyboard_value)]
     storyboard_by_id: dict[str, dict[str, Any]] = {}
     duplicate_ids: list[str] = []
     for row in raw_storyboard:
@@ -2089,12 +2209,24 @@ def _normalize_scene_plan(
     error_code = ""
     watchability_fallback_count = 0
     used_fallback = False
+    scene_plan_empty_detected = False
+    scene_plan_empty_reason = ""
+    scene_plan_fallback_applied = False
+    scene_plan_fallback_type = ""
+    scene_plan_fallback_row_count = 0
 
-    if duplicate_ids:
+    if storyboard_missing:
+        scene_plan_empty_detected = True
+        scene_plan_empty_reason = "missing_storyboard"
+    elif not raw_storyboard:
+        scene_plan_empty_detected = True
+        scene_plan_empty_reason = "empty_storyboard"
+
+    if duplicate_ids and not scene_plan_empty_detected:
         validation_error = "duplicate_segment_id"
         error_code = "SCENES_SEGMENT_ID_MISMATCH"
 
-    if not validation_error and (len(raw_storyboard) != len(scene_segment_rows) or model_segment_ids != expected_segment_ids):
+    if not validation_error and not scene_plan_empty_detected and (len(raw_storyboard) != len(scene_segment_rows) or model_segment_ids != expected_segment_ids):
         validation_error = "segment_id_sequence_mismatch"
         error_code = "SCENES_SEGMENT_ID_MISMATCH"
 
@@ -2145,6 +2277,9 @@ def _normalize_scene_plan(
         segment_id = str(source_row.get("segment_id") or "").strip()
         raw_row = _safe_dict(storyboard_by_id.get(segment_id))
         if not raw_row:
+            if not scene_plan_empty_detected:
+                scene_plan_empty_detected = True
+                scene_plan_empty_reason = scene_plan_empty_reason or "zero_normalized_rows"
             validation_error = validation_error or "missing_storyboard_row"
             error_code = error_code or "SCENES_SEGMENT_ID_MISMATCH"
             continue
@@ -2585,6 +2720,26 @@ def _normalize_scene_plan(
         validation_error = validation_error or "speaker_role_invalid"
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
+    if scene_plan_empty_detected and empty_plan_fallback_allowed:
+        fallback_rows, fallback_details = _build_grounded_empty_scene_plan_fallback(
+            scene_segment_rows=scene_segment_rows,
+            role_lookup=role_lookup,
+            creative_config=creative_config,
+            character_appearance_modes_by_role=appearance_modes,
+        )
+        if fallback_rows:
+            normalized_storyboard = fallback_rows
+            used_fallback = True
+            scene_plan_fallback_applied = True
+            scene_plan_fallback_type = str(_safe_dict(fallback_details).get("type") or "grounded_zero_row_from_segments")
+            scene_plan_fallback_row_count = len(fallback_rows)
+            validation_error = ""
+            error_code = ""
+            scene_plan_empty_reason = "fallback_applied"
+    if scene_plan_empty_detected and not scene_plan_fallback_applied:
+        validation_error = "empty_scene_plan"
+        error_code = "SCENES_EMPTY_PLAN"
+
     route_mix_mode = str(creative_config.get("route_mix_mode") or "auto").strip().lower() or "auto"
     total_segments = len(scene_segment_rows)
     if route_mix_mode == "auto" and total_segments == 8 and lip_sync_selected_count > 3:
@@ -2615,6 +2770,7 @@ def _normalize_scene_plan(
         hard_short_clip_target
         and len(normalized_storyboard) == expected_scene_count
         and pre_repair_counts != route_budget_target
+        and not (scene_plan_empty_detected and not scene_plan_fallback_applied)
     ):
         repaired_storyboard, repair_details = _repair_scene_plan_routes_for_budget(
             storyboard_rows=normalized_storyboard,
@@ -2651,7 +2807,7 @@ def _normalize_scene_plan(
         error_codes.append("SCENES_ENUM_INVALID")
         validation_error = validation_error or "enum_invalid"
         error_code = error_code or "SCENES_ENUM_INVALID"
-    if route_budget_mismatch:
+    if route_budget_mismatch and not (scene_plan_empty_detected and not scene_plan_fallback_applied):
         validation_errors.append("route_budget_mismatch")
         error_codes.append("SCENES_ROUTE_BUDGET_MISMATCH")
         validation_error = "route_budget_mismatch"
@@ -2799,6 +2955,11 @@ def _normalize_scene_plan(
         "scene_plan_route_budget_mismatch_reason": "gemini_did_not_respect_user_route_strategy" if route_budget_mismatch else "",
         "scene_plan_user_route_strategy_was_sent": bool(_route_strategy_active(creative_config)),
         "scene_plan_user_route_strategy_hard_constraint": bool(hard_short_clip_target),
+        "scene_plan_empty_detected": scene_plan_empty_detected,
+        "scene_plan_empty_reason": scene_plan_empty_reason,
+        "scene_plan_fallback_applied": scene_plan_fallback_applied,
+        "scene_plan_fallback_type": scene_plan_fallback_type,
+        "scene_plan_fallback_row_count": scene_plan_fallback_row_count,
         "route_spacing": {
             "has_adjacent_ia2v": has_adjacent_ia2v,
             "has_adjacent_first_last": has_adjacent_first_last,
@@ -2827,6 +2988,18 @@ def build_gemini_scene_plan(
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
     creative_config = _normalize_creative_config(_safe_dict(package.get("input")).get("creative_config"))
+    story_core_raw = _safe_dict(package.get("story_core"))
+    role_plan_raw = _safe_dict(package.get("role_plan"))
+    beat_map_raw = _safe_dict(package.get("beat_map"))
+    route_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    empty_plan_fallback_allowed = bool(
+        scene_segment_rows
+        and role_lookup
+        and _safe_list(story_core_raw.get("narrative_segments"))
+        and (beat_map_raw or _safe_list(story_core_raw.get("narrative_segments")))
+        and (route_preset or _route_strategy_active(creative_config))
+        and _safe_list(role_plan_raw.get("scene_casting"))
+    )
     vocal_gender = str(aux.get("vocal_gender") or UNKNOWN_VOCAL_GENDER).strip().lower() or UNKNOWN_VOCAL_GENDER
     vocal_owner_role = str(aux.get("vocal_owner_role") or UNKNOWN_VOCAL_OWNER_ROLE).strip() or UNKNOWN_VOCAL_OWNER_ROLE
     model_id = str(_safe_dict(context.get("video_capability_canon")).get("model_id") or DEFAULT_VIDEO_MODEL_ID)
@@ -2961,6 +3134,11 @@ def build_gemini_scene_plan(
             "scene_plan_route_budget_mismatch_reason": str(normalization_diag.get("scene_plan_route_budget_mismatch_reason") or ""),
             "scene_plan_user_route_strategy_was_sent": bool(normalization_diag.get("scene_plan_user_route_strategy_was_sent")),
             "scene_plan_user_route_strategy_hard_constraint": bool(normalization_diag.get("scene_plan_user_route_strategy_hard_constraint")),
+            "scene_plan_empty_detected": bool(normalization_diag.get("scene_plan_empty_detected")),
+            "scene_plan_empty_reason": str(normalization_diag.get("scene_plan_empty_reason") or ""),
+            "scene_plan_fallback_applied": bool(normalization_diag.get("scene_plan_fallback_applied")),
+            "scene_plan_fallback_type": str(normalization_diag.get("scene_plan_fallback_type") or ""),
+            "scene_plan_fallback_row_count": int(normalization_diag.get("scene_plan_fallback_row_count") or 0),
             "scene_plan_route_selection_reasons_by_segment": _safe_dict(normalization_diag.get("scene_plan_route_selection_reasons_by_segment")),
             "scene_plan_final_route_by_segment": _safe_dict(normalization_diag.get("final_route_by_segment")),
             "scene_plan_requested_route_locks_by_segment": _safe_dict(normalization_diag.get("requested_route_locks_by_segment")),
@@ -2995,6 +3173,7 @@ def build_gemini_scene_plan(
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
+            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
         diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
         diagnostics.update(
@@ -3026,6 +3205,7 @@ def build_gemini_scene_plan(
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
+            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
         diagnostics["error_code"] = "SCENES_CORE_SOURCE_MISSING"
         diagnostics["validation_error"] = "missing_core_source_for_segments"
@@ -3057,6 +3237,7 @@ def build_gemini_scene_plan(
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
+            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
         diagnostics["error_code"] = "SCENES_ROLE_SOURCE_MISSING"
         diagnostics["validation_error"] = "missing_role_source_for_segments"
@@ -3104,6 +3285,7 @@ def build_gemini_scene_plan(
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
+            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
 
     try:
@@ -3155,6 +3337,7 @@ def build_gemini_scene_plan(
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
+            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
         diagnostics["error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
         validation_error = "scene_plan_timeout_empty_response" if timeout_error else validation_error
