@@ -3339,8 +3339,17 @@ def build_gemini_scene_plan(
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
-        diagnostics["error_code"] = "SCENES_TIMEOUT_EMPTY_RESPONSE" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID")
-        validation_error = "scene_plan_timeout_empty_response" if timeout_error else validation_error
+        storyboard_rows = _safe_list(scene_plan.get("storyboard"))
+        has_validation_error = bool(str(validation_error or "").strip())
+        ok = bool(storyboard_rows) and not has_validation_error
+        if not ok and timeout_error and not has_validation_error:
+            validation_error = "scene_plan_timeout_empty_response"
+            has_validation_error = True
+        diagnostics["error_code"] = (
+            (error_code or "")
+            if ok
+            else ("SCENES_TIMEOUT_EMPTY_RESPONSE" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID"))
+        )
         diagnostics.update(
             _collect_scene_plan_diagnostics(
                 scene_plan=scene_plan,
@@ -3349,10 +3358,13 @@ def build_gemini_scene_plan(
                 include_presence_modes=True,
             )
         )
+        error_text = ""
+        if not ok:
+            error_text = "scene_plan_timeout" if timeout_error else str(exc)
         return {
-            "ok": False,
+            "ok": ok,
             "scene_plan": scene_plan,
-            "error": "scene_plan_timeout" if timeout_error else str(exc),
+            "error": error_text,
             "validation_error": validation_error,
             "error_code": diagnostics["error_code"],
             "used_fallback": True,
