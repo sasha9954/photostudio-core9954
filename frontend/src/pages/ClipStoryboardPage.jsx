@@ -3987,7 +3987,28 @@ function mergeScenarioPackagePreservingAudioMap({
   });
   const scenePlanPayload = nextPackage?.scene_plan && typeof nextPackage.scene_plan === "object" ? { ...nextPackage.scene_plan } : null;
   const hasScenePlanPayload = hasScenarioStagePayload("scene_plan", nextPackage);
-  if (scenePlanPayload && hasScenePlanPayload) {
+  const scenePlanIncomingRow = incomingStatuses?.scene_plan && typeof incomingStatuses.scene_plan === "object" ? incomingStatuses.scene_plan : {};
+  const scenePlanPreviousRow = previousStatuses?.scene_plan && typeof previousStatuses.scene_plan === "object" ? previousStatuses.scene_plan : {};
+  const currentScenePlanStatus = normalizeScenarioPipelineStageStatus(syncedStatuses?.scene_plan?.status || "");
+  const incomingScenePlanStatus = normalizeScenarioPipelineStageStatus(scenePlanIncomingRow?.status || "");
+  const previousScenePlanStatus = normalizeScenarioPipelineStageStatus(scenePlanPreviousRow?.status || "");
+  const hasScenePlanBlockingError = [
+    scenePlanPayload?.error,
+    scenePlanPayload?.validation_error,
+    scenePlanPayload?.validationError,
+    scenePlanPayload?.failure_reason,
+    scenePlanPayload?.failureReason,
+    scenePlanPayload?.retry_error,
+    scenePlanPayload?.retryError,
+    scenePlanPayload?.last_error,
+    scenePlanPayload?.lastError,
+    syncedStatuses?.scene_plan?.error,
+    scenePlanIncomingRow?.error,
+  ].some((value) => String(value || "").trim().length > 0);
+  const hasAuthoritativeScenePlanSuccess = hasScenePlanPayload
+    && (currentScenePlanStatus === "done" || incomingScenePlanStatus === "done" || previousScenePlanStatus === "done")
+    && !hasScenePlanBlockingError;
+  if (scenePlanPayload && hasAuthoritativeScenePlanSuccess) {
     [
       "error",
       "validation_error",
@@ -4002,41 +4023,6 @@ function mergeScenarioPackagePreservingAudioMap({
       if (Object.prototype.hasOwnProperty.call(scenePlanPayload, key)) delete scenePlanPayload[key];
     });
     nextPackage.scene_plan = scenePlanPayload;
-  }
-  const scenePlanIncomingRow = incomingStatuses?.scene_plan && typeof incomingStatuses.scene_plan === "object" ? incomingStatuses.scene_plan : {};
-  const scenePlanPreviousRow = previousStatuses?.scene_plan && typeof previousStatuses.scene_plan === "object" ? previousStatuses.scene_plan : {};
-  const shouldForceScenePlanDone = hasScenePlanPayload && (
-    executedSet.has("scene_plan")
-    || normalizedRequestedStageId === "scene_plan"
-    || normalizeScenarioPipelineStageStatus(scenePlanIncomingRow?.status || "") === "done"
-  );
-  if (shouldForceScenePlanDone) {
-    const preservedUpdatedAtMs = Math.max(
-      parseScenarioStageUpdatedAtMs(scenePlanIncomingRow?.updated_at),
-      parseScenarioStageUpdatedAtMs(scenePlanPreviousRow?.updated_at),
-      Date.now()
-    );
-    const nextScenePlanStatus = {
-      ...(syncedStatuses?.scene_plan && typeof syncedStatuses.scene_plan === "object" ? syncedStatuses.scene_plan : {}),
-      status: "done",
-      error: "",
-      updated_at: new Date(preservedUpdatedAtMs).toISOString(),
-    };
-    [
-      "invalidated",
-      "invalid",
-      "dirty",
-      "stale",
-      "staleReason",
-      "stale_reason",
-      "reason",
-      "statusReason",
-      "invalidateReason",
-      "invalidatedReason",
-    ].forEach((key) => {
-      if (Object.prototype.hasOwnProperty.call(nextScenePlanStatus, key)) delete nextScenePlanStatus[key];
-    });
-    syncedStatuses.scene_plan = nextScenePlanStatus;
   }
   if (Object.keys(syncedStatuses).length) nextPackage.stage_statuses = syncedStatuses;
 
