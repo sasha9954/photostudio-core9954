@@ -3613,6 +3613,13 @@ function normalizeScenarioPipelineStageStatus(status) {
   return String(status || "").trim().toLowerCase();
 }
 
+function parseScenarioStageUpdatedAtMs(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return 0;
+  const ts = Date.parse(raw);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
 function getScenarioPipelineStageOrder() {
   return [...SCENARIO_PIPELINE_STAGE_ORDER];
 }
@@ -3943,6 +3950,20 @@ function mergeScenarioPackagePreservingAudioMap({
   const incomingStatuses = responseSafe?.stage_statuses && typeof responseSafe.stage_statuses === "object" ? responseSafe.stage_statuses : {};
   const mergedStatuses = { ...incomingStatuses };
   getScenarioPipelineStageOrder().forEach((stageId) => {
+    const previousRow = previousStatuses?.[stageId] && typeof previousStatuses[stageId] === "object" ? previousStatuses[stageId] : null;
+    const incomingRow = incomingStatuses?.[stageId] && typeof incomingStatuses[stageId] === "object" ? incomingStatuses[stageId] : null;
+    if (!previousRow || !incomingRow) return;
+    const previousStatus = normalizeScenarioPipelineStageStatus(previousRow?.status || "");
+    const incomingStatus = normalizeScenarioPipelineStageStatus(incomingRow?.status || "");
+    const previousUpdatedAtMs = parseScenarioStageUpdatedAtMs(previousRow?.updated_at);
+    const incomingUpdatedAtMs = parseScenarioStageUpdatedAtMs(incomingRow?.updated_at);
+    const incomingIsOlder = incomingUpdatedAtMs > 0 && previousUpdatedAtMs > 0 && incomingUpdatedAtMs < previousUpdatedAtMs;
+    const incomingDowngradesToError = previousStatus === "done" && incomingStatus === "error";
+    if (incomingIsOlder && incomingDowngradesToError) {
+      mergedStatuses[stageId] = previousRow;
+    }
+  });
+  getScenarioPipelineStageOrder().forEach((stageId) => {
     const stageDepth = getScenarioStageDepth(stageId);
     if (!(stageDepth > incomingDepth) || executedSet.has(stageId)) return;
     const previousRow = previousStatuses?.[stageId] && typeof previousStatuses[stageId] === "object" ? previousStatuses[stageId] : null;
@@ -3964,6 +3985,59 @@ function mergeScenarioPackagePreservingAudioMap({
     row.error = row?.error || "payload_missing";
     syncedStatuses[stageId] = row;
   });
+  const scenePlanPayload = nextPackage?.scene_plan && typeof nextPackage.scene_plan === "object" ? { ...nextPackage.scene_plan } : null;
+  const hasScenePlanPayload = hasScenarioStagePayload("scene_plan", nextPackage);
+  if (scenePlanPayload && hasScenePlanPayload) {
+    [
+      "error",
+      "validation_error",
+      "validationError",
+      "failure_reason",
+      "failureReason",
+      "retry_error",
+      "retryError",
+      "last_error",
+      "lastError",
+    ].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(scenePlanPayload, key)) delete scenePlanPayload[key];
+    });
+    nextPackage.scene_plan = scenePlanPayload;
+  }
+  const scenePlanIncomingRow = incomingStatuses?.scene_plan && typeof incomingStatuses.scene_plan === "object" ? incomingStatuses.scene_plan : {};
+  const scenePlanPreviousRow = previousStatuses?.scene_plan && typeof previousStatuses.scene_plan === "object" ? previousStatuses.scene_plan : {};
+  const shouldForceScenePlanDone = hasScenePlanPayload && (
+    executedSet.has("scene_plan")
+    || normalizedRequestedStageId === "scene_plan"
+    || normalizeScenarioPipelineStageStatus(scenePlanIncomingRow?.status || "") === "done"
+  );
+  if (shouldForceScenePlanDone) {
+    const preservedUpdatedAtMs = Math.max(
+      parseScenarioStageUpdatedAtMs(scenePlanIncomingRow?.updated_at),
+      parseScenarioStageUpdatedAtMs(scenePlanPreviousRow?.updated_at),
+      Date.now()
+    );
+    const nextScenePlanStatus = {
+      ...(syncedStatuses?.scene_plan && typeof syncedStatuses.scene_plan === "object" ? syncedStatuses.scene_plan : {}),
+      status: "done",
+      error: "",
+      updated_at: new Date(preservedUpdatedAtMs).toISOString(),
+    };
+    [
+      "invalidated",
+      "invalid",
+      "dirty",
+      "stale",
+      "staleReason",
+      "stale_reason",
+      "reason",
+      "statusReason",
+      "invalidateReason",
+      "invalidatedReason",
+    ].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(nextScenePlanStatus, key)) delete nextScenePlanStatus[key];
+    });
+    syncedStatuses.scene_plan = nextScenePlanStatus;
+  }
   if (Object.keys(syncedStatuses).length) nextPackage.stage_statuses = syncedStatuses;
 
   console.debug("[SCENARIO APPLY GUARD]", {

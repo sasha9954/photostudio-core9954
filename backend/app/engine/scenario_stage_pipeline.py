@@ -11204,6 +11204,18 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     scene_plan["created_for_signature"] = str(scene_plan.get("created_for_signature") or current_signature or "")
     scene_plan["route_strategy_signature"] = current_route_strategy_signature
     scene_plan["route_locks_by_segment"] = _safe_dict(scene_plan.get("route_locks_by_segment") or route_locks_by_segment)
+    for stale_error_key in (
+        "error",
+        "validation_error",
+        "validationError",
+        "failure_reason",
+        "failureReason",
+        "retry_error",
+        "retryError",
+        "last_error",
+        "lastError",
+    ):
+        scene_plan.pop(stale_error_key, None)
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_created_for_signature"] = str(_safe_dict(package.get("scene_plan")).get("created_for_signature") or "")
