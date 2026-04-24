@@ -365,6 +365,103 @@ def _collect_allowed_entity_registry(package: dict[str, Any]) -> dict[str, dict[
     return registry
 
 
+def _is_character_role_id(value: Any) -> bool:
+    role = str(value or "").strip().lower()
+    return bool(re.fullmatch(r"character_[0-9]+", role))
+
+
+def _collect_connected_cast_roles(package: dict[str, Any]) -> list[str]:
+    input_pkg = _safe_dict(package.get("input"))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    refs_by_role = _safe_dict(input_pkg.get("refs_by_role"))
+    assigned_roles = _safe_dict(package.get("assigned_roles"))
+
+    cast_roles: list[str] = []
+
+    present_cast_roles = _safe_list(connected_summary.get("presentCastRoles"))
+    for role in present_cast_roles:
+        normalized = _normalize_text(role, max_len=80).lower()
+        if _is_character_role_id(normalized):
+            cast_roles.append(normalized)
+
+    connected_role_ids = _safe_list(connected_summary.get("connectedRoleIds"))
+    for role in connected_role_ids:
+        normalized = _normalize_text(role, max_len=80).lower()
+        if _is_character_role_id(normalized):
+            cast_roles.append(normalized)
+
+    for role in refs_by_role.keys():
+        normalized = _normalize_text(role, max_len=80).lower()
+        if _is_character_role_id(normalized):
+            cast_roles.append(normalized)
+
+    for role in assigned_roles.keys():
+        normalized = _normalize_text(role, max_len=80).lower()
+        if _is_character_role_id(normalized):
+            cast_roles.append(normalized)
+
+    return sorted(list(dict.fromkeys([role for role in cast_roles if role])))
+
+
+def _resolve_single_cast_anchor_role(package: dict[str, Any]) -> str:
+    input_pkg = _safe_dict(package.get("input"))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    connected_cast_roles = _collect_connected_cast_roles(package)
+    character_count = connected_summary.get("characterCount")
+    if isinstance(character_count, str):
+        character_count = int(character_count) if character_count.isdigit() else None
+    elif not isinstance(character_count, int):
+        character_count = None
+    if (
+        set(connected_cast_roles) == {"character_1"}
+        and (character_count is None or character_count <= 1)
+    ):
+        return "character_1"
+    return ""
+
+
+def _build_single_cast_grounded_fallback(
+    *,
+    expected_segment_ids: list[str],
+    anchor_role: str,
+    allowed_registry: dict[str, dict[str, Any]],
+    character_appearance_modes: dict[str, str],
+) -> dict[str, Any]:
+    anchor = _normalize_text(anchor_role, max_len=80).lower()
+    if not anchor or not expected_segment_ids:
+        return {}
+
+    allowed_row = _safe_dict(allowed_registry.get(anchor))
+    anchor_mode = normalize_character_appearance_mode(character_appearance_modes.get(anchor))
+    presence_mode = "voiceover" if anchor_mode == "offscreen_voice" else "physical"
+
+    roster = [
+        {
+            "entity_id": anchor,
+            "role_name": _normalize_text(allowed_row.get("role_name") or anchor, max_len=120),
+            "continuity_rules": list(_CHARACTER_REF_SAFE_CONTINUITY_RULES),
+        }
+    ]
+    scene_casting = [
+        {
+            "segment_id": segment_id,
+            "primary_role": anchor,
+            "secondary_roles": [],
+            "presence_mode": presence_mode,
+            "presence_weight": "anchor",
+            "performance_focus": "Follow the same main character through this beat.",
+            "continuity_notes": "Keep ambient city life as environment only, not cast entities.",
+        }
+        for segment_id in expected_segment_ids
+    ]
+
+    return {
+        "roles_version": ROLES_VERSION,
+        "roster": roster,
+        "scene_casting": scene_casting,
+    }
+
+
 def _build_roles_prompt(context: dict[str, Any]) -> str:
     return (
         "You are ROLES stage (GEMINI-FIRST 7-layer canon) for scenario pipeline.\n"
@@ -375,6 +472,7 @@ def _build_roles_prompt(context: dict[str, Any]) -> str:
         "Do not use scene_candidate_windows as source of truth.\n"
         "Forbidden leakage: action choreography, route planning, camera/motion directives, prompt-language authoring, technical/render details.\n"
         "Forbidden hallucination: NEVER introduce entities outside allowed_entity_registry.\n"
+        "Ambient background population (passersby, locals, crowd texture, city life) can exist only as world atmosphere, never as cast entities unless grounded in allowed_entity_registry.\n"
         "ROLES output must be story-facing only.\n"
         "Do not copy technical identity/reference/source wording from CORE.\n"
         "Use technical identity locks only internally, never in output text.\n"
@@ -768,6 +866,7 @@ def _validate_roles_payload(
     roles_payload: dict[str, Any],
     expected_segment_ids: list[str],
     allowed_registry: dict[str, dict[str, Any]],
+    strict_single_cast_anchor: str = "",
 ) -> tuple[dict[str, Any], str]:
     roster = _normalize_roster(roles_payload.get("roster"), allowed_registry)
     scene_casting = _normalize_scene_casting(roles_payload.get("scene_casting"))
@@ -782,16 +881,27 @@ def _validate_roles_payload(
     if not roster_ids.issubset(set(allowed_registry.keys())):
         return {}, ROLES_ENTITY_HALLUCINATION
 
+    if strict_single_cast_anchor:
+        anchor = _normalize_text(strict_single_cast_anchor, max_len=80).lower()
+        if roster_ids != {anchor}:
+            return {}, ROLES_ENTITY_HALLUCINATION
+
     seen_segment_ids: list[str] = []
     for row in scene_casting:
         segment_id = str(row.get("segment_id") or "").strip()
         if not segment_id:
             return {}, ROLES_SCHEMA_INVALID
         seen_segment_ids.append(segment_id)
-        if str(row.get("primary_role") or "").strip() not in roster_ids:
+        primary_role = str(row.get("primary_role") or "").strip()
+        if primary_role not in roster_ids:
+            return {}, ROLES_ENTITY_HALLUCINATION
+        if strict_single_cast_anchor and primary_role != str(strict_single_cast_anchor).strip():
             return {}, ROLES_ENTITY_HALLUCINATION
         for secondary in _safe_list(row.get("secondary_roles")):
-            if str(secondary or "").strip() not in roster_ids:
+            secondary_role = str(secondary or "").strip()
+            if secondary_role not in roster_ids:
+                return {}, ROLES_ENTITY_HALLUCINATION
+            if strict_single_cast_anchor and secondary_role != str(strict_single_cast_anchor).strip():
                 return {}, ROLES_ENTITY_HALLUCINATION
         if str(row.get("presence_mode") or "") not in ALLOWED_PRESENCE_MODES:
             return {}, ROLES_SCHEMA_INVALID
@@ -870,6 +980,9 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
     segment_rows, expected_segment_ids, segment_error, segment_row_diagnostics = _build_segment_rows(audio_map, story_core)
     allowed_registry = _collect_allowed_entity_registry(package)
     core_subject_map = _build_core_subject_map(story_core)
+    connected_cast_roles = _collect_connected_cast_roles(package)
+    single_cast_anchor = _resolve_single_cast_anchor_role(package)
+    character_appearance_modes = _extract_character_appearance_modes(input_pkg)
 
     diagnostics = {
         "prompt_version": ROLE_PLAN_PROMPT_VERSION,
@@ -906,6 +1019,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "timeout_retry_attempted": False,
         "response_was_empty_after_timeout": False,
         "role_plan_primary_mismatch_segments": [],
+        "connected_cast_roles": connected_cast_roles,
+        "single_cast_anchor_role": single_cast_anchor,
+        "single_cast_fallback_applied": False,
+        "single_cast_fallback_reason": "",
     }
 
     diagnostics.update(segment_row_diagnostics)
@@ -960,7 +1077,9 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "allowed_entity_registry": list(allowed_registry.values()),
         "assigned_roles": _safe_dict(package.get("assigned_roles")),
         "connected_refs_summary": _safe_dict(_safe_dict(input_pkg.get("connected_context_summary"))),
-        "characterAppearanceModesByRole": _extract_character_appearance_modes(input_pkg),
+        "characterAppearanceModesByRole": character_appearance_modes,
+        "connectedCastRoles": connected_cast_roles,
+        "singleCastAnchorRole": single_cast_anchor,
         "entity_registry_sources": ["input.refs_by_role", "refs_inventory", "assigned_roles", "connected_context_summary"],
     }
 
@@ -1038,10 +1157,51 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 roles_payload=sanitized,
                 expected_segment_ids=expected_segment_ids,
                 allowed_registry=allowed_registry,
+                strict_single_cast_anchor=single_cast_anchor,
             )
             if validation_error:
                 last_error = validation_error
                 diagnostics["error_code"] = validation_error
+                if validation_error == ROLES_ENTITY_HALLUCINATION and single_cast_anchor:
+                    fallback_candidate = _build_single_cast_grounded_fallback(
+                        expected_segment_ids=expected_segment_ids,
+                        anchor_role=single_cast_anchor,
+                        allowed_registry=allowed_registry,
+                        character_appearance_modes=character_appearance_modes,
+                    )
+                    fallback_normalized, fallback_error = _validate_roles_payload(
+                        roles_payload=fallback_candidate,
+                        expected_segment_ids=expected_segment_ids,
+                        allowed_registry=allowed_registry,
+                        strict_single_cast_anchor=single_cast_anchor,
+                    )
+                    if not fallback_error:
+                        bridge = _build_role_plan_legacy_bridge_from_roles_v11(roles_payload=fallback_normalized)
+                        role_plan = {**fallback_normalized, **bridge}
+                        diagnostics.update(
+                            {
+                                "roster_count": len(_safe_list(fallback_normalized.get("roster"))),
+                                "scene_casting_count": len(_safe_list(fallback_normalized.get("scene_casting"))),
+                                "segment_coverage_ok": True,
+                                "coverage_seen_segment_ids": list(expected_segment_ids),
+                                "coverage_missing_segment_ids": [],
+                                "coverage_extra_segment_ids": [],
+                                "normalized_role_plan_preview": _normalize_text(json.dumps(fallback_normalized, ensure_ascii=False), max_len=500),
+                                "single_cast_fallback_applied": True,
+                                "single_cast_fallback_reason": ROLES_ENTITY_HALLUCINATION,
+                                "error_code": "",
+                            }
+                        )
+                        return {
+                            "ok": True,
+                            "role_plan": role_plan,
+                            "error": "",
+                            "error_code": "",
+                            "validation_error": "",
+                            "used_fallback": True,
+                            "retry_count": attempt,
+                            "diagnostics": diagnostics,
+                        }
                 if validation_error in {ROLES_TECHNICAL_LEAKING, ROLES_CREATIVE_ROUTE, ROLES_ACTION_LEAKING}:
                     leak_code, leak_path, leak_token = _extract_leakage_details(sanitized)
                     diagnostics["technical_leak_trigger"] = leak_code or validation_error
