@@ -2968,6 +2968,116 @@ def _apply_scene_plan_route_locks(
     return normalized, _scene_plan_route_counts(normalized)
 
 
+def _repair_scene_plan_final_semantics(
+    *,
+    package: dict[str, Any],
+    scene_plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    normalized = deepcopy(_safe_dict(scene_plan))
+    if not normalized:
+        return normalized, {"rows_updated": 0, "world_rows_repaired": 0, "primary_role_filled": 0}
+
+    core_rows_by_segment: dict[str, dict[str, Any]] = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(package.get("story_core")).get("narrative_segments"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    role_rows_by_segment: dict[str, dict[str, Any]] = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(package.get("role_plan")).get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+
+    world_rows_repaired = 0
+    primary_role_filled = 0
+    rows_updated = 0
+    route_lock_updates: dict[str, str] = {}
+    world_modes = {"world_observation", "world_pressure", "threshold", "social_texture", "aftermath", "release", "transition"}
+
+    def _upstream_primary_role(segment_id: str, row: dict[str, Any]) -> str:
+        core_row = _safe_dict(core_rows_by_segment.get(segment_id))
+        beat_primary_subject = _canonical_subject_id(core_row.get("beat_primary_subject"))
+        beat_mode = str(core_row.get("beat_mode") or "").strip().lower()
+        hero_world_mode = str(core_row.get("hero_world_mode") or "").strip().lower()
+        if beat_primary_subject == "world" or hero_world_mode == "world_foreground" or beat_mode in world_modes:
+            return "world"
+        if beat_primary_subject:
+            return beat_primary_subject
+        role_primary = _canonical_subject_id(_safe_dict(role_rows_by_segment.get(segment_id)).get("primary_role"))
+        if role_primary:
+            return role_primary
+        return _canonical_subject_id(row.get("primary_role"))
+
+    for field in ("storyboard", "scenes"):
+        rows = [deepcopy(_safe_dict(row)) for row in _safe_list(normalized.get(field)) if isinstance(row, dict)]
+        if not rows:
+            continue
+        rewritten_rows: list[dict[str, Any]] = []
+        for idx, row in enumerate(rows, start=1):
+            segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+            if not segment_id:
+                rewritten_rows.append(row)
+                continue
+            route = str(row.get("route") or "").strip().lower()
+            visual_focus_role = _canonical_subject_id(row.get("visual_focus_role"))
+            speaker_role = _canonical_subject_id(row.get("speaker_role"))
+            lip_sync_allowed = bool(row.get("lip_sync_allowed"))
+            primary_role = _canonical_subject_id(row.get("primary_role"))
+            resolved_primary = _upstream_primary_role(segment_id, row)
+            changed = False
+
+            if resolved_primary == "world":
+                if primary_role != "world":
+                    row["primary_role"] = "world"
+                    changed = True
+                if visual_focus_role != "world":
+                    row["visual_focus_role"] = "world"
+                    changed = True
+                if route != "i2v":
+                    row["route"] = "i2v"
+                    route_lock_updates[segment_id] = "i2v"
+                    changed = True
+                if speaker_role:
+                    row["speaker_role"] = ""
+                    changed = True
+                if bool(row.get("lip_sync_allowed")):
+                    row["lip_sync_allowed"] = False
+                    changed = True
+                if bool(row.get("mouth_visible_required")):
+                    row["mouth_visible_required"] = False
+                    changed = True
+                if changed:
+                    world_rows_repaired += 1
+            elif (
+                not primary_role
+                and route == "ia2v"
+                and (visual_focus_role == "character_1" or speaker_role == "character_1" or lip_sync_allowed or resolved_primary == "character_1")
+            ):
+                row["primary_role"] = "character_1"
+                primary_role_filled += 1
+                changed = True
+
+            if changed:
+                rows_updated += 1
+            rewritten_rows.append(row)
+        normalized[field] = rewritten_rows
+
+    if route_lock_updates:
+        existing_locks = {
+            str(k).strip(): str(v).strip().lower()
+            for k, v in _safe_dict(normalized.get("route_locks_by_segment")).items()
+            if str(k).strip()
+        }
+        existing_locks.update(route_lock_updates)
+        normalized["route_locks_by_segment"] = existing_locks
+    normalized["route_mix_summary"] = _scene_plan_route_counts(normalized)
+    return normalized, {
+        "rows_updated": rows_updated,
+        "world_rows_repaired": world_rows_repaired,
+        "primary_role_filled": primary_role_filled,
+    }
+
+
 def _collect_scene_plan_route_semantic_mismatches(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
     mismatches: list[dict[str, Any]] = []
     for idx, row in enumerate(_scene_plan_rows_for_validation(scene_plan), start=1):
@@ -11747,6 +11857,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_enum_repair_rows"] = []
     diagnostics["scene_plan_enum_unrepaired_count"] = 0
     diagnostics["scene_plan_enum_unrepaired_rows"] = []
+    diagnostics["scene_plan_final_semantic_repairs"] = {"rows_updated": 0, "world_rows_repaired": 0, "primary_role_filled": 0}
     diagnostics["scene_plan_failed_candidate_preview"] = []
     diagnostics["scene_plan_failed_candidate_route_mix"] = {}
     diagnostics["scene_plan_failed_candidate_rows_count"] = 0
@@ -11901,6 +12012,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             else:
                 result = semantic_retry_result
                 scene_plan = retry_scene_plan
+        scene_plan, final_semantic_repairs = _repair_scene_plan_final_semantics(
+            package=package,
+            scene_plan=scene_plan,
+        )
+        diagnostics["scene_plan_final_semantic_repairs"] = dict(final_semantic_repairs)
         result["scene_plan"] = scene_plan
     else:
         locked_route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
