@@ -58,6 +58,8 @@ CORE_TECHNICAL_SPAWNING = "CORE_TECHNICAL_SPAWNING"
 CORE_IDENTITY_CONFLICT = "CORE_IDENTITY_CONFLICT"
 CORE_ROLE_BINDING_CONTRADICTION = "CORE_ROLE_BINDING_CONTRADICTION"
 CORE_QUALITY_GATES_FAILED = "CORE_QUALITY_GATES_FAILED"
+STORY_CORE_EMPTY_RESULT = "STORY_CORE_EMPTY_RESULT"
+STORY_CORE_SCHEMA_INVALID = "STORY_CORE_SCHEMA_INVALID"
 _FEMALE_CODED_TERMS = ("woman", "women", "female", "feminine", "girl", "lady", "her", "she", "heroine")
 _MALE_CODED_TERMS = ("man", "men", "male", "masculine", "boy", "gentleman", "his", "he", "hero")
 
@@ -340,6 +342,44 @@ def _has_non_empty_collection(value: Any) -> bool:
 def _has_valid_story_core_payload(output: Any) -> bool:
     payload = _safe_dict(output)
     return bool(str(payload.get("core_version") or "").strip()) and bool(_safe_list(payload.get("narrative_segments")))
+
+
+def _validate_story_core_result(output: Any) -> tuple[bool, str, list[str]]:
+    if output is None:
+        return False, STORY_CORE_EMPTY_RESULT, ["story_core_missing"]
+    if not isinstance(output, dict):
+        return False, STORY_CORE_EMPTY_RESULT, ["story_core_not_dict"]
+    story_core = _safe_dict(output)
+    if not story_core:
+        return False, STORY_CORE_EMPTY_RESULT, ["story_core_empty_object"]
+
+    errors: list[str] = []
+    for field_name in ("story_summary", "opening_anchor", "ending_callback_rule"):
+        if not str(story_core.get(field_name) or "").strip():
+            errors.append(f"missing_or_empty:{field_name}")
+
+    identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
+    identity_lock = _safe_dict(story_core.get("identity_lock"))
+    has_identity = bool(identity_doctrine) or bool(identity_lock)
+    if not has_identity:
+        errors.append("missing_identity_doctrine_or_identity_lock")
+
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    world_doctrine = str(story_core.get("world_doctrine") or identity_doctrine.get("world_doctrine") or "").strip()
+    if not (world_doctrine or bool(world_lock)):
+        errors.append("missing_world_doctrine_or_world_lock")
+
+    style_lock = _safe_dict(story_core.get("style_lock"))
+    style_doctrine = str(story_core.get("style_doctrine") or identity_doctrine.get("style_doctrine") or "").strip()
+    if not (style_doctrine or bool(style_lock)):
+        errors.append("missing_style_doctrine_or_style_lock")
+
+    if not _safe_list(story_core.get("narrative_segments")):
+        errors.append("narrative_segments_missing_or_empty")
+
+    if errors:
+        return False, STORY_CORE_SCHEMA_INVALID, errors
+    return True, "", []
 
 
 def _has_valid_role_plan_payload(output: Any) -> bool:
@@ -12355,6 +12395,20 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             pkg = _run_audio_map_stage(pkg)
         elif stage_id == "story_core":
             pkg = _run_story_core_stage(pkg)
+            story_core_ok, story_core_error_code, story_core_errors = _validate_story_core_result(pkg.get("story_core"))
+            if not story_core_ok:
+                diagnostics = _safe_dict(pkg.get("diagnostics"))
+                diagnostics["story_core_last_error_code"] = story_core_error_code
+                diagnostics["story_core_validation_errors"] = story_core_errors
+                diagnostics["story_core_failed_payload_rejected"] = True
+                diagnostics["story_core_hard_fail"] = True
+                diagnostics["story_core_result_invalid"] = True
+                diagnostics["story_core_invalid_required_fields"] = story_core_errors
+                pkg["diagnostics"] = diagnostics
+                pkg["story_core"] = {}
+                pkg["story_core_v1"] = {}
+                pkg["story_core_stale"] = True
+                raise RuntimeError(f"{story_core_error_code}:{'; '.join(story_core_errors[:6])}")
         elif stage_id == "role_plan":
             pkg = _run_role_plan_stage(pkg)
         elif stage_id == "scene_plan":
