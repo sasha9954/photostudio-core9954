@@ -9962,6 +9962,8 @@ SCENE_PACKAGING_POLICY = {
     "world_split_part_min_sec": 2.5,
     "world_split_part_target_max_sec": 4.0,
     "world_split_part_hard_max_sec": 4.4,
+    "no_split_gap_candidate_min_sec": 0.18,
+    "no_split_gap_candidate_midpoint_bias": 0.5,
 }
 
 
@@ -10009,6 +10011,54 @@ def _is_inside_no_split(point_sec: float, no_split_ranges: list[dict[str, Any]],
         if (start - eps) <= point_sec <= (end + eps):
             return True
     return False
+
+
+def _derive_gap_split_candidates_from_no_split_ranges(
+    *,
+    window_t0: float,
+    window_t1: float,
+    no_split_ranges: list[dict[str, Any]],
+) -> list[float]:
+    policy = SCENE_PACKAGING_POLICY
+    min_gap = _to_float(policy.get("no_split_gap_candidate_min_sec"), 0.0)
+    midpoint_bias = min(1.0, max(0.0, _to_float(policy.get("no_split_gap_candidate_midpoint_bias"), 0.5)))
+    if window_t1 <= window_t0:
+        return []
+    clamped_ranges: list[tuple[float, float]] = []
+    for row in no_split_ranges:
+        start = _to_float(_safe_dict(row).get("start"), _to_float(_safe_dict(row).get("t0"), -1.0))
+        end = _to_float(_safe_dict(row).get("end"), _to_float(_safe_dict(row).get("t1"), -1.0))
+        if end <= start:
+            continue
+        clip_start = max(window_t0, start)
+        clip_end = min(window_t1, end)
+        if clip_end <= clip_start:
+            continue
+        clamped_ranges.append((round(clip_start, 3), round(clip_end, 3)))
+    if len(clamped_ranges) < 2:
+        return []
+    clamped_ranges.sort(key=lambda item: (item[0], item[1]))
+    merged_ranges: list[tuple[float, float]] = []
+    for start, end in clamped_ranges:
+        if not merged_ranges or start > merged_ranges[-1][1]:
+            merged_ranges.append((start, end))
+            continue
+        prev_start, prev_end = merged_ranges[-1]
+        merged_ranges[-1] = (prev_start, max(prev_end, end))
+    if len(merged_ranges) < 2:
+        return []
+    gap_candidates: list[float] = []
+    for idx in range(len(merged_ranges) - 1):
+        left_end = merged_ranges[idx][1]
+        right_start = merged_ranges[idx + 1][0]
+        gap = round(right_start - left_end, 3)
+        if gap < min_gap:
+            continue
+        candidate = left_end + gap * midpoint_bias
+        if not (window_t0 + 0.01 < candidate < window_t1 - 0.01):
+            continue
+        gap_candidates.append(round(candidate, 3))
+    return sorted(set(gap_candidates))
 
 
 def _rename_segments_canon(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -10106,8 +10156,14 @@ def _split_long_world_windows(
         t0 = _to_float(seg.get("t0"), 0.0)
         t1 = _to_float(seg.get("t1"), t0)
         midpoint = t0 + (t1 - t0) / 2.0
+        gap_cut_points = _derive_gap_split_candidates_from_no_split_ranges(
+            window_t0=t0,
+            window_t1=t1,
+            no_split_ranges=no_split_ranges,
+        )
+        candidate_pool = sorted(set(all_cut_points + gap_cut_points))
         candidates: list[tuple[float, float, float]] = []
-        for cut in all_cut_points:
+        for cut in candidate_pool:
             if not (t0 + 0.01 < cut < t1 - 0.01):
                 continue
             if _is_inside_no_split(cut, no_split_ranges):
