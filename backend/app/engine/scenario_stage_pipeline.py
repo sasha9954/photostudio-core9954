@@ -2295,6 +2295,200 @@ def _enforce_scene_prompts_identity_and_presence(
     return normalized, validation_error, diagnostics
 
 
+def _scene_prompts_quality_pass(
+    package: dict[str, Any],
+    scene_prompts: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = deepcopy(_safe_dict(scene_prompts))
+    segments = [row for row in _safe_list(normalized.get("segments")) if isinstance(row, dict)]
+    if not segments:
+        return normalized, {
+            "scene_prompts_quality_pass_applied": False,
+            "scene_prompts_quality_ia2v_variant_applied_count": 0,
+            "scene_prompts_quality_world_i2v_conflict_fixed_count": 0,
+            "scene_prompts_quality_video_prompt_deduped_count": 0,
+            "scene_prompts_quality_odessa_anchor_strengthened": False,
+        }
+
+    scene_plan_rows = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _scene_plan_rows_for_validation(_safe_dict(package.get("scene_plan")))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+    core_rows = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(package.get("story_core")).get("narrative_segments"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+
+    odessa_probe = " ".join(
+        [
+            str(_safe_dict(package.get("input")).get("story") or ""),
+            str(_safe_dict(package.get("input")).get("text") or ""),
+            str(_safe_dict(package.get("input")).get("note") or ""),
+            str(_safe_dict(normalized).get("global_style_anchor") or ""),
+        ]
+    ).lower()
+    is_odessa_case = any(token in odessa_probe for token in ("odessa", "одес", "black sea", "черн", "порт", "port city", "примор"))
+    odessa_anchor = (
+        "Odessa world contract: weathered southern stone, Black Sea salt air and wind, deep archways/courtyards/balconies, "
+        "port machinery breath, tram and cobblestone embankments, seagulls and pale harsh southern light; lived-in realism, never tourist postcard."
+    )
+    anchor_strengthened = False
+    if is_odessa_case:
+        existing_anchor = str(normalized.get("global_style_anchor") or "").strip()
+        if "weathered southern stone" not in existing_anchor.lower() or "lived-in realism" not in existing_anchor.lower():
+            normalized["global_style_anchor"] = odessa_anchor if not existing_anchor else f"{odessa_anchor} {existing_anchor}".strip()
+            anchor_strengthened = True
+
+    boilerplate_tokens = (
+        "use the uploaded image as the exact first frame and identity anchor",
+        "a performance shot of the same performer singing an emotional line",
+        "clear expressive lip sync",
+        "allow expressive but controlled gestures",
+        "performer-first composition",
+        "global continuity lock",
+    )
+    singer_conflict_patterns: tuple[re.Pattern[str], ...] = (
+        re.compile(r"\bvisible(?:\s+on-screen)?\s+singing\b", re.IGNORECASE),
+        re.compile(r"\blip[\s\-]?sync\b", re.IGNORECASE),
+        re.compile(r"\breadable\s+mouth\b", re.IGNORECASE),
+        re.compile(r"\bdominant\s+performer\b", re.IGNORECASE),
+    )
+    world_modes = {"world_observation", "world_pressure", "social_texture", "threshold", "aftermath", "release", "transition", "cutaway"}
+    ia2v_variant_applied_count = 0
+    world_i2v_conflict_fixed_count = 0
+    video_prompt_deduped_count = 0
+    prev_ia2v_variant = ""
+
+    def _dedupe_prompt_sentences(text: str) -> tuple[str, bool]:
+        body = re.sub(r"\s+", " ", str(text or "").strip())
+        if not body:
+            return "", False
+        parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", body) if p.strip()]
+        seen_norm: set[str] = set()
+        out: list[str] = []
+        changed = False
+        for part in parts:
+            norm = re.sub(r"[^a-z0-9]+", " ", part.lower()).strip()
+            if not norm:
+                continue
+            is_duplicate = norm in seen_norm
+            if not is_duplicate:
+                for token in boilerplate_tokens:
+                    if token in norm and any(token in prior for prior in seen_norm):
+                        is_duplicate = True
+                        break
+            if is_duplicate:
+                changed = True
+                continue
+            seen_norm.add(norm)
+            out.append(part)
+        return " ".join(out).strip(), changed
+
+    def _ia2v_variant_clause(segment_id: str, row: dict[str, Any]) -> str:
+        nonlocal prev_ia2v_variant
+        scene_row = _safe_dict(scene_plan_rows.get(segment_id))
+        core_row = _safe_dict(core_rows.get(segment_id))
+        arc_role = str(row.get("arc_role") or scene_row.get("arc_role") or core_row.get("arc_role") or "").strip().lower()
+        beat_mode = str(row.get("beat_mode") or scene_row.get("beat_mode") or core_row.get("beat_mode") or "").strip().lower()
+        visual_scale = str(row.get("visual_scale") or scene_row.get("visual_scale") or "").strip().lower()
+        motion_profile = str(row.get("motion_profile") or scene_row.get("motion_profile") or "").strip().lower()
+        emotional_key = str(row.get("emotional_key") or scene_row.get("emotional_key") or core_row.get("emotional_key") or "").strip().lower()
+        location_zone = str(row.get("location_zone") or scene_row.get("location_zone") or core_row.get("location_zone") or "").strip()
+        candidates = [
+            ("intimate_close_lipsync", "Intimate close lip-sync: tight face framing, breath-level delivery, tiny controlled hand motion."),
+            ("grounded_static_authority", "Grounded static authority: mostly locked framing, minimal gesture, calm decisive eye-line."),
+            ("slow_walk_and_sing", "Slow walk-and-sing: measured forward drift with stable identity and readable mouth."),
+            ("waist_up_declamatory", "Waist-up declaratory frame: chest-to-head composition, deliberate emphatic gestures, steady cadence."),
+            ("close_emotional_pressure", "Close emotional pressure: compressed framing, micro-expression emphasis, controlled inner tension."),
+            ("wide_heroic_singer_in_world", "Wide heroic singer-in-world: performer remains primary but Odessa environment breathes around her."),
+            ("final_restrained_decisive_line", "Final restrained decisive line: still posture, short decisive gesture, emotionally resolved delivery."),
+        ]
+        selected = "intimate_close_lipsync"
+        if arc_role in {"climax", "pivot"} or "pressure" in emotional_key:
+            selected = "close_emotional_pressure"
+        elif arc_role in {"release", "afterglow"} or beat_mode in {"release", "aftermath"}:
+            selected = "final_restrained_decisive_line"
+        elif "wide" in visual_scale or "wide" in location_zone.lower() or "embankment" in location_zone.lower():
+            selected = "wide_heroic_singer_in_world"
+        elif "walk" in motion_profile or "walk" in beat_mode:
+            selected = "slow_walk_and_sing"
+        elif "static" in motion_profile:
+            selected = "grounded_static_authority"
+        elif "waist" in visual_scale or beat_mode in {"performance", "declaration"}:
+            selected = "waist_up_declamatory"
+        if selected == prev_ia2v_variant:
+            for alt_key, _ in candidates:
+                if alt_key != prev_ia2v_variant:
+                    selected = alt_key
+                    break
+        prev_ia2v_variant = selected
+        for key, clause in candidates:
+            if key == selected:
+                return clause
+        return ""
+
+    rewritten_segments: list[dict[str, Any]] = []
+    for idx, raw_row in enumerate(segments, start=1):
+        row = deepcopy(_safe_dict(raw_row))
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+        route = str(row.get("route") or _safe_dict(scene_plan_rows.get(segment_id)).get("route") or "").strip().lower()
+        scene_row = _safe_dict(scene_plan_rows.get(segment_id))
+        core_row = _safe_dict(core_rows.get(segment_id))
+        video_prompt = str(row.get("video_prompt") or "").strip()
+        deduped_prompt, deduped_changed = _dedupe_prompt_sentences(video_prompt)
+        if deduped_changed:
+            row["video_prompt"] = deduped_prompt
+            video_prompt = deduped_prompt
+            video_prompt_deduped_count += 1
+
+        if route == "ia2v":
+            clause = _ia2v_variant_clause(segment_id, row)
+            if clause and clause.lower() not in video_prompt.lower():
+                row["video_prompt"] = _prepend_clause_once(video_prompt, clause)
+                video_prompt = str(row.get("video_prompt") or "").strip()
+                ia2v_variant_applied_count += 1
+
+        visual_focus_role = str(row.get("visual_focus_role") or scene_row.get("visual_focus_role") or "").strip().lower()
+        speaker_role = str(row.get("speaker_role") or scene_row.get("speaker_role") or "").strip().lower()
+        primary_role = str(row.get("primary_role") or scene_row.get("primary_role") or "").strip().lower()
+        beat_mode = str(row.get("beat_mode") or scene_row.get("beat_mode") or core_row.get("beat_mode") or "").strip().lower()
+        world_i2v = bool(
+            route == "i2v"
+            and (
+                beat_mode in world_modes
+                or visual_focus_role in {"world", "environment"}
+                or primary_role in {"world", "environment"}
+                or (not speaker_role and "offscreen" in video_prompt.lower())
+            )
+        )
+        if world_i2v:
+            cleaned = video_prompt
+            for pattern in singer_conflict_patterns:
+                cleaned = pattern.sub("", cleaned)
+            cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,;")
+            world_clause = "World/cutaway mode: no visible singer or lip-sync framing; keep vocalist offscreen or non-dominant."
+            if world_clause.lower() not in cleaned.lower():
+                cleaned = f"{world_clause} {cleaned}".strip()
+            if cleaned != video_prompt:
+                row["video_prompt"] = cleaned
+                world_i2v_conflict_fixed_count += 1
+
+        rewritten_segments.append(row)
+
+    normalized["segments"] = rewritten_segments
+    if _safe_list(normalized.get("scenes")):
+        normalized["scenes"] = [deepcopy(row) for row in rewritten_segments]
+    return normalized, {
+        "scene_prompts_quality_pass_applied": True,
+        "scene_prompts_quality_ia2v_variant_applied_count": ia2v_variant_applied_count,
+        "scene_prompts_quality_world_i2v_conflict_fixed_count": world_i2v_conflict_fixed_count,
+        "scene_prompts_quality_video_prompt_deduped_count": video_prompt_deduped_count,
+        "scene_prompts_quality_odessa_anchor_strengthened": anchor_strengthened,
+    }
+
+
 _SCENE_PROMPTS_DETECH_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bpeak[\-\s]?threshold pocket\b", re.IGNORECASE), "quiet kitchen aftermath"),
     (re.compile(r"\bthreshold pocket\b", re.IGNORECASE), "doorway area"),
@@ -12719,6 +12913,11 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["validation_error"] = ""
     diagnostics["scene_prompts_error"] = ""
     diagnostics["scene_prompts_empty"] = False
+    diagnostics["scene_prompts_quality_pass_applied"] = False
+    diagnostics["scene_prompts_quality_ia2v_variant_applied_count"] = 0
+    diagnostics["scene_prompts_quality_world_i2v_conflict_fixed_count"] = 0
+    diagnostics["scene_prompts_quality_video_prompt_deduped_count"] = 0
+    diagnostics["scene_prompts_quality_odessa_anchor_strengthened"] = False
     previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "")
     diagnostics["scene_prompts_upstream_changed"] = bool(previous_signature and previous_signature != current_signature)
     diagnostics["scene_prompts_upstream_signature"] = current_signature
@@ -12806,6 +13005,11 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
                 result["error"] = str(result.get("error") or result.get("validation_error") or "scene_prompts_validation_failed")
                 hard_fail_error = str(result.get("validation_error") or result.get("error") or "scene_prompts_validation_failed")
 
+    quality_scene_prompts, quality_diag = _scene_prompts_quality_pass(package, _safe_dict(result.get("scene_prompts")))
+    result["scene_prompts"] = quality_scene_prompts
+    result_diag = _safe_dict(result.get("diagnostics"))
+    result_diag.update(quality_diag)
+    result["diagnostics"] = result_diag
     scene_prompts = _safe_dict(result.get("scene_prompts"))
     package["scene_prompts"] = _attach_downstream_mode_metadata(scene_prompts, package)
 
