@@ -1258,8 +1258,8 @@ def _sync_role_scene_route_semantics(package: dict[str, Any]) -> dict[str, int]:
     updated = 0
     ia2v_forced_visible = 0
     i2v_offscreen_repairs = 0
-    for row in scene_casting:
-        casting_row = _safe_dict(row)
+    for idx, row in enumerate(scene_casting):
+        casting_row = dict(_safe_dict(row))
         seg_id = str(casting_row.get("segment_id") or "").strip()
         if not seg_id:
             continue
@@ -1289,8 +1289,7 @@ def _sync_role_scene_route_semantics(package: dict[str, Any]) -> dict[str, int]:
                 changed = True
                 i2v_offscreen_repairs += 1
         if changed:
-            row.clear()
-            row.update(casting_row)
+            scene_casting[idx] = casting_row
             updated += 1
 
     role_plan["scene_casting"] = scene_casting
