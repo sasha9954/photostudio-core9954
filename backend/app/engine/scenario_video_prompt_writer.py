@@ -456,17 +456,42 @@ def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) ->
     route_payload = _safe_dict(row.get("route_payload"))
     prompt_row = _safe_dict(fallback_row.get("prompt_row"))
     plan_row = _safe_dict(fallback_row.get("plan_row"))
-    fallback_route = _normalize_route(
-        fallback_row.get("route")
-        or prompt_row.get("route")
-        or plan_row.get("route")
-    )
+    scene_plan_route = _normalize_route(plan_row.get("route"))
+    scene_prompt_route = _normalize_route(prompt_row.get("route"))
+    fallback_route = _normalize_route(fallback_row.get("route"))
     model_route = _normalize_route(
         video_metadata.get("route_type")
         or row.get("route")
         or route_payload.get("route")
     )
-    route = fallback_route if fallback_route in _ALLOWED_ROUTES else model_route
+
+    # Route truth must come from upstream scene planning layers.
+    # Final prompt writer is not allowed to silently mutate i2v -> ia2v
+    # even if this segment looks like a final emotional payoff candidate.
+    route = next(
+        (
+            candidate
+            for candidate in (scene_plan_route, scene_prompt_route, fallback_route, model_route)
+            if candidate in _ALLOWED_ROUTES
+        ),
+        "",
+    )
+
+    diagnostics = _safe_dict(fallback_row.get("final_video_prompt_diagnostics"))
+    diagnostics["final_emotional_payoff_candidate"] = bool(_is_final_emotional_payoff_candidate(fallback_row))
+    diagnostics["resolved_route_source"] = (
+        "scene_plan"
+        if route == scene_plan_route
+        else "scene_prompts"
+        if route == scene_prompt_route
+        else "fallback_row"
+        if route == fallback_route
+        else "model_payload"
+        if route == model_route
+        else "missing"
+    )
+    fallback_row["final_video_prompt_diagnostics"] = diagnostics
+
     if route not in _ALLOWED_ROUTES:
         raise RuntimeError("FINAL_VIDEO_PROMPT_ROUTE_MISSING")
     return route
