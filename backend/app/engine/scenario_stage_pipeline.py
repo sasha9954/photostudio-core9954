@@ -12076,6 +12076,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     route_locks_by_segment,
                     overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill")),
                 )
+                retry_scene_plan, retry_final_semantic_repairs = _repair_scene_plan_final_semantics(
+                    package=package,
+                    scene_plan=retry_scene_plan,
+                )
+                diagnostics["scene_plan_final_semantic_repairs"] = dict(retry_final_semantic_repairs)
                 retry_result["scene_plan"] = retry_scene_plan
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
                 package=package,
