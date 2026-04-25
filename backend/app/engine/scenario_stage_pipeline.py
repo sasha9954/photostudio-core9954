@@ -3655,7 +3655,22 @@ def _ref_safe_identity_text(text: str, role: str) -> str:
     lowered = raw.lower()
     if any(re.search(pattern, lowered) for pattern in banned_patterns):
         return _visual_ref_identity_rule(role)
-    return raw
+    split_pattern = re.compile(r"([.!?])")
+    tokens = split_pattern.split(raw)
+    clauses: list[str] = []
+    for idx in range(0, len(tokens), 2):
+        chunk = str(tokens[idx] or "").strip()
+        punct = str(tokens[idx + 1] or "") if idx + 1 < len(tokens) else ""
+        if not chunk:
+            continue
+        candidate = f"{chunk}{punct}".strip()
+        candidate_norm = re.sub(r"\s+", " ", candidate).strip(" .!?;,").lower()
+        prev_norm = re.sub(r"\s+", " ", clauses[-1]).strip(" .!?;,").lower() if clauses else ""
+        if candidate_norm and candidate_norm == prev_norm:
+            continue
+        clauses.append(candidate)
+    deduped = " ".join(clauses).strip()
+    return deduped or raw
 
 
 def _build_story_core_v11(
@@ -3933,9 +3948,15 @@ def _build_story_core_v11(
     for i in range(max(0, len(beats) - 1)):
         left, right = beats[i], beats[i + 1]
         evt_type = "semantic_progression"
+        handoff_explicit = _transition_handoff_is_explicit(
+            left,
+            right,
+            content_type=content_type,
+            director_mode=director_mode,
+        )
         if left.get("story_function") != right.get("story_function"):
             evt_type = "function_turn"
-        if left.get("beat_primary_subject") != right.get("beat_primary_subject"):
+        if handoff_explicit:
             evt_type = "subject_handoff_explicit"
         transition_events.append(
             {
@@ -3948,7 +3969,13 @@ def _build_story_core_v11(
 
     primary_per_beat = [str(item.get("beat_primary_subject") or "") for item in beats]
     shadow_count = sum(1 for subject in primary_per_beat if subject and subject != primary_subject)
-    subject_shadowing = shadow_count > max(1, math.floor(len(beats) * 0.35))
+    intentional_clip_alternation = _is_intentional_clip_subject_alternation(
+        primary_per_beat,
+        primary_subject=primary_subject,
+        content_type=content_type,
+        director_mode=director_mode,
+    )
+    subject_shadowing = (shadow_count > max(1, math.floor(len(beats) * 0.35))) and not intentional_clip_alternation
     required_object_beats = [idx for idx, beat in enumerate(beats) if str(beat.get("continuity_visibility_requirement") or "") == "object_anchor_required"]
     required_object_beats_set = set(required_object_beats)
     legitimized_transition_indices = {
@@ -3996,7 +4023,6 @@ def _build_story_core_v11(
             flatline_segments.append({"from_beat": f"beat_{start + 1}", "to_beat": f"beat_{end}", "story_function": arc_tokens[start]})
         start = end
     semantic_delta_score = round(1.0 - min(0.7, len(flatline_segments) * 0.18) - (0.15 if subject_shadowing else 0.0) - (0.15 if continuity_break else 0.0), 3)
-    opening_mismatch = bool(beats and primary_subject not in str(beats[0].get("beat_primary_subject") or ""))
     dangling_tail = bool(beats and "afterimage" not in str(beats[-1].get("story_function") or "") and "release" not in str(beats[-1].get("story_function") or ""))
     callback_missing = bool(opening_anchor and ending_callback_rule and not beats)
     continuity_object_dropout = bool(continuity_objects and not continuity_matrix["subject_to_objects"])
@@ -4103,6 +4129,19 @@ def _build_story_core_v11(
             }
             for idx, item in enumerate(beats)
         ]
+    first_beat_subject = str(beats[0].get("beat_primary_subject") or "").strip() if beats else ""
+    first_beat_function = str(beats[0].get("story_function") or "").strip() if beats else ""
+    first_segment = _safe_dict(narrative_segments[0]) if narrative_segments else {}
+    first_segment_role = str(first_segment.get("arc_role") or "").strip().lower()
+    opening_world_anchor = _has_opening_world_anchor_signal(opening_anchor)
+    opening_clip_world_aligned = (
+        _is_music_video_clip_mode(content_type, director_mode)
+        and opening_world_anchor
+        and first_beat_subject == "world"
+        and first_beat_function in {"opening_anchor", "setup", "build_progression"}
+        and first_segment_role in {"setup", "build"}
+    )
+    opening_mismatch = bool(beats and first_beat_subject != primary_subject and not opening_clip_world_aligned)
 
     canonical_arc_segments = (
         [
@@ -5763,6 +5802,95 @@ def _extract_story_core_anchor_phrases(text: str) -> list[str]:
     return anchors[:6]
 
 
+def _has_opening_world_anchor_signal(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    return any(
+        token in lowered
+        for token in (
+            "morning",
+            "dawn",
+            "quiet light",
+            "black sea",
+            "sea",
+            "seagull",
+            "gulls",
+            "port",
+            "harbor",
+            "harbour",
+            "quay",
+            "shore",
+            "embankment",
+            "boulevard",
+        )
+    )
+
+
+def _is_intentional_clip_subject_alternation(
+    beat_subjects: list[str],
+    *,
+    primary_subject: str,
+    content_type: str,
+    director_mode: str,
+) -> bool:
+    if not _is_music_video_clip_mode(content_type, director_mode):
+        return False
+    sequence = [str(item or "").strip() for item in beat_subjects if str(item or "").strip()]
+    if len(sequence) < 4:
+        return False
+    allowed = {primary_subject, "world"}
+    if not set(sequence).issubset(allowed):
+        return False
+    if not ({primary_subject, "world"} <= set(sequence)):
+        return False
+    alternations = sum(1 for idx in range(1, len(sequence)) if sequence[idx] != sequence[idx - 1])
+    return alternations >= max(2, math.floor((len(sequence) - 1) * 0.7))
+
+
+def _transition_handoff_is_explicit(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    content_type: str,
+    director_mode: str,
+) -> bool:
+    left_subject = str(left.get("beat_primary_subject") or "").strip()
+    right_subject = str(right.get("beat_primary_subject") or "").strip()
+    if not left_subject or not right_subject or left_subject == right_subject:
+        return False
+    if not _is_music_video_clip_mode(content_type, director_mode):
+        return True
+    merged_signal = " ".join(
+        [
+            str(left.get("beat_focus_hint") or ""),
+            str(right.get("beat_focus_hint") or ""),
+            str(left.get("group_reason") or ""),
+            str(right.get("group_reason") or ""),
+        ]
+    ).lower()
+    explicit_tokens = (
+        "handoff",
+        "passes",
+        "pass to",
+        "hands over",
+        "takes from",
+        "gives",
+        "exchange",
+        "ownership",
+        "transfer",
+        "enter",
+        "exit",
+        "reveals",
+        "focus shifts to",
+    )
+    explicit_signal = any(token in merged_signal for token in explicit_tokens)
+    reason_signal = str(right.get("story_function") or "") == "transition_turn" and str(left.get("story_function") or "") != str(
+        right.get("story_function") or ""
+    )
+    return explicit_signal or reason_signal
+
+
 def _compress_story_core_literal_segment_text(
     row: dict[str, Any],
     *,
@@ -5782,25 +5910,46 @@ def _compress_story_core_literal_segment_text(
         return rewritten, False
 
     function_map = {
-        "setup": "Open on lived city ritual where the hero is read through how people and space react",
-        "build": "Escalate through linked public and intimate zones so pressure grows by social texture",
-        "pivot": "Turn the beat by shifting witness distance and implied risk instead of direct exposition",
-        "climax": "Peak as performance force collides with city response and contested personal memory",
-        "release": "Release into aftermath traces where the world keeps moving and the hero re-anchors",
-        "afterglow": "Leave a residual echo where private resolve and city rhythm settle into one doctrine",
+        "setup": "Frame the opening through observable place cues before committing to direct performance emphasis",
+        "build": "Increase pressure by layering social observation, movement vectors, and tighter relational distance",
+        "pivot": "Reframe intent through a perspective shift so stakes change without literal explanation",
+        "climax": "Drive peak force where performed intent meets external reaction and consequence",
+        "release": "Decompress through residue and recovery signals while continuity still holds",
+        "afterglow": "Close on a persistent trace where inner resolve and world rhythm align",
     }
     emotional_map = {
-        "setup": "restrained curiosity with coded subtext",
-        "build": "mounting urgency carried by witness detail",
-        "pivot": "tense ambiguity and counterpoint between intent and environment",
-        "climax": "high pressure with reactive crowd logic and implied consequence",
-        "release": "measured exhale with aftermath texture",
-        "afterglow": "quiet afterimage, intimate but world-aware",
+        "setup": "measured curiosity with latent tension",
+        "build": "mounting urgency carried by accumulating witness detail",
+        "pivot": "charged uncertainty with unstable balance of control",
+        "climax": "high-voltage confrontation under social pressure",
+        "release": "controlled exhale with reflective drag",
+        "afterglow": "quiet resonance, intimate but still externally aware",
+    }
+    beat_mode_map = {
+        "world_observation": "Prioritize environment causality and public texture over explicit lyric paraphrase",
+        "performance": "Let body rhythm and vocal intent carry narrative progression in-frame",
+        "transition": "Mark the turn with bridging evidence so the shift reads as motivated",
+    }
+    hero_world_map = {
+        "hero_foreground": "Keep hero agency legible while world response remains consequential",
+        "world_foreground": "Keep the world in command and let hero presence read through reactions and traces",
+        "balanced": "Balance hero signal and environmental counterweight within the same beat",
+    }
+    subtext_map = {
+        "second_order": "Encode meaning through implication rather than declarative labeling",
+        "coded": "Use indirect dramatic coding and avoid literal claim statements",
+        "direct": "Preserve clear intent while avoiding literal replay of source text",
     }
     role = str(arc_role or "").strip().lower()
+    beat_mode = str(row.get("beat_mode") or "").strip().lower()
+    hero_world_mode = str(row.get("hero_world_mode") or "").strip().lower()
+    subtext_mode = str(row.get("subtext_mode") or "").strip().lower()
+    mode_clause = beat_mode_map.get(beat_mode) or "Keep progression tied to concrete visual logic"
+    foreground_clause = hero_world_map.get(hero_world_mode) or "Keep subject/world hierarchy coherent for this beat"
+    subtext_clause = subtext_map.get(subtext_mode) or "Maintain anti-literal framing and semantic indirection"
     anchor_tail = f" Anchors stay grounded in {anchor_hint}." if anchor_hint else ""
-    rewritten["beat_purpose"] = f"{function_map.get(role) or function_map['build']}.{anchor_tail}".strip()
-    rewritten["emotional_key"] = emotional_map.get(role) or emotional_map["build"]
+    rewritten["beat_purpose"] = f"{function_map.get(role) or function_map['build']}. {mode_clause}. {foreground_clause}.{anchor_tail}".strip()
+    rewritten["emotional_key"] = f"{emotional_map.get(role) or emotional_map['build']}; {subtext_clause.lower()}"
     return rewritten, True
 
 
