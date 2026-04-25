@@ -376,6 +376,9 @@ def _collect_allowed_entity_registry(package: dict[str, Any]) -> dict[str, dict[
     for role_name in connected_roles.keys():
         _upsert(str(role_name), "connected_context_summary", role_name=str(role_name))
 
+    # Canonical non-character subject used by CORE beat_map/narrative intent.
+    _upsert("world", "core_canonical_subject", role_name="world")
+
     return registry
 
 
@@ -463,6 +466,14 @@ def _build_single_cast_grounded_fallback(
             "continuity_rules": list(_CHARACTER_REF_SAFE_CONTINUITY_RULES),
         }
     ]
+    if any(str(_safe_dict(core_subject_map.get(segment_id)).get("primary_role") or "").strip().lower() == "world" for segment_id in expected_segment_ids):
+        roster.append(
+            {
+                "entity_id": "world",
+                "role_name": "world",
+                "continuity_rules": ["Treat world as environmental subject, not a spawned cast character."],
+            }
+        )
     scene_casting: list[dict[str, Any]] = []
     for segment_id in expected_segment_ids:
         core_row = _safe_dict(core_subject_map.get(segment_id))
@@ -526,10 +537,11 @@ def _build_single_cast_grounded_fallback(
             if presence_mode == "voiceover"
             else "Keep character_1 implied while the beat emphasis stays on world progression."
         )
+        resolved_primary = "world" if (world_first and not performance_first) else anchor
         scene_casting.append(
             {
                 "segment_id": segment_id,
-                "primary_role": anchor,
+                "primary_role": resolved_primary,
                 "secondary_roles": [],
                 "presence_mode": presence_mode,
                 "presence_weight": presence_weight,
@@ -872,12 +884,46 @@ def _build_core_subject_map(story_core: dict[str, Any]) -> dict[str, dict[str, A
         story_core_v1 = story_core
     beat_map = _safe_dict(story_core_v1.get("beat_map"))
     beats = [_safe_dict(row) for row in _safe_list(beat_map.get("beats"))]
+    narrative_by_segment = {
+        _normalize_text(_safe_dict(row).get("segment_id"), max_len=80): _safe_dict(row)
+        for row in _safe_list(story_core.get("narrative_segments"))
+        if _normalize_text(_safe_dict(row).get("segment_id"), max_len=80)
+    }
     out: dict[str, dict[str, Any]] = {}
     for beat in beats:
         segment_id = _normalize_text(beat.get("source_segment_id"), max_len=80)
         if not segment_id:
             continue
-        primary_role = _normalize_text(beat.get("beat_primary_subject"), max_len=80)
+        narrative_row = _safe_dict(narrative_by_segment.get(segment_id))
+        narrative_hero_world_mode = _normalize_text(narrative_row.get("hero_world_mode"), max_len=80).lower()
+        narrative_beat_mode = _normalize_text(narrative_row.get("beat_mode"), max_len=80).lower()
+        beat_primary_subject = _normalize_text(beat.get("beat_primary_subject"), max_len=80).lower()
+        beat_mode = _normalize_text(beat.get("beat_mode"), max_len=80).lower() or narrative_beat_mode
+        hero_world_mode = _normalize_text(beat.get("hero_world_mode"), max_len=80).lower() or narrative_hero_world_mode
+
+        # Priority:
+        # 1) narrative_segments.hero_world_mode
+        # 2) beat_map.beat_primary_subject
+        # 3) narrative_segments.beat_mode
+        # 4) conservative fallback heuristic
+        primary_role = ""
+        if narrative_hero_world_mode == "world_foreground" and beat_mode != "performance":
+            primary_role = "world"
+        elif narrative_hero_world_mode == "hero_foreground":
+            primary_role = "character_1"
+        elif beat_primary_subject:
+            primary_role = beat_primary_subject
+        elif narrative_beat_mode == "performance":
+            primary_role = "character_1"
+        elif narrative_beat_mode in _SINGLE_CAST_WORLD_BEAT_MODES:
+            primary_role = "world"
+        elif hero_world_mode == "world_foreground" and beat_mode != "performance":
+            primary_role = "world"
+        elif beat_mode in _SINGLE_CAST_WORLD_BEAT_MODES:
+            primary_role = "world"
+        elif beat_mode == "performance" or hero_world_mode == "hero_foreground":
+            primary_role = "character_1"
+
         secondary_roles = list(
             dict.fromkeys(
                 [
@@ -888,8 +934,8 @@ def _build_core_subject_map(story_core: dict[str, Any]) -> dict[str, dict[str, A
             )
         )
         out[segment_id] = {"primary_role": primary_role, "secondary_roles": secondary_roles}
-        out[segment_id]["hero_world_mode"] = _normalize_text(beat.get("hero_world_mode"), max_len=80)
-        out[segment_id]["beat_mode"] = _normalize_text(beat.get("beat_mode"), max_len=80)
+        out[segment_id]["hero_world_mode"] = hero_world_mode
+        out[segment_id]["beat_mode"] = beat_mode
     return out
 
 
@@ -968,7 +1014,8 @@ def _validate_roles_payload(
 
     if strict_single_cast_anchor:
         anchor = _normalize_text(strict_single_cast_anchor, max_len=80).lower()
-        if roster_ids != {anchor}:
+        non_world_roster_ids = {role_id for role_id in roster_ids if role_id != "world"}
+        if non_world_roster_ids != {anchor}:
             return {}, ROLES_ENTITY_HALLUCINATION
 
     seen_segment_ids: list[str] = []
@@ -980,7 +1027,7 @@ def _validate_roles_payload(
         primary_role = str(row.get("primary_role") or "").strip()
         if primary_role not in roster_ids:
             return {}, ROLES_ENTITY_HALLUCINATION
-        if strict_single_cast_anchor and primary_role != str(strict_single_cast_anchor).strip():
+        if strict_single_cast_anchor and primary_role not in {str(strict_single_cast_anchor).strip(), "world"}:
             return {}, ROLES_ENTITY_HALLUCINATION
         for secondary in _safe_list(row.get("secondary_roles")):
             secondary_role = str(secondary or "").strip()
