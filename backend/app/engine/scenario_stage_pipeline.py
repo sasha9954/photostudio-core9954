@@ -5715,6 +5715,129 @@ _STORY_CORE_NARRATIVE_TOP_LEVEL_FIELDS = ("story_summary", "opening_anchor", "en
 _STORY_CORE_NARRATIVE_GLOBAL_ARC_FIELDS = ("exposition", "climax", "resolution")
 _STORY_CORE_NARRATIVE_IDENTITY_DOCTRINE_FIELDS = ("hero_anchor", "world_doctrine", "style_doctrine")
 _STORY_CORE_NARRATIVE_SEGMENT_PRIORITY_FIELDS = ("beat_purpose", "emotional_key")
+_STORY_CORE_LITERAL_LIST_MARKERS = (
+    "to show",
+    "show ",
+    "showing",
+    "показывать",
+    "показать",
+    "покажи",
+    "показываем",
+)
+_STORY_CORE_DIRECT_MAPPING_MARKERS = (
+    "shows fear",
+    "shows sadness",
+    "illustrates",
+    "literally",
+    "because she is",
+    "because he is",
+    "чтобы показать",
+)
+
+
+def _is_music_video_clip_mode(content_type: str, director_mode: str) -> bool:
+    return str(content_type or "").strip().lower() == "music_video" and str(director_mode or "").strip().lower() == "clip"
+
+
+def _extract_story_core_anchor_phrases(text: str) -> list[str]:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return []
+    anchors: list[str] = []
+    for pattern in (
+        r"\bодесс\w*\b",
+        r"\bodessa\b",
+        r"\bport\b",
+        r"\bharbor\b",
+        r"\bsea\b",
+        r"\bprimors\w*\b",
+        r"\bпотемкин\w*\b",
+        r"\bбульвар\w*\b",
+        r"\bдвор\w*\b",
+        r"\bлестниц\w*\b",
+    ):
+        for hit in re.findall(pattern, lowered, flags=re.IGNORECASE):
+            token = str(hit or "").strip()
+            if token and token not in anchors:
+                anchors.append(token)
+    return anchors[:6]
+
+
+def _compress_story_core_literal_segment_text(
+    row: dict[str, Any],
+    *,
+    arc_role: str,
+    anchor_hint: str,
+) -> tuple[dict[str, Any], bool]:
+    rewritten = dict(row)
+    beat_purpose = str(row.get("beat_purpose") or "").strip()
+    emotional_key = str(row.get("emotional_key") or "").strip()
+    merged_text = f"{beat_purpose} {emotional_key}".strip().lower()
+    comma_count = merged_text.count(",")
+    literal_marker_hit = any(marker in merged_text for marker in _STORY_CORE_LITERAL_LIST_MARKERS)
+    direct_marker_hit = any(marker in merged_text for marker in _STORY_CORE_DIRECT_MAPPING_MARKERS)
+    list_like_hit = comma_count >= 2
+    should_rewrite = bool(beat_purpose) and (literal_marker_hit or direct_marker_hit or list_like_hit)
+    if not should_rewrite:
+        return rewritten, False
+
+    function_map = {
+        "setup": "Open on lived city ritual where the hero is read through how people and space react",
+        "build": "Escalate through linked public and intimate zones so pressure grows by social texture",
+        "pivot": "Turn the beat by shifting witness distance and implied risk instead of direct exposition",
+        "climax": "Peak as performance force collides with city response and contested personal memory",
+        "release": "Release into aftermath traces where the world keeps moving and the hero re-anchors",
+        "afterglow": "Leave a residual echo where private resolve and city rhythm settle into one doctrine",
+    }
+    emotional_map = {
+        "setup": "restrained curiosity with coded subtext",
+        "build": "mounting urgency carried by witness detail",
+        "pivot": "tense ambiguity and counterpoint between intent and environment",
+        "climax": "high pressure with reactive crowd logic and implied consequence",
+        "release": "measured exhale with aftermath texture",
+        "afterglow": "quiet afterimage, intimate but world-aware",
+    }
+    role = str(arc_role or "").strip().lower()
+    anchor_tail = f" Anchors stay grounded in {anchor_hint}." if anchor_hint else ""
+    rewritten["beat_purpose"] = f"{function_map.get(role) or function_map['build']}.{anchor_tail}".strip()
+    rewritten["emotional_key"] = emotional_map.get(role) or emotional_map["build"]
+    return rewritten, True
+
+
+def _apply_story_core_semantic_compression(
+    payload: dict[str, Any],
+    *,
+    content_type: str,
+    director_mode: str,
+    user_concept: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not _is_music_video_clip_mode(content_type, director_mode):
+        return payload, {"applied": False, "rewritten_segments": []}
+    normalized = deepcopy(_safe_dict(payload))
+    if not normalized:
+        return normalized, {"applied": False, "rewritten_segments": []}
+    anchor_tokens = _extract_story_core_anchor_phrases(user_concept)
+    anchor_hint = ", ".join(anchor_tokens[:3])
+    rewritten_segments: list[str] = []
+    output_segments: list[dict[str, Any]] = []
+    for row in _safe_list(normalized.get("narrative_segments")):
+        segment = _safe_dict(row)
+        segment_id = str(segment.get("segment_id") or "").strip()
+        rewritten_row, changed = _compress_story_core_literal_segment_text(
+            segment,
+            arc_role=str(segment.get("arc_role") or ""),
+            anchor_hint=anchor_hint,
+        )
+        if changed and segment_id:
+            rewritten_segments.append(segment_id)
+            if str(rewritten_row.get("subtext_mode") or "").strip().lower() == "direct":
+                rewritten_row["subtext_mode"] = "coded"
+            if str(rewritten_row.get("association_target") or "").strip().lower() == "level_1":
+                rewritten_row["association_target"] = "level_2_plus"
+        output_segments.append(rewritten_row)
+    if output_segments:
+        normalized["narrative_segments"] = output_segments
+    return normalized, {"applied": bool(rewritten_segments), "rewritten_segments": rewritten_segments[:24]}
 
 
 def _story_core_forbidden_zones_text(payload: dict[str, Any]) -> list[tuple[str, str]]:
@@ -6213,6 +6336,9 @@ def _build_story_core_prompt(
         "ANTI-LITERAL WORLD CONTRACT (hard): avoid first-order cliché shorthand. Do not map danger/crime/street myth to automatic stock noir bundles (e.g., repeated dark alleys/courtyards/ports/underworld phrasing).\n"
         "Build world via second-order social logic: rituals, coded behavior, distance, threshold spaces, witness perspective, ordinary life under pressure, and aftermath traces.\n"
         "World must feel specific through lived texture and human environment, not through repeated stereotype tags.\n"
+        "SEMANTIC COMPRESSION RULE (hard): when user concept contains location/object lists, compress them into coherent world doctrine and progression logic; never output checklist-style 'show X, Y, Z'.\n"
+        "Keep grounded anchors (city, hero, world identity, musical character), but rewrite literal directives into dramaturgical function.\n"
+        "For narrative_segments, write beat purpose as scene function + relation between hero and world + progression pressure, not as direct paraphrase of lyrics or user note.\n"
         "ATMOSPHERE RULE: criminal/tense/street atmosphere means social pressure and risk logic in the world; it is NOT a request for costume shorthand.\n"
         "IDENTITY INVENTION GUARD (hard): if character refs exist, do not invent exact wardrobe/accessories/headwear/jewelry/tattoos/facial-hair packages unless explicitly grounded in refs or user text.\n"
         "Allowed identity language at CORE: narrative presence, social role energy, emotional mode, and scene function.\n"
@@ -7435,6 +7561,8 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_refs_sources_used"] = []
     diagnostics["story_core_raw_response"] = ""
     diagnostics["story_core_normalized_payload"] = {}
+    diagnostics["story_core_semantic_compression_applied"] = False
+    diagnostics["story_core_semantic_compression_segments"] = []
     diagnostics["story_core_validation_errors"] = []
     diagnostics["story_core_role_identity_expectations"] = {}
     diagnostics["story_core_retry_used"] = False
@@ -7638,10 +7766,20 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics = _safe_dict(package.get("diagnostics"))
                 diagnostics["story_core_raw_response"] = raw_text
                 parsed = _extract_json_obj(raw_text)
+                resolved_director_mode = _resolve_director_mode(
+                    input_pkg.get("director_mode"),
+                    content_type=str(input_pkg.get("content_type") or "music_video"),
+                )
                 normalized_core = _normalize_story_core_contract_payload(
                     parsed=parsed,
                     audio_segments=core_segments,
                     creative_config=creative_config,
+                )
+                normalized_core, semantic_compression_diag = _apply_story_core_semantic_compression(
+                    normalized_core,
+                    content_type=str(input_pkg.get("content_type") or "music_video"),
+                    director_mode=resolved_director_mode,
+                    user_concept=user_concept,
                 )
                 sanitized_normalized_core, sanitize_removed_terms, sanitize_applied = _sanitize_story_core_forbidden_technical_language(
                     normalized_core
@@ -7653,6 +7791,10 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 if attempt == 0:
                     first_attempt_normalized_fingerprint = normalized_fingerprint
                 diagnostics["story_core_normalized_payload"] = normalized_core
+                diagnostics["story_core_semantic_compression_applied"] = bool(semantic_compression_diag.get("applied"))
+                diagnostics["story_core_semantic_compression_segments"] = _safe_list(
+                    semantic_compression_diag.get("rewritten_segments")
+                )
                 diagnostics["story_core_narrative_sanitizer_applied"] = bool(sanitize_applied)
                 diagnostics["story_core_narrative_sanitizer_removed_terms"] = sanitize_removed_terms[:24]
                 technical_spawn_debug: dict[str, Any] = {}
