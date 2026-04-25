@@ -3132,6 +3132,162 @@ def _collect_scene_plan_route_semantic_mismatches(scene_plan: dict[str, Any]) ->
     return mismatches
 
 
+def _rebalance_scene_plan_routes_after_validity_repairs(
+    *,
+    package: dict[str, Any],
+    scene_plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    normalized = deepcopy(_safe_dict(scene_plan))
+    rows = _scene_plan_rows_for_validation(normalized)
+    if not rows:
+        return normalized, {"attempted": False, "upgraded": 0, "missing_ia2v": 0, "target": {}, "actual_before": {}, "actual_after": {}}
+
+    input_pkg = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    expected_scene_count = _expected_scene_count_from_package(package)
+    target_budget = _compute_route_budget_for_total(expected_scene_count, creative_config)
+    actual_before = _scene_plan_route_counts(normalized)
+    missing_ia2v = max(0, int(target_budget.get("ia2v") or 0) - int(actual_before.get("ia2v") or 0))
+    spare_i2v = max(0, int(actual_before.get("i2v") or 0) - int(target_budget.get("i2v") or 0))
+    needed_upgrades = min(missing_ia2v, spare_i2v)
+    if needed_upgrades <= 0:
+        return normalized, {
+            "attempted": False,
+            "upgraded": 0,
+            "missing_ia2v": missing_ia2v,
+            "target": target_budget,
+            "actual_before": actual_before,
+            "actual_after": actual_before,
+            "upgraded_segment_ids": [],
+        }
+
+    max_consecutive = int(creative_config.get("max_consecutive_lipsync") or 2)
+    all_lipsync_override = _is_all_lipsync_override_mode(
+        total_scenes=expected_scene_count,
+        creative_config=creative_config,
+        target_budget=target_budget,
+    )
+    world_beat_types = {"world_observation", "world_pressure", "threshold", "social_texture", "aftermath", "release", "transition", "cutaway"}
+    performance_beat_types = {"vocal_emotion", "performance", "singer_performance"}
+
+    working_routes: list[str] = [str(_safe_dict(row).get("route") or "").strip().lower() for row in rows]
+
+    def _longest_lipsync_streak(route_values: list[str]) -> int:
+        longest = 0
+        current = 0
+        for value in route_values:
+            if value == "ia2v":
+                current += 1
+                longest = max(longest, current)
+            else:
+                current = 0
+        return longest
+
+    def _candidate_score(row: dict[str, Any], idx: int) -> tuple[int, int, int]:
+        route_row = _safe_dict(row)
+        story_beat_type = str(route_row.get("story_beat_type") or "").strip().lower()
+        primary_role = _canonical_subject_id(route_row.get("primary_role"))
+        visual_focus_role = _canonical_subject_id(route_row.get("visual_focus_role"))
+        speaker_role = _canonical_subject_id(route_row.get("speaker_role"))
+        singing_required = bool(route_row.get("singing_readiness_required"))
+        lip_sync_allowed = bool(route_row.get("lip_sync_allowed"))
+        mouth_visible_required = bool(route_row.get("mouth_visible_required"))
+        object_action_allowed = bool(route_row.get("object_action_allowed"))
+
+        if working_routes[idx] != "i2v":
+            return (-1, -1, -idx)
+        if visual_focus_role != "character_1":
+            return (-1, -1, -idx)
+        if story_beat_type in world_beat_types:
+            return (-1, -1, -idx)
+        if primary_role in {"world", "environment"}:
+            return (-1, -1, -idx)
+        if object_action_allowed and not singing_required:
+            return (-1, -1, -idx)
+
+        singer_centered = bool(primary_role == "character_1" or speaker_role == "character_1")
+        performance_ready = bool(
+            singing_required
+            or lip_sync_allowed
+            or mouth_visible_required
+            or story_beat_type in performance_beat_types
+        )
+        if not singer_centered and not performance_ready:
+            return (-1, -1, -idx)
+
+        trial_routes = list(working_routes)
+        trial_routes[idx] = "ia2v"
+        if not all_lipsync_override and _longest_lipsync_streak(trial_routes) > max_consecutive:
+            return (-1, -1, -idx)
+
+        score = 0
+        if story_beat_type in performance_beat_types:
+            score += 5
+        if singing_required:
+            score += 4
+        if primary_role == "character_1":
+            score += 3
+        if speaker_role == "character_1":
+            score += 2
+        if lip_sync_allowed or mouth_visible_required:
+            score += 1
+        neighbor_penalty = int((idx > 0 and working_routes[idx - 1] == "ia2v") or (idx + 1 < len(working_routes) and working_routes[idx + 1] == "ia2v"))
+        return (score, -neighbor_penalty, -idx)
+
+    upgraded_segment_ids: list[str] = []
+    for _ in range(needed_upgrades):
+        scored: list[tuple[tuple[int, int, int], int, str]] = []
+        for idx, row in enumerate(rows):
+            segment_id = str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+            if not segment_id:
+                continue
+            score = _candidate_score(_safe_dict(row), idx)
+            if score[0] < 0:
+                continue
+            scored.append((score, idx, segment_id))
+        if not scored:
+            break
+        scored.sort(reverse=True)
+        _, best_idx, best_segment_id = scored[0]
+        working_routes[best_idx] = "ia2v"
+        upgraded_segment_ids.append(best_segment_id)
+
+    if upgraded_segment_ids:
+        upgraded_set = set(upgraded_segment_ids)
+        for field in ("scenes", "storyboard"):
+            rewritten: list[dict[str, Any]] = []
+            for idx, raw in enumerate(_safe_list(normalized.get(field)), start=1):
+                row = deepcopy(_safe_dict(raw))
+                segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+                if segment_id in upgraded_set:
+                    row["route"] = "ia2v"
+                rewritten.append(row)
+            if rewritten:
+                normalized[field] = rewritten
+        route_locks = {
+            str(k).strip(): str(v).strip().lower()
+            for k, v in _safe_dict(normalized.get("route_locks_by_segment")).items()
+            if str(k).strip()
+        }
+        for segment_id in upgraded_segment_ids:
+            route_locks[segment_id] = "ia2v"
+        normalized["route_locks_by_segment"] = route_locks
+
+    normalized["route_mix_summary"] = _scene_plan_route_counts(normalized)
+    actual_after = _scene_plan_route_counts(normalized)
+    return normalized, {
+        "attempted": True,
+        "upgraded": len(upgraded_segment_ids),
+        "missing_ia2v": missing_ia2v,
+        "target": target_budget,
+        "actual_before": actual_before,
+        "actual_after": actual_after,
+        "upgraded_segment_ids": upgraded_segment_ids,
+        "max_consecutive_lipsync": max_consecutive,
+        "all_lipsync_override": all_lipsync_override,
+    }
+
+
 def _scene_plan_snapshot_restore_is_safe(
     *,
     package: dict[str, Any],
@@ -11856,6 +12012,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_retry_already_attempted"] = False
     diagnostics["scene_plan_route_budget_second_retry_suppressed"] = False
     diagnostics["scene_plan_route_budget_feedback"] = ""
+    diagnostics["scene_plan_post_validity_route_rebalance"] = {}
     diagnostics["scene_plan_route_budget_ok"] = True
     diagnostics["scene_plan_route_budget_target"] = {}
     diagnostics["scene_plan_route_budget_actual"] = {}
@@ -12042,8 +12199,13 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             package=package,
             scene_plan=scene_plan,
         )
+        scene_plan, post_validity_rebalance = _rebalance_scene_plan_routes_after_validity_repairs(
+            package=package,
+            scene_plan=scene_plan,
+        )
         scene_plan, final_sync_meta = _sync_scene_plan_storyboard_mirror(scene_plan)
         diagnostics["scene_plan_final_semantic_repairs"] = dict(final_semantic_repairs)
+        diagnostics["scene_plan_post_validity_route_rebalance"] = dict(post_validity_rebalance)
         diagnostics["scene_plan_final_sync"] = dict(final_sync_meta)
         result["scene_plan"] = scene_plan
     else:
@@ -12108,8 +12270,13 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     package=package,
                     scene_plan=retry_scene_plan,
                 )
+                retry_scene_plan, retry_post_validity_rebalance = _rebalance_scene_plan_routes_after_validity_repairs(
+                    package=package,
+                    scene_plan=retry_scene_plan,
+                )
                 retry_scene_plan, retry_sync_meta = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
                 diagnostics["scene_plan_final_semantic_repairs"] = dict(retry_final_semantic_repairs)
+                diagnostics["scene_plan_post_validity_route_rebalance"] = dict(retry_post_validity_rebalance)
                 diagnostics["scene_plan_final_sync"] = dict(retry_sync_meta)
                 retry_result["scene_plan"] = retry_scene_plan
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
