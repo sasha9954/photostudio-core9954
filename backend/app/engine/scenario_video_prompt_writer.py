@@ -491,6 +491,102 @@ def _resolve_character_1_view_selection(
     }
 
 
+def _extract_ref_url(item: Any) -> str:
+    if isinstance(item, str):
+        return str(item).strip()
+    row = _safe_dict(item)
+    return str(row.get("url") or row.get("asset_path") or row.get("assetPath") or row.get("value") or "").strip()
+
+
+def _enforce_character_1_view_selection_on_refs(
+    *,
+    refs_by_role: dict[str, Any] | None,
+    character_views: dict[str, dict[str, Any]] | None,
+    character_view_selection: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    refs_map = {str(role): _safe_list(urls) for role, urls in _safe_dict(refs_by_role).items()}
+    views = _safe_dict(character_views)
+    selection = _safe_dict(character_view_selection)
+    available_views = [str(v) for v in _safe_list(selection.get("available")) if str(v)]
+    selected_views = [str(v) for v in _safe_list(selection.get("selected")) if str(v)]
+    mode = str(selection.get("mode") or "").strip()
+    reason = str(selection.get("reason") or "").strip()
+    fallback_needed = False
+    fallback_reason = ""
+    original_refs = _safe_list(refs_map.get("character_1"))
+
+    if mode == "environment_cutaway":
+        if original_refs:
+            refs_map["character_1"] = []
+            fallback_needed = True
+            fallback_reason = "environment_cutaway_removed_character_refs"
+        return refs_map, {
+            "available_views": available_views,
+            "selected_views": [],
+            "mode": mode,
+            "reason": reason or "environment_only_scene",
+            "fallback_needed": fallback_needed,
+            "fallback_reason": fallback_reason,
+            "effective_character_1_ref_count": 0,
+        }
+
+    selected_urls = []
+    for view_key in selected_views:
+        url = str(_safe_dict(views.get(view_key)).get("url") or "").strip()
+        if url:
+            selected_urls.append(url)
+    selected_urls = list(dict.fromkeys(selected_urls))
+    selected_view_set = set(selected_views)
+    selected_url_set = set(selected_urls)
+
+    enforced_refs: list[Any] = []
+    for view_key in selected_views:
+        for item in original_refs:
+            row = _safe_dict(item)
+            item_view = str(row.get("view_type") or row.get("viewType") or "").strip().lower()
+            item_url = _extract_ref_url(item)
+            if view_key and item_view == view_key:
+                enforced_refs.append(item)
+                break
+            if item_url and item_url in selected_url_set:
+                enforced_refs.append(item)
+                break
+    if not enforced_refs:
+        for item in original_refs:
+            row = _safe_dict(item)
+            item_view = str(row.get("view_type") or row.get("viewType") or "").strip().lower()
+            item_url = _extract_ref_url(item)
+            if (item_view and item_view in selected_view_set) or (item_url and item_url in selected_url_set):
+                enforced_refs.append(item)
+
+    if not enforced_refs and original_refs:
+        fallback_needed = True
+        fallback_reason = "selected_view_not_mapped_to_refs"
+        enforced_refs = [original_refs[0]]
+
+    deduped_refs: list[Any] = []
+    seen_keys: set[str] = set()
+    for idx, item in enumerate(enforced_refs):
+        row = _safe_dict(item)
+        item_key = _extract_ref_url(item) or str(row.get("id") or row.get("name") or f"idx:{idx}")
+        if item_key in seen_keys:
+            continue
+        seen_keys.add(item_key)
+        deduped_refs.append(item)
+    refs_map["character_1"] = deduped_refs
+
+    return refs_map, {
+        "available_views": available_views,
+        "selected_views": selected_views,
+        "selected_urls": selected_urls,
+        "mode": mode,
+        "reason": reason or "i2v",
+        "fallback_needed": fallback_needed,
+        "fallback_reason": fallback_reason,
+        "effective_character_1_ref_count": len(_safe_list(refs_map.get("character_1"))),
+    }
+
+
 def _dedupe_prompt_sentences(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -1483,6 +1579,24 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         character_views=_safe_dict(identity_ctx.get("character_views")),
         environment_cutaway_i2v=environment_cutaway_i2v,
     )
+    refs_by_role, character_view_selection_enforcement = _enforce_character_1_view_selection_on_refs(
+        refs_by_role=refs_by_role,
+        character_views=_safe_dict(identity_ctx.get("character_views")),
+        character_view_selection=character_view_selection,
+    )
+    character_view_selection = {
+        **character_view_selection,
+        "selected_views": list(_safe_list(character_view_selection_enforcement.get("selected_views"))),
+        "selected_urls": list(_safe_list(character_view_selection_enforcement.get("selected_urls"))),
+        "fallback_needed": bool(character_view_selection_enforcement.get("fallback_needed")),
+        "fallback_reason": str(character_view_selection_enforcement.get("fallback_reason") or "").strip(),
+        "effective_character_1_ref_count": int(character_view_selection_enforcement.get("effective_character_1_ref_count") or 0),
+        "enforced_downstream": True,
+    }
+    if environment_cutaway_i2v:
+        refs_used = [role for role in refs_used if str(role or "").strip().lower() != "character_1"]
+    elif _safe_list(refs_by_role.get("character_1")) and "character_1" not in refs_used:
+        refs_used = [*refs_used, "character_1"]
     cutaway_prefers_emptiness = bool(environment_cutaway_i2v and _scene_prefers_emptiness(lower_scene_semantics))
     explicit_labor_tokens = (
         "labor documentary",
