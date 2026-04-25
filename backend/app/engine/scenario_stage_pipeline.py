@@ -12313,8 +12313,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             code for code in _safe_list(diagnostics.get("scene_plan_error_codes"))
             if str(code or "").strip() != "SCENES_ROUTE_BUDGET_MISMATCH"
         ]
-        if str(hard_fail_error).strip().lower() in {"route_budget_mismatch", "route_budget_mismatch_after_compact_retry"}:
-            hard_fail_error = ""
+        # Clear stale pre-repair hard-fail markers once the post-repair candidate passes
+        # all final acceptance gates (budget, coverage, schema/enum, timeout).
+        hard_fail_error = ""
     diagnostics["validation_error"] = str(diagnostics.get("scene_plan_validation_error") or "")
     diagnostics["scene_plan_error"] = str(result.get("error") or "")
     if timeout_empty and int(diagnostics.get("scene_plan_segment_count_actual") or 0) == 0:
