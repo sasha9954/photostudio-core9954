@@ -4413,14 +4413,12 @@ def _sanitize_identity_and_visibility_conflicts(
         mutated = False
         if lip_sync_only and route == "i2v":
             seg["photo_prompt"] = (
-                f"Environment-focused story cutaway in the current grounded world. {world_context}. "
-                "No main performer visible. Singer remains voiceover only. "
-                "Preserve the current world, style, lighting, and atmosphere from the package."
+                f"Environment cutaway in the current grounded world. {world_context}. "
+                "No dominant performer; singer remains offscreen voiceover."
             )
             seg["video_prompt"] = (
-                f"Environment-focused motion shot in the current grounded world. {world_context}. "
-                "Subtle world/space/atmosphere movement only. No main performer visible. "
-                "No visible vocal performance. Singer remains voiceover only. Preserve the current story environment and style continuity."
+                f"Environment motion cutaway in the current grounded world. {world_context}. "
+                "Subtle ambient motion only; no visible vocal performance or dominant performer."
             )
             seg["positive_video_prompt"] = seg["video_prompt"]
             seg["first_frame_prompt"] = "Environment-focused cutaway in the current grounded world. No main performer visible."
@@ -4448,23 +4446,21 @@ def _sanitize_identity_and_visibility_conflicts(
             if lip_sync_only and route == "i2v":
                 if field_name == "photo_prompt":
                     return (
-                        f"Environment-focused story cutaway in the current grounded world. {world_context}. "
-                        "No main performer visible. Singer remains voiceover only. "
-                        "Preserve the current world, style, lighting, and atmosphere from the package."
+                        f"Environment cutaway in the current grounded world. {world_context}. "
+                        "No dominant performer; singer remains offscreen voiceover."
                     )
                 if field_name in {"video_prompt", "positive_video_prompt"}:
                     return (
-                        f"Environment-focused motion shot in the current grounded world. {world_context}. "
-                        "Subtle world/space/atmosphere movement only. No main performer visible. "
-                        "No visible vocal performance. Singer remains voiceover only. Preserve the current story environment and style continuity."
+                        f"Environment motion cutaway in the current grounded world. {world_context}. "
+                        "Subtle ambient motion only; no visible vocal performance or dominant performer."
                     )
                 if field_name == "first_frame_prompt":
-                    return "Environment-focused cutaway in the current grounded world. No main performer visible."
+                    return "Environment cutaway in the current grounded world with no dominant performer."
                 if field_name == "last_frame_prompt":
                     return (
                         ""
                         if route != "first_last"
-                        else "Environment-focused cutaway in the current grounded world. No main performer visible."
+                        else "Environment cutaway in the current grounded world with no dominant performer."
                     )
             if route == "ia2v":
                 if field_name == "photo_prompt":

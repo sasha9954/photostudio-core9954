@@ -410,19 +410,65 @@ def _dedupe_prompt_sentences(text: str) -> str:
     return ". ".join(deduped).strip(" ,.;")
 
 
+
+
+def _is_final_emotional_payoff_candidate(fallback_row: dict[str, Any]) -> bool:
+    seq = int(fallback_row.get("sequence_index") or 0)
+    total = int(fallback_row.get("total_segments") or 0)
+    near_tail = total > 0 and seq >= max(1, total - 1)
+    if not near_tail:
+        return False
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    prompt_row = _safe_dict(fallback_row.get("prompt_row"))
+    audio_segment = _safe_dict(fallback_row.get("audio_segment"))
+    transcript = str(audio_segment.get("transcript_slice") or audio_segment.get("text") or "").strip().lower()
+    semantics_blob = " ".join([
+        transcript,
+        str(plan_row.get("emotional_intent") or ""),
+        str(plan_row.get("narrative_function") or ""),
+        str(plan_row.get("scene_goal") or ""),
+        str(prompt_row.get("action_emotion") or prompt_row.get("actionEmotion") or ""),
+    ]).lower()
+    has_vocal = bool(audio_segment.get("is_lip_sync_candidate")) or bool(transcript)
+    has_emotional_tail = any(token in semantics_blob for token in ("final", "tail", "payoff", "ending", "climax", "release", "resolution", "last line", "outro"))
+    return bool(has_vocal and has_emotional_tail)
+
+
+def _compact_environment_cutaway_prompt(text: str, *, preserve_empty_mood: bool) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    sentences = [chunk.strip(" ,.;") for chunk in re.split(r"(?<=[.!?])\s+", raw) if chunk.strip(" ,.;")]
+    purpose = next((s for s in sentences if "purpose:" in s.lower()), "")
+    camera = next((s for s in sentences if "camera move:" in s.lower()), "")
+    out = [
+        purpose or "Environment/world-detail cutaway with clear world context.",
+        camera or "Camera move: slow, restrained cinematic drift with stable readability.",
+        "Route behavior: no dominant performer; any people remain incidental and distant.",
+        "Continuity: keep same world family, location context, weather/season/time continuity.",
+        "Technical safety: smooth motion only; no whip/chaotic camera or abrupt location jump.",
+    ]
+    if preserve_empty_mood:
+        out.append("Mood: near-empty aftermath is preferred when the beat calls for lingering quiet.")
+    return _dedupe_prompt_sentences(". ".join(part for part in out if part).strip())
 def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) -> str:
     video_metadata = _safe_dict(row.get("video_metadata"))
     route_payload = _safe_dict(row.get("route_payload"))
     prompt_row = _safe_dict(fallback_row.get("prompt_row"))
     plan_row = _safe_dict(fallback_row.get("plan_row"))
-    route = _normalize_route(
-        video_metadata.get("route_type")
-        or row.get("route")
-        or route_payload.get("route")
-        or fallback_row.get("route")
+    fallback_route = _normalize_route(
+        fallback_row.get("route")
         or prompt_row.get("route")
         or plan_row.get("route")
     )
+    model_route = _normalize_route(
+        video_metadata.get("route_type")
+        or row.get("route")
+        or route_payload.get("route")
+    )
+    route = fallback_route if fallback_route in _ALLOWED_ROUTES else model_route
+    if _is_final_emotional_payoff_candidate(fallback_row) and route == "i2v":
+        route = "ia2v"
     if route not in _ALLOWED_ROUTES:
         raise RuntimeError("FINAL_VIDEO_PROMPT_ROUTE_MISSING")
     return route
@@ -941,6 +987,7 @@ def _canonical_segments(package: dict[str, Any]) -> list[dict[str, Any]]:
                 ordered_ids.append(segment_id)
 
     rows: list[dict[str, Any]] = []
+    total_segments = len(ordered_ids)
     for idx, segment_id in enumerate(ordered_ids, start=1):
         prompt_row = _safe_dict(prompts_by_id.get(segment_id))
         plan_row = _safe_dict(plan_by_id.get(segment_id))
@@ -951,6 +998,7 @@ def _canonical_segments(package: dict[str, Any]) -> list[dict[str, Any]]:
                 "segment_id": segment_id,
                 "scene_id": str(prompt_row.get("scene_id") or plan_row.get("scene_id") or segment_id).strip(),
                 "sequence_index": idx,
+                "total_segments": total_segments,
                 "route": route,
                 "prompt_row": prompt_row,
                 "plan_row": plan_row,
@@ -1483,6 +1531,10 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     positive_prompt = _append_clause(positive_prompt, ANTI_DUPLICATE_ADJACENT_CLAUSE)
     if environment_cutaway_i2v:
         positive_prompt = _strip_environment_cutaway_performer_language(positive_prompt)
+        positive_prompt = _compact_environment_cutaway_prompt(
+            positive_prompt,
+            preserve_empty_mood=cutaway_prefers_emptiness,
+        )
     positive_prompt, negative_prompt, contract_debug = _sanitize_contract_prompts(
         positive_prompt=positive_prompt,
         negative_prompt=negative_prompt,
