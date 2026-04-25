@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -9964,6 +9965,11 @@ SCENE_PACKAGING_POLICY = {
     "world_split_part_hard_max_sec": 4.4,
     "no_split_gap_candidate_min_sec": 0.18,
     "no_split_gap_candidate_midpoint_bias": 0.5,
+    "instrumental_gap_min_detect_sec": 0.9,
+    "instrumental_gap_scene_min_sec": 2.5,
+    "instrumental_gap_multi_scene_min_sec": 5.5,
+    "instrumental_gap_three_scene_min_sec": 8.5,
+    "instrumental_scene_min_duration_sec": 2.8,
 }
 
 
@@ -10059,6 +10065,204 @@ def _derive_gap_split_candidates_from_no_split_ranges(
             continue
         gap_candidates.append(round(candidate, 3))
     return sorted(set(gap_candidates))
+
+
+def _derive_instrumental_gap_windows(
+    *,
+    phrase_units: list[dict[str, Any]],
+    timeline_t0: float,
+    timeline_t1: float,
+) -> list[dict[str, Any]]:
+    policy = SCENE_PACKAGING_POLICY
+    min_detect = _to_float(policy.get("instrumental_gap_min_detect_sec"), 0.0)
+    if timeline_t1 <= timeline_t0:
+        return []
+    vocal_ranges: list[tuple[float, float]] = []
+    for unit in phrase_units:
+        row = _safe_dict(unit)
+        text = str(row.get("text") or row.get("transcript_slice") or row.get("transcript") or "").strip()
+        has_text = bool(text and not _is_instrumental_tail_marker_text(text))
+        has_words = _phrase_word_count(row) > 0
+        if not (has_text or has_words):
+            continue
+        t0 = _to_float(row.get("t0"), -1.0)
+        t1 = _to_float(row.get("t1"), -1.0)
+        if not (timeline_t0 <= t0 < t1 <= timeline_t1 + 0.01):
+            continue
+        vocal_ranges.append((max(timeline_t0, t0), min(timeline_t1, t1)))
+    if not vocal_ranges:
+        total = round(max(0.0, timeline_t1 - timeline_t0), 3)
+        return [{"t0": round(timeline_t0, 3), "t1": round(timeline_t1, 3), "duration_sec": total, "position": "full_track"}] if total >= min_detect else []
+    vocal_ranges.sort(key=lambda pair: (pair[0], pair[1]))
+    merged: list[tuple[float, float]] = []
+    for start, end in vocal_ranges:
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+        prev_start, prev_end = merged[-1]
+        merged[-1] = (prev_start, max(prev_end, end))
+    windows: list[dict[str, Any]] = []
+    cursor = timeline_t0
+    for idx, (start, end) in enumerate(merged):
+        if start > cursor:
+            duration = round(max(0.0, start - cursor), 3)
+            if duration >= min_detect:
+                position = "intro" if idx == 0 else "middle"
+                windows.append({"t0": round(cursor, 3), "t1": round(start, 3), "duration_sec": duration, "position": position})
+        cursor = max(cursor, end)
+    if timeline_t1 > cursor:
+        duration = round(max(0.0, timeline_t1 - cursor), 3)
+        if duration >= min_detect:
+            position = "outro" if merged else "full_track"
+            windows.append({"t0": round(cursor, 3), "t1": round(timeline_t1, 3), "duration_sec": duration, "position": position})
+    return windows
+
+
+def _build_instrumental_block_internal_splits(
+    *,
+    t0: float,
+    t1: float,
+    target_scene_count: int,
+    candidate_cut_points: list[float],
+    no_split_ranges: list[dict[str, Any]],
+) -> list[float]:
+    policy = SCENE_PACKAGING_POLICY
+    min_scene_duration = _to_float(policy.get("instrumental_scene_min_duration_sec"), 2.5)
+    if target_scene_count <= 1:
+        return []
+    desired_split_count = target_scene_count - 1
+    candidate_pool = {
+        round(_to_float(point, -1.0), 3)
+        for point in candidate_cut_points
+        if (t0 + 0.01) < _to_float(point, -1.0) < (t1 - 0.01) and not _is_inside_no_split(_to_float(point, -1.0), no_split_ranges)
+    }
+    span = max(0.0, t1 - t0)
+    for k in range(1, target_scene_count):
+        ideal = t0 + span * (k / target_scene_count)
+        if (t0 + 0.01) < ideal < (t1 - 0.01) and not _is_inside_no_split(ideal, no_split_ranges):
+            candidate_pool.add(round(ideal, 3))
+    sorted_pool = sorted(candidate_pool)
+    if len(sorted_pool) < desired_split_count:
+        return []
+    best: tuple[float, list[float]] | None = None
+    for combo in itertools.combinations(sorted_pool, desired_split_count):
+        cuts = [t0, *combo, t1]
+        chunks = [round(cuts[idx + 1] - cuts[idx], 3) for idx in range(len(cuts) - 1)]
+        if any(chunk < min_scene_duration for chunk in chunks):
+            continue
+        ideal = span / target_scene_count if target_scene_count > 0 else span
+        score = sum(abs(chunk - ideal) for chunk in chunks)
+        if best is None or score < best[0]:
+            best = (score, list(combo))
+    return [] if best is None else [round(point, 3) for point in best[1]]
+
+
+def _package_instrumental_gap_windows(
+    segments: list[dict[str, Any]],
+    *,
+    phrase_units: list[dict[str, Any]],
+    candidate_cut_points: list[float],
+    no_split_ranges: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    policy = SCENE_PACKAGING_POLICY
+    scene_min = _to_float(policy.get("instrumental_gap_scene_min_sec"), 2.5)
+    multi_min = _to_float(policy.get("instrumental_gap_multi_scene_min_sec"), 5.5)
+    three_scene_min = _to_float(policy.get("instrumental_gap_three_scene_min_sec"), 8.5)
+    timeline_t0 = _to_float(_safe_dict(segments[0]).get("t0"), 0.0) if segments else 0.0
+    timeline_t1 = max((_to_float(_safe_dict(seg).get("t1"), 0.0) for seg in segments), default=timeline_t0)
+    gap_windows = _derive_instrumental_gap_windows(phrase_units=phrase_units, timeline_t0=timeline_t0, timeline_t1=timeline_t1)
+    if not gap_windows:
+        return segments, {"detected_gap_count": 0, "scene_block_count": 0, "micro_gap_ignored_count": 0, "transition_buffer_count": 0, "split_count": 0}
+    boundary_points: set[float] = set()
+    packaged_blocks = 0
+    transition_buffers = 0
+    split_count = 0
+    scene_targets: list[dict[str, Any]] = []
+    for window in gap_windows:
+        t0 = _to_float(window.get("t0"), 0.0)
+        t1 = _to_float(window.get("t1"), t0)
+        duration = max(0.0, t1 - t0)
+        if duration < scene_min:
+            transition_buffers += 1
+            continue
+        boundary_points.update({round(t0, 3), round(t1, 3)})
+        target_scene_count = 1
+        if duration >= three_scene_min:
+            target_scene_count = 3
+        elif duration >= multi_min:
+            target_scene_count = 2
+        internal_splits = _build_instrumental_block_internal_splits(
+            t0=t0,
+            t1=t1,
+            target_scene_count=target_scene_count,
+            candidate_cut_points=candidate_cut_points,
+            no_split_ranges=no_split_ranges,
+        )
+        if target_scene_count > 1 and not internal_splits:
+            fallback_target = max(1, target_scene_count - 1)
+            internal_splits = _build_instrumental_block_internal_splits(
+                t0=t0,
+                t1=t1,
+                target_scene_count=fallback_target,
+                candidate_cut_points=candidate_cut_points,
+                no_split_ranges=no_split_ranges,
+            )
+        boundary_points.update(internal_splits)
+        split_count += len(internal_splits)
+        packaged_blocks += 1
+        scene_targets.append({"t0": round(t0, 3), "t1": round(t1, 3), "position": str(window.get("position") or "middle")})
+    if not boundary_points:
+        return segments, {
+            "detected_gap_count": len(gap_windows),
+            "scene_block_count": 0,
+            "micro_gap_ignored_count": max(0, len(gap_windows) - transition_buffers),
+            "transition_buffer_count": transition_buffers,
+            "split_count": 0,
+        }
+    split_points = sorted(boundary_points)
+    repartitioned: list[dict[str, Any]] = []
+    for seg in segments:
+        row = _safe_dict(seg)
+        seg_t0 = _to_float(row.get("t0"), 0.0)
+        seg_t1 = _to_float(row.get("t1"), seg_t0)
+        internal_points = [point for point in split_points if seg_t0 + 0.01 < point < seg_t1 - 0.01]
+        if not internal_points:
+            repartitioned.append(row)
+            continue
+        cut_chain = [seg_t0, *internal_points, seg_t1]
+        for idx in range(len(cut_chain) - 1):
+            left, right = round(cut_chain[idx], 3), round(cut_chain[idx + 1], 3)
+            if right - left <= 0.05:
+                continue
+            piece = _safe_dict(deepcopy(row))
+            piece["t0"] = left
+            piece["t1"] = right
+            piece["duration_sec"] = round(max(0.0, right - left), 3)
+            repartitioned.append(piece)
+    for seg in repartitioned:
+        seg_t0 = _to_float(seg.get("t0"), 0.0)
+        seg_t1 = _to_float(seg.get("t1"), seg_t0)
+        for block in scene_targets:
+            block_t0 = _to_float(block.get("t0"), 0.0)
+            block_t1 = _to_float(block.get("t1"), block_t0)
+            if seg_t0 >= block_t0 - 0.01 and seg_t1 <= block_t1 + 0.01:
+                seg["is_lip_sync_candidate"] = False
+                seg["transcript_slice"] = ""
+                seg["lyrical_density"] = "low"
+                route_hints = _safe_dict(seg.get("route_hints"))
+                route_hints["lip_sync_fit"] = "instrumental_gap"
+                route_hints["preferred_routes"] = ["i2v", "world", "transition", "atmosphere"]
+                seg["route_hints"] = route_hints
+                seg["scene_packaging_unit"] = "instrumental_gap"
+                seg["instrumental_gap_position"] = str(block.get("position") or "middle")
+                break
+    return repartitioned, {
+        "detected_gap_count": len(gap_windows),
+        "scene_block_count": packaged_blocks,
+        "micro_gap_ignored_count": max(0, len(gap_windows) - packaged_blocks - transition_buffers),
+        "transition_buffer_count": transition_buffers,
+        "split_count": split_count,
+    }
 
 
 def _rename_segments_canon(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -10211,12 +10415,23 @@ def _apply_scene_packaging_policy_to_audio_segments(payload: dict[str, Any]) -> 
         candidate_cut_points=candidate_cut_points,
         no_split_ranges=no_split_ranges,
     )
-    patched["segments"] = _rename_segments_canon(split)
+    packaged, instrumental_diag = _package_instrumental_gap_windows(
+        split,
+        phrase_units=phrase_units,
+        candidate_cut_points=candidate_cut_points,
+        no_split_ranges=no_split_ranges,
+    )
+    patched["segments"] = _rename_segments_canon(packaged)
     diag = {
         "enabled": True,
         "policy": dict(SCENE_PACKAGING_POLICY),
         "merge_count": merge_count,
         "split_count": split_count,
+        "instrumental_gap_detected_count": int(instrumental_diag.get("detected_gap_count") or 0),
+        "instrumental_gap_scene_block_count": int(instrumental_diag.get("scene_block_count") or 0),
+        "instrumental_gap_transition_buffer_count": int(instrumental_diag.get("transition_buffer_count") or 0),
+        "instrumental_gap_micro_ignored_count": int(instrumental_diag.get("micro_gap_ignored_count") or 0),
+        "instrumental_gap_internal_split_count": int(instrumental_diag.get("split_count") or 0),
         "segment_count_before": len(segments),
         "segment_count_after": len(_safe_list(patched.get("segments"))),
     }
