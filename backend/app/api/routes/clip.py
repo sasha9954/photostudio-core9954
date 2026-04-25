@@ -12659,6 +12659,11 @@ def clip_image(payload: ClipImageIn):
         _safe_dict(_safe_dict(raw_scene_contract.get("connected_context_summary")).get("character_identity_by_role")),
     ]
     connected_ref_character_1 = _safe_dict(connected_inputs_for_appearance.get("ref_character_1"))
+    connected_ref_character_1_views = _safe_dict(
+        connected_ref_character_1.get("characterViews")
+        or connected_ref_character_1.get("character_views")
+        or _safe_dict(connected_ref_character_1.get("meta")).get("character_views")
+    )
     appearance_sources.append({"character_1": _safe_dict(connected_ref_character_1.get("meta"))})
     for source in appearance_sources:
         row = _safe_dict(source.get("character_1"))
@@ -12698,6 +12703,7 @@ def clip_image(payload: ClipImageIn):
         "appearanceMode": character_1_appearance_mode,
         "characterRefAttachedBecauseRoute": character_ref_attached_because_route,
         "characterRefSkippedBecauseAppearanceMode": character_ref_skipped_because_appearance_mode,
+        "character1ViewTypes": [key for key in ("front_primary", "side_profile", "performance_medium", "back_optional") if _safe_dict(connected_ref_character_1_views.get(key)).get("url")],
     }, ensure_ascii=False))
     reference_profiles = build_reference_profiles({
         role: [{"url": url, "name": ""} for url in (comfy_refs_by_role.get(role) or [])]
@@ -12746,6 +12752,8 @@ def clip_image(payload: ClipImageIn):
         video_prompt=getattr(refs_obj, "sceneNarrativeStep", None),
     )
     scene_contract["characterAppearanceModesByRole"] = {"character_1": character_1_appearance_mode}
+    scene_contract["characterViewsByRole"] = {"character_1": connected_ref_character_1_views}
+    scene_contract["character_views_by_role"] = {"character_1": connected_ref_character_1_views}
     scene_contract["characterRefAttachedBecauseRoute"] = character_ref_attached_because_route
     scene_contract["characterRefSkippedBecauseAppearanceMode"] = character_ref_skipped_because_appearance_mode
     scene_contract["appearanceMode"] = character_1_appearance_mode

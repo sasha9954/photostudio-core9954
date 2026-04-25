@@ -978,10 +978,20 @@ def _extract_ref_entry_url(entry: Any) -> str:
 def _normalize_character_views(row: dict[str, Any], role: str) -> dict[str, dict[str, Any]]:
     refs_list = _safe_list(row.get("refs"))
     incoming_views = _safe_dict(row.get("characterViews") or row.get("character_views") or _safe_dict(row.get("meta")).get("character_views"))
+    refs_by_view: dict[str, dict[str, Any]] = {}
+    for idx, ref_item in enumerate(refs_list):
+        ref_row = _safe_dict(ref_item)
+        declared = str(ref_row.get("view_type") or ref_row.get("viewType") or "").strip().lower()
+        if declared in _CHARACTER_VIEW_ORDER and declared not in refs_by_view:
+            refs_by_view[declared] = ref_row
+            continue
+        fallback_key = _CHARACTER_VIEW_ORDER[idx] if idx < len(_CHARACTER_VIEW_ORDER) else ""
+        if fallback_key and fallback_key not in refs_by_view:
+            refs_by_view[fallback_key] = ref_row
     normalized: dict[str, dict[str, Any]] = {}
     for idx, view_key in enumerate(_CHARACTER_VIEW_ORDER):
         view_src = _safe_dict(incoming_views.get(view_key))
-        entry = refs_list[idx] if idx < len(refs_list) else {}
+        entry = refs_by_view.get(view_key) or _safe_dict(refs_list[idx] if idx < len(refs_list) else {})
         url = str(view_src.get("url") or _extract_ref_entry_url(entry)).strip()
         if not url:
             continue
@@ -6519,6 +6529,7 @@ def _final_video_prompt_character_1_context(package: dict[str, Any]) -> dict[str
     refs_present = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
     connected_refs = _safe_list(_safe_dict(connected.get("connectedRefsPresentByRole")).get("character_1"))
     ref_character_1_inventory = _safe_dict(_safe_dict(package.get("refs_inventory")).get("ref_character_1"))
+    character_views = _normalize_character_views(ref_character_1_inventory, "character_1")
     inventory_refs = _safe_list(ref_character_1_inventory.get("refs"))
     inventory_value = str(ref_character_1_inventory.get("value") or "").strip()
     all_refs = [
@@ -6533,6 +6544,8 @@ def _final_video_prompt_character_1_context(package: dict[str, Any]) -> dict[str
         "identity_label": str(char1.get("identity_label") or "").strip(),
         "ref_signature": ref_signature,
         "connected_refs": sorted(all_refs),
+        "character_views": character_views,
+        "character_view_types": [key for key in _CHARACTER_VIEW_ORDER if key in character_views],
     }
 
 

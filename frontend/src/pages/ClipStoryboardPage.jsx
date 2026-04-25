@@ -6643,33 +6643,35 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     if (!normalized.refs.length) return null;
     const roleType = normalizeCharacterRoleType(sourceNode?.data?.roleType);
     const refMeta = buildRefOwnershipBindingMeta({ ...(sourceNode?.data || {}), kind: "ref_character" });
+    const characterViews = normalized?.characterViews && typeof normalized.characterViews === "object" ? normalized.characterViews : {};
+    const viewRefs = buildCharacterRefsFromViews(characterViews, "character_1");
     return {
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Character 1 • ${normalized.refs.length} refs`,
       sourceLabel: "Character 1",
-      refs: normalized.refs.map((item, idx) => {
-        const viewType = CHARACTER_VIEW_ORDER[idx] || "front_primary";
-        const slot = normalized?.characterViews?.[viewType] || {};
+      refs: viewRefs.map((item) => {
+        const viewType = String(item?.view_type || item?.viewType || "front_primary").trim().toLowerCase();
+        const slot = characterViews?.[viewType] || {};
         return {
           url: item.url,
           roleType,
           view_type: viewType,
           viewType,
           label: String(item?.label || slot?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
-          order: idx,
-          priority: idx,
+          order: Number.isFinite(Number(item?.order)) ? Number(item.order) : 0,
+          priority: Number.isFinite(Number(item?.priority)) ? Number(item.priority) : 0,
           is_primary: viewType === "front_primary",
           role: "character_1",
           ...refMeta,
         };
       }),
-      characterViews: normalized?.characterViews && typeof normalized.characterViews === "object" ? normalized.characterViews : {},
-      count: normalized.refs.length,
+      characterViews,
+      count: viewRefs.length,
       meta: {
         kind: "ref_character",
-        count: normalized.refs.length,
+        count: viewRefs.length,
         roleType,
-        character_views: normalized?.characterViews && typeof normalized.characterViews === "object" ? normalized.characterViews : {},
+        character_views: characterViews,
         ...refMeta,
       },
     };
@@ -7441,24 +7443,51 @@ const CHARACTER_VIEW_DEFAULT_LABELS = {
   back_optional: "Сзади / optional",
 };
 
+function normalizeCharacterViewSlotEntry(viewType, value, role = "character_1", idx = 0) {
+  const row = value && typeof value === "object" ? value : {};
+  const url = String(resolveComfyRefThumbnailUrl(row) || row?.url || row?.asset_path || row?.assetPath || "").trim();
+  if (!url) return null;
+  return {
+    ...row,
+    url,
+    asset_path: String(row?.asset_path || row?.assetPath || url).trim(),
+    view_type: viewType,
+    viewType: viewType,
+    label: String(row?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
+    order: Number.isFinite(Number(row?.order)) ? Number(row.order) : idx,
+    priority: Number.isFinite(Number(row?.priority)) ? Number(row.priority) : idx,
+    is_primary: viewType === "front_primary",
+    role,
+  };
+}
+
+function buildCharacterRefsFromViews(characterViews = {}, role = "character_1") {
+  return CHARACTER_VIEW_ORDER
+    .map((viewType, idx) => normalizeCharacterViewSlotEntry(viewType, characterViews?.[viewType], role, idx))
+    .filter(Boolean);
+}
+
 function normalizeCharacterViewsPack(refs = [], role = "character_1", incomingViews = null) {
   const srcViews = incomingViews && typeof incomingViews === "object" ? incomingViews : {};
+  const refsList = Array.isArray(refs) ? refs : [];
+  const refsByViewType = new Map();
+  refsList.forEach((item, idx) => {
+    if (!item || typeof item !== "object") return;
+    const declaredType = String(item?.view_type || item?.viewType || "").trim().toLowerCase();
+    if (declaredType && CHARACTER_VIEW_ORDER.includes(declaredType) && !refsByViewType.has(declaredType)) {
+      refsByViewType.set(declaredType, item);
+      return;
+    }
+    const fallbackType = CHARACTER_VIEW_ORDER[idx] || "";
+    if (fallbackType && !refsByViewType.has(fallbackType)) refsByViewType.set(fallbackType, item);
+  });
   const pack = {};
   CHARACTER_VIEW_ORDER.forEach((viewType, idx) => {
-    const fromState = srcViews?.[viewType] && typeof srcViews[viewType] === "object" ? srcViews[viewType] : {};
-    const fallbackRef = refs[idx] && typeof refs[idx] === "object" ? refs[idx] : null;
-    const url = String(fromState?.url || fallbackRef?.url || "").trim();
-    if (!url) return;
-    pack[viewType] = {
-      url,
-      asset_path: url,
-      view_type: viewType,
-      label: String(fromState?.label || fallbackRef?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
-      order: Number.isFinite(Number(fromState?.order)) ? Number(fromState.order) : idx,
-      priority: Number.isFinite(Number(fromState?.priority)) ? Number(fromState.priority) : idx,
-      is_primary: viewType === "front_primary",
-      role,
-    };
+    const fromState = srcViews?.[viewType] && typeof srcViews[viewType] === "object" ? srcViews[viewType] : null;
+    const fallbackRef = refsByViewType.get(viewType) || null;
+    const normalized = normalizeCharacterViewSlotEntry(viewType, fromState || fallbackRef, role, idx);
+    if (!normalized) return;
+    pack[viewType] = normalized;
   });
   return pack;
 }
@@ -7704,20 +7733,7 @@ function normalizeRefData(data, kindHint = "") {
         : "";
   const characterViews = kind === "ref_character" ? normalizeCharacterViewsPack(refs, role || "character_1", data?.characterViews) : undefined;
   const refsWithViewMeta = kind === "ref_character"
-    ? refs.map((item, idx) => {
-      const viewType = CHARACTER_VIEW_ORDER[idx] || "front_primary";
-      const slot = characterViews?.[viewType] || {};
-      return {
-        ...item,
-        view_type: viewType,
-        viewType,
-        label: String(item?.label || slot?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
-        order: idx,
-        priority: idx,
-        is_primary: viewType === "front_primary",
-        role: "character_1",
-      };
-    })
+    ? buildCharacterRefsFromViews(characterViews, role || "character_1")
     : refs;
 
   return {
@@ -19433,9 +19449,10 @@ onClipSec: (nodeId, value) => {
                   },
                 }
                 : x))),
-              onPickImage: async (nodeId, file) => {
+              onPickImage: async (nodeId, file, options = {}) => {
                 const pickedFiles = Array.isArray(file) ? file : (file ? [file] : []);
                 if (!pickedFiles.length) return;
+                const slotKey = String(options?.slotKey || "").trim().toLowerCase();
                 setNodes((prev) => bindHandlers(prev.map((x) => (x.id === nodeId ? { ...x, data: { ...x.data, uploading: true, uploadSoftError: "" } } : x))));
                 try {
                   const targetNode = nodesRef.current.find((x) => x.id === nodeId);
@@ -19495,16 +19512,32 @@ onClipSec: (nodeId, value) => {
                         if (x.id !== nodeId) return x;
                         const nextPrevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
                         const nextMax = x?.data?.kind === "ref_style" ? 1 : 5;
-                        const nextRefs = nextMax === 1
-                          ? [{ url, name: out?.name || oneFile.name }]
-                          : nextPrevRefs.concat({ url, name: out?.name || oneFile.name }).slice(0, nextMax);
                         const isCharacterPrimary = String(x?.data?.kind || "") === "ref_character";
+                        const baseRef = { url, name: out?.name || oneFile.name };
+                        const nextCharacterViews = isCharacterPrimary
+                          ? normalizeCharacterViewsPack(nextPrevRefs, "character_1", x?.data?.characterViews)
+                          : {};
+                        const nextRefs = (() => {
+                          if (nextMax === 1) return [baseRef];
+                          if (!isCharacterPrimary || !slotKey || !CHARACTER_VIEW_ORDER.includes(slotKey)) {
+                            return nextPrevRefs.concat(baseRef).slice(0, nextMax);
+                          }
+                          const slotPayload = normalizeCharacterViewSlotEntry(slotKey, {
+                            ...baseRef,
+                            label: CHARACTER_VIEW_DEFAULT_LABELS[slotKey] || slotKey,
+                          }, "character_1", CHARACTER_VIEW_ORDER.indexOf(slotKey));
+                          const patchedViews = { ...nextCharacterViews, [slotKey]: slotPayload };
+                          return buildCharacterRefsFromViews(patchedViews, "character_1");
+                        })();
+                        const nextViewsResolved = isCharacterPrimary
+                          ? normalizeCharacterViewsPack(nextRefs, "character_1", slotKey ? { ...nextCharacterViews, [slotKey]: { ...baseRef, label: CHARACTER_VIEW_DEFAULT_LABELS[slotKey] || slotKey } } : nextCharacterViews)
+                          : undefined;
                         return {
                           ...x,
                           data: {
                             ...x.data,
                             refs: nextRefs,
-                            ...(isCharacterPrimary ? { characterViews: normalizeCharacterViewsPack(nextRefs, "character_1", x?.data?.characterViews) } : {}),
+                            ...(isCharacterPrimary ? { characterViews: nextViewsResolved } : {}),
                             refStatus: nextRefs.length ? "draft" : "empty",
                             refShortLabel: "",
                             refDetailsOpen: false,
@@ -19613,12 +19646,20 @@ onClipSec: (nodeId, value) => {
                   });
                 }
               },
-              onRemoveImage: (nodeId, idx) => {
+              onRemoveImage: (nodeId, idx, options = {}) => {
+                const slotKey = String(options?.slotKey || "").trim().toLowerCase();
                 setNodes((prev) => bindHandlers(prev.map((x) => {
                   if (x.id !== nodeId) return x;
                   const prevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
-                  const nextRefs = prevRefs.filter((_, i) => i !== idx);
                   const isCharacterPrimary = String(x?.data?.kind || "") === "ref_character";
+                  const nextRefs = (() => {
+                    if (!isCharacterPrimary || !slotKey || !CHARACTER_VIEW_ORDER.includes(slotKey)) {
+                      return prevRefs.filter((_, i) => i !== idx);
+                    }
+                    const nextViews = normalizeCharacterViewsPack(prevRefs, "character_1", x?.data?.characterViews);
+                    delete nextViews[slotKey];
+                    return buildCharacterRefsFromViews(nextViews, "character_1");
+                  })();
                   return {
                     ...x,
                     data: {

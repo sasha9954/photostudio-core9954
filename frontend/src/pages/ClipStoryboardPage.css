@@ -2687,6 +2687,72 @@ body.ps_clip_fullscreen .mainCol {
   padding: 3px 6px;
 }
 
+.clipSB_refSlotWindows {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.clipSB_refSlotWindow {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 8px;
+}
+
+.clipSB_refSlotWindow.is-filled {
+  border-color: rgba(94, 234, 212, 0.45);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.clipSB_refSlotWindow.is-required {
+  box-shadow: inset 0 0 0 1px rgba(253, 164, 175, 0.25);
+}
+
+.clipSB_refSlotWindowHead {
+  margin-bottom: 6px;
+}
+
+.clipSB_refSlotWindowTitle {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.clipSB_refSlotWindowHint {
+  margin-top: 2px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.clipSB_refSlotWindowOptional {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 10px;
+}
+
+.clipSB_refSlotWindowBody {
+  margin-bottom: 6px;
+}
+
+.clipSB_refSlotThumb {
+  width: 100%;
+  height: 88px;
+}
+
+.clipSB_refSlotEmpty {
+  width: 100%;
+  min-height: 88px;
+}
+
+.clipSB_refSlotWindowActions {
+  display: flex;
+  gap: 8px;
+}
+
+.clipSB_btnDanger {
+  border-color: rgba(251, 113, 133, 0.48) !important;
+  color: rgba(255, 228, 232, 0.94) !important;
+}
+
 .clipSB_refToggleDetails {
   margin-bottom: 8px;
   border: 1px solid rgba(255,255,255,.22);

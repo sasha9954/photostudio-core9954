@@ -357,10 +357,20 @@ def _normalize_character_views_from_inventory(ref_inventory: dict[str, Any]) -> 
     views_src = _safe_dict(source.get("characterViews") or source.get("character_views") or _safe_dict(source.get("meta")).get("character_views"))
     refs_src = _safe_list(source.get("refs"))
     ordered_keys = ["front_primary", "side_profile", "performance_medium", "back_optional"]
+    refs_by_view: dict[str, dict[str, Any]] = {}
+    for idx, raw_ref in enumerate(refs_src):
+        ref_row = _safe_dict(raw_ref)
+        declared = str(ref_row.get("view_type") or ref_row.get("viewType") or "").strip().lower()
+        if declared in ordered_keys and declared not in refs_by_view:
+            refs_by_view[declared] = ref_row
+            continue
+        fallback_key = ordered_keys[idx] if idx < len(ordered_keys) else ""
+        if fallback_key and fallback_key not in refs_by_view:
+            refs_by_view[fallback_key] = ref_row
     normalized: dict[str, dict[str, Any]] = {}
     for idx, key in enumerate(ordered_keys):
         row = _safe_dict(views_src.get(key))
-        fallback = _safe_dict(refs_src[idx] if idx < len(refs_src) else {})
+        fallback = refs_by_view.get(key) or _safe_dict(refs_src[idx] if idx < len(refs_src) else {})
         url = str(row.get("url") or fallback.get("url") or "").strip()
         if not url:
             continue
@@ -425,6 +435,59 @@ def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
         "character_views": character_views,
         "character_view_types": [key for key in ["front_primary", "side_profile", "performance_medium", "back_optional"] if character_views.get(key)],
         "multi_view_identity_contract": multi_view_identity_contract,
+    }
+
+
+def _resolve_character_1_view_selection(
+    *,
+    route: str,
+    scene_semantics: str,
+    character_views: dict[str, dict[str, Any]] | None,
+    environment_cutaway_i2v: bool,
+) -> dict[str, Any]:
+    views = character_views if isinstance(character_views, dict) else {}
+    available = [key for key in ("front_primary", "side_profile", "performance_medium", "back_optional") if _safe_dict(views.get(key)).get("url")]
+    semantics = str(scene_semantics or "").lower()
+    if environment_cutaway_i2v:
+        return {
+            "mode": "environment_cutaway",
+            "prefer": [],
+            "support": [],
+            "fallback": [],
+            "selected": [],
+            "available": available,
+            "dominant_subject_allowed": False,
+            "reason": "environment_only_scene",
+        }
+    prefer: list[str] = []
+    support: list[str] = []
+    fallback: list[str] = []
+    if route == "ia2v" or any(token in semantics for token in ("lip-sync", "lipsync", "performance", "medium-close", "medium close", "mouth readable")):
+        prefer = ["front_primary", "performance_medium"]
+        support = ["side_profile"]
+    elif any(token in semantics for token in ("back-facing", "back facing", "rear view", "from behind", "спиной", "сзади")):
+        prefer = ["back_optional"]
+        support = []
+        fallback = ["side_profile", "front_primary"]
+    elif any(token in semantics for token in ("profile", "side-facing", "side facing", "боком", "профиль")):
+        prefer = ["side_profile"]
+        support = ["front_primary"]
+    else:
+        prefer = ["front_primary", "side_profile"]
+        support = ["performance_medium"]
+    selection_order = [*prefer, *support, *fallback]
+    selected = [key for key in selection_order if key in available]
+    if not selected and available:
+        selected = [available[0]]
+    return {
+        "mode": "hero_scene",
+        "prefer": prefer,
+        "support": support,
+        "fallback": fallback,
+        "selected": selected,
+        "available": available,
+        "dominant_subject_allowed": True,
+        "reason": route or "i2v",
     }
 
 
@@ -1414,6 +1477,12 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         fallback_photo_prompt = _append_clause(fallback_photo_prompt, WORLD_DETAIL_HUMAN_PRESENCE_CLAUSE)
 
     lower_scene_semantics = " ".join(scene_specific_parts + [positive_prompt]).lower()
+    character_view_selection = _resolve_character_1_view_selection(
+        route=route,
+        scene_semantics=lower_scene_semantics,
+        character_views=_safe_dict(identity_ctx.get("character_views")),
+        environment_cutaway_i2v=environment_cutaway_i2v,
+    )
     cutaway_prefers_emptiness = bool(environment_cutaway_i2v and _scene_prefers_emptiness(lower_scene_semantics))
     explicit_labor_tokens = (
         "labor documentary",
@@ -1891,6 +1960,8 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         "mustAppear": must_appear,
         "refsUsed": refs_used,
         "refsByRole": refs_by_role,
+        "characterViewSelection": character_view_selection,
+        "character_view_selection": character_view_selection,
         "previousSceneImageUrl": previous_scene_image_url or None,
         "confirmedHeroLookReferenceUsed": bool(confirmed_look_used),
         "confirmedHeroLookReferenceClauseApplied": bool(confirmed_look_used and confirmed_look_clause_applied),
