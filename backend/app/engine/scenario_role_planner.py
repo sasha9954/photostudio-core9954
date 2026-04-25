@@ -971,6 +971,7 @@ def _normalize_scene_casting_from_core(
     *,
     scene_casting: list[dict[str, Any]],
     core_subject_map: dict[str, dict[str, Any]],
+    sync_secondary_roles: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     normalized_rows: list[dict[str, Any]] = []
     mismatches: list[dict[str, str]] = []
@@ -987,7 +988,8 @@ def _normalize_scene_casting_from_core(
             mismatches.append({"segment_id": segment_id, "expected": expected_primary, "got": got_primary})
         if expected_primary:
             clean_row["primary_role"] = expected_primary
-        clean_row["secondary_roles"] = list(_safe_list(core_row.get("secondary_roles")))
+        if sync_secondary_roles:
+            clean_row["secondary_roles"] = list(_safe_list(core_row.get("secondary_roles")))
         normalized_rows.append(clean_row)
     return normalized_rows, mismatches
 
@@ -1066,6 +1068,26 @@ def _validate_roles_payload(
     if leak_error:
         return {}, leak_error
     return normalized, ""
+
+
+def _collect_primary_mismatches(
+    *,
+    scene_casting: list[dict[str, Any]],
+    core_subject_map: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    mismatches: list[dict[str, str]] = []
+    for row in scene_casting:
+        segment_id = str(_safe_dict(row).get("segment_id") or "").strip()
+        if not segment_id:
+            continue
+        core_row = _safe_dict(core_subject_map.get(segment_id))
+        if not core_row:
+            continue
+        expected_primary = str(core_row.get("primary_role") or "").strip()
+        got_primary = str(_safe_dict(row).get("primary_role") or "").strip()
+        if expected_primary and got_primary and got_primary != expected_primary:
+            mismatches.append({"segment_id": segment_id, "expected": expected_primary, "got": got_primary})
+    return mismatches
 
 
 def _build_role_plan_legacy_bridge_from_roles_v11(
@@ -1310,6 +1332,16 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                         strict_single_cast_anchor=single_cast_anchor,
                     )
                     if not fallback_error:
+                        fallback_scene_casting, _ = _normalize_scene_casting_from_core(
+                            scene_casting=[_safe_dict(row) for row in _safe_list(fallback_normalized.get("scene_casting"))],
+                            core_subject_map=core_subject_map,
+                            sync_secondary_roles=False,
+                        )
+                        fallback_normalized["scene_casting"] = fallback_scene_casting
+                        diagnostics["role_plan_primary_mismatch_segments"] = _collect_primary_mismatches(
+                            scene_casting=fallback_scene_casting,
+                            core_subject_map=core_subject_map,
+                        )[:40]
                         bridge = _build_role_plan_legacy_bridge_from_roles_v11(roles_payload=fallback_normalized)
                         role_plan = {**fallback_normalized, **bridge}
                         diagnostics.update(
@@ -1357,6 +1389,16 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                     continue
                 break
 
+            final_scene_casting, _ = _normalize_scene_casting_from_core(
+                scene_casting=[_safe_dict(row) for row in _safe_list(normalized.get("scene_casting"))],
+                core_subject_map=core_subject_map,
+                sync_secondary_roles=False,
+            )
+            normalized["scene_casting"] = final_scene_casting
+            diagnostics["role_plan_primary_mismatch_segments"] = _collect_primary_mismatches(
+                scene_casting=final_scene_casting,
+                core_subject_map=core_subject_map,
+            )[:40]
             bridge = _build_role_plan_legacy_bridge_from_roles_v11(roles_payload=normalized)
             role_plan = {**normalized, **bridge}
             diagnostics.update(
