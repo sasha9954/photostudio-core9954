@@ -195,6 +195,8 @@ const RefThumbImage = React.memo(function RefThumbImage({
 
 export default function RefLiteNode({ id, data, title, className, handleId, showRoleSelector = false }) {
   const inputRef = useRef(null);
+  const slotInputRef = useRef(null);
+  const [activeSlotKey, setActiveSlotKey] = useState("");
   const maxFiles = 5;
   const refs = Array.isArray(data?.refs)
     ? data.refs
@@ -227,21 +229,44 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const normalizedCharacterViews = isCharacter1Node && data?.characterViews && typeof data.characterViews === "object"
     ? data.characterViews
     : {};
-  const refsWithSlotMeta = refs.map((item, idx) => {
-    const declaredViewType = String(item?.view_type || item?.viewType || "").trim().toLowerCase();
-    const slotByView = CHARACTER_VIEW_SLOTS.find((slot) => slot.key === declaredViewType);
-    const slot = slotByView || CHARACTER_VIEW_SLOTS[idx] || null;
-    const slotFromState = slot ? normalizedCharacterViews?.[slot.key] : null;
-    return {
-      item,
-      idx,
-      slot,
-      slotLabel: String(item?.label || slotFromState?.label || slot?.title || "").trim(),
-    };
-  });
+  const slotRefs = useMemo(() => {
+    if (!isCharacter1Node) return {};
+    return CHARACTER_VIEW_SLOTS.reduce((acc, slot) => {
+      const fromPack = normalizedCharacterViews?.[slot.key] && typeof normalizedCharacterViews[slot.key] === "object"
+        ? normalizedCharacterViews[slot.key]
+        : null;
+      const fromRefs = refs.find((item) => {
+        const declaredViewType = String(item?.view_type || item?.viewType || "").trim().toLowerCase();
+        return declaredViewType === slot.key;
+      });
+      const fallbackByOrder = refs[CHARACTER_VIEW_SLOTS.findIndex((entry) => entry.key === slot.key)] || null;
+      const resolved = fromPack || fromRefs || fallbackByOrder;
+      if (!resolved) {
+        acc[slot.key] = null;
+        return acc;
+      }
+      acc[slot.key] = {
+        ...resolved,
+        url: String(resolved?.url || "").trim(),
+        label: String(resolved?.label || slot.title || "").trim(),
+      };
+      return acc;
+    }, {});
+  }, [isCharacter1Node, normalizedCharacterViews, refs]);
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
+  const openSlotPicker = (slotKey) => {
+    setActiveSlotKey(String(slotKey || ""));
+    slotInputRef.current?.click();
+  };
   const onInputChange = async (e) => { const files = Array.from(e.target.files || []); if (files.length) await data?.onPickImage?.(id, files); e.target.value = ""; };
+  const onSlotInputChange = async (e) => {
+    const files = Array.from(e.target.files || []);
+    const slotKey = String(activeSlotKey || "").trim();
+    if (files.length && slotKey) await data?.onPickImage?.(id, files, { slotKey });
+    e.target.value = "";
+    setActiveSlotKey("");
+  };
 
   return (<>
     <Handle type="source" position={Position.Right} id={handleId} className="clipSB_handle" style={handleStyle(handleId)} />
@@ -340,33 +365,55 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
         </select>
       </div>
       {isCharacter1Node ? (
-        <div className="clipSB_refSlotLegend">
-          {CHARACTER_VIEW_SLOTS.map((slot, idx) => {
-            const hasSlotImage = refsWithSlotMeta.some((entry) => entry.slot?.key === slot.key);
+        <div className="clipSB_refSlotWindows">
+          {CHARACTER_VIEW_SLOTS.map((slot) => {
+            const slotRef = slotRefs?.[slot.key] || null;
+            const slotFilled = !!buildRefImageCandidates(slotRef).length;
             return (
-              <div key={`${id}-slot-${slot.key}`} className={`clipSB_refSlotLegendItem ${hasSlotImage ? "is-filled" : "is-empty"}`}>
-                <div className="clipSB_refSlotLegendTitle">
-                  {idx + 1}. {slot.title} {slot.required ? <span className="clipSB_refSlotLegendRequired">• обяз.</span> : null}
+              <div key={`${id}-slot-window-${slot.key}`} className={`clipSB_refSlotWindow ${slotFilled ? "is-filled" : "is-empty"} ${slot.required ? "is-required" : "is-optional"}`}>
+                <div className="clipSB_refSlotWindowHead">
+                  <div className="clipSB_refSlotWindowTitle">{slot.title} {slot.required ? <span className="clipSB_refSlotLegendRequired">• обяз.</span> : <span className="clipSB_refSlotWindowOptional">optional</span>}</div>
+                  <div className="clipSB_refSlotWindowHint">{slot.hint}</div>
                 </div>
-                <div className="clipSB_refSlotLegendHint">{slot.hint}</div>
+                <div className="clipSB_refSlotWindowBody">
+                  {slotFilled ? (
+                    <div className="clipSB_refThumb clipSB_refSlotThumb">
+                      <RefThumbImage item={slotRef} idx={0} title={slot.title} handleId={`${handleId}:${slot.key}`} onOpenLightbox={onOpenLightbox} />
+                      <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, null, { slotKey: slot.key })}>×</button>
+                    </div>
+                  ) : (
+                    <button className="clipSB_refLiteEmpty clipSB_refSlotEmpty" onClick={() => openSlotPicker(slot.key)} type="button">
+                      <span className="clipSB_refLiteEmptyPlus">+</span>
+                      <span>пустой слот</span>
+                      <span>загрузить в {slot.title}</span>
+                    </button>
+                  )}
+                </div>
+                <div className="clipSB_refSlotWindowActions">
+                  <button className="clipSB_btn" onClick={() => openSlotPicker(slot.key)} disabled={!!data?.uploading || refStatus === "loading"}>{slotFilled ? "Перезалить" : "Загрузить"}</button>
+                  {slotFilled ? <button className="clipSB_btn clipSB_btnDanger" onClick={() => data?.onRemoveImage?.(id, null, { slotKey: slot.key })}>Удалить</button> : null}
+                </div>
               </div>
             );
           })}
         </div>
-      ) : null}
-      <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refsWithSlotMeta.map(({ item, idx, slot, slotLabel }) => {
-        return (
-          <div className="clipSB_refThumb" key={getStableRefItemKey(item, idx)}>
-            <RefThumbImage item={item} idx={idx} title={title} handleId={handleId} onOpenLightbox={onOpenLightbox} />
-            {isCharacter1Node && slot ? <div className="clipSB_refSlotBadge">{slotLabel || slot.title}</div> : null}
-            <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button>
+      ) : (
+        <>
+          <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
+            return (
+              <div className="clipSB_refThumb" key={getStableRefItemKey(item, idx)}>
+                <RefThumbImage item={item} idx={idx} title={title} handleId={handleId} onOpenLightbox={onOpenLightbox} />
+                <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button>
+              </div>
+            );
+          })}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>{data?.uploading ? "Загрузка…" : refs.length ? "Добавить фото" : "Загрузить фото"}</button>
           </div>
-        );
-      })}{canAddMore ? <button className="clipSB_refAddTile" onClick={openPicker} title="Добавить изображение">+</button> : null}</div>}</div>
-      <div style={{ display: "flex", gap: 8 }}>
-        <button className="clipSB_btn" onClick={openPicker} disabled={!canAddMore || !!data?.uploading || refStatus === "loading"}>{data?.uploading ? "Загрузка…" : refs.length ? "Добавить фото" : "Загрузить фото"}</button>
-      </div>
+        </>
+      )}
       <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" multiple style={{ display: "none" }} onChange={onInputChange} />
+      <input ref={slotInputRef} type="file" accept="image/png,image/jpeg,image/jpg,image/webp" style={{ display: "none" }} onChange={onSlotInputChange} />
     </NodeShell>
   </>);
 }
