@@ -352,6 +352,28 @@ _MALE_CODED_TERMS = (
 )
 
 
+def _normalize_character_views_from_inventory(ref_inventory: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    source = _safe_dict(ref_inventory)
+    views_src = _safe_dict(source.get("characterViews") or source.get("character_views") or _safe_dict(source.get("meta")).get("character_views"))
+    refs_src = _safe_list(source.get("refs"))
+    ordered_keys = ["front_primary", "side_profile", "performance_medium", "back_optional"]
+    normalized: dict[str, dict[str, Any]] = {}
+    for idx, key in enumerate(ordered_keys):
+        row = _safe_dict(views_src.get(key))
+        fallback = _safe_dict(refs_src[idx] if idx < len(refs_src) else {})
+        url = str(row.get("url") or fallback.get("url") or "").strip()
+        if not url:
+            continue
+        normalized[key] = {
+            "url": url,
+            "view_type": key,
+            "is_primary": key == "front_primary",
+            "order": idx,
+            "label": str(row.get("label") or fallback.get("label") or key).strip(),
+        }
+    return normalized
+
+
 def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     connected = _safe_dict(input_pkg.get("connected_context_summary")) or _safe_dict(package.get("connected_context_summary"))
@@ -360,6 +382,7 @@ def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
     refs_present = _safe_list(_safe_dict(connected.get("refsPresentByRole")).get("character_1"))
     connected_refs = _safe_list(_safe_dict(connected.get("connectedRefsPresentByRole")).get("character_1"))
     ref_character_1_inventory = _safe_dict(_safe_dict(package.get("refs_inventory")).get("ref_character_1"))
+    character_views = _normalize_character_views_from_inventory(ref_character_1_inventory)
     inventory_refs = _safe_list(ref_character_1_inventory.get("refs"))
     inventory_value = str(ref_character_1_inventory.get("value") or "").strip()
     all_refs = [
@@ -384,6 +407,14 @@ def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
         ]
         if str(v).strip()
     ]
+    multi_view_identity_contract = [
+        "all uploaded character_1 views belong to the exact same person",
+        "front_primary is canonical source of truth",
+        "side_profile supports profile/head-shape/silhouette continuity",
+        "performance_medium supports facial detail, mouth shape, lip-sync/performance continuity",
+        "back_optional supports rear-facing shots only",
+        "do not treat these refs as different people",
+    ]
     return {
         "gender_hint": gender_hint,
         "identity_label": identity_label,
@@ -391,6 +422,9 @@ def _character_1_context(package: dict[str, Any]) -> dict[str, Any]:
         "ref_signature": ref_signature,
         "has_explicit_character_1_ref": bool(explicit_character_1_refs),
         "lip_sync_only": appearance == "lip_sync_only" or presence == "lip_sync_only",
+        "character_views": character_views,
+        "character_view_types": [key for key in ["front_primary", "side_profile", "performance_medium", "back_optional"] if character_views.get(key)],
+        "multi_view_identity_contract": multi_view_identity_contract,
     }
 
 

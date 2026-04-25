@@ -60,6 +60,12 @@ const LINKED_CHARACTER_OPTIONS = [
   { value: "shared", label: "Общий" },
   { value: "world", label: "Мир" },
 ];
+const CHARACTER_VIEW_SLOTS = [
+  { key: "front_primary", title: "Фронт / основной", hint: "Обязательный canonical identity ref", required: true },
+  { key: "side_profile", title: "Бок / профиль", hint: "Support: профиль, силуэт, форма головы", required: false },
+  { key: "performance_medium", title: "Полутело / lip-sync", hint: "Support: мимика, рот, performance", required: false },
+  { key: "back_optional", title: "Сзади / optional", hint: "Support только для back-facing сцен", required: false },
+];
 
 const IDENTITY_GENDER_DEFAULT = {
   "девушка": "female",
@@ -217,6 +223,22 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const linkedCharacter = normalizeLinkedCharacter(data?.linkedCharacter || data?.linked_character);
   const appearanceMode = normalizeAppearanceMode(data?.appearanceMode || data?.screenPresenceMode || data?.appearance_mode || data?.screen_presence_mode);
   const onOpenLightbox = data?.onOpenLightbox;
+  const isCharacter1Node = handleId === "ref_character";
+  const normalizedCharacterViews = isCharacter1Node && data?.characterViews && typeof data.characterViews === "object"
+    ? data.characterViews
+    : {};
+  const refsWithSlotMeta = refs.map((item, idx) => {
+    const declaredViewType = String(item?.view_type || item?.viewType || "").trim().toLowerCase();
+    const slotByView = CHARACTER_VIEW_SLOTS.find((slot) => slot.key === declaredViewType);
+    const slot = slotByView || CHARACTER_VIEW_SLOTS[idx] || null;
+    const slotFromState = slot ? normalizedCharacterViews?.[slot.key] : null;
+    return {
+      item,
+      idx,
+      slot,
+      slotLabel: String(item?.label || slotFromState?.label || slot?.title || "").trim(),
+    };
+  });
 
   const openPicker = () => { if (canAddMore) inputRef.current?.click(); };
   const onInputChange = async (e) => { const files = Array.from(e.target.files || []); if (files.length) await data?.onPickImage?.(id, files); e.target.value = ""; };
@@ -317,10 +339,26 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
           {LINKED_CHARACTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
         </select>
       </div>
-      <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refs.map((item, idx) => {
+      {isCharacter1Node ? (
+        <div className="clipSB_refSlotLegend">
+          {CHARACTER_VIEW_SLOTS.map((slot, idx) => {
+            const hasSlotImage = refsWithSlotMeta.some((entry) => entry.slot?.key === slot.key);
+            return (
+              <div key={`${id}-slot-${slot.key}`} className={`clipSB_refSlotLegendItem ${hasSlotImage ? "is-filled" : "is-empty"}`}>
+                <div className="clipSB_refSlotLegendTitle">
+                  {idx + 1}. {slot.title} {slot.required ? <span className="clipSB_refSlotLegendRequired">• обяз.</span> : null}
+                </div>
+                <div className="clipSB_refSlotLegendHint">{slot.hint}</div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      <div className="clipSB_refLitePreview">{!refs.length ? <div className="clipSB_refLiteEmpty" onClick={openPicker} role="button" tabIndex={0}><span className="clipSB_refLiteEmptyPlus">+</span><span>нет изображений</span><span>добавь фото</span></div> : <div className="clipSB_refGrid clipSB_refLiteGrid">{refsWithSlotMeta.map(({ item, idx, slot, slotLabel }) => {
         return (
           <div className="clipSB_refThumb" key={getStableRefItemKey(item, idx)}>
             <RefThumbImage item={item} idx={idx} title={title} handleId={handleId} onOpenLightbox={onOpenLightbox} />
+            {isCharacter1Node && slot ? <div className="clipSB_refSlotBadge">{slotLabel || slot.title}</div> : null}
             <button className="clipSB_refThumbRemove" title="Удалить фото" onClick={() => data?.onRemoveImage?.(id, idx)}>×</button>
           </div>
         );

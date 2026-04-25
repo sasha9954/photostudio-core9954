@@ -952,6 +952,52 @@ def _normalize_ref_meta(meta: Any) -> dict[str, Any]:
     }
 
 
+_CHARACTER_VIEW_ORDER = ("front_primary", "side_profile", "performance_medium", "back_optional")
+_CHARACTER_VIEW_LABELS = {
+    "front_primary": "Фронт / основной",
+    "side_profile": "Бок / профиль",
+    "performance_medium": "Полутело / lip-sync",
+    "back_optional": "Сзади / optional",
+}
+
+
+def _extract_ref_entry_url(entry: Any) -> str:
+    if isinstance(entry, str):
+        return str(entry).strip()
+    row = _safe_dict(entry)
+    return str(
+        row.get("url")
+        or row.get("asset_path")
+        or row.get("assetPath")
+        or row.get("src")
+        or row.get("value")
+        or ""
+    ).strip()
+
+
+def _normalize_character_views(row: dict[str, Any], role: str) -> dict[str, dict[str, Any]]:
+    refs_list = _safe_list(row.get("refs"))
+    incoming_views = _safe_dict(row.get("characterViews") or row.get("character_views") or _safe_dict(row.get("meta")).get("character_views"))
+    normalized: dict[str, dict[str, Any]] = {}
+    for idx, view_key in enumerate(_CHARACTER_VIEW_ORDER):
+        view_src = _safe_dict(incoming_views.get(view_key))
+        entry = refs_list[idx] if idx < len(refs_list) else {}
+        url = str(view_src.get("url") or _extract_ref_entry_url(entry)).strip()
+        if not url:
+            continue
+        normalized[view_key] = {
+            "url": url,
+            "asset_path": str(view_src.get("asset_path") or view_src.get("assetPath") or url).strip(),
+            "view_type": view_key,
+            "label": str(view_src.get("label") or _safe_dict(entry).get("label") or _CHARACTER_VIEW_LABELS.get(view_key) or "").strip(),
+            "order": idx,
+            "priority": idx,
+            "is_primary": view_key == "front_primary",
+            "role": role,
+        }
+    return normalized
+
+
 def _normalize_refs_inventory(refs_inventory: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     normalized: dict[str, Any] = {}
     ownership_binding_inventory: list[dict[str, Any]] = []
@@ -962,6 +1008,13 @@ def _normalize_refs_inventory(refs_inventory: dict[str, Any]) -> tuple[dict[str,
         row = dict(value)
         meta = _normalize_ref_meta(row.get("meta"))
         row["meta"] = meta
+        if str(key) in {"ref_character_1", "ref_character_2", "ref_character_3"}:
+            role = "character_1" if str(key) == "ref_character_1" else ("character_2" if str(key) == "ref_character_2" else "character_3")
+            character_views = _normalize_character_views(row, role)
+            if character_views:
+                row["characterViews"] = character_views
+                row["character_views"] = character_views
+                row["meta"] = {**_safe_dict(row.get("meta")), "character_views": character_views}
         normalized[str(key)] = row
         if meta.get("ownershipRoleMapped") or meta.get("bindingType") != "nearby":
             ownership_binding_inventory.append(
@@ -1023,7 +1076,7 @@ def _extract_ref_urls(ref_node: Any) -> list[str]:
         if value and _looks_like_ref_url(value):
             urls.append(value)
     for ref in _safe_list(node.get("refs")):
-        value = str(ref or "").strip()
+        value = _extract_ref_entry_url(ref)
         if value and _looks_like_ref_url(value):
             urls.append(value)
     return list(dict.fromkeys(urls))

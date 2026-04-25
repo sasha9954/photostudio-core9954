@@ -2644,6 +2644,49 @@ body.ps_clip_fullscreen .mainCol {
   margin-top: 8px;
 }
 
+.clipSB_refSlotLegend {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.clipSB_refSlotLegendItem {
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 8px;
+}
+
+.clipSB_refSlotLegendItem.is-filled {
+  border-color: rgba(94, 234, 212, 0.45);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.clipSB_refSlotLegendTitle {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.clipSB_refSlotLegendHint {
+  margin-top: 2px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.clipSB_refSlotLegendRequired {
+  color: #fda4af;
+}
+
+.clipSB_refSlotBadge {
+  margin-top: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 10px;
+  line-height: 1.2;
+  padding: 3px 6px;
+}
+
 .clipSB_refToggleDetails {
   margin-bottom: 8px;
   border: 1px solid rgba(255,255,255,.22);
