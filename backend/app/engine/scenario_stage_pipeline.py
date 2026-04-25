@@ -2299,6 +2299,166 @@ def _scene_prompts_quality_pass(
     package: dict[str, Any],
     scene_prompts: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    def _build_universal_world_style_anchor(
+        pkg: dict[str, Any],
+        prompts_payload: dict[str, Any],
+    ) -> tuple[str, bool]:
+        input_pkg = _safe_dict(pkg.get("input"))
+        story_core = _safe_dict(pkg.get("story_core"))
+        identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
+        world_lock = _safe_dict(story_core.get("world_lock"))
+        style_lock = _safe_dict(story_core.get("style_lock"))
+
+        existing_anchor = str(_safe_dict(prompts_payload).get("global_style_anchor") or "").strip()
+        source_texts: list[tuple[str, str]] = [
+            ("input.text", str(input_pkg.get("text") or "").strip()),
+            ("input.story_text", str(input_pkg.get("story_text") or "").strip()),
+            ("input.note", str(input_pkg.get("note") or "").strip()),
+            ("input.director_note", str(input_pkg.get("director_note") or "").strip()),
+            ("story_core.world_lock.rule", str(world_lock.get("rule") or "").strip()),
+            ("story_core.identity_doctrine.world_doctrine", str(identity_doctrine.get("world_doctrine") or "").strip()),
+            ("story_core.style_lock.rule", str(style_lock.get("rule") or "").strip()),
+            ("story_core.identity_doctrine.style_doctrine", str(identity_doctrine.get("style_doctrine") or "").strip()),
+            ("scene_prompts.global_style_anchor", existing_anchor),
+        ]
+        bundle = " ".join(text for _, text in source_texts if text).lower()
+        if not bundle:
+            return existing_anchor, False
+
+        cue_catalog: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+            "environment": (
+                ("port city", ("port city", "harbor city", "harbour city", "dock district")),
+                ("club", ("club", "nightclub", "dance floor", "bar interior")),
+                ("kitchen", ("kitchen", "galley", "cooktop", "kitchen drama")),
+                ("alley", ("alley", "alleyway", "lane", "backstreet")),
+                ("apartment", ("apartment", "flat", "living room", "bedroom interior")),
+                ("village", ("village", "rural lane", "hamlet")),
+                ("industrial zone", ("industrial", "factory", "warehouse", "shipyard")),
+                ("seaside", ("seaside", "sea", "shore", "coast", "embankment", "quay")),
+                ("desert", ("desert", "sand", "arid")),
+                ("courtyard", ("courtyard", "inner yard", "patio")),
+                ("street", ("street", "boulevard", "avenue", "road")),
+                ("interior", ("interior", "indoors", "inside")),
+                ("exterior", ("exterior", "outdoor", "outside")),
+            ),
+            "materials": (
+                ("stone", ("stone", "weathered stone", "limestone")),
+                ("concrete", ("concrete", "cement")),
+                ("wood", ("wood", "wooden")),
+                ("dust", ("dust", "dusty")),
+                ("rust", ("rust", "rusted", "oxidized metal")),
+                ("tile", ("tile", "tiled")),
+                ("cobblestone", ("cobblestone", "cobbled")),
+                ("metal", ("metal", "steel", "iron")),
+                ("glass", ("glass", "window glare", "glass reflections")),
+                ("plaster", ("plaster", "stucco")),
+                ("fabric atmosphere", ("fabric", "textile", "cloth texture")),
+            ),
+            "air_light": (
+                ("salt air", ("salt air", "sea air", "salty wind", "sea breeze")),
+                ("humidity", ("humidity", "humid air", "moist air")),
+                ("harsh sun", ("harsh sun", "hard sunlight", "blazing sun")),
+                ("pale morning light", ("pale morning light", "morning light", "dawn light")),
+                ("neon haze", ("neon haze", "neon glow", "neon spill")),
+                ("warm tungsten interior", ("warm tungsten", "tungsten interior", "warm practical lights")),
+                ("cold dawn", ("cold dawn", "cold morning", "blue dawn")),
+                ("rainy air", ("rainy air", "wet air", "rain mist", "drizzle haze")),
+                ("smoke/steam", ("smoke", "steam", "haze", "vapor")),
+                ("sea wind", ("sea wind", "coastal wind", "shore wind")),
+            ),
+            "architecture": (
+                ("archways", ("archway", "archways", "arches")),
+                ("balconies", ("balcony", "balconies")),
+                ("narrow streets", ("narrow street", "narrow streets", "tight alley")),
+                ("courtyards", ("courtyard", "courtyards")),
+                ("port cranes", ("port crane", "port cranes", "harbor crane")),
+                ("tram lines", ("tram line", "tram lines", "tram tracks")),
+                ("corridor", ("corridor", "hallway", "passage")),
+                ("stage", ("stage", "performance stage")),
+                ("kitchen table", ("kitchen table", "tabletop kitchen")),
+                ("embankment", ("embankment", "seafront walk", "waterfront edge")),
+                ("roofline", ("roofline", "rooftops", "roof edge")),
+                ("stairway", ("stairway", "stairs", "staircase")),
+            ),
+            "realism": (
+                ("lived-in realism", ("lived-in realism", "lived in", "worn-in world", "grounded realism")),
+                ("no tourist postcard", ("no tourist postcard", "avoid postcard", "not postcard pretty")),
+                ("no generic cinematic filler", ("no generic cinematic filler", "avoid generic cinematic", "avoid stock cinematic")),
+                ("grounded world continuity", ("grounded world continuity", "world continuity", "world-consistent realism")),
+                ("no glossy stock-image vibe", ("no glossy stock-image vibe", "avoid glossy stock", "not glossy stock-image")),
+            ),
+        }
+        strong_sources = {
+            "story_core.world_lock.rule",
+            "story_core.identity_doctrine.world_doctrine",
+            "story_core.style_lock.rule",
+            "story_core.identity_doctrine.style_doctrine",
+            "scene_prompts.global_style_anchor",
+        }
+        detected: dict[str, dict[str, set[str]]] = {key: {} for key in cue_catalog}
+        for source_name, text in source_texts:
+            lowered = str(text or "").lower()
+            if not lowered:
+                continue
+            for category, entries in cue_catalog.items():
+                for label, aliases in entries:
+                    if any(alias in lowered for alias in aliases):
+                        bucket = detected[category].setdefault(label, set())
+                        bucket.add(source_name)
+
+        selected: dict[str, list[str]] = {}
+        for category, labels in detected.items():
+            ranked = sorted(
+                labels.items(),
+                key=lambda item: (
+                    max(1 if src in strong_sources else 0 for src in item[1]),
+                    len(item[1]),
+                    -len(item[0]),
+                ),
+                reverse=True,
+            )
+            selected_labels: list[str] = []
+            for label, srcs in ranked:
+                mentions = len(srcs)
+                if mentions < 2 and not any(src in strong_sources for src in srcs):
+                    continue
+                if label in existing_anchor.lower():
+                    continue
+                selected_labels.append(label)
+                if len(selected_labels) >= 2:
+                    break
+            selected[category] = selected_labels
+
+        if not any(selected.values()) and not existing_anchor:
+            return "", False
+
+        if not selected["realism"]:
+            realism_floor = "lived-in realism, grounded world continuity, no tourist-postcard gloss, no generic cinematic filler"
+            if realism_floor not in existing_anchor.lower():
+                selected["realism"] = [realism_floor]
+
+        parts: list[str] = []
+        if selected["environment"]:
+            parts.append(f"environment: {', '.join(selected['environment'])}")
+        if selected["materials"]:
+            parts.append(f"materials: {', '.join(selected['materials'])}")
+        if selected["air_light"]:
+            parts.append(f"air/light: {', '.join(selected['air_light'])}")
+        if selected["architecture"]:
+            parts.append(f"spatial cues: {', '.join(selected['architecture'])}")
+        if selected["realism"]:
+            parts.append(f"tone: {', '.join(selected['realism'])}")
+
+        addition = "; ".join(part for part in parts if part).strip()
+        if not addition:
+            return existing_anchor, False
+
+        if existing_anchor:
+            enhanced = f"{existing_anchor} {addition}".strip()
+        else:
+            enhanced = addition
+        return enhanced, enhanced != existing_anchor
+
     normalized = deepcopy(_safe_dict(scene_prompts))
     segments = [row for row in _safe_list(normalized.get("segments")) if isinstance(row, dict)]
     if not segments:
@@ -2307,7 +2467,7 @@ def _scene_prompts_quality_pass(
             "scene_prompts_quality_ia2v_variant_applied_count": 0,
             "scene_prompts_quality_world_i2v_conflict_fixed_count": 0,
             "scene_prompts_quality_video_prompt_deduped_count": 0,
-            "scene_prompts_quality_odessa_anchor_strengthened": False,
+            "scene_prompts_quality_world_anchor_strengthened": False,
         }
 
     scene_plan_rows = {
@@ -2321,25 +2481,10 @@ def _scene_prompts_quality_pass(
         if str(_safe_dict(row).get("segment_id") or "").strip()
     }
 
-    odessa_probe = " ".join(
-        [
-            str(_safe_dict(package.get("input")).get("story") or ""),
-            str(_safe_dict(package.get("input")).get("text") or ""),
-            str(_safe_dict(package.get("input")).get("note") or ""),
-            str(_safe_dict(normalized).get("global_style_anchor") or ""),
-        ]
-    ).lower()
-    is_odessa_case = any(token in odessa_probe for token in ("odessa", "одес", "black sea", "черн", "порт", "port city", "примор"))
-    odessa_anchor = (
-        "Odessa world contract: weathered southern stone, Black Sea salt air and wind, deep archways/courtyards/balconies, "
-        "port machinery breath, tram and cobblestone embankments, seagulls and pale harsh southern light; lived-in realism, never tourist postcard."
-    )
     anchor_strengthened = False
-    if is_odessa_case:
-        existing_anchor = str(normalized.get("global_style_anchor") or "").strip()
-        if "weathered southern stone" not in existing_anchor.lower() or "lived-in realism" not in existing_anchor.lower():
-            normalized["global_style_anchor"] = odessa_anchor if not existing_anchor else f"{odessa_anchor} {existing_anchor}".strip()
-            anchor_strengthened = True
+    enhanced_anchor, anchor_strengthened = _build_universal_world_style_anchor(package, normalized)
+    if enhanced_anchor:
+        normalized["global_style_anchor"] = enhanced_anchor
 
     boilerplate_tokens = (
         "use the uploaded image as the exact first frame and identity anchor",
@@ -2485,7 +2630,7 @@ def _scene_prompts_quality_pass(
         "scene_prompts_quality_ia2v_variant_applied_count": ia2v_variant_applied_count,
         "scene_prompts_quality_world_i2v_conflict_fixed_count": world_i2v_conflict_fixed_count,
         "scene_prompts_quality_video_prompt_deduped_count": video_prompt_deduped_count,
-        "scene_prompts_quality_odessa_anchor_strengthened": anchor_strengthened,
+        "scene_prompts_quality_world_anchor_strengthened": anchor_strengthened,
     }
 
 
@@ -12917,7 +13062,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_prompts_quality_ia2v_variant_applied_count"] = 0
     diagnostics["scene_prompts_quality_world_i2v_conflict_fixed_count"] = 0
     diagnostics["scene_prompts_quality_video_prompt_deduped_count"] = 0
-    diagnostics["scene_prompts_quality_odessa_anchor_strengthened"] = False
+    diagnostics["scene_prompts_quality_world_anchor_strengthened"] = False
     previous_signature = str(diagnostics.get("scene_prompts_upstream_signature") or "")
     diagnostics["scene_prompts_upstream_changed"] = bool(previous_signature and previous_signature != current_signature)
     diagnostics["scene_prompts_upstream_signature"] = current_signature
