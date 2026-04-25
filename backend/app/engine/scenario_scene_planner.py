@@ -223,6 +223,39 @@ SCENE_PLAN_COMPOSITION_ENUM_ALIASES: dict[str, dict[str, str]] = {
 }
 
 
+_FINAL_PAYOFF_HINTS = {
+    "final",
+    "last line",
+    "last phrase",
+    "tail",
+    "ending",
+    "outro",
+    "payoff",
+    "resolution",
+    "afterimage",
+    "release",
+    "climax",
+}
+
+
+def _is_final_emotional_payoff_candidate(source_row: dict[str, Any], *, idx: int, total: int) -> bool:
+    if total <= 0:
+        return False
+    near_tail = idx >= max(0, total - 2)
+    if not near_tail:
+        return False
+    transcript = str(source_row.get("transcript_slice") or "").strip().lower()
+    beat_mode = str(source_row.get("beat_mode") or "").strip().lower()
+    hero_world_mode = str(source_row.get("hero_world_mode") or "").strip().lower()
+    emotional_key = str(source_row.get("emotional_key") or "").strip().lower()
+    arc_role = str(source_row.get("arc_role") or "").strip().lower()
+    beat_purpose = str(source_row.get("beat_purpose") or "").strip().lower()
+    blob = " ".join([transcript, beat_mode, hero_world_mode, emotional_key, arc_role, beat_purpose])
+    has_tail_hint = any(token in blob for token in _FINAL_PAYOFF_HINTS)
+    has_vocal_hint = bool(source_row.get("is_lip_sync_candidate")) or bool(transcript)
+    return bool(has_vocal_hint and (has_tail_hint or beat_mode == "performance" or hero_world_mode == "hero_foreground"))
+
+
 def _safe_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -897,6 +930,8 @@ def _final_semantic_route_rebalance(
                 score += 2
             if _is_world_beat(source_row):
                 score -= 6
+            if _is_final_emotional_payoff_candidate(source_row, idx=idx, total=len(ordered_ids)):
+                score += 8
             promote_candidates.append((score - idx, segment_id))
         for _score, segment_id in sorted(promote_candidates, key=lambda item: item[0], reverse=True)[:ia2v_deficit]:
             row_by_segment[segment_id] = _apply_route_to_row(
@@ -921,6 +956,8 @@ def _final_semantic_route_rebalance(
             if str(row.get("route") or "").strip().lower() != "ia2v":
                 continue
             source_row = source_by_segment.get(segment_id, {})
+            if _is_final_emotional_payoff_candidate(source_row, idx=idx, total=len(ordered_ids)):
+                continue
             score = 0
             if _is_world_beat(source_row):
                 score += 7

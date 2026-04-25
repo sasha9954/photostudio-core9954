@@ -1240,6 +1240,63 @@ def _clamp_ratio(value: Any, default: float) -> float:
         return float(default)
 
 
+
+
+def _sync_role_scene_route_semantics(package: dict[str, Any]) -> dict[str, int]:
+    role_plan = _safe_dict(package.get("role_plan"))
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    scene_casting = _safe_list(role_plan.get("scene_casting"))
+    storyboard = _safe_list(scene_plan.get("storyboard")) or _safe_list(scene_plan.get("scenes")) or _safe_list(scene_plan.get("segments"))
+    if not scene_casting or not storyboard:
+        return {"updated": 0, "ia2v_forced_visible": 0, "i2v_offscreen_repairs": 0}
+
+    scene_rows_by_id = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in storyboard
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+    updated = 0
+    ia2v_forced_visible = 0
+    i2v_offscreen_repairs = 0
+    for row in scene_casting:
+        casting_row = _safe_dict(row)
+        seg_id = str(casting_row.get("segment_id") or "").strip()
+        if not seg_id:
+            continue
+        scene_row = _safe_dict(scene_rows_by_id.get(seg_id))
+        if not scene_row:
+            continue
+        route = str(scene_row.get("route") or "").strip().lower()
+        presence_mode = str(casting_row.get("presence_mode") or "").strip().lower()
+        perf_focus = str(casting_row.get("performance_focus") or "").strip()
+        changed = False
+        if route == "ia2v":
+            if presence_mode != "physical":
+                casting_row["presence_mode"] = "physical"
+                changed = True
+                ia2v_forced_visible += 1
+            if not perf_focus or any(token in perf_focus.lower() for token in ("offscreen", "voiceover", "implied", "background")):
+                casting_row["performance_focus"] = "Visible on-screen vocal performance with readable emotional delivery."
+                changed = True
+            casting_row["presence_weight"] = str(casting_row.get("presence_weight") or "anchor").strip().lower() or "anchor"
+        elif route == "i2v":
+            visual_focus = str(scene_row.get("visual_focus_role") or "").strip().lower()
+            speaker_role = str(scene_row.get("speaker_role") or "").strip().lower()
+            is_env_cutaway = visual_focus == "environment" and not speaker_role
+            if is_env_cutaway and presence_mode == "physical" and any(token in perf_focus.lower() for token in ("lip", "vocal", "on-screen", "onscreen", "performance")):
+                casting_row["presence_mode"] = "voiceover"
+                casting_row["performance_focus"] = "World-detail cutaway with singer offscreen."
+                changed = True
+                i2v_offscreen_repairs += 1
+        if changed:
+            row.clear()
+            row.update(casting_row)
+            updated += 1
+
+    role_plan["scene_casting"] = scene_casting
+    package["role_plan"] = _attach_downstream_mode_metadata(role_plan, package)
+    return {"updated": updated, "ia2v_forced_visible": ia2v_forced_visible, "i2v_offscreen_repairs": i2v_offscreen_repairs}
+
 def _build_route_strategy_signature_payload(creative_config: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_creative_config(creative_config)
     return {
@@ -11217,7 +11274,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     ):
         scene_plan.pop(stale_error_key, None)
     package["scene_plan"] = _attach_downstream_mode_metadata(scene_plan, package)
+    role_scene_sync = _sync_role_scene_route_semantics(package)
     diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["role_scene_route_sync_updated_count"] = int(_safe_dict(role_scene_sync).get("updated") or 0)
+    diagnostics["role_scene_route_sync_ia2v_forced_visible_count"] = int(_safe_dict(role_scene_sync).get("ia2v_forced_visible") or 0)
+    diagnostics["role_scene_route_sync_i2v_offscreen_repairs"] = int(_safe_dict(role_scene_sync).get("i2v_offscreen_repairs") or 0)
     diagnostics["scene_plan_created_for_signature"] = str(_safe_dict(package.get("scene_plan")).get("created_for_signature") or "")
     diagnostics["scene_plan_route_strategy_signature"] = current_route_strategy_signature
     diagnostics["scene_plan_created_for_signature"] = str(current_signature or diagnostics.get("scene_plan_created_for_signature") or "")
