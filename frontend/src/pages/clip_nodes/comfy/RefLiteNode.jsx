@@ -197,7 +197,7 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const inputRef = useRef(null);
   const slotInputRef = useRef(null);
   const [activeSlotKey, setActiveSlotKey] = useState("");
-  const maxFiles = 5;
+  const maxFiles = handleId === "ref_character" ? 4 : 5;
   const refs = Array.isArray(data?.refs)
     ? data.refs
       .map((item) => {

@@ -4565,10 +4565,10 @@ function collectBrainPlannerInput({ brainNodeId, nodesList, edgesList }) {
   const refStyleNode = pickSourceNode("ref_style");
   const refItemsNode = pickSourceNode("ref_items");
 
-  const characterRefs = getRefList(refCharNode, "ref_character", 5);
+  const characterRefs = getRefList(refCharNode, "ref_character", getRefMaxFiles("ref_character"));
   const locationRefs = getRefList(refLocNode, "ref_location", 5);
   const propsRefs = getRefList(refItemsNode, "ref_items", 5);
-  const styleRefs = getRefList(refStyleNode, "ref_style", 1);
+  const styleRefs = getRefList(refStyleNode, "ref_style", getRefMaxFiles("ref_style"));
   const scenarioKey = SCENARIO_OPTIONS.some((option) => option.value === brainNode?.data?.scenarioKey)
     ? brainNode.data.scenarioKey
     : "clip";
@@ -7436,6 +7436,10 @@ const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
   world: "environment",
 };
 const CHARACTER_VIEW_ORDER = ["front_primary", "side_profile", "performance_medium", "back_optional"];
+const REF_MAX_FILES_BY_KIND = {
+  ref_character: 4,
+  ref_style: 1,
+};
 const CHARACTER_VIEW_DEFAULT_LABELS = {
   front_primary: "Фронт / основной",
   side_profile: "Бок / профиль",
@@ -7465,6 +7469,11 @@ function buildCharacterRefsFromViews(characterViews = {}, role = "character_1") 
   return CHARACTER_VIEW_ORDER
     .map((viewType, idx) => normalizeCharacterViewSlotEntry(viewType, characterViews?.[viewType], role, idx))
     .filter(Boolean);
+}
+
+function getRefMaxFiles(kind = "") {
+  const normalizedKind = String(kind || "").trim().toLowerCase();
+  return Number(REF_MAX_FILES_BY_KIND[normalizedKind] || 5);
 }
 
 function normalizeCharacterViewsPack(refs = [], role = "character_1", incomingViews = null) {
@@ -7708,7 +7717,7 @@ function normalizeComfyRefNodeData(nodeType = "", data = {}, kindHint = "") {
 
 function normalizeRefData(data, kindHint = "") {
   const kind = String(data?.kind || kindHint || "");
-  const maxFiles = kind === "ref_style" ? 1 : 5;
+  const maxFiles = getRefMaxFiles(kind);
   const refsRaw = Array.isArray(data?.refs)
     ? data.refs
     : (data?.url ? [{ url: data.url, name: data?.name || "" }] : []);
@@ -9158,7 +9167,7 @@ function RefNode({ id, data }) {
       />
     );
   }
-  const maxFiles = kind === "ref_style" ? 1 : 5;
+  const maxFiles = getRefMaxFiles(kind);
   const refsRaw = Array.isArray(data?.refs) ? data.refs : (data?.url ? [{ url: data.url, name: data?.name || "" }] : []);
   const refs = refsRaw
     .map((item) => ({
@@ -9373,7 +9382,7 @@ function RefNode({ id, data }) {
         <div className="clipSB_hint" style={{ marginTop: 10 }}>
           {kind === "ref_style"
             ? "Глобальный стиль (1 фото)"
-            : "Загрузи до 5 фото"}
+            : `Загрузи до ${maxFiles} фото`}
         </div>
 
         <div className="clipSB_hint" style={{ marginTop: 8 }}>
@@ -19457,7 +19466,7 @@ onClipSec: (nodeId, value) => {
                 try {
                   const targetNode = nodesRef.current.find((x) => x.id === nodeId);
                   const normalizedTarget = normalizeRefData(targetNode?.data || {}, targetNode?.data?.kind || "");
-                  const maxFiles = targetNode?.data?.kind === "ref_style" ? 1 : 5;
+                  const maxFiles = getRefMaxFiles(targetNode?.data?.kind || "");
                   const prevRefs = normalizedTarget.refs;
                   const room = Math.max(0, maxFiles - (maxFiles === 1 ? 0 : prevRefs.length));
                   const queue = (maxFiles === 1 ? pickedFiles.slice(0, 1) : pickedFiles.slice(0, room));
@@ -19511,7 +19520,7 @@ onClipSec: (nodeId, value) => {
                       setNodes((prev) => prev.map((x) => {
                         if (x.id !== nodeId) return x;
                         const nextPrevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
-                        const nextMax = x?.data?.kind === "ref_style" ? 1 : 5;
+                        const nextMax = getRefMaxFiles(x?.data?.kind || "");
                         const isCharacterPrimary = String(x?.data?.kind || "") === "ref_character";
                         const baseRef = { url, name: out?.name || oneFile.name };
                         const nextCharacterViews = isCharacterPrimary
