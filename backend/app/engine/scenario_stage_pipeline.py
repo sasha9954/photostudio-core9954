@@ -4999,6 +4999,8 @@ def _score_story_core_association(row: dict[str, Any]) -> dict[str, Any]:
         "reason_tags": reasons,
         "literal_generic_cliche": generic_cliche,
         "direct_emotion_illustration": direct_emotion_illustration,
+        "direct_threat_shorthand": direct_threat_shorthand,
+        "direct_mapping_hits": direct_mapping_hits,
         "low_subtext": low_subtext,
     }
 
@@ -5047,6 +5049,9 @@ def _evaluate_story_core_quality_gates(
     director_mode: str = "",
     audio_map_quality_context: dict[str, Any] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
+    content_type_norm = str(content_type or "").strip().lower()
+    director_mode_norm = str(director_mode or "").strip().lower()
+    is_music_clip_mode = content_type_norm == "music_video" and director_mode_norm == "clip"
     diagnostics: dict[str, Any] = {
         "story_core_entropy_threshold_triggered": False,
         "story_core_flatline_span_start": "",
@@ -5076,6 +5081,8 @@ def _evaluate_story_core_quality_gates(
         "story_core_literal_generic_cliche_segments": [],
         "story_core_direct_emotion_illustration_segments": [],
         "story_core_low_subtext_segments": [],
+        "story_core_direct_threat_shorthand_segments": [],
+        "story_core_direct_mapping_segments": [],
         "story_core_anti_literal_retry_used": False,
         "story_core_visual_breath_triggered": False,
         "story_core_visual_breath_reason": "",
@@ -5110,6 +5117,8 @@ def _evaluate_story_core_quality_gates(
                 "association_reason_tags": _safe_list(association.get("reason_tags")),
                 "literal_generic_cliche": bool(association.get("literal_generic_cliche")),
                 "direct_emotion_illustration": bool(association.get("direct_emotion_illustration")),
+                "direct_threat_shorthand": bool(association.get("direct_threat_shorthand")),
+                "direct_mapping_hits": int(association.get("direct_mapping_hits") or 0),
                 "low_subtext": bool(association.get("low_subtext")),
             }
         )
@@ -5215,10 +5224,22 @@ def _evaluate_story_core_quality_gates(
     diagnostics["story_core_direct_emotion_illustration_segments"] = [
         row["segment_id"] for row in vectors if row["direct_emotion_illustration"]
     ][:16]
+    diagnostics["story_core_direct_threat_shorthand_segments"] = [
+        row["segment_id"] for row in vectors if row["direct_threat_shorthand"]
+    ][:16]
+    diagnostics["story_core_direct_mapping_segments"] = [
+        row["segment_id"] for row in vectors if row["direct_mapping_hits"] > 0
+    ][:16]
     diagnostics["story_core_low_subtext_segments"] = [row["segment_id"] for row in vectors if row["low_subtext"]][:16]
     min_second_degree_required = 2 if len(vectors) >= 5 else 1
-    if len(level_2_plus_segments) < min_second_degree_required:
-        causes.append("anti_literal_low_depth_streak")
+    low_depth_profile = len(level_2_plus_segments) < min_second_degree_required
+    high_literal_signal_segments = [
+        row["segment_id"]
+        for row in vectors
+        if row["literal_generic_cliche"] or row["direct_emotion_illustration"] or row["direct_threat_shorthand"]
+    ]
+    high_literal_signal_count = len(high_literal_signal_segments)
+    literal_signal_density_high = high_literal_signal_count > max(1, len(vectors) // 2)
     low_streak = 0
     max_low_streak = 0
     for level in association_levels:
@@ -5227,7 +5248,25 @@ def _evaluate_story_core_quality_gates(
             max_low_streak = max(max_low_streak, low_streak)
         else:
             low_streak = 0
-    if len(level_0_segments) > max(1, len(vectors) // 2) or max_low_streak >= 3:
+    anti_literal_failed = False
+    if low_depth_profile:
+        if is_music_clip_mode:
+            anti_literal_failed = (
+                len(level_0_segments) > max(1, len(vectors) // 2)
+                or (max_low_streak >= 4 and literal_signal_density_high)
+                or high_literal_signal_count >= max(2, len(vectors) - 1)
+            )
+        else:
+            anti_literal_failed = (
+                len(level_0_segments) > 0
+                or max_low_streak >= 3
+                or literal_signal_density_high
+            )
+    if anti_literal_failed:
+        causes.append("anti_literal_low_depth_streak")
+    hard_literal_fallback = len(level_0_segments) > max(1, len(vectors) // 2)
+    low_depth_streak_for_retry = max_low_streak >= (4 if is_music_clip_mode else 3)
+    if hard_literal_fallback or low_depth_streak_for_retry or anti_literal_failed:
         diagnostics["story_core_anti_literal_retry_used"] = True
         if "anti_literal_low_depth_streak" not in causes:
             causes.append("anti_literal_low_depth_streak")
@@ -5330,9 +5369,6 @@ def _evaluate_story_core_quality_gates(
     if overload_detected and fail_spans:
         causes.append("visual_breath_contrast_event_missing")
 
-    content_type_norm = str(content_type or "").strip().lower()
-    director_mode_norm = str(director_mode or "").strip().lower()
-    is_music_clip_mode = content_type_norm == "music_video" and director_mode_norm == "clip"
     if is_music_clip_mode and "entropy_flatline_detected" in causes:
         quality_ctx = _safe_dict(audio_map_quality_context)
         ids_preserved = bool(quality_ctx.get("segment_ids_preserved", True))
