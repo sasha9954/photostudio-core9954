@@ -563,6 +563,24 @@ def _enforce_character_1_view_selection_on_refs(
         fallback_needed = True
         fallback_reason = "selected_view_not_mapped_to_refs"
         enforced_refs = [original_refs[0]]
+    if not enforced_refs and selected_views and selected_urls:
+        # Keep attach path alive when refsByRole has sparse/non-enriched items.
+        for view_key in selected_views:
+            view_row = _safe_dict(views.get(view_key))
+            url = str(view_row.get("url") or "").strip()
+            if not url:
+                continue
+            enforced_refs.append(
+                {
+                    "url": url,
+                    "view_type": view_key,
+                    "viewType": view_key,
+                    "label": str(view_row.get("label") or view_key).strip(),
+                }
+            )
+        if enforced_refs:
+            fallback_needed = True
+            fallback_reason = fallback_reason or "selected_view_attached_from_inventory"
 
     deduped_refs: list[Any] = []
     seen_keys: set[str] = set()
@@ -1399,7 +1417,14 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
     role_row = _safe_dict(fallback_row.get("role_row"))
     prompt_refs_by_role = _safe_dict(fallback_prompt_row.get("refsByRole"))
     plan_refs_by_role = _safe_dict(plan_row.get("refsByRole"))
-    refs_by_role = prompt_refs_by_role or plan_refs_by_role
+    refs_by_role = dict(plan_refs_by_role)
+    for role, refs in prompt_refs_by_role.items():
+        role_key = str(role)
+        prompt_refs = _safe_list(refs)
+        if prompt_refs:
+            refs_by_role[role_key] = prompt_refs
+        elif role_key not in refs_by_role:
+            refs_by_role[role_key] = []
     refs_used = _safe_list(
         fallback_prompt_row.get("refsUsed")
         if isinstance(fallback_prompt_row.get("refsUsed"), list)
@@ -1584,15 +1609,22 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         character_views=_safe_dict(identity_ctx.get("character_views")),
         character_view_selection=character_view_selection,
     )
+    effective_character_1_ref_count = int(character_view_selection_enforcement.get("effective_character_1_ref_count") or 0)
     character_view_selection = {
         **character_view_selection,
         "selected_views": list(_safe_list(character_view_selection_enforcement.get("selected_views"))),
         "selected_urls": list(_safe_list(character_view_selection_enforcement.get("selected_urls"))),
         "fallback_needed": bool(character_view_selection_enforcement.get("fallback_needed")),
         "fallback_reason": str(character_view_selection_enforcement.get("fallback_reason") or "").strip(),
-        "effective_character_1_ref_count": int(character_view_selection_enforcement.get("effective_character_1_ref_count") or 0),
+        "effective_character_1_ref_count": effective_character_1_ref_count,
         "enforced_downstream": True,
     }
+    if (
+        not environment_cutaway_i2v
+        and _safe_list(character_view_selection.get("selected_views"))
+        and effective_character_1_ref_count > 0
+    ):
+        confirmed_look_used = True
     if environment_cutaway_i2v:
         refs_used = [role for role in refs_used if str(role or "").strip().lower() != "character_1"]
     elif _safe_list(refs_by_role.get("character_1")) and "character_1" not in refs_used:
