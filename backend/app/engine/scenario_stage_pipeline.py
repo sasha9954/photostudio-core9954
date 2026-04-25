@@ -3078,6 +3078,32 @@ def _repair_scene_plan_final_semantics(
     }
 
 
+def _sync_scene_plan_storyboard_mirror(
+    scene_plan: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, int]]:
+    normalized = deepcopy(_safe_dict(scene_plan))
+    canonical_rows = _safe_list(normalized.get("storyboard"))
+    source = "storyboard"
+    if not canonical_rows:
+        canonical_rows = _safe_list(normalized.get("scenes"))
+        source = "scenes"
+    if not canonical_rows:
+        canonical_rows = _safe_list(normalized.get("segments"))
+        source = "segments"
+
+    canonical = [deepcopy(_safe_dict(row)) for row in canonical_rows if isinstance(row, dict)]
+    if not canonical:
+        return normalized, {"synced": 0, "rows": 0, "source": source}
+
+    current_storyboard = [deepcopy(_safe_dict(row)) for row in _safe_list(normalized.get("storyboard")) if isinstance(row, dict)]
+    current_scenes = [deepcopy(_safe_dict(row)) for row in _safe_list(normalized.get("scenes")) if isinstance(row, dict)]
+    synced = int(current_storyboard != canonical) + int(current_scenes != canonical)
+    normalized["storyboard"] = [deepcopy(row) for row in canonical]
+    normalized["scenes"] = [deepcopy(row) for row in canonical]
+    normalized["route_mix_summary"] = _scene_plan_route_counts(normalized)
+    return normalized, {"synced": synced, "rows": len(canonical), "source": source}
+
+
 def _collect_scene_plan_route_semantic_mismatches(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
     mismatches: list[dict[str, Any]] = []
     for idx, row in enumerate(_scene_plan_rows_for_validation(scene_plan), start=1):
@@ -12016,7 +12042,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             package=package,
             scene_plan=scene_plan,
         )
+        scene_plan, final_sync_meta = _sync_scene_plan_storyboard_mirror(scene_plan)
         diagnostics["scene_plan_final_semantic_repairs"] = dict(final_semantic_repairs)
+        diagnostics["scene_plan_final_sync"] = dict(final_sync_meta)
         result["scene_plan"] = scene_plan
     else:
         locked_route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
@@ -12080,7 +12108,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     package=package,
                     scene_plan=retry_scene_plan,
                 )
+                retry_scene_plan, retry_sync_meta = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
                 diagnostics["scene_plan_final_semantic_repairs"] = dict(retry_final_semantic_repairs)
+                diagnostics["scene_plan_final_sync"] = dict(retry_sync_meta)
                 retry_result["scene_plan"] = retry_scene_plan
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
                 package=package,
