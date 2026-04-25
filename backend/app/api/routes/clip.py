@@ -3401,24 +3401,25 @@ def _infer_reference_view_label(url: str, index: int = 0) -> str:
     markers = [
         ("front", ["front", "frontal", "face", "straight"]),
         ("side/profile", ["side", "profile", "3-4", "three-quarter", "three quarter"]),
+        ("detail", ["performance", "lipsync", "lip-sync", "medium", "mid-shot", "mid_shot"]),
         ("back", ["back", "rear", "behind", "from-behind", "from_behind"]),
         ("detail", ["detail", "closeup", "close-up", "close_up", "macro"]),
     ]
     for label, tokens in markers:
         if any(token in normalized for token in tokens):
             return label
-    fallback_by_index = {0: "front", 1: "side/profile", 2: "back", 3: "detail"}
+    fallback_by_index = {0: "front", 1: "side/profile", 2: "detail", 3: "back"}
     return fallback_by_index.get(index, "unknown")
 
 
 def _selected_view_fallback_order(selected_view_hint: str) -> list[str]:
     normalized = str(selected_view_hint or "any").strip().lower() or "any"
     mapping = {
-        "front": ["front", "side/profile", "detail", "back", "unknown"],
-        "side/profile": ["side/profile", "front", "back", "detail", "unknown"],
+        "front": ["front", "detail", "side/profile", "back", "unknown"],
+        "side/profile": ["side/profile", "front", "detail", "back", "unknown"],
         "back": ["back", "side/profile", "front", "detail", "unknown"],
         "detail": ["detail", "front", "side/profile", "back", "unknown"],
-        "any": ["front", "side/profile", "back", "detail", "unknown"],
+        "any": ["front", "side/profile", "detail", "back", "unknown"],
     }
     return list(mapping.get(normalized, mapping["any"]))
 
@@ -11810,6 +11811,13 @@ def _build_comfy_image_prompt_assembly(
 
     multi_view_lock_block = "\n".join([
         "REFERENCE USAGE — MULTI-VIEW CHARACTER LOCK:",
+        "- all uploaded character_1 views belong to the exact same person",
+        "- front_primary is canonical source of truth",
+        "- side_profile supports profile/head-shape/silhouette continuity",
+        "- performance_medium supports facial detail, mouth shape, lip-sync/performance continuity",
+        "- back_optional supports rear-facing shots only",
+        "- do not treat these refs as different people",
+        "- do not merge them into a new reinterpretation",
         "Each character role (e.g. character_1) may contain multiple reference images representing the SAME entity from different angles (front, side, back, profile, motion, detail).",
         "Treat ALL images of the same role as ONE unified identity set.",
         "VIEW SELECTION PRIORITY (STRICT):",

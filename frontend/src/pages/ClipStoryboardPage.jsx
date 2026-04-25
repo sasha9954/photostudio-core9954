@@ -6647,9 +6647,31 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
       value: normalized.refs[0]?.url || "",
       preview: normalized.refs[0]?.name || `Character 1 • ${normalized.refs.length} refs`,
       sourceLabel: "Character 1",
-      refs: normalized.refs.map((item) => ({ url: item.url, roleType, ...refMeta })),
+      refs: normalized.refs.map((item, idx) => {
+        const viewType = CHARACTER_VIEW_ORDER[idx] || "front_primary";
+        const slot = normalized?.characterViews?.[viewType] || {};
+        return {
+          url: item.url,
+          roleType,
+          view_type: viewType,
+          viewType,
+          label: String(item?.label || slot?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
+          order: idx,
+          priority: idx,
+          is_primary: viewType === "front_primary",
+          role: "character_1",
+          ...refMeta,
+        };
+      }),
+      characterViews: normalized?.characterViews && typeof normalized.characterViews === "object" ? normalized.characterViews : {},
       count: normalized.refs.length,
-      meta: { kind: "ref_character", count: normalized.refs.length, roleType, ...refMeta },
+      meta: {
+        kind: "ref_character",
+        count: normalized.refs.length,
+        roleType,
+        character_views: normalized?.characterViews && typeof normalized.characterViews === "object" ? normalized.characterViews : {},
+        ...refMeta,
+      },
     };
   }
 
@@ -7411,6 +7433,35 @@ const REF_OWNERSHIP_ROLE_TO_PIPELINE_ROLE = {
   shared: "shared",
   world: "environment",
 };
+const CHARACTER_VIEW_ORDER = ["front_primary", "side_profile", "performance_medium", "back_optional"];
+const CHARACTER_VIEW_DEFAULT_LABELS = {
+  front_primary: "Фронт / основной",
+  side_profile: "Бок / профиль",
+  performance_medium: "Полутело / lip-sync",
+  back_optional: "Сзади / optional",
+};
+
+function normalizeCharacterViewsPack(refs = [], role = "character_1", incomingViews = null) {
+  const srcViews = incomingViews && typeof incomingViews === "object" ? incomingViews : {};
+  const pack = {};
+  CHARACTER_VIEW_ORDER.forEach((viewType, idx) => {
+    const fromState = srcViews?.[viewType] && typeof srcViews[viewType] === "object" ? srcViews[viewType] : {};
+    const fallbackRef = refs[idx] && typeof refs[idx] === "object" ? refs[idx] : null;
+    const url = String(fromState?.url || fallbackRef?.url || "").trim();
+    if (!url) return;
+    pack[viewType] = {
+      url,
+      asset_path: url,
+      view_type: viewType,
+      label: String(fromState?.label || fallbackRef?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
+      order: Number.isFinite(Number(fromState?.order)) ? Number(fromState.order) : idx,
+      priority: Number.isFinite(Number(fromState?.priority)) ? Number(fromState.priority) : idx,
+      is_primary: viewType === "front_primary",
+      role,
+    };
+  });
+  return pack;
+}
 
 function normalizeCharacterRoleType(value) {
   const clean = String(value || "").trim().toLowerCase();
@@ -7644,9 +7695,35 @@ function normalizeRefData(data, kindHint = "") {
     .filter((item) => hasAnyRefImageCandidate(item))
     .slice(0, maxFiles);
 
+  const role = kind === "ref_character"
+    ? "character_1"
+    : kind === "ref_character_2"
+      ? "character_2"
+      : kind === "ref_character_3"
+        ? "character_3"
+        : "";
+  const characterViews = kind === "ref_character" ? normalizeCharacterViewsPack(refs, role || "character_1", data?.characterViews) : undefined;
+  const refsWithViewMeta = kind === "ref_character"
+    ? refs.map((item, idx) => {
+      const viewType = CHARACTER_VIEW_ORDER[idx] || "front_primary";
+      const slot = characterViews?.[viewType] || {};
+      return {
+        ...item,
+        view_type: viewType,
+        viewType,
+        label: String(item?.label || slot?.label || CHARACTER_VIEW_DEFAULT_LABELS[viewType] || "").trim(),
+        order: idx,
+        priority: idx,
+        is_primary: viewType === "front_primary",
+        role: "character_1",
+      };
+    })
+    : refs;
+
   return {
     ...data,
-    refs,
+    refs: refsWithViewMeta,
+    ...(kind === "ref_character" ? { characterViews } : {}),
   };
 }
 
@@ -19421,7 +19498,21 @@ onClipSec: (nodeId, value) => {
                         const nextRefs = nextMax === 1
                           ? [{ url, name: out?.name || oneFile.name }]
                           : nextPrevRefs.concat({ url, name: out?.name || oneFile.name }).slice(0, nextMax);
-                        return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "", uploadSoftError: "" } };
+                        const isCharacterPrimary = String(x?.data?.kind || "") === "ref_character";
+                        return {
+                          ...x,
+                          data: {
+                            ...x.data,
+                            refs: nextRefs,
+                            ...(isCharacterPrimary ? { characterViews: normalizeCharacterViewsPack(nextRefs, "character_1", x?.data?.characterViews) } : {}),
+                            refStatus: nextRefs.length ? "draft" : "empty",
+                            refShortLabel: "",
+                            refDetailsOpen: false,
+                            refHiddenProfile: null,
+                            refAnalysisError: "",
+                            uploadSoftError: "",
+                          },
+                        };
                       }));
                     } catch (err) {
                       console.error(err);
@@ -19527,7 +19618,20 @@ onClipSec: (nodeId, value) => {
                   if (x.id !== nodeId) return x;
                   const prevRefs = normalizeRefData(x?.data || {}, x?.data?.kind || "").refs;
                   const nextRefs = prevRefs.filter((_, i) => i !== idx);
-                  return { ...x, data: { ...x.data, refs: nextRefs, refStatus: nextRefs.length ? "draft" : "empty", refShortLabel: "", refDetailsOpen: false, refHiddenProfile: null, refAnalysisError: "" } };
+                  const isCharacterPrimary = String(x?.data?.kind || "") === "ref_character";
+                  return {
+                    ...x,
+                    data: {
+                      ...x.data,
+                      refs: nextRefs,
+                      ...(isCharacterPrimary ? { characterViews: normalizeCharacterViewsPack(nextRefs, "character_1", x?.data?.characterViews) } : {}),
+                      refStatus: nextRefs.length ? "draft" : "empty",
+                      refShortLabel: "",
+                      refDetailsOpen: false,
+                      refHiddenProfile: null,
+                      refAnalysisError: "",
+                    },
+                  };
                 })));
                 clearClipStoryboardStorageForCurrentAccount("ref_removed");
               },
