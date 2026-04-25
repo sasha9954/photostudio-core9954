@@ -467,8 +467,6 @@ def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) ->
         or route_payload.get("route")
     )
     route = fallback_route if fallback_route in _ALLOWED_ROUTES else model_route
-    if _is_final_emotional_payoff_candidate(fallback_row) and route == "i2v":
-        route = "ia2v"
     if route not in _ALLOWED_ROUTES:
         raise RuntimeError("FINAL_VIDEO_PROMPT_ROUTE_MISSING")
     return route
