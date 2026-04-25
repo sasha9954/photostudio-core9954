@@ -12016,6 +12016,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_ok"] = True
     diagnostics["scene_plan_route_budget_target"] = {}
     diagnostics["scene_plan_route_budget_actual"] = {}
+    diagnostics["scene_plan_soft_route_budget_shortfall_accepted"] = False
+    diagnostics["scene_plan_soft_route_budget_target"] = {}
+    diagnostics["scene_plan_soft_route_budget_actual"] = {}
+    diagnostics["scene_plan_soft_route_budget_reason"] = ""
     diagnostics["scene_plan_max_consecutive_lipsync"] = 0
     diagnostics["scene_plan_longest_lipsync_streak"] = 0
     diagnostics["scene_plan_all_lipsync_mode"] = False
@@ -12492,7 +12496,39 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_error"] = ""
         diagnostics["scene_plan_failure_reason"] = ""
         diagnostics["scene_plan_last_failed_candidate_error"] = ""
-    if route_budget_ok and (not has_real_error):
+    post_validity_rebalance_diag = _safe_dict(diagnostics.get("scene_plan_post_validity_route_rebalance"))
+    soft_targets_enabled = bool(_safe_dict(route_budget_meta.get("creative_config")).get("targets_are_soft"))
+    no_valid_ia2v_replacement_candidate = bool(
+        post_validity_rebalance_diag.get("attempted")
+        and int(post_validity_rebalance_diag.get("upgraded") or 0) == 0
+        and int(post_validity_rebalance_diag.get("missing_ia2v") or 0) > 0
+    )
+    only_route_budget_shortfall = bool(
+        (not route_budget_ok)
+        and (not has_real_error)
+        and str(result.get("validation_error") or "").strip().lower() == "route_budget_mismatch"
+    )
+    soft_route_budget_shortfall_accepted = bool(
+        soft_targets_enabled and segment_coverage_ok and only_route_budget_shortfall and no_valid_ia2v_replacement_candidate
+    )
+    diagnostics["scene_plan_soft_route_budget_shortfall_accepted"] = bool(soft_route_budget_shortfall_accepted)
+    diagnostics["scene_plan_soft_route_budget_target"] = (
+        _safe_dict(route_budget_meta.get("target_route_mix")) if soft_route_budget_shortfall_accepted else {}
+    )
+    diagnostics["scene_plan_soft_route_budget_actual"] = (
+        _safe_dict(route_budget_meta.get("actual_route_mix")) if soft_route_budget_shortfall_accepted else {}
+    )
+    diagnostics["scene_plan_soft_route_budget_reason"] = (
+        "no_valid_ia2v_replacement_candidate" if soft_route_budget_shortfall_accepted else ""
+    )
+    if soft_route_budget_shortfall_accepted:
+        _append_diag_event(
+            package,
+            "scene_plan soft route budget shortfall accepted: no valid ia2v replacement candidate",
+            stage_id="scene_plan",
+        )
+    route_budget_acceptance_ok = bool(route_budget_ok or soft_route_budget_shortfall_accepted)
+    if route_budget_acceptance_ok and (not has_real_error):
         result["ok"] = True
         result["validation_error"] = ""
         result["error"] = ""
