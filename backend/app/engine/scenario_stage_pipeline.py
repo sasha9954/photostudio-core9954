@@ -1211,7 +1211,8 @@ def _apply_visual_ref_identity_lock_to_story_core(
         identity_doctrine = _safe_dict(story_core.get("identity_doctrine"))
         existing_hero_anchor = _ref_safe_identity_text(str(identity_doctrine.get("hero_anchor") or "").strip(), role)
         hero_anchor_suffix = _append_visual_ref_auxiliary_note(existing_hero_anchor, role)
-        identity_doctrine["hero_anchor"] = f"{rule} {hero_anchor_suffix}".strip() if hero_anchor_suffix else rule
+        merged_anchor = f"{rule} {hero_anchor_suffix}".strip() if hero_anchor_suffix else rule
+        identity_doctrine["hero_anchor"] = _ref_safe_identity_text(merged_anchor, role)
         story_core["identity_doctrine"] = identity_doctrine
         story_core["identity_lock"] = {"rule": rule}
 
@@ -3655,22 +3656,63 @@ def _ref_safe_identity_text(text: str, role: str) -> str:
     lowered = raw.lower()
     if any(re.search(pattern, lowered) for pattern in banned_patterns):
         return _visual_ref_identity_rule(role)
-    split_pattern = re.compile(r"([.!?])")
-    tokens = split_pattern.split(raw)
+    split_pattern = re.compile(r"(?:\n\s*\n+|(?<=[.!?])\s+)")
     clauses: list[str] = []
-    for idx in range(0, len(tokens), 2):
-        chunk = str(tokens[idx] or "").strip()
-        punct = str(tokens[idx + 1] or "") if idx + 1 < len(tokens) else ""
-        if not chunk:
+    seen_norm: set[str] = set()
+    for chunk in split_pattern.split(raw):
+        candidate = str(chunk or "").strip()
+        if not candidate:
             continue
-        candidate = f"{chunk}{punct}".strip()
         candidate_norm = re.sub(r"\s+", " ", candidate).strip(" .!?;,").lower()
-        prev_norm = re.sub(r"\s+", " ", clauses[-1]).strip(" .!?;,").lower() if clauses else ""
-        if candidate_norm and candidate_norm == prev_norm:
+        if not candidate_norm or candidate_norm in seen_norm:
             continue
+        seen_norm.add(candidate_norm)
         clauses.append(candidate)
     deduped = " ".join(clauses).strip()
     return deduped or raw
+
+
+def _modulate_peak_flatline_story_functions(
+    beats: list[dict[str, Any]],
+    *,
+    canonical_by_segment_id: dict[str, dict[str, Any]],
+) -> None:
+    if len(beats) < 3:
+        return
+    idx = 0
+    while idx < len(beats):
+        fn = str(_safe_dict(beats[idx]).get("story_function") or "").strip()
+        run_end = idx + 1
+        while run_end < len(beats) and str(_safe_dict(beats[run_end]).get("story_function") or "").strip() == fn:
+            run_end += 1
+        run_size = run_end - idx
+        if fn == "climax_pressure" and run_size >= 3:
+            for offset in range(1, run_size - 1):
+                beat = _safe_dict(beats[idx + offset])
+                segment_id = str(beat.get("source_segment_id") or "").strip()
+                canonical_row = _safe_dict(canonical_by_segment_id.get(segment_id))
+                beat_mode = str(canonical_row.get("beat_mode") or "").strip().lower()
+                hero_world_mode = str(canonical_row.get("hero_world_mode") or "").strip().lower()
+                replacement = "transition_turn" if (beat_mode in {"world_pressure", "social_texture", "world_observation", "threshold"} or hero_world_mode == "world_foreground") else "build_progression"
+                beats[idx + offset]["story_function"] = replacement
+        idx = run_end
+
+
+def _has_closure_signal(
+    beats: list[dict[str, Any]],
+    narrative_segments: list[dict[str, Any]],
+    ending_callback_rule: str,
+) -> bool:
+    if not beats:
+        return False
+    tail_beats = beats[-2:] if len(beats) >= 2 else beats
+    if any(any(token in str(_safe_dict(item).get("story_function") or "") for token in ("afterimage", "release")) for item in tail_beats):
+        return True
+    tail_segments = narrative_segments[-2:] if len(narrative_segments) >= 2 else narrative_segments
+    if any(str(_safe_dict(row).get("arc_role") or "").strip().lower() in {"release", "afterglow"} for row in tail_segments):
+        return True
+    callback_text = str(ending_callback_rule or "").strip().lower()
+    return any(token in callback_text for token in ("echo", "resolve", "release", "closure", "afterglow"))
 
 
 def _build_story_core_v11(
@@ -3780,6 +3822,11 @@ def _build_story_core_v11(
     note_text = " ".join([text_bundle.get("note", ""), text_bundle.get("director_note", "")]).strip()
     forbidden_drift = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
     parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
+    canonical_by_segment_id = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in parsed_narrative_segments
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
 
     beats: list[dict[str, Any]] = []
     slot_groups: list[dict[str, Any]] = []
@@ -3808,12 +3855,7 @@ def _build_story_core_v11(
         fn = _domestic_argument_story_function(idx, total_slots) if domestic_argument_duet else _slot_story_function(slot, idx, total_slots)
         canonical_row = {}
         if parsed_narrative_segments:
-            canonical_row = _safe_dict(
-                next(
-                    (row for row in parsed_narrative_segments if str(row.get("segment_id") or "").strip() == slot_id),
-                    {},
-                )
-            )
+            canonical_row = _safe_dict(canonical_by_segment_id.get(slot_id))
             fn = _legacy_story_function_from_canonical(canonical_row, fn)
         phrase_key = re.sub(r"\s+", " ", phrase.lower()).strip()
         energy = _to_float(_safe_dict(slot.get("audio_features")).get("energy_score"), 0.5)
@@ -3890,6 +3932,7 @@ def _build_story_core_v11(
             }
         )
         previous_phrase = phrase_key
+    _modulate_peak_flatline_story_functions(beats, canonical_by_segment_id=canonical_by_segment_id)
     if current_group:
         group_id = f"group_{len(slot_groups) + 1}"
         slot_groups.append({"group_id": group_id, "slot_ids": list(current_group)})
@@ -4023,7 +4066,7 @@ def _build_story_core_v11(
             flatline_segments.append({"from_beat": f"beat_{start + 1}", "to_beat": f"beat_{end}", "story_function": arc_tokens[start]})
         start = end
     semantic_delta_score = round(1.0 - min(0.7, len(flatline_segments) * 0.18) - (0.15 if subject_shadowing else 0.0) - (0.15 if continuity_break else 0.0), 3)
-    dangling_tail = bool(beats and "afterimage" not in str(beats[-1].get("story_function") or "") and "release" not in str(beats[-1].get("story_function") or ""))
+    dangling_tail = False
     callback_missing = bool(opening_anchor and ending_callback_rule and not beats)
     continuity_object_dropout = bool(continuity_objects and not continuity_matrix["subject_to_objects"])
     beat_presence_requirements = {str(item.get("subject_presence_requirement") or "") for item in beats}
@@ -4152,6 +4195,7 @@ def _build_story_core_v11(
         if parsed_narrative_segments
         else [item.get("story_function") for item in beats[:8]]
     )
+    dangling_tail = bool(beats) and not _has_closure_signal(beats, narrative_segments, ending_callback_rule)
     story_core_v1 = {
         "schema_version": "core_v1.1",
         "director_mode": director_mode,
@@ -5896,6 +5940,8 @@ def _compress_story_core_literal_segment_text(
     *,
     arc_role: str,
     anchor_hint: str,
+    previous_function_phrase: str = "",
+    include_anchor_tail: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     rewritten = dict(row)
     beat_purpose = str(row.get("beat_purpose") or "").strip()
@@ -5910,12 +5956,30 @@ def _compress_story_core_literal_segment_text(
         return rewritten, False
 
     function_map = {
-        "setup": "Frame the opening through observable place cues before committing to direct performance emphasis",
-        "build": "Increase pressure by layering social observation, movement vectors, and tighter relational distance",
-        "pivot": "Reframe intent through a perspective shift so stakes change without literal explanation",
-        "climax": "Drive peak force where performed intent meets external reaction and consequence",
-        "release": "Decompress through residue and recovery signals while continuity still holds",
-        "afterglow": "Close on a persistent trace where inner resolve and world rhythm align",
+        "setup": (
+            "Frame the opening through observable place cues before committing to direct performance emphasis",
+            "Establish world and intent through concrete context before explicit escalation begins",
+        ),
+        "build": (
+            "Increase pressure by layering social observation, movement vectors, and tighter relational distance",
+            "Escalate momentum through accumulating witness detail and compressing relational distance",
+        ),
+        "pivot": (
+            "Reframe intent through a perspective shift so stakes change without literal explanation",
+            "Turn the dramatic axis by redirecting consequence and viewpoint without explicit exposition",
+        ),
+        "climax": (
+            "Drive peak force where performed intent meets external reaction and consequence",
+            "Push maximum pressure as hero action collides with public consequence and unstable control",
+        ),
+        "release": (
+            "Decompress through residue and recovery signals while continuity still holds",
+            "Shift from impact to recovery while preserving continuity pressure in the same world frame",
+        ),
+        "afterglow": (
+            "Close on a persistent trace where inner resolve and world rhythm align",
+            "Land on lingering resonance where cost remains visible but emotional direction stabilizes",
+        ),
     }
     emotional_map = {
         "setup": "measured curiosity with latent tension",
@@ -5947,8 +6011,14 @@ def _compress_story_core_literal_segment_text(
     mode_clause = beat_mode_map.get(beat_mode) or "Keep progression tied to concrete visual logic"
     foreground_clause = hero_world_map.get(hero_world_mode) or "Keep subject/world hierarchy coherent for this beat"
     subtext_clause = subtext_map.get(subtext_mode) or "Maintain anti-literal framing and semantic indirection"
-    anchor_tail = f" Anchors stay grounded in {anchor_hint}." if anchor_hint else ""
-    rewritten["beat_purpose"] = f"{function_map.get(role) or function_map['build']}. {mode_clause}. {foreground_clause}.{anchor_tail}".strip()
+    choices = function_map.get(role) or function_map["build"]
+    phrase_seed = f"{str(row.get('segment_id') or '').strip()}|{beat_mode}|{hero_world_mode}|{subtext_mode}"
+    selected_idx = int(hashlib.sha1(phrase_seed.encode("utf-8")).hexdigest(), 16) % len(choices)
+    selected_phrase = choices[selected_idx]
+    if previous_function_phrase and selected_phrase == previous_function_phrase:
+        selected_phrase = choices[(selected_idx + 1) % len(choices)]
+    anchor_tail = f" Anchors stay grounded in {anchor_hint}." if (include_anchor_tail and anchor_hint) else ""
+    rewritten["beat_purpose"] = f"{selected_phrase}. {mode_clause}. {foreground_clause}.{anchor_tail}".strip()
     rewritten["emotional_key"] = f"{emotional_map.get(role) or emotional_map['build']}; {subtext_clause.lower()}"
     return rewritten, True
 
@@ -5969,16 +6039,24 @@ def _apply_story_core_semantic_compression(
     anchor_hint = ", ".join(anchor_tokens[:3])
     rewritten_segments: list[str] = []
     output_segments: list[dict[str, Any]] = []
-    for row in _safe_list(normalized.get("narrative_segments")):
+    previous_function_phrase = ""
+    last_anchor_tail_idx = -99
+    for idx, row in enumerate(_safe_list(normalized.get("narrative_segments"))):
         segment = _safe_dict(row)
         segment_id = str(segment.get("segment_id") or "").strip()
+        include_anchor_tail = bool(anchor_hint) and (idx == 0 or idx - last_anchor_tail_idx >= 4)
         rewritten_row, changed = _compress_story_core_literal_segment_text(
             segment,
             arc_role=str(segment.get("arc_role") or ""),
             anchor_hint=anchor_hint,
+            previous_function_phrase=previous_function_phrase,
+            include_anchor_tail=include_anchor_tail,
         )
         if changed and segment_id:
             rewritten_segments.append(segment_id)
+            previous_function_phrase = str(rewritten_row.get("beat_purpose") or "").split(".", 1)[0].strip().lower()
+            if "anchors stay grounded in " in str(rewritten_row.get("beat_purpose") or "").lower():
+                last_anchor_tail_idx = idx
             if str(rewritten_row.get("subtext_mode") or "").strip().lower() == "direct":
                 rewritten_row["subtext_mode"] = "coded"
             if str(rewritten_row.get("association_target") or "").strip().lower() == "level_1":
