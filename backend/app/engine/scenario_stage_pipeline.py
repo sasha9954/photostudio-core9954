@@ -9953,6 +9953,220 @@ def _is_first_last_candidate_from_hints(
     return bool(is_open or is_end or is_controlled_transition)
 
 
+SCENE_PACKAGING_POLICY = {
+    "short_vocal_merge_min_sec": 2.5,
+    "short_vocal_merge_max_sec": 4.2,
+    "short_vocal_merged_max_sec": 7.5,
+    "adjacent_vocal_max_gap_sec": 0.12,
+    "long_world_split_min_sec": 5.8,
+    "world_split_part_min_sec": 2.5,
+    "world_split_part_target_max_sec": 4.0,
+    "world_split_part_hard_max_sec": 4.4,
+}
+
+
+def _segment_duration(seg: dict[str, Any]) -> float:
+    t0 = _to_float(seg.get("t0"), 0.0)
+    t1 = _to_float(seg.get("t1"), t0)
+    return round(max(0.0, _to_float(seg.get("duration_sec"), t1 - t0)), 3)
+
+
+def _is_non_vocal_world_candidate(seg: dict[str, Any]) -> bool:
+    text = str(seg.get("transcript_slice") or "").strip()
+    if bool(seg.get("is_lip_sync_candidate")) and text:
+        return False
+    route_hints = _safe_dict(seg.get("route_hints"))
+    lip_fit = str(route_hints.get("lip_sync_fit") or "").strip().lower()
+    lyrical_density = str(seg.get("lyrical_density") or "").strip().lower()
+    return bool((not text) or lip_fit in {"too_short", "too_long"} or lyrical_density in {"low", ""})
+
+
+def _is_semantic_break_between(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_text = str(left.get("transcript_slice") or "").strip()
+    right_text = str(right.get("transcript_slice") or "").strip()
+    left_finality = str(left.get("finality_candidate") or "").strip().lower()
+    right_turn = bool(right.get("semantic_turn_candidate"))
+    right_release = bool(right.get("release_candidate"))
+    if left_finality in {"hinge", "closure", "tail_hit"}:
+        return True
+    if right_turn or right_release:
+        return True
+    if re.search(r"[.!?…]\s*$", left_text) and re.search(
+        r"^\s*(but|however|yet|then|instead|meanwhile|suddenly|now)\b",
+        right_text,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def _is_inside_no_split(point_sec: float, no_split_ranges: list[dict[str, Any]], *, eps: float = 0.01) -> bool:
+    for row in no_split_ranges:
+        start = _to_float(_safe_dict(row).get("start"), _to_float(_safe_dict(row).get("t0"), -1.0))
+        end = _to_float(_safe_dict(row).get("end"), _to_float(_safe_dict(row).get("t1"), -1.0))
+        if start < 0 or end < 0:
+            continue
+        if (start - eps) <= point_sec <= (end + eps):
+            return True
+    return False
+
+
+def _rename_segments_canon(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    prev_intensity = 0.0
+    for idx, raw in enumerate(segments, start=1):
+        seg = _safe_dict(deepcopy(raw))
+        t0 = round(_to_float(seg.get("t0"), 0.0), 3)
+        t1 = round(_to_float(seg.get("t1"), t0), 3)
+        seg["segment_id"] = f"seg_{idx:02d}"
+        seg["t0"] = t0
+        seg["t1"] = t1
+        seg["duration_sec"] = round(max(0.0, t1 - t0), 3)
+        intensity = _to_float(seg.get("intensity"), prev_intensity)
+        seg["energy_delta_vs_prev"] = "reset" if idx == 1 else str(seg.get("energy_delta_vs_prev") or ("rise" if intensity > prev_intensity else "hold")).strip().lower()
+        prev_intensity = intensity
+        out.append(seg)
+    return out
+
+
+def _merge_short_adjacent_vocal_windows(segments: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    policy = SCENE_PACKAGING_POLICY
+    merged: list[dict[str, Any]] = []
+    idx = 0
+    merge_count = 0
+    while idx < len(segments):
+        current = _safe_dict(segments[idx])
+        if idx + 1 >= len(segments):
+            merged.append(current)
+            break
+        nxt = _safe_dict(segments[idx + 1])
+        dur_a = _segment_duration(current)
+        dur_b = _segment_duration(nxt)
+        gap = max(0.0, round(_to_float(nxt.get("t0"), 0.0) - _to_float(current.get("t1"), 0.0), 3))
+        combined_dur = round(max(0.0, _to_float(nxt.get("t1"), 0.0) - _to_float(current.get("t0"), 0.0)), 3)
+        can_merge = bool(
+            bool(current.get("is_lip_sync_candidate"))
+            and bool(nxt.get("is_lip_sync_candidate"))
+            and (policy["short_vocal_merge_min_sec"] <= dur_a <= policy["short_vocal_merge_max_sec"])
+            and (policy["short_vocal_merge_min_sec"] <= dur_b <= policy["short_vocal_merge_max_sec"])
+            and gap <= policy["adjacent_vocal_max_gap_sec"]
+            and combined_dur <= policy["short_vocal_merged_max_sec"]
+            and not _is_semantic_break_between(current, nxt)
+        )
+        if not can_merge:
+            merged.append(current)
+            idx += 1
+            continue
+        joined = _safe_dict(deepcopy(current))
+        joined["t1"] = round(_to_float(nxt.get("t1"), _to_float(current.get("t1"), 0.0)), 3)
+        joined["duration_sec"] = round(max(0.0, _to_float(joined.get("t1"), 0.0) - _to_float(joined.get("t0"), 0.0)), 3)
+        a_text = str(current.get("transcript_slice") or "").strip()
+        b_text = str(nxt.get("transcript_slice") or "").strip()
+        joined["transcript_slice"] = f"{a_text} {b_text}".strip()
+        joined["semantic_turn_candidate"] = False
+        joined["release_candidate"] = bool(nxt.get("release_candidate"))
+        joined["finality_candidate"] = str(nxt.get("finality_candidate") or current.get("finality_candidate") or "none")
+        route_hints = _safe_dict(current.get("route_hints"))
+        route_hints["lip_sync_fit"] = "good"
+        joined["route_hints"] = route_hints
+        merged.append(joined)
+        merge_count += 1
+        idx += 2
+    return merged, merge_count
+
+
+def _split_long_world_windows(
+    segments: list[dict[str, Any]],
+    *,
+    phrase_units: list[dict[str, Any]],
+    candidate_cut_points: list[float],
+    no_split_ranges: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    policy = SCENE_PACKAGING_POLICY
+    split_count = 0
+    out: list[dict[str, Any]] = []
+    unit_cut_points = sorted(
+        {
+            round(_to_float(_safe_dict(unit).get("t1"), -1.0), 3)
+            for unit in phrase_units
+            if _to_float(_safe_dict(unit).get("t1"), -1.0) > 0.0
+        }
+    )
+    generic_cut_points = sorted({round(_to_float(v, -1.0), 3) for v in candidate_cut_points if _to_float(v, -1.0) > 0.0})
+    all_cut_points = sorted(set(unit_cut_points + generic_cut_points))
+    for seg_raw in segments:
+        seg = _safe_dict(seg_raw)
+        if not _is_non_vocal_world_candidate(seg):
+            out.append(seg)
+            continue
+        duration = _segment_duration(seg)
+        if duration < policy["long_world_split_min_sec"]:
+            out.append(seg)
+            continue
+        t0 = _to_float(seg.get("t0"), 0.0)
+        t1 = _to_float(seg.get("t1"), t0)
+        midpoint = t0 + (t1 - t0) / 2.0
+        candidates: list[tuple[float, float, float]] = []
+        for cut in all_cut_points:
+            if not (t0 + 0.01 < cut < t1 - 0.01):
+                continue
+            if _is_inside_no_split(cut, no_split_ranges):
+                continue
+            left = round(cut - t0, 3)
+            right = round(t1 - cut, 3)
+            if left < policy["world_split_part_min_sec"] or right < policy["world_split_part_min_sec"]:
+                continue
+            if left > policy["world_split_part_hard_max_sec"] or right > policy["world_split_part_hard_max_sec"]:
+                continue
+            penalty = abs(left - right) + abs(cut - midpoint) * 0.2
+            candidates.append((penalty, cut, abs(cut - midpoint)))
+        if not candidates:
+            out.append(seg)
+            continue
+        candidates.sort(key=lambda item: item[0])
+        cut = candidates[0][1]
+        left_seg = _safe_dict(deepcopy(seg))
+        right_seg = _safe_dict(deepcopy(seg))
+        left_seg["t1"] = round(cut, 3)
+        left_seg["duration_sec"] = round(max(0.0, cut - t0), 3)
+        right_seg["t0"] = round(cut, 3)
+        right_seg["duration_sec"] = round(max(0.0, t1 - cut), 3)
+        left_seg["first_last_candidate"] = False
+        right_seg["first_last_candidate"] = bool(seg.get("first_last_candidate"))
+        left_seg["release_candidate"] = False
+        right_seg["semantic_turn_candidate"] = False
+        out.extend([left_seg, right_seg])
+        split_count += 1
+    return out, split_count
+
+
+def _apply_scene_packaging_policy_to_audio_segments(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    patched = _safe_dict(deepcopy(payload))
+    segments = [_safe_dict(row) for row in _safe_list(patched.get("segments")) if isinstance(row, dict)]
+    if not segments:
+        return patched, {"enabled": True, "merge_count": 0, "split_count": 0, "segment_count_before": 0, "segment_count_after": 0}
+    phrase_units = [_safe_dict(row) for row in _safe_list(patched.get("phrase_units")) if isinstance(row, dict)]
+    candidate_cut_points = [float(v) for v in _safe_list(patched.get("candidate_cut_points_sec")) if isinstance(v, (int, float))]
+    no_split_ranges = [_safe_dict(row) for row in _safe_list(patched.get("no_split_ranges")) if isinstance(row, dict)]
+    merged, merge_count = _merge_short_adjacent_vocal_windows(segments)
+    split, split_count = _split_long_world_windows(
+        merged,
+        phrase_units=phrase_units,
+        candidate_cut_points=candidate_cut_points,
+        no_split_ranges=no_split_ranges,
+    )
+    patched["segments"] = _rename_segments_canon(split)
+    diag = {
+        "enabled": True,
+        "policy": dict(SCENE_PACKAGING_POLICY),
+        "merge_count": merge_count,
+        "split_count": split_count,
+        "segment_count_before": len(segments),
+        "segment_count_after": len(_safe_list(patched.get("segments"))),
+    }
+    return patched, diag
+
+
 def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any], *, duration_sec: float, analysis_mode: str) -> dict[str, Any]:
     """
     Build temporary legacy compatibility fields from AUDIO v1.1 segments.
@@ -10414,6 +10628,16 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["audio_map_validation_error"] = "AUDIO_MAP_INVALID_SHORT_SEGMENT"
             raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
 
+        packaged_audio_payload, packaging_diag = _apply_scene_packaging_policy_to_audio_segments(strict_result.normalized)
+        packaged_validation = validate_audio_map_v11(packaged_audio_payload, audio_duration_sec=duration_sec)
+        if packaged_validation.ok:
+            strict_result = packaged_validation
+        else:
+            packaging_diag["fallback_reason"] = "packaging_validation_failed_keep_original_segments"
+            packaging_diag["fallback_error_code"] = str(packaged_validation.error_code or "")
+            packaging_diag["fallback_errors"] = _safe_list(packaged_validation.errors)
+
+        diagnostics["audio_map_scene_packaging_policy"] = packaging_diag
         audio_map = _build_legacy_compat_audio_payload_from_segments_v11(
             strict_result.normalized,
             duration_sec=duration_sec,
