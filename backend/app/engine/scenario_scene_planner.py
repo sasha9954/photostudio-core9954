@@ -800,6 +800,58 @@ def _build_scene_segment_rows(
                 "subject_presence_requirement": str(beat.get("subject_presence_requirement") or "").strip(),
             }
         )
+    if normalized:
+        return normalized, list(dict.fromkeys(missing_core_source_segments))
+
+    # Beat-map fallback (source of truth) for pipelines that have no audio_map.segments.
+    # FINAL requires scenes[] with timing; derive segment rows directly from beat_map.beats.
+    for idx, beat in enumerate(beat_rows, start=1):
+        segment_id = str(beat.get("source_segment_id") or f"seg_{idx}").strip()
+        if not segment_id:
+            segment_id = f"seg_{idx}"
+        time_range = _safe_dict(beat.get("time_range"))
+        t0 = _round3(time_range.get("t0"))
+        t1 = _round3(time_range.get("t1"))
+        if t1 < t0:
+            t1 = t0
+        beat_primary_subject = str(beat.get("beat_primary_subject") or "").strip()
+        beat_mode = str(beat.get("beat_mode") or "").strip()
+        beat_purpose = str(beat.get("beat_purpose") or beat.get("purpose") or beat_mode).strip()
+        hero_world_mode = str(beat.get("hero_world_mode") or "").strip()
+        has_vocal = beat_primary_subject.lower() == "character_1"
+        route = "ia2v" if has_vocal else "i2v"
+        role_row = _safe_dict(cast_rows.get(segment_id))
+        normalized.append(
+            {
+                "segment_id": segment_id,
+                "scene_id": segment_id,
+                "t0": t0,
+                "t1": t1,
+                "duration_sec": _round3(max(0.0, t1 - t0)),
+                "transcript_slice": "",
+                "rhythmic_anchor": "",
+                "intensity": "",
+                "is_lip_sync_candidate": has_vocal,
+                "arc_role": "",
+                "beat_purpose": beat_purpose,
+                "emotional_key": "",
+                "primary_role": str(role_row.get("primary_role") or beat_primary_subject).strip(),
+                "secondary_roles": [str(v).strip() for v in _safe_list(role_row.get("secondary_roles")) if str(v).strip()],
+                "presence_mode": str(role_row.get("presence_mode") or "").strip(),
+                "presence_weight": str(role_row.get("presence_weight") or "").strip(),
+                "performance_focus": bool(role_row.get("performance_focus")) or has_vocal,
+                "beat_mode": beat_mode,
+                "hero_world_mode": hero_world_mode,
+                "beat_primary_subject": beat_primary_subject,
+                "subject_presence_requirement": str(beat.get("subject_presence_requirement") or "").strip(),
+                # Keep scene-level fallback fields available to downstream prompt/final adapters.
+                "route": route,
+                "has_vocal": has_vocal,
+                "video_prompt": str(beat.get("video_prompt") or beat_purpose).strip(),
+                "image_prompt": str(beat.get("image_prompt") or beat_purpose).strip(),
+                "continuity": "Preserve identity, world, and style continuity across scenes.",
+            }
+        )
     return normalized, list(dict.fromkeys(missing_core_source_segments))
 
 
@@ -995,7 +1047,15 @@ def _final_semantic_route_rebalance(
 
 def _expected_scene_count_from_package(package: dict[str, Any]) -> int:
     audio_map = _safe_dict(package.get("audio_map"))
-    return len(_safe_list(audio_map.get("segments")))
+    audio_count = len(_safe_list(audio_map.get("segments")))
+    if audio_count > 0:
+        return audio_count
+    story_core = _safe_dict(package.get("story_core"))
+    story_core_v1 = _safe_dict(story_core.get("story_core_v1"))
+    if not story_core_v1 and str(story_core.get("schema_version") or "").startswith("core_v1"):
+        story_core_v1 = story_core
+    beat_map = _safe_dict(story_core_v1.get("beat_map") or package.get("beat_map"))
+    return len(_safe_list(beat_map.get("beats")))
 
 
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
