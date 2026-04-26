@@ -1072,6 +1072,24 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     i2v_ratio: i2vRatio,
     preferred_routes: ["i2v", "ia2v", "first_last"],
   };
+  const aiCreativeConfig = state?.creative_config?.ai_director && typeof state.creative_config.ai_director === "object"
+    ? state.creative_config.ai_director
+    : {};
+  if (Object.keys(aiCreativeConfig).length) {
+    creativeConfig.ai_director = aiCreativeConfig;
+  }
+  const hiddenLipSync = state?.lip_sync;
+  if (typeof hiddenLipSync === "boolean") {
+    creativeConfig.lip_sync = hiddenLipSync;
+  }
+  const hiddenStructure = normalizeText(state?.structure);
+  if (hiddenStructure) {
+    creativeConfig.structure = hiddenStructure;
+  }
+  const hiddenRoutes = Array.isArray(state?.routes) ? state.routes.map((item) => normalizeText(item).toLowerCase()).filter(Boolean) : [];
+  if (hiddenRoutes.length) {
+    creativeConfig.routes = hiddenRoutes;
+  }
 
 
   const markStaleFrom = String(state?.markStaleFrom || "").trim();

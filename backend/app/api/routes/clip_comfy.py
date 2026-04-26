@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.engine.comfy_brain_engine import run_comfy_plan, run_comfy_prompt_sync
 from app.engine.comfy_reference_profile import build_reference_profiles
+from app.engine.gemini_rest import post_generate_content, resolve_gemini_api_key
 from app.engine.scenario_director_engine import (
     ScenarioDirectorError,
     run_scenario_director,
@@ -42,6 +43,7 @@ ALLOWED_COMFY_GENRES = {"horror", "romance", "comedy", "drama", "action", "thril
 ALLOWED_PROJECT_MODES = {"narration_first", "music_first", "hybrid"}
 ALLOWED_INPUT_MODES = {"audio_first", "text_to_audio_first"}
 ALLOWED_DIRECTOR_MODES = {"clip", "story", "ad"}
+DIRECTOR_INTERPRET_MODEL = (os.getenv("GEMINI_TEXT_MODEL") or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 
 
 class RefItemIn(BaseModel):
@@ -214,6 +216,18 @@ class ScenarioDirectorGenerateIn(BaseModel):
         if normalized in {"реклама", "reklama"}:
             return "ad"
         return normalized if normalized in ALLOWED_DIRECTOR_MODES else ""
+
+
+class DirectorInterpretRefsIn(BaseModel):
+    character_1: bool = False
+    location: bool = False
+    props: bool = False
+
+
+class DirectorInterpretIn(BaseModel):
+    text: str = ""
+    hasAudio: bool = False
+    refs: DirectorInterpretRefsIn = Field(default_factory=DirectorInterpretRefsIn)
 
 
 def _sanitize_context_refs(raw_context_refs: Any) -> dict[str, Any]:
@@ -451,6 +465,49 @@ def _should_use_scenario_director_fixture(req: dict[str, Any], *, reason: str = 
     if "gemini_invalid_json" in normalized_reason and fallback_on_gemini_invalid_json and env_invalid_json_fallback:
         return True
     return False
+
+
+def _extract_gemini_text_payload(resp: dict[str, Any]) -> str:
+    candidates = resp.get("candidates") if isinstance(resp, dict) else None
+    if not isinstance(candidates, list):
+        return ""
+    for candidate in candidates:
+        content = candidate.get("content") if isinstance(candidate, dict) else None
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list):
+            continue
+        chunks: list[str] = []
+        for part in parts:
+            text = str(part.get("text") or "").strip() if isinstance(part, dict) else ""
+            if text:
+                chunks.append(text)
+        if chunks:
+            return "\n".join(chunks).strip()
+    return ""
+
+
+def _extract_json_object(raw_text: str) -> dict[str, Any]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {}
+    fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE | re.MULTILINE).strip()
+    for candidate in (fenced, text):
+        try:
+            value = json.loads(candidate)
+            if isinstance(value, dict):
+                return value
+        except Exception:
+            pass
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            value = json.loads(text[start:end + 1])
+            if isinstance(value, dict):
+                return value
+        except Exception:
+            return {}
+    return {}
 
 
 def _build_scenario_director_fixture(req: dict[str, Any], *, fixture_reason: str) -> dict[str, Any]:
@@ -770,6 +827,97 @@ def _build_short_label_for_role(role: str, profile: dict[str, Any] | None) -> st
     if role == "style":
         return _build_style_label(profile)
     return "реф"
+
+
+@router.post("/director/interpret")
+async def director_interpret(payload: DirectorInterpretIn) -> dict[str, Any]:
+    text = str(payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text_required")
+
+    refs = payload.refs if isinstance(payload.refs, DirectorInterpretRefsIn) else DirectorInterpretRefsIn()
+    prompt = (
+        "Ты — AI Director.\n\n"
+        "Тебе дано описание клипа.\n\n"
+        "Твоя задача:\n"
+        "— НЕ писать сцены\n"
+        "— НЕ писать длинный текст\n"
+        "— определить конфигурацию клипа\n\n"
+        "Правила:\n"
+        "— если есть пение → lip_sync = true\n"
+        "— если герой не поёт → lip_sync = false\n"
+        "— если есть «воспоминания» → структура = performance_cut\n"
+        "— если 2 мира → разделить ia2v (персонаж) и i2v (мир)\n"
+        "— если город указан → world = этот город\n\n"
+        "Верни ТОЛЬКО JSON:\n"
+        "{\n"
+        "\"mode\": \"clip|story|concert\",\n"
+        "\"lip_sync\": true/false,\n"
+        "\"structure\": \"performance_cut|visual|story\",\n"
+        "\"character_role\": \"...\",\n"
+        "\"world\": \"...\",\n"
+        "\"i2v_usage\": \"...\",\n"
+        "\"ia2v_usage\": \"...\",\n"
+        "\"narrative_note\": \"short\",\n"
+        "\"format\": \"optional 9:16|16:9|1:1\",\n"
+        "\"routes\": [\"i2v\", \"ia2v\", \"first_last\"]\n"
+        "}\n\n"
+        f"Контекст: hasAudio={bool(payload.hasAudio)}, refs.character_1={bool(refs.character_1)}, refs.location={bool(refs.location)}, refs.props={bool(refs.props)}.\n"
+        f"Описание: {text}"
+    )
+    key_info = resolve_gemini_api_key()
+    if not key_info.get("valid"):
+        raise HTTPException(status_code=500, detail=f"gemini_key_invalid:{key_info.get('error') or 'missing'}")
+    response = post_generate_content(
+        str(key_info.get("api_key") or ""),
+        DIRECTOR_INTERPRET_MODEL,
+        {"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=45,
+    )
+    if response.get("__http_error__"):
+        status = int(response.get("status") or 502)
+        raise HTTPException(status_code=status if status > 0 else 502, detail="gemini_request_failed")
+
+    parsed = _extract_json_object(_extract_gemini_text_payload(response))
+    if not parsed:
+        raise HTTPException(status_code=502, detail="gemini_invalid_json")
+
+    mode = str(parsed.get("mode") or "clip").strip().lower()
+    mode = mode if mode in {"clip", "story", "concert"} else "clip"
+    structure = str(parsed.get("structure") or "visual").strip().lower()
+    structure = structure if structure in {"performance_cut", "visual", "story"} else "visual"
+    format_value = str(parsed.get("format") or "").strip()
+    if format_value not in {"9:16", "16:9", "1:1"}:
+        format_value = ""
+    routes_raw = parsed.get("routes")
+    routes = [str(item).strip().lower() for item in routes_raw] if isinstance(routes_raw, list) else []
+    routes = [item for item in routes if item in {"i2v", "ia2v", "first_last"}]
+
+    lip_sync_value = bool(parsed.get("lip_sync"))
+    world = str(parsed.get("world") or "").strip()
+    i2v_usage = str(parsed.get("i2v_usage") or "").strip()
+    ia2v_usage = str(parsed.get("ia2v_usage") or "").strip()
+    return {
+        "mode": mode,
+        "lip_sync": lip_sync_value,
+        "structure": structure,
+        "character_role": str(parsed.get("character_role") or "").strip(),
+        "world": world,
+        "i2v_usage": i2v_usage,
+        "ia2v_usage": ia2v_usage,
+        "narrative_note": str(parsed.get("narrative_note") or "").strip(),
+        "format": format_value,
+        "routes": routes,
+        "director_config": {
+            "mode": mode,
+            "lip_sync": lip_sync_value,
+            "structure": structure,
+            "routes": routes,
+            "world": world,
+            "i2v_usage": i2v_usage,
+            "ia2v_usage": ia2v_usage,
+        },
+    }
 
 
 @router.post("/clip/comfy/plan")
