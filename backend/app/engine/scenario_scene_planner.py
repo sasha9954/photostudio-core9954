@@ -326,9 +326,28 @@ def normalize_character_appearance_mode(value: Any) -> str:
         return "offscreen_voice"
     if token == "silhouette":
         return "background_only"
+    if token == "everywhere_meaningful":
+        return "story_visible"
+    if token == "background":
+        return "background_only"
+    if token == "offscreen":
+        return "offscreen_voice"
     if token in {"auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"}:
         return token
     return "auto"
+
+
+def character_presence_mode_from_appearance_mode(value: Any) -> str:
+    appearance_mode = normalize_character_appearance_mode(value)
+    if appearance_mode == "lip_sync_only":
+        return "vocal_anchor"
+    if appearance_mode == "story_visible":
+        return "adaptive_presence"
+    if appearance_mode == "background_only":
+        return "background_presence"
+    if appearance_mode == "offscreen_voice":
+        return "offscreen_voice"
+    return "adaptive_presence"
 
 
 def _extract_character_appearance_modes(input_pkg: dict[str, Any]) -> dict[str, str]:
@@ -350,6 +369,7 @@ def _extract_character_appearance_modes(input_pkg: dict[str, Any]) -> dict[str, 
                 or row.get("screenPresenceMode")
                 or row.get("appearance_mode")
                 or row.get("screen_presence_mode")
+                or row.get("character_presence_mode")
             )
     for role in _ROLE_KEYS:
         out.setdefault(role, "auto")
@@ -1153,6 +1173,10 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     scene_segment_rows, missing_core_source_segments = _build_scene_segment_rows(audio_map, story_core, role_plan)
     role_identity_gender_map = _extract_role_identity_gender_map(input_pkg)
     character_appearance_modes_by_role = _extract_character_appearance_modes(input_pkg)
+    character_presence_modes_by_role = {
+        role: character_presence_mode_from_appearance_mode(mode)
+        for role, mode in character_appearance_modes_by_role.items()
+    }
     vocal_gender = _resolve_vocal_gender(audio_map, input_pkg)
     vocal_owner_role = _resolve_vocal_owner_role(vocal_gender, role_identity_gender_map)
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
@@ -1206,6 +1230,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "vocal_owner_role": vocal_owner_role,
         },
         "character_appearance_modes_by_role": character_appearance_modes_by_role,
+        "character_presence_modes_by_role": character_presence_modes_by_role,
         "role_plan": {
             "roles_version": str(role_plan.get("roles_version") or ""),
             "roster": _safe_list(role_plan.get("roster")),
@@ -1284,6 +1309,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         "vocal_owner_role": vocal_owner_role,
         "role_identity_gender_map": role_identity_gender_map,
         "character_appearance_modes_by_role": character_appearance_modes_by_role,
+        "character_presence_modes_by_role": character_presence_modes_by_role,
     }
     return context, aux
 
@@ -1452,8 +1478,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             "- never keep ia2v on instrumental / no-vocal / non-lipsync-invalid windows; downgrade those rows to i2v;\n"
             "- keep target_counts as close as possible after route-validity checks; do not fake ia2v just to satisfy counts.\n"
             "If character_1 appearanceMode is lip_sync_only:\n"
+            "- Treat as character_presence_mode=vocal_anchor preference.\n"
             "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
-            "- i2v rows: character_1 must not be primary physical subject; speaker_role=\"\"; vocal_owner_role=\"\"; lip_sync_allowed=false; mouth_visible_required=false; visual subject should be environment/locals/threshold/aftermath/social texture.\n"
+            "- i2v rows: prefer non-primary character_1 framing, but character_1 MAY still appear as silhouette/walking/background presence.\n"
             "World beats must be truly world-driven (social texture, pressure, threshold, aftermath, instrumental release) with no fake singer-presence.\n"
             f"Fix exactly: {validation_feedback}\n"
             "Output contract:\n"
@@ -1489,9 +1516,12 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "For ia2v rows still prefer setting: speaker_role=character_1, vocal_owner_role=character_1, lip_sync_allowed=true, mouth_visible_required=true, singing_readiness_required=true.\\n"
         "For i2v scenes enforce: speaker_role=\"\", vocal_owner_role=\"\", lip_sync_allowed=false, mouth_visible_required=false.\\n"
         "Respect character_appearance_modes_by_role contract from context.\\n"
-        "If character_1 appearance mode is lip_sync_only: character_1 is visually mandatory for ia2v, but in i2v do not make character_1 primary physical subject. Prefer environment/locals/threshold/aftermath/objects/crowd as primary.\\n"
-        "If character_1 appearance mode is offscreen_voice: avoid ia2v for character_1 and keep character_1 offscreen/implied in i2v.\\n"
-        "If character_1 appearance mode is background_only: allow only shadow/silhouette/background presence in i2v; avoid close-up hero lip-sync framing unless route is ia2v.\\n"
+        "Treat character appearanceMode as behavior preference, not hard scene constraint. Never reject or drop scenes because of appearanceMode alone.\\n"
+        "Map character_1 appearanceMode into character_presence_mode policy:\\n"
+        "- lip_sync_only => vocal_anchor: character_1 must be visible in vocal ia2v scenes; in i2v scenes character_1 MAY appear as silhouette/walking/background while non-character_1 world focus is still preferred.\\n"
+        "- story_visible/everywhere_meaningful => adaptive_presence: adapt visibility to scene importance and narrative clarity.\\n"
+        "- background_only/background => background_presence: character_1 may appear but never as primary subject in i2v.\\n"
+        "- offscreen_voice/offscreen => offscreen_voice: voice-only with no visual presence.\\n"
         "Do not write stock noir shorthand loops (same empty streets/courtyard/port/gate beats repeated with renamed locations).\\n"
         "Strengthen scene writing with specific lived-in behavior, social tension signals, witness detail, threshold pauses, and aftermath traces.\\n"
         "For each row keep scene_goal / narrative_function / photo_staging_goal / ltx_video_goal distinct and dramaturgic, not generic filler.\\n"
@@ -2708,6 +2738,7 @@ def _normalize_scene_plan(
             primary_role = ""
         visual_focus_role = primary_role
         character_1_appearance_mode = normalize_character_appearance_mode(appearance_modes.get("character_1"))
+        character_1_presence_mode = character_presence_mode_from_appearance_mode(character_1_appearance_mode)
         speaker_role = str(raw_row.get("speaker_role") or "").strip()
         spoken_line = str(raw_row.get("spoken_line") or "").strip()
         lip_sync_allowed = bool(raw_row.get("lip_sync_allowed"))
@@ -2952,12 +2983,12 @@ def _normalize_scene_plan(
         reaction_role_by_segment[segment_id] = reaction_role
         character_1_visual_policy = (
             "offscreen_voiceover"
-            if character_1_appearance_mode == "offscreen_voice"
-            else "offscreen_or_implied_for_i2v"
-            if character_1_appearance_mode == "lip_sync_only" and route == "i2v"
+            if character_1_presence_mode == "offscreen_voice"
+            else "vocal_anchor_background_optional"
+            if character_1_presence_mode == "vocal_anchor" and route == "i2v"
             else "background_or_silhouette"
-            if character_1_appearance_mode == "background_only"
-            else "story_visible_default"
+            if character_1_presence_mode == "background_presence"
+            else "adaptive_presence"
         )
         scene_character_visibility_policy.append(
             {
@@ -2965,8 +2996,9 @@ def _normalize_scene_plan(
                 "route": route,
                 "primary_role": primary_role,
                 "character_1_appearanceMode": character_1_appearance_mode,
+                "character_1_presence_mode": character_1_presence_mode,
                 "character_1_visual_policy": character_1_visual_policy,
-                "characterRefAttachedAllowed": not (route == "i2v" and character_1_appearance_mode in {"lip_sync_only", "offscreen_voice"}),
+                "characterRefAttachedAllowed": not (route == "i2v" and character_1_presence_mode == "offscreen_voice"),
             }
         )
 

@@ -4394,9 +4394,28 @@ def normalize_character_appearance_mode(value: Any) -> str:
         return "offscreen_voice"
     if token == "silhouette":
         return "background_only"
+    if token == "everywhere_meaningful":
+        return "story_visible"
+    if token == "background":
+        return "background_only"
+    if token == "offscreen":
+        return "offscreen_voice"
     if token in {"auto", "story_visible", "lip_sync_only", "background_only", "offscreen_voice"}:
         return token
     return "auto"
+
+
+def character_presence_mode_from_appearance_mode(value: Any) -> str:
+    appearance_mode = normalize_character_appearance_mode(value)
+    if appearance_mode == "lip_sync_only":
+        return "vocal_anchor"
+    if appearance_mode == "story_visible":
+        return "adaptive_presence"
+    if appearance_mode == "background_only":
+        return "background_presence"
+    if appearance_mode == "offscreen_voice":
+        return "offscreen_voice"
+    return "adaptive_presence"
 
 
 def _normalized_gender_presentation(raw: Any) -> str:
@@ -12672,15 +12691,17 @@ def clip_image(payload: ClipImageIn):
             or row.get("screenPresenceMode")
             or row.get("appearance_mode")
             or row.get("screen_presence_mode")
+            or row.get("character_presence_mode")
         )
         if candidate_mode != "auto":
             character_1_appearance_mode = candidate_mode
             break
+    character_1_presence_mode = character_presence_mode_from_appearance_mode(character_1_appearance_mode)
     character_ref_attached_because_route = False
     character_ref_skipped_because_appearance_mode = False
     if route_value in {"ia2v", "lip_sync_music"}:
         character_ref_attached_because_route = bool(comfy_refs_by_role.get("character_1"))
-    if route_value == "i2v" and character_1_appearance_mode in {"lip_sync_only", "offscreen_voice"}:
+    if route_value == "i2v" and character_1_presence_mode == "offscreen_voice":
         if comfy_refs_by_role.get("character_1"):
             character_ref_skipped_because_appearance_mode = True
         comfy_refs_by_role["character_1"] = []
@@ -12701,6 +12722,7 @@ def clip_image(payload: ClipImageIn):
         "promptSource": prompt_source,
         "elapsedMs": int((time.monotonic() - api_started_at) * 1000),
         "appearanceMode": character_1_appearance_mode,
+        "characterPresenceMode": character_1_presence_mode,
         "characterRefAttachedBecauseRoute": character_ref_attached_because_route,
         "characterRefSkippedBecauseAppearanceMode": character_ref_skipped_because_appearance_mode,
         "character1ViewTypes": [key for key in ("front_primary", "side_profile", "performance_medium", "back_optional") if _safe_dict(connected_ref_character_1_views.get(key)).get("url")],
@@ -12752,11 +12774,13 @@ def clip_image(payload: ClipImageIn):
         video_prompt=getattr(refs_obj, "sceneNarrativeStep", None),
     )
     scene_contract["characterAppearanceModesByRole"] = {"character_1": character_1_appearance_mode}
+    scene_contract["characterPresenceModesByRole"] = {"character_1": character_1_presence_mode}
     scene_contract["characterViewsByRole"] = {"character_1": connected_ref_character_1_views}
     scene_contract["character_views_by_role"] = {"character_1": connected_ref_character_1_views}
     scene_contract["characterRefAttachedBecauseRoute"] = character_ref_attached_because_route
     scene_contract["characterRefSkippedBecauseAppearanceMode"] = character_ref_skipped_because_appearance_mode
     scene_contract["appearanceMode"] = character_1_appearance_mode
+    scene_contract["character_presence_mode"] = character_1_presence_mode
     scene_contract["route"] = route_value
     incoming_identity_lock = (
         _coerce_optional_bool(raw_scene_contract.get("identityLockApplied"))
