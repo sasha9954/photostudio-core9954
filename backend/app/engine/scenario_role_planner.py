@@ -1090,42 +1090,6 @@ def _collect_primary_mismatches(
     return mismatches
 
 
-def _build_role_plan_legacy_bridge_from_roles_v11(
-    *,
-    roles_payload: dict[str, Any],
-) -> dict[str, Any]:
-    roster = [_safe_dict(row) for row in _safe_list(roles_payload.get("roster"))]
-    scene_casting = [_safe_dict(row) for row in _safe_list(roles_payload.get("scene_casting"))]
-    roster_ids = [str(row.get("entity_id") or "").strip() for row in roster if str(row.get("entity_id") or "").strip()]
-
-    scene_roles: list[dict[str, Any]] = []
-    for row in scene_casting:
-        primary = str(row.get("primary_role") or "").strip()
-        secondary = [str(item).strip() for item in _safe_list(row.get("secondary_roles")) if str(item).strip()]
-        active_roles = list(dict.fromkeys([primary, *secondary]))
-        inactive_roles = [entity_id for entity_id in roster_ids if entity_id and entity_id not in active_roles]
-        scene_roles.append(
-            {
-                "scene_id": str(row.get("segment_id") or "").strip(),
-                "segment_id": str(row.get("segment_id") or "").strip(),
-                "primary_role": primary,
-                "secondary_roles": secondary,
-                "active_roles": active_roles,
-                "inactive_roles": inactive_roles,
-                "scene_presence_mode": str(row.get("presence_mode") or "").strip(),
-                "presence_weight": str(row.get("presence_weight") or "").strip(),
-                "performance_focus": str(row.get("performance_focus") or "").strip(),
-            }
-        )
-
-    return {
-        "legacy_bridge_generated": True,
-        "legacy_bridge_source": "roles_v1_1_scene_casting",
-        "deprecated": True,
-        "scene_roles": scene_roles,
-    }
-
-
 def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     audio_map = _safe_dict(package.get("audio_map"))
@@ -1342,8 +1306,12 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                             scene_casting=fallback_scene_casting,
                             core_subject_map=core_subject_map,
                         )[:40]
-                        bridge = _build_role_plan_legacy_bridge_from_roles_v11(roles_payload=fallback_normalized)
-                        role_plan = {**fallback_normalized, **bridge}
+                        role_plan = {
+                            "roles_version": fallback_normalized.get("roles_version"),
+                            "roster": _safe_list(fallback_normalized.get("roster")),
+                            "scene_casting": _safe_list(fallback_normalized.get("scene_casting")),
+                        }
+                        print("[ROLES] legacy_bridge removed, using scene_casting only")
                         diagnostics.update(
                             {
                                 "roster_count": len(_safe_list(fallback_normalized.get("roster"))),
@@ -1399,8 +1367,12 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 scene_casting=final_scene_casting,
                 core_subject_map=core_subject_map,
             )[:40]
-            bridge = _build_role_plan_legacy_bridge_from_roles_v11(roles_payload=normalized)
-            role_plan = {**normalized, **bridge}
+            role_plan = {
+                "roles_version": normalized.get("roles_version"),
+                "roster": _safe_list(normalized.get("roster")),
+                "scene_casting": _safe_list(normalized.get("scene_casting")),
+            }
+            print("[ROLES] legacy_bridge removed, using scene_casting only")
             diagnostics.update(
                 {
                     "roster_count": len(_safe_list(normalized.get("roster"))),
