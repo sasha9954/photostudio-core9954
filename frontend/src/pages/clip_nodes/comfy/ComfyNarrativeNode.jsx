@@ -57,6 +57,11 @@ export default function ComfyNarrativeNode({ id, data }) {
     }
   }, [data?.contentType, data?.onFieldChange, id, safeContentType]);
 
+  useEffect(() => {
+    setAiQuestions(null);
+    setAiAnswers({});
+  }, [data?.directorNote]);
+
 
   const clipModeByContentType = safeContentType === "music_video";
   const clipModeByDirectorMode = String(data?.directorMode || data?.director_mode || "").trim().toLowerCase() === "clip";
@@ -189,6 +194,7 @@ export default function ComfyNarrativeNode({ id, data }) {
       applyAIResult(response);
     } catch (err) {
       setAiError(String(err?.message || "AI answers failed"));
+      setAiQuestions(null);
     } finally {
       setAiLoading(false);
     }
@@ -344,7 +350,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                   onClick={handleSubmitAIAnswers}
                   disabled={aiLoading || aiQuestions.some((q) => !aiAnswers[q.id])}
                 >
-                  Продолжить
+                  {aiLoading ? "Обработка…" : "Продолжить"}
                 </button>
               </div>
             ) : null}

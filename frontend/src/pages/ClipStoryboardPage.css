@@ -3894,7 +3894,9 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 .ai-option-btn.selected {
-  background: #444;
+  background: #666;
+  border: 1px solid #aaa;
+  color: #fff;
 }
 
 .ai-submit-btn {
