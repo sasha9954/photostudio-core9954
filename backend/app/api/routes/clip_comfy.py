@@ -373,12 +373,13 @@ def _sync_stage_package_input(
 
 
 def _resolve_input_invalidation_from_changes(changed_flags: dict[str, bool]) -> tuple[str, str]:
+    print(f"[PIPELINE DEBUG] changed_flags={changed_flags}")
     if bool(changed_flags.get("audio_url")):
         print("[PIPELINE] invalidation: audio_url changed -> clearing full pipeline")
         return "input_package", "input_signature_changed:audio_url"
     if bool(changed_flags.get("story_text")) or bool(changed_flags.get("core_prompt")):
         print("[PIPELINE] invalidation: core changed → clearing downstream only")
-        return "audio_map", "input_signature_changed:core"
+        return "story_core", "input_signature_changed:core"
     if bool(changed_flags.get("roles")) or bool(changed_flags.get("refs")):
         print("[PIPELINE] invalidation: roles changed -> clearing downstream only")
         return "story_core", "input_signature_changed:roles"
