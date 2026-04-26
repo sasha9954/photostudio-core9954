@@ -1200,12 +1200,19 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
     creative_config = req.get("creative_config") if isinstance(req.get("creative_config"), dict) else {}
     ai_cfg = creative_config.get("ai_director") if isinstance(creative_config.get("ai_director"), dict) else {}
     if ai_cfg:
+        req["forceRouteMode"] = "strict_ai"
         if "lip_sync" in ai_cfg:
             req["lipSync"] = ai_cfg.get("lip_sync")
         if "structure" in ai_cfg:
             req["structure"] = ai_cfg.get("structure")
         if isinstance(ai_cfg.get("routes"), list):
             req["forced_routes"] = ai_cfg.get("routes")
+    structure = str(req.get("structure") or "").strip().lower()
+    if structure == "performance_cut":
+        req.setdefault("creative_config", {})
+        if isinstance(req.get("creative_config"), dict):
+            req["creative_config"]["vocal_policy"] = "ia2v_only_on_vocal_windows"
+            req["creative_config"]["instrumental_policy"] = "use_i2v_for_non_vocal_or_instrumental_gaps"
     if _should_use_scenario_director_fixture(req, reason="manual_override"):
         logger.warning("[clip_comfy_scenario_director_generate] using deterministic fixture reason=manual_override")
         return _build_scenario_director_fixture(req, fixture_reason="manual_override")

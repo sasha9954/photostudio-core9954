@@ -1077,6 +1077,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     : {};
   if (Object.keys(aiCreativeConfig).length) {
     creativeConfig.ai_director = aiCreativeConfig;
+    creativeConfig.instrumental_policy = "ai_controlled";
+    creativeConfig.vocal_policy = "ai_controlled";
     creativeConfig.route_strategy_mode = "ai_override";
     creativeConfig.route_targets_per_block = {};
     creativeConfig.lipsync_ratio = null;
@@ -1135,6 +1137,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     storyText: narrativeDirective.storyText,
     note: narrativeDirective.note,
     directorNote: narrativeDirective.directorNote,
+    narrative_note: normalizeText(state?.aiNarrative) || narrativeDirective.directorNote,
     director_controls: {
       contentType: safeContentType,
       format,
