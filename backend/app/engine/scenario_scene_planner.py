@@ -3432,6 +3432,68 @@ def build_gemini_scene_plan(
     validation_feedback: str = "",
     prompt_mode: str = "default",
 ) -> dict[str, Any]:
+    audio_map = _safe_dict(package.get("audio_map"))
+    scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
+    if not scene_windows or len(scene_windows) == 0:
+        raise ValueError("SCENES_ERROR: scene_candidate_windows missing")
+
+    scene_plan: list[dict[str, Any]] = []
+    for window_raw in scene_windows:
+        window = _safe_dict(window_raw)
+        scene_plan.append(
+            {
+                "scene_id": window.get("scene_id"),
+                "t0": window.get("t0"),
+                "t1": window.get("t1"),
+                "duration": window.get("duration_sec"),
+                "energy": window.get("local_energy_band"),
+                "cut_reason": window.get("cut_reason"),
+                "density": window.get("visual_density_hint"),
+                "location": "",
+                "action": "",
+                "environment_interaction": "",
+                "visual_hook": "",
+                "camera": {
+                    "framing": "",
+                    "movement": "",
+                    "angle": "",
+                },
+                "route": "ia2v" if window.get("cut_reason") == "phrase" else "i2v",
+            }
+        )
+
+    if len(scene_plan) != len(scene_windows):
+        raise ValueError("SCENES_ERROR: scene_plan mismatch")
+
+    route_mix_summary = {
+        "i2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"),
+        "ia2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"),
+        "first_last": 0,
+    }
+    scene_plan_payload = {
+        "scenes_version": SCENES_VERSION,
+        "storyboard": scene_plan,
+        "scenes": deepcopy(scene_plan),
+        "route_mix_summary": route_mix_summary,
+    }
+    package["scene_plan"] = scene_plan_payload
+    print(f"[SCENES] built from candidate windows: {len(scene_plan)} scenes")
+    return {
+        "ok": True,
+        "scene_plan": scene_plan_payload,
+        "error": "",
+        "validation_error": "",
+        "error_code": "",
+        "used_fallback": False,
+        "diagnostics": {
+            "prompt_version": SCENE_PLAN_PROMPT_VERSION,
+            "used_model": "mapped_from_audio_map.scene_candidate_windows",
+            "scene_count": len(scene_plan),
+            "scene_plan_scenes_version": SCENES_VERSION,
+            "scene_plan_uses_segment_id_canonical": False,
+        },
+    }
+
     context, aux = _build_scene_planning_context(package)
     scene_segment_rows = _safe_list(aux.get("scene_segment_rows"))
     role_lookup = _safe_dict(aux.get("role_lookup"))
