@@ -1,5 +1,6 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
+import { fetchJson } from "../../../services/api";
 import {
   NARRATIVE_INPUT_HANDLES,
   NARRATIVE_SOURCE_INPUT_HANDLES,
@@ -29,6 +30,8 @@ const ROUTE_STRATEGY_PRESETS = [
 ];
 
 export default function ComfyNarrativeNode({ id, data }) {
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
@@ -71,6 +74,12 @@ export default function ComfyNarrativeNode({ id, data }) {
   const customTotal = customI2v + customIa2v + customFirstLast;
   const baseSceneCount = Number(data?.baseSceneCount || 8) || 8;
   const hasRouteTotalWarning = safeRouteStrategyMode === "custom_counts" && customTotal !== baseSceneCount;
+  const hasAudioSource = !!connectedContext.sourceByHandle?.audio_in;
+  const aiRefs = useMemo(() => ({
+    character_1: connectedContext.characterCount > 0,
+    location: !!connectedContext.hasLocation,
+    props: !!connectedContext.hasProps,
+  }), [connectedContext.characterCount, connectedContext.hasLocation, connectedContext.hasProps]);
   const selectedStrategySummary = safeRouteStrategyMode === "auto"
     ? {
       title: "Выбрано: Авто",
@@ -124,6 +133,56 @@ export default function ComfyNarrativeNode({ id, data }) {
       <div className="clipSB_narrativeEmptyHint">Нода ждёт ровно один активный вход: audio_in, video_file_in или video_link_in.</div>
     </div>
   );
+
+  const handleAiInterpret = async () => {
+    const text = String(data?.directorNote || "").trim();
+    if (!text || aiLoading) return;
+    setAiError("");
+    setAiLoading(true);
+    try {
+      const response = await fetchJson("/api/director/interpret", {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          hasAudio: hasAudioSource,
+          refs: aiRefs,
+        }),
+      });
+      const mode = String(response?.mode || "").trim().toLowerCase();
+      const mappedContentType = mode === "story" ? "story" : "music_video";
+      const mappedDirectorMode = mode === "story" ? "story" : "clip";
+      const structure = String(response?.structure || "").trim().toLowerCase();
+      const i2vUsage = String(response?.i2v_usage || "").trim();
+      const ia2vUsage = String(response?.ia2v_usage || "").trim();
+      const nextCreativeConfig = {
+        ...(data?.creative_config && typeof data.creative_config === "object" ? data.creative_config : {}),
+        ai_director: {
+          lip_sync: !!response?.lip_sync,
+          structure,
+          routes: Array.isArray(response?.routes) ? response.routes : [],
+          i2v_usage: i2vUsage,
+          ia2v_usage: ia2vUsage,
+          world: String(response?.world || "").trim(),
+        },
+      };
+      data?.onFieldChange?.(id, {
+        directorNote: String(response?.narrative_note || text),
+        contentType: mappedContentType,
+        mode: mappedDirectorMode,
+        directorMode: mappedDirectorMode,
+        ...(String(response?.format || "").trim() ? { format: String(response.format).trim() } : {}),
+        creative_config: nextCreativeConfig,
+        aiDirectorConfig: response?.director_config || {},
+        lip_sync: !!response?.lip_sync,
+        structure,
+        routes: Array.isArray(response?.routes) ? response.routes : [],
+      });
+    } catch (error) {
+      setAiError(String(error?.message || "AI interpret failed"));
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   return (
     <>
@@ -212,6 +271,15 @@ export default function ComfyNarrativeNode({ id, data }) {
                 rows={3}
               />
             </label>
+            <button
+              type="button"
+              className="clipSB_btn clipSB_btnPrimary"
+              onClick={handleAiInterpret}
+              disabled={aiLoading || !String(data?.directorNote || "").trim()}
+            >
+              {aiLoading ? "AI анализ…" : "🎬 Сформировать через AI"}
+            </button>
+            {aiError ? <div className="clipSB_narrativeEmptyHint" role="alert">{aiError}</div> : null}
 
             {sourceInput}
 
@@ -268,7 +336,7 @@ export default function ComfyNarrativeNode({ id, data }) {
               </select>
             </label>
 
-            {isClipMode ? (
+            {false && isClipMode ? (
               <section className="clipSB_narrativeSection">
                 <div className="clipSB_brainLabel">СТРАТЕГИЯ СЦЕН</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6 }}>

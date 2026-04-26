@@ -223,7 +223,6 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
   const genderHint = normalizeGenderHint(data?.genderHint || data?.gender_hint);
   const bindingType = normalizeBindingType(data?.bindingType || data?.binding_type);
   const linkedCharacter = normalizeLinkedCharacter(data?.linkedCharacter || data?.linked_character);
-  const appearanceMode = normalizeAppearanceMode(data?.appearanceMode || data?.screenPresenceMode || data?.appearance_mode || data?.screen_presence_mode);
   const onOpenLightbox = data?.onOpenLightbox;
   const isCharacter1Node = handleId === "ref_character";
   const normalizedCharacterViews = isCharacter1Node && data?.characterViews && typeof data.characterViews === "object"
@@ -326,20 +325,7 @@ export default function RefLiteNode({ id, data, title, className, handleId, show
               {GENDER_HINT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
-          <div style={{ marginBottom: 10 }}>
-            <div className="clipSB_small" style={{ marginBottom: 4 }}>Появление на экране:</div>
-            <select
-              className="clipSB_select"
-              value={appearanceMode}
-              onChange={(event) => data?.onField?.(id, "appearanceMode", normalizeAppearanceMode(event?.target?.value))}
-              disabled={refStatus === "loading"}
-              title={APPEARANCE_MODE_OPTIONS.find((option) => option.value === appearanceMode)?.tooltip || ""}
-            >
-              {APPEARANCE_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value} title={option.tooltip}>{option.label}</option>
-              ))}
-            </select>
-          </div>
+          {/* appearance mode hidden in UI: AI Director controls screen presence */}
         </>
       ) : null}
       <div style={{ marginBottom: 10 }}>
