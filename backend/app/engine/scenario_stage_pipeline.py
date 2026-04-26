@@ -621,7 +621,23 @@ def _can_run_scene_plan_from_existing_payload(
 
 def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
     audio_map = _safe_dict(_safe_dict(package).get("audio_map"))
-    if not _safe_list(audio_map.get("segments")):
+    segments = _safe_list(audio_map.get("segments"))
+    if not segments:
+        return False
+    for row in segments:
+        seg = _safe_dict(row)
+        t0 = _to_float(seg.get("t0"), -1.0)
+        t1 = _to_float(seg.get("t1"), -1.0)
+        duration_sec = _to_float(seg.get("duration_sec"), -1.0)
+        if t0 < 0.0 or t1 <= t0:
+            return False
+        if duration_sec <= 0.0 or abs(duration_sec - (t1 - t0)) > 0.02:
+            return False
+    analyzer = _safe_dict(audio_map.get("audio_analyzer"))
+    beats = _safe_list(analyzer.get("beats"))
+    vocal_phrases = _safe_list(analyzer.get("vocal_phrases"))
+    analyzer_segments = _safe_list(analyzer.get("segments"))
+    if not beats or not vocal_phrases or analyzer_segments != segments:
         return False
     diagnostics = _safe_dict(audio_map.get("diagnostics"))
     coverage_ok = diagnostics.get("coverage_ok")
@@ -12128,6 +12144,11 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["audio_map_backend_repair_applied"] = False
     audio_map["audio_map_music_signal_mode"] = music_signal_mode
     audio_map["audio_map_dynamics_available"] = dynamics_available
+    audio_map["audio_analyzer"] = {
+        "beats": _safe_list(raw_analysis.get("beats")),
+        "vocal_phrases": _safe_list(raw_analysis.get("vocalPhrases")),
+        "segments": _safe_list(audio_map.get("segments")),
+    }
 
     diagnostics["audio_map_analysis_mode"] = "audio_map_v1_1_strict"
     diagnostics["audio_map_used_fallback"] = False
@@ -12151,6 +12172,9 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_legacy_scene_slots_derived"] = True
     diagnostics["audio_map_legacy_scene_slots_deprecated"] = True
     diagnostics["audio_map_legacy_bridge_note"] = str(audio_map.get("audio_map_legacy_bridge_note") or "")
+    diagnostics["audio_analyzer_beats_count"] = len(_safe_list(_safe_dict(audio_map.get("audio_analyzer")).get("beats")))
+    diagnostics["audio_analyzer_vocal_phrases_count"] = len(_safe_list(_safe_dict(audio_map.get("audio_analyzer")).get("vocal_phrases")))
+    diagnostics["audio_analyzer_segments_count"] = len(_safe_list(_safe_dict(audio_map.get("audio_analyzer")).get("segments")))
     diagnostics.update(_safe_dict(scene_slot_diag))
     diagnostics["audio_map_alignment_source"] = str(audio_map.get("audio_map_alignment_source") or "gemini_audio_map_v1_1")
     diagnostics.update(grid_metrics)
