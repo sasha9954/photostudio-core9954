@@ -329,9 +329,9 @@ def _build_stage_input_snapshot(req: dict[str, Any]) -> dict[str, Any]:
 def _sync_stage_package_input(
     package: dict[str, Any],
     req: dict[str, Any],
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], dict[str, bool]]:
     if not isinstance(package, dict):
-        return package, False
+        return package, {"any": False}
     next_package = dict(package)
     current_input = next_package.get("input") if isinstance(next_package.get("input"), dict) else {}
     current_refs_inventory = next_package.get("refs_inventory") if isinstance(next_package.get("refs_inventory"), dict) else {}
@@ -342,11 +342,48 @@ def _sync_stage_package_input(
     input_changed = current_input != snapshot_input
     refs_changed = current_refs_inventory != snapshot_refs_inventory
     roles_changed = current_assigned_roles != snapshot_assigned_roles
-    package_changed = input_changed or refs_changed or roles_changed
+    current_creative_config = current_input.get("creative_config") if isinstance(current_input.get("creative_config"), dict) else {}
+    snapshot_creative_config = snapshot_input.get("creative_config") if isinstance(snapshot_input.get("creative_config"), dict) else {}
+
+    current_core_prompt = str(
+        current_creative_config.get("core_prompt")
+        or current_creative_config.get("story_core_prompt")
+        or current_input.get("core_prompt")
+        or ""
+    ).strip()
+    snapshot_core_prompt = str(
+        snapshot_creative_config.get("core_prompt")
+        or snapshot_creative_config.get("story_core_prompt")
+        or snapshot_input.get("core_prompt")
+        or ""
+    ).strip()
+
+    changed_flags = {
+        "audio_url": str(current_input.get("audio_url") or "").strip() != str(snapshot_input.get("audio_url") or "").strip(),
+        "story_text": str(current_input.get("story_text") or "").strip() != str(snapshot_input.get("story_text") or "").strip(),
+        "core_prompt": current_core_prompt != snapshot_core_prompt,
+        "refs": refs_changed,
+        "roles": roles_changed,
+    }
+    changed_flags["any"] = any(changed_flags.values()) or input_changed
     next_package["input"] = snapshot_input
     next_package["refs_inventory"] = snapshot_refs_inventory
     next_package["assigned_roles"] = snapshot_assigned_roles
-    return next_package, package_changed
+    return next_package, changed_flags
+
+
+def _resolve_input_invalidation_from_changes(changed_flags: dict[str, bool]) -> tuple[str, str]:
+    if bool(changed_flags.get("audio_url")):
+        print("[PIPELINE] invalidation: audio_url changed -> clearing full pipeline")
+        return "input_package", "input_signature_changed:audio_url"
+    if bool(changed_flags.get("story_text")) or bool(changed_flags.get("core_prompt")):
+        print("[PIPELINE] invalidation: core changed → clearing downstream only")
+        return "audio_map", "input_signature_changed:core"
+    if bool(changed_flags.get("roles")) or bool(changed_flags.get("refs")):
+        print("[PIPELINE] invalidation: roles changed -> clearing downstream only")
+        return "story_core", "input_signature_changed:roles"
+    print("[PIPELINE] invalidation: scenes changed -> clearing downstream only")
+    return "role_plan", "input_signature_changed:scenes"
 CONNECT_REFS_MAIN_ROLES = ["character_1", "character_2", "character_3", "animal", "group", "props", "location", "style"]
 ANIMAL_LABEL_BY_SPECIES = {
     "dog": "собака",
@@ -849,9 +886,10 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
                 }
         else:
             package = create_storyboard_package(req)
-        package, package_changed = _sync_stage_package_input(package, req)
-        if package_changed:
-            package = _clear_downstream_stage_outputs(package, "input_package", reason="input_signature_changed")
+        package, changed_flags = _sync_stage_package_input(package, req)
+        if bool(changed_flags.get("any")):
+            invalidation_stage, invalidation_reason = _resolve_input_invalidation_from_changes(changed_flags)
+            package = _clear_downstream_stage_outputs(package, invalidation_stage, reason=invalidation_reason)
         logger.info(
             "[scenario_stage_v1] incoming-manual-package stage_id=%s summary=%s keys=%s",
             stage_id,
