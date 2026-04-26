@@ -32,6 +32,8 @@ const ROUTE_STRATEGY_PRESETS = [
 export default function ComfyNarrativeNode({ id, data }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [aiQuestions, setAiQuestions] = useState(null);
+  const [aiAnswers, setAiAnswers] = useState({});
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
@@ -134,6 +136,64 @@ export default function ComfyNarrativeNode({ id, data }) {
     </div>
   );
 
+  const applyAIResult = (response) => {
+    const mode = String(response?.mode || "").trim().toLowerCase();
+    const mappedContentType = mode === "story" ? "story" : "music_video";
+    const mappedDirectorMode = mode === "story" ? "story" : "clip";
+    const structure = String(response?.structure || "").trim().toLowerCase();
+    const i2vUsage = String(response?.i2v_usage || "").trim();
+    const ia2vUsage = String(response?.ia2v_usage || "").trim();
+    const nextCreativeConfig = {
+      ...(data?.creative_config && typeof data.creative_config === "object" ? data.creative_config : {}),
+      ai_director: {
+        lip_sync: !!response?.lip_sync,
+        structure,
+        routes: Array.isArray(response?.routes) ? response.routes : [],
+        i2v_usage: i2vUsage,
+        ia2v_usage: ia2vUsage,
+        world: String(response?.world || "").trim(),
+      },
+    };
+    data?.onFieldChange?.(id, {
+      directorNote: data?.directorNote,
+      aiNarrative: response?.narrative_note,
+      contentType: mappedContentType,
+      mode: mappedDirectorMode,
+      directorMode: mappedDirectorMode,
+      ...(String(response?.format || "").trim() ? { format: String(response.format).trim() } : {}),
+      creative_config: nextCreativeConfig,
+      aiDirectorConfig: response?.director_config || {},
+      lip_sync: !!response?.lip_sync,
+      structure,
+      routes: Array.isArray(response?.routes) ? response.routes : [],
+    });
+  };
+
+  const handleSubmitAIAnswers = async () => {
+    const text = String(data?.directorNote || "").trim();
+    if (!text || aiLoading) return;
+    try {
+      setAiError("");
+      setAiLoading(true);
+      const response = await fetchJson("/api/director/interpret", {
+        method: "POST",
+        body: JSON.stringify({
+          text,
+          answers: aiAnswers,
+          hasAudio: hasAudioSource,
+          refs: aiRefs,
+        }),
+      });
+      setAiQuestions(null);
+      setAiAnswers({});
+      applyAIResult(response);
+    } catch (err) {
+      setAiError(String(err?.message || "AI answers failed"));
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleAiInterpret = async () => {
     const text = String(data?.directorNote || "").trim();
     if (!text || aiLoading) return;
@@ -148,36 +208,14 @@ export default function ComfyNarrativeNode({ id, data }) {
           refs: aiRefs,
         }),
       });
-      const mode = String(response?.mode || "").trim().toLowerCase();
-      const mappedContentType = mode === "story" ? "story" : "music_video";
-      const mappedDirectorMode = mode === "story" ? "story" : "clip";
-      const structure = String(response?.structure || "").trim().toLowerCase();
-      const i2vUsage = String(response?.i2v_usage || "").trim();
-      const ia2vUsage = String(response?.ia2v_usage || "").trim();
-      const nextCreativeConfig = {
-        ...(data?.creative_config && typeof data.creative_config === "object" ? data.creative_config : {}),
-        ai_director: {
-          lip_sync: !!response?.lip_sync,
-          structure,
-          routes: Array.isArray(response?.routes) ? response.routes : [],
-          i2v_usage: i2vUsage,
-          ia2v_usage: ia2vUsage,
-          world: String(response?.world || "").trim(),
-        },
-      };
-      data?.onFieldChange?.(id, {
-        directorNote: data?.directorNote,
-        aiNarrative: response?.narrative_note,
-        contentType: mappedContentType,
-        mode: mappedDirectorMode,
-        directorMode: mappedDirectorMode,
-        ...(String(response?.format || "").trim() ? { format: String(response.format).trim() } : {}),
-        creative_config: nextCreativeConfig,
-        aiDirectorConfig: response?.director_config || {},
-        lip_sync: !!response?.lip_sync,
-        structure,
-        routes: Array.isArray(response?.routes) ? response.routes : [],
-      });
+      if (response?.needs_clarification) {
+        setAiQuestions(response?.questions || []);
+        setAiAnswers({});
+        return;
+      }
+      setAiQuestions(null);
+      setAiAnswers({});
+      applyAIResult(response);
     } catch (error) {
       setAiError(String(error?.message || "AI interpret failed"));
     } finally {
@@ -281,6 +319,35 @@ export default function ComfyNarrativeNode({ id, data }) {
               {aiLoading ? "AI анализ…" : "🎬 Сформировать через AI"}
             </button>
             {aiError ? <div className="clipSB_narrativeEmptyHint" role="alert">{aiError}</div> : null}
+            {aiQuestions && aiQuestions.length > 0 ? (
+              <div className="ai-questions-block">
+                {aiQuestions.map((q) => (
+                  <div key={q.id} className="ai-question-item">
+                    <div className="ai-question-text">{q.text}</div>
+                    <div className="ai-question-options">
+                      {(q.options || []).map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          className={`clipSB_btn ai-option-btn ${aiAnswers[q.id] === opt ? "selected" : ""}`.trim()}
+                          onClick={() => setAiAnswers((prev) => ({ ...prev, [q.id]: opt }))}
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="clipSB_btn clipSB_btnPrimary ai-submit-btn"
+                  onClick={handleSubmitAIAnswers}
+                  disabled={aiLoading || aiQuestions.some((q) => !aiAnswers[q.id])}
+                >
+                  Продолжить
+                </button>
+              </div>
+            ) : null}
 
             {sourceInput}
 

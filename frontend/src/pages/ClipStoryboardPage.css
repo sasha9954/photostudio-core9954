@@ -3869,6 +3869,38 @@ body.ps_clip_fullscreen .mainCol {
   margin-top: 2px;
 }
 
+.ai-questions-block {
+  margin-top: 10px;
+}
+
+.ai-question-item {
+  margin-bottom: 10px;
+}
+
+.ai-question-text {
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.ai-question-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-option-btn {
+  margin-right: 6px;
+}
+
+.ai-option-btn.selected {
+  background: #444;
+}
+
+.ai-submit-btn {
+  margin-top: 10px;
+}
+
 .clipSB_narrativeFormatField {
   margin-top: 2px;
 }
