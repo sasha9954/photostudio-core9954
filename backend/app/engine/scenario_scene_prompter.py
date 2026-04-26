@@ -2123,19 +2123,24 @@ def _build_fallback_scene_prompts(
             video_prompt = simplified
             positive_video_prompt = simplified
 
-    scenes_core = _safe_dict(scene_plan_row.get("scenes_core")) or _safe_dict(scene_plan_row.get("scene_core"))
-    scene_prompt_source = dict(scenes_core)
-    for key in ("location", "action", "environment_interaction", "visual_hook", "energy", "camera"):
-        if key not in scene_prompt_source and key in scene_plan_row:
-            scene_prompt_source[key] = scene_plan_row.get(key)
+    scene_prompt_source = _safe_dict(scene_plan_row)
     if route in {"i2v", "ia2v"}:
         structured_image_prompt = _build_scenes_core_image_prompt(scene_prompt_source)
         structured_video_prompt = _build_scenes_core_video_prompt(scene_prompt_source, route)
+        if not any(
+            [
+                scene_prompt_source.get("location"),
+                scene_prompt_source.get("action"),
+                scene_prompt_source.get("visual_hook"),
+            ]
+        ):
+            structured_image_prompt = ""
+            structured_video_prompt = ""
         if structured_image_prompt:
-            photo_prompt = structured_image_prompt
+            photo_prompt = f"{structured_image_prompt}, {photo_prompt}"
         if structured_video_prompt:
-            video_prompt = structured_video_prompt
-            positive_video_prompt = structured_video_prompt
+            video_prompt = f"{structured_video_prompt}, {video_prompt}"
+            positive_video_prompt = video_prompt
             negative_video_prompt = _append_prompt_clause(negative_video_prompt, _SCENES_CORE_NEGATIVE_PROMPT)
 
     fallback_notes = _prompt_notes_template(route)
