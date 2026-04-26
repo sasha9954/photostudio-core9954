@@ -3409,15 +3409,26 @@ def build_gemini_scene_plan(
 
     def _ensure_scene_plan_scenes(scene_plan: dict[str, Any]) -> None:
         existing_scenes = _safe_list(scene_plan.get("scenes"))
-        existing_route_by_segment = {
-            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): str(_safe_dict(row).get("route") or "").strip().lower()
+        existing_prompts_by_segment = {
+            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
             for row in existing_scenes
             if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
         }
-        storyboard_route_by_segment = {
-            str(_safe_dict(row).get("segment_id") or "").strip(): str(_safe_dict(row).get("route") or "").strip().lower()
-            for row in _safe_list(scene_plan.get("storyboard"))
-            if str(_safe_dict(row).get("segment_id") or "").strip()
+        prompt_lookup = {
+            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+            for row in _safe_list(_safe_dict(package.get("scene_prompts")).get("segments"))
+            if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        }
+        if not prompt_lookup:
+            prompt_lookup = {
+                str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+                for row in _safe_list(_safe_dict(package.get("scene_prompts")).get("scenes"))
+                if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+            }
+        beat_lookup = {
+            str(_safe_dict(row).get("source_segment_id") or "").strip(): _safe_dict(row)
+            for row in _safe_list(_safe_dict(_safe_dict(package.get("story_core")).get("beat_map")).get("beats"))
+            if str(_safe_dict(row).get("source_segment_id") or "").strip()
         }
         scene_segment_rows_for_plan: list[dict[str, Any]] = []
         for source_row in scene_segment_rows:
@@ -3425,12 +3436,34 @@ def build_gemini_scene_plan(
             segment_id = str(source.get("segment_id") or source.get("scene_id") or "").strip()
             if not segment_id:
                 continue
-            route = (
-                str(existing_route_by_segment.get(segment_id) or "").strip().lower()
-                or str(storyboard_route_by_segment.get(segment_id) or "").strip().lower()
-                or str(source.get("route") or "").strip().lower()
-                or "i2v"
-            )
+            beat_row = _safe_dict(beat_lookup.get(segment_id))
+            prompt_row = _safe_dict(prompt_lookup.get(segment_id))
+            existing_row = _safe_dict(existing_prompts_by_segment.get(segment_id))
+            beat_primary_subject = str(beat_row.get("beat_primary_subject") or source.get("beat_primary_subject") or "").strip().lower()
+            has_vocal = beat_primary_subject == "character_1"
+            route = "ia2v" if has_vocal else "i2v"
+            fallback_prompt = str(
+                beat_row.get("beat_focus_hint")
+                or source.get("beat_focus_hint")
+                or beat_row.get("beat_purpose")
+                or source.get("beat_purpose")
+                or ""
+            ).strip()
+            video_prompt = str(
+                prompt_row.get("video_prompt")
+                or prompt_row.get("positive_video_prompt")
+                or existing_row.get("video_prompt")
+                or source.get("video_prompt")
+                or fallback_prompt
+            ).strip()
+            image_prompt = str(
+                prompt_row.get("image_prompt")
+                or prompt_row.get("photo_prompt")
+                or existing_row.get("image_prompt")
+                or source.get("image_prompt")
+                or video_prompt
+                or fallback_prompt
+            ).strip()
             scene_segment_rows_for_plan.append(
                 {
                     "scene_id": segment_id,
@@ -3438,7 +3471,9 @@ def build_gemini_scene_plan(
                     "t0": _round3(source.get("t0")),
                     "t1": _round3(source.get("t1")),
                     "duration_sec": _round3(source.get("duration_sec")),
-                    "route": route if route in ALLOWED_ROUTES else "i2v",
+                    "route": route,
+                    "video_prompt": video_prompt,
+                    "image_prompt": image_prompt,
                 }
             )
         if scene_segment_rows_for_plan:
