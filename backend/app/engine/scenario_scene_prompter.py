@@ -1958,7 +1958,7 @@ def _build_scenes_core_video_prompt(scene: dict[str, Any], route: str) -> str:
         scene_specific_count += 1
     energy = str(scene.get("energy") or "").strip()
     if energy:
-        video_parts.append(f"energy level: {energy}")
+        video_parts.append(f"motion energy: {energy}")
         scene_specific_count += 1
 
     if scene_specific_count == 0:
@@ -2137,9 +2137,9 @@ def _build_fallback_scene_prompts(
             structured_image_prompt = ""
             structured_video_prompt = ""
         if structured_image_prompt:
-            photo_prompt = f"{structured_image_prompt}, {photo_prompt}"
+            photo_prompt = f"{photo_prompt}, {structured_image_prompt}"
         if structured_video_prompt:
-            video_prompt = f"{structured_video_prompt}, {video_prompt}"
+            video_prompt = f"{video_prompt}, {structured_video_prompt}"
             positive_video_prompt = video_prompt
             negative_video_prompt = _append_prompt_clause(negative_video_prompt, _SCENES_CORE_NEGATIVE_PROMPT)
 
