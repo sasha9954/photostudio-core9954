@@ -1077,6 +1077,10 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     : {};
   if (Object.keys(aiCreativeConfig).length) {
     creativeConfig.ai_director = aiCreativeConfig;
+    creativeConfig.route_strategy_mode = "ai_override";
+    creativeConfig.route_targets_per_block = {};
+    creativeConfig.lipsync_ratio = null;
+    creativeConfig.first_last_ratio = null;
   }
   const hiddenLipSync = state?.lip_sync;
   if (typeof hiddenLipSync === "boolean") {

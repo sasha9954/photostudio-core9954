@@ -849,6 +849,10 @@ async def director_interpret(payload: DirectorInterpretIn) -> dict[str, Any]:
         "— если есть «воспоминания» → структура = performance_cut\n"
         "— если 2 мира → разделить ia2v (персонаж) и i2v (мир)\n"
         "— если город указан → world = этот город\n\n"
+        "Контекст:\n"
+        "— есть ли персонаж\n"
+        "— есть ли локация\n"
+        "— есть ли аудио\n\n"
         "Верни ТОЛЬКО JSON:\n"
         "{\n"
         "\"mode\": \"clip|story|concert\",\n"
@@ -894,6 +898,8 @@ async def director_interpret(payload: DirectorInterpretIn) -> dict[str, Any]:
     routes = [item for item in routes if item in {"i2v", "ia2v", "first_last"}]
 
     lip_sync_value = bool(parsed.get("lip_sync"))
+    if not routes:
+        routes = ["i2v"] if not lip_sync_value else ["i2v", "ia2v"]
     world = str(parsed.get("world") or "").strip()
     i2v_usage = str(parsed.get("i2v_usage") or "").strip()
     ia2v_usage = str(parsed.get("ia2v_usage") or "").strip()
@@ -1191,6 +1197,15 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         req.setdefault("metadata", {})
         if isinstance(req.get("metadata"), dict):
             req["metadata"]["frontendOptions"] = req.get("options")
+    creative_config = req.get("creative_config") if isinstance(req.get("creative_config"), dict) else {}
+    ai_cfg = creative_config.get("ai_director") if isinstance(creative_config.get("ai_director"), dict) else {}
+    if ai_cfg:
+        if "lip_sync" in ai_cfg:
+            req["lipSync"] = ai_cfg.get("lip_sync")
+        if "structure" in ai_cfg:
+            req["structure"] = ai_cfg.get("structure")
+        if isinstance(ai_cfg.get("routes"), list):
+            req["forced_routes"] = ai_cfg.get("routes")
     if _should_use_scenario_director_fixture(req, reason="manual_override"):
         logger.warning("[clip_comfy_scenario_director_generate] using deterministic fixture reason=manual_override")
         return _build_scenario_director_fixture(req, fixture_reason="manual_override")

@@ -166,7 +166,8 @@ export default function ComfyNarrativeNode({ id, data }) {
         },
       };
       data?.onFieldChange?.(id, {
-        directorNote: String(response?.narrative_note || text),
+        directorNote: data?.directorNote,
+        aiNarrative: response?.narrative_note,
         contentType: mappedContentType,
         mode: mappedDirectorMode,
         directorMode: mappedDirectorMode,
