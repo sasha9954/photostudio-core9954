@@ -74,14 +74,16 @@ IA2V_CONTINUITY_LOCK_CLAUSE = (
 HERO_CONTINUATION_LOCK_CLAUSE = (
     "Hard continuity lock for same-hero continuation: preserve same face, same outfit, same accessories, same tattoos/signature details, and same silhouette; no similar-but-different replacement hero."
 )
-_I2V_CAMERA_LIFE_MOVES = (
-    "Use a slow push-in to increase intimacy while preserving stable identity readability.",
-    "Use a slow pull-back that reveals location scale and depth without changing hero identity.",
-    "Use a gentle lateral track to reveal parallax and world layering.",
-    "Use a subtle side drift with restrained character+camera co-motion when suitable.",
-    "Use a restrained reveal move from foreground obstruction into a clearer world read.",
-    "Use a gentle horizontal arc for cinematic depth and spatial continuity.",
-)
+_I2V_CAMERA_VARIANT_CLAUSES: dict[str, str] = {
+    "slow_pullback_reveal": "Use a slow pull-back reveal that gradually opens the surrounding world scale and spatial depth.",
+    "slow_push_in_observation": "Use a very soft observational push-in toward environmental detail, preserving restrained world-first realism.",
+    "lateral_glide": "Use a gentle lateral glide to read facades, corridor-like depth, or embankment flow with stable motion.",
+    "diagonal_drift": "Use a restrained diagonal drift to uncover layered depth through passages, stairs, or courtyard transitions.",
+    "static_frame_with_world_motion": "Keep the camera nearly static and let ambient world motion (air, light, water, distant passersby) carry the beat.",
+    "foreground_parallax_pass": "Use a controlled parallax pass with arches/columns/frames in foreground while the camera remains calm and grounded.",
+    "elevated_reveal": "Use a subtle elevated reveal with slight crane feel for scale; avoid drone-tourism postcard energy.",
+    "ground_level_glide": "Use a calm ground-level glide near texture lines (cobblestones, rails, seafront edge) for tactile world immersion.",
+}
 CONTROLLED_MOTION_SAFETY_BLOCK = (
     "CONTROLLED MOTION SAFETY: smooth readable cinematic motion, grounded body movement, moderate step/sway/turn/weight shift, "
     "stable anatomy-safe motion, no jerky movement, no frantic choreography, no violent spins, no high-frequency shaking."
@@ -755,14 +757,65 @@ def _strip_ia2v_anchor_fragments(text: str) -> str:
     return cleaned
 
 
-def _select_i2v_camera_life_clause(*, scene_seq_index: int, scene_specific_blob: str) -> str:
-    if any(token in scene_specific_blob for token in ("wide", "establish", "city", "landscape", "scale", "street", "crowd")):
-        return _I2V_CAMERA_LIFE_MOVES[1]
-    if any(token in scene_specific_blob for token in ("corridor", "hallway", "passage", "tunnel", "alley")):
-        return _I2V_CAMERA_LIFE_MOVES[2]
-    if any(token in scene_specific_blob for token in ("door", "window", "foreground", "reveal")):
-        return _I2V_CAMERA_LIFE_MOVES[4]
-    return _I2V_CAMERA_LIFE_MOVES[max(0, (int(scene_seq_index) - 1) % len(_I2V_CAMERA_LIFE_MOVES))]
+def _select_i2v_camera_variant(
+    *,
+    scene_seq_index: int,
+    scene_specific_blob: str,
+    semantics: dict[str, str],
+    previous_i2v_variants: list[str],
+) -> tuple[str, str]:
+    blob = str(scene_specific_blob or "").lower()
+    semantic_blob = " ".join(str(v or "").lower() for v in semantics.values() if str(v or "").strip())
+    joint = f"{blob} {semantic_blob}".strip()
+    scores: dict[str, int] = {key: 0 for key in _I2V_CAMERA_VARIANT_CLAUSES}
+
+    def _bump(variant: str, weight: int, *tokens: str) -> None:
+        if any(token in joint for token in tokens):
+            scores[variant] = scores.get(variant, 0) + int(weight)
+
+    _bump("slow_pullback_reveal", 3, "opening", "setup", "wide", "establish", "city", "harbor", "aftermath", "reveal", "large location")
+    _bump("elevated_reveal", 3, "wide", "city", "port", "harbor", "square", "opening", "establish", "scale")
+    _bump("slow_push_in_observation", 3, "symbolic", "detail", "residue", "witness", "trace", "aftermath", "quiet")
+    _bump("static_frame_with_world_motion", 3, "aftermath", "lingering", "quiet", "stillness", "empty", "deserted", "ambient")
+    _bump("lateral_glide", 3, "facade", "street", "embankment", "corridor", "hallway", "tram", "waterfront", "quay")
+    _bump("diagonal_drift", 3, "diagonal", "stairs", "stair", "passage", "courtyard", "alley", "depth")
+    _bump("foreground_parallax_pass", 4, "arch", "arches", "column", "balcony", "doorframe", "door frame", "window frame", "foreground", "grille", "gate")
+    _bump("ground_level_glide", 4, "cobblestone", "cobblestones", "rails", "rail", "street texture", "ground level", "seafront edge", "pavement")
+
+    if str(semantics.get("hero_world_mode") or "").lower() in {"world", "environment", "environment_first", "world_first"}:
+        scores["static_frame_with_world_motion"] += 1
+        scores["lateral_glide"] += 1
+    if str(semantics.get("visual_scale") or "").lower() in {"wide", "large", "epic"}:
+        scores["slow_pullback_reveal"] += 2
+        scores["elevated_reveal"] += 2
+    if str(semantics.get("visual_density") or "").lower() in {"high", "dense", "layered"}:
+        scores["foreground_parallax_pass"] += 1
+        scores["diagonal_drift"] += 1
+    if str(semantics.get("motion_profile") or "").lower() in {"still", "minimal", "quiet"}:
+        scores["static_frame_with_world_motion"] += 2
+    if str(semantics.get("beat_mode") or "").lower() in {"residue", "aftermath", "witness", "symbolic"}:
+        scores["slow_push_in_observation"] += 2
+        scores["static_frame_with_world_motion"] += 2
+
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    if not ranked:
+        return "slow_pullback_reveal", _I2V_CAMERA_VARIANT_CLAUSES["slow_pullback_reveal"]
+    chosen = ranked[0][0]
+    last = str(previous_i2v_variants[-1] or "").strip().lower() if previous_i2v_variants else ""
+    streak = 1
+    if len(previous_i2v_variants) >= 2 and previous_i2v_variants[-1] == previous_i2v_variants[-2]:
+        streak = 2
+    if (last and chosen == last) or streak >= 2:
+        for candidate, _score in ranked[1:]:
+            if candidate != last:
+                chosen = candidate
+                break
+    if last == "slow_pullback_reveal" and chosen == last:
+        for candidate, _score in ranked[1:]:
+            if candidate != "slow_pullback_reveal":
+                chosen = candidate
+                break
+    return chosen, _I2V_CAMERA_VARIANT_CLAUSES.get(chosen, _I2V_CAMERA_VARIANT_CLAUSES["slow_pullback_reveal"])
 
 
 def _strip_positive_contract_blocks(text: str) -> str:
@@ -1399,7 +1452,13 @@ def _build_instruction(payload: dict[str, Any]) -> str:
     )
 
 
-def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_segment(
+    raw_row: Any,
+    fallback_row: dict[str, Any],
+    identity_ctx: dict[str, Any],
+    *,
+    previous_i2v_variants: list[str],
+) -> dict[str, Any]:
     row = _safe_dict(raw_row)
     segment_id = str(row.get("segment_id") or fallback_row.get("segment_id") or "").strip()
     scene_id = str(row.get("scene_id") or fallback_row.get("scene_id") or segment_id).strip()
@@ -1625,6 +1684,30 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         and effective_character_1_ref_count > 0
     ):
         confirmed_look_used = True
+    i2v_camera_variant = ""
+    i2v_camera_clause = ""
+    if route == "i2v":
+        semantic_row = _safe_dict(row.get("semantic_tags"))
+        semantics = {
+            "arc_role": str(plan_row.get("arc_role") or semantic_row.get("arc_role") or "").strip(),
+            "beat_mode": str(plan_row.get("beat_mode") or semantic_row.get("beat_mode") or "").strip(),
+            "visual_scale": str(plan_row.get("visual_scale") or semantic_row.get("visual_scale") or "").strip(),
+            "visual_density": str(plan_row.get("visual_density") or semantic_row.get("visual_density") or "").strip(),
+            "motion_profile": str(plan_row.get("motion_profile") or semantic_row.get("motion_profile") or "").strip(),
+            "hero_world_mode": str(plan_row.get("hero_world_mode") or semantic_row.get("hero_world_mode") or visual_focus_role or "").strip(),
+            "location_world_emphasis": str(
+                plan_row.get("location_emphasis")
+                or plan_row.get("world_emphasis")
+                or fallback_prompt_row.get("world_anchor")
+                or ""
+            ).strip(),
+        }
+        i2v_camera_variant, i2v_camera_clause = _select_i2v_camera_variant(
+            scene_seq_index=scene_seq_index,
+            scene_specific_blob=lower_scene_semantics,
+            semantics=semantics,
+            previous_i2v_variants=previous_i2v_variants,
+        )
     if environment_cutaway_i2v:
         refs_used = [role for role in refs_used if str(role or "").strip().lower() != "character_1"]
     elif _safe_list(refs_by_role.get("character_1")) and "character_1" not in refs_used:
@@ -1649,10 +1732,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
             or fallback_photo_prompt
             or "environment continuity cutaway"
         ).strip()
-        cutaway_camera_move = _select_i2v_camera_life_clause(
-            scene_seq_index=scene_seq_index,
-            scene_specific_blob=lower_scene_semantics,
-        )
+        cutaway_camera_move = i2v_camera_clause or _I2V_CAMERA_VARIANT_CLAUSES["static_frame_with_world_motion"]
         positive_prompt = (
             f"Environment/world-detail cutaway purpose: {cutaway_scene_purpose}. "
             f"Camera move: {cutaway_camera_move}. "
@@ -1770,7 +1850,14 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         route_behavior_template = CONTROLLED_MOTION_SAFETY_BLOCK
         positive_prompt = _append_clause(positive_prompt, route_behavior_template)
         if not environment_cutaway_i2v:
-            positive_prompt = _append_clause(positive_prompt, _select_i2v_camera_life_clause(scene_seq_index=scene_seq_index, scene_specific_blob=scene_specific_blob))
+            if not i2v_camera_clause:
+                i2v_camera_variant, i2v_camera_clause = _select_i2v_camera_variant(
+                    scene_seq_index=scene_seq_index,
+                    scene_specific_blob=scene_specific_blob,
+                    semantics={},
+                    previous_i2v_variants=previous_i2v_variants,
+                )
+            positive_prompt = _append_clause(positive_prompt, i2v_camera_clause)
         positive_prompt = _append_clause(
             positive_prompt,
             "Use smooth restrained cinematic camera life with subtle parallax, environmental motion, and depth cues to avoid frozen slideshow feeling; keep motion LTX-safe with no fast spin, no whip movement, and no chaotic handheld.",
@@ -2133,6 +2220,7 @@ def _sanitize_segment(raw_row: Any, fallback_row: dict[str, Any], identity_ctx: 
         "duplicate_final_prompt_detected": False,
         "duplicate_prompt_segments": [],
         "route_template_source": route_template_source,
+        "i2v_camera_variant": i2v_camera_variant or None,
         "scene_specific_payload_source": "scene_prompts.prompt_row+scene_plan",
         "final_prompt_scene_specific_missing": bool(final_prompt_scene_specific_missing),
         "final_prompt_rebuilt_from_scene_prompts": bool(final_prompt_rebuilt_from_scene_prompts),
@@ -2168,7 +2256,18 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
     identity_ctx = _character_1_context(package)
     for fallback_row in segment_rows:
         segment_id = str(fallback_row.get("segment_id") or "").strip()
-        seg = _sanitize_segment(by_segment_id.get(segment_id), fallback_row, identity_ctx)
+        previous_i2v_variants = [
+            str(_safe_dict(prev).get("i2v_camera_variant") or "").strip()
+            for prev in normalized
+            if str(_safe_dict(prev).get("route") or "").strip().lower() == "i2v"
+            and str(_safe_dict(prev).get("i2v_camera_variant") or "").strip()
+        ]
+        seg = _sanitize_segment(
+            by_segment_id.get(segment_id),
+            fallback_row,
+            identity_ctx,
+            previous_i2v_variants=previous_i2v_variants,
+        )
         if normalized:
             _rewire_shadow_continuity(normalized[-1], seg)
         if str(seg.get("video_metadata", {}).get("route_type") or "") == "ia2v":
