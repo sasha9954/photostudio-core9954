@@ -7194,6 +7194,10 @@ def _build_story_core_prompt(
 ) -> str:
     compact_input = _compact_prompt_payload(core_input_context)
     compact_assigned_roles = _compact_prompt_payload(assigned_roles)
+    world_constraint = str(
+        _safe_dict(core_input_context.get("world_style_identity_constraints")).get("director_world_lock_summary")
+        or ""
+    ).strip()
     mode = "directed" if story_core_mode == "directed" else "creative"
     mode_instructions = (
         "MODE: DIRECTED\n"
@@ -7263,6 +7267,7 @@ def _build_story_core_prompt(
         "global_arc fields: exposition, climax, resolution.\n"
         "identity_doctrine fields: hero_anchor, world_doctrine, style_doctrine.\n"
         "Keep doctrine concise, production-usable, and consistent with refs/user concept.\n"
+        f"World constraint: {world_constraint or 'keep one coherent world family from user/director constraints'}\n"
         f"Video model capability bounds (must obey): {capability_bounds_text}\n"
         "HARD CONTRACT: respect explicit user world locks (e.g., no club/no neon) and avoid contradictions.\n"
         f"{mode_instructions}\n"
