@@ -7782,6 +7782,26 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         for row in _safe_list(final_video_prompt.get("segments"))
         if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
     ]
+    beat_rows = [_safe_dict(row) for row in _safe_list(_safe_dict(story_core.get("beat_map")).get("beats"))]
+    beat_timing_by_segment: dict[str, tuple[float, float]] = {}
+    for beat in beat_rows:
+        slot_ids = _safe_list(beat.get("slot_ids"))
+        slot_id = str(slot_ids[0] or "").strip() if slot_ids else ""
+        if not slot_id:
+            continue
+        time_range = _safe_dict(beat.get("time_range"))
+        t0_raw = time_range.get("t0")
+        t1_raw = time_range.get("t1")
+        try:
+            beat_t0 = float(t0_raw)
+            beat_t1 = float(t1_raw)
+        except Exception:
+            continue
+        if not (math.isfinite(beat_t0) and math.isfinite(beat_t1)):
+            continue
+        if beat_t1 < beat_t0:
+            beat_t1 = beat_t0
+        beat_timing_by_segment.setdefault(slot_id, (beat_t0, beat_t1))
     prompts_by_id = {
         str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
         for row in _safe_list(scene_prompts.get("segments"))
@@ -8188,6 +8208,17 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         if t1 < t0:
             t1 = t0
         duration_sec = _to_float(plan_row.get("duration_sec"), max(0.0, t1 - t0))
+
+        beat_timing = beat_timing_by_segment.get(segment_id)
+        if beat_timing is not None:
+            t0, t1 = beat_timing
+            duration_sec = max(0.0, t1 - t0)
+        else:
+            logger.warning("[scenario_stage_pipeline] finalize_stage missing beat timing for segment_id=%s", segment_id)
+
+        segment["t0"] = t0
+        segment["t1"] = t1
+        segment["duration_sec"] = duration_sec
 
         final_image_prompt = str(
             route_payload.get("image_prompt")
