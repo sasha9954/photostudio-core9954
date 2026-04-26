@@ -3310,6 +3310,15 @@ def build_gemini_scene_plan(
         "scene_plan_retry_prompt_mode": str(prompt_mode or "default"),
         **capability_diag,
     }
+    invalid_timing_segments: list[str] = []
+    for row in scene_segment_rows:
+        row_obj = _safe_dict(row)
+        segment_id = str(row_obj.get("segment_id") or "").strip() or "unknown"
+        t0 = _round3(row_obj.get("t0"))
+        t1 = _round3(row_obj.get("t1"))
+        duration_sec = _round3(row_obj.get("duration_sec"))
+        if t0 < 0.0 or t1 <= t0 or duration_sec <= 0.0 or abs(duration_sec - (t1 - t0)) > 0.02:
+            invalid_timing_segments.append(segment_id)
 
     def _collect_scene_plan_diagnostics(
         *,
@@ -3471,6 +3480,38 @@ def build_gemini_scene_plan(
             "validation_error": validation_error or "SCENES_SCHEMA_INVALID",
             "error_code": diagnostics["error_code"],
             "used_fallback": True,
+            "diagnostics": diagnostics,
+        }
+
+    if invalid_timing_segments:
+        plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, _ = _normalize_scene_plan(
+            {},
+            scene_segment_rows=scene_segment_rows,
+            role_lookup=role_lookup,
+            creative_config=creative_config,
+            vocal_gender=vocal_gender,
+            vocal_owner_role=vocal_owner_role,
+            include_debug_raw=include_debug_raw,
+            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
+        )
+        diagnostics["error_code"] = "SCENES_AUDIO_TIMING_REQUIRED"
+        diagnostics["validation_error"] = "audio_segments_missing_timing"
+        diagnostics["invalid_timing_segment_ids"] = list(dict.fromkeys(invalid_timing_segments))
+        diagnostics.update(
+            _collect_scene_plan_diagnostics(
+                scene_plan=plan,
+                normalization_diag=normalization_diag,
+                watchability_fallback_count=watchability_fallback_count,
+                include_presence_modes=False,
+            )
+        )
+        return {
+            "ok": False,
+            "scene_plan": plan,
+            "error": "audio_segments_missing_timing",
+            "validation_error": "audio_segments_missing_timing",
+            "error_code": "SCENES_AUDIO_TIMING_REQUIRED",
+            "used_fallback": used_fallback,
             "diagnostics": diagnostics,
         }
 
