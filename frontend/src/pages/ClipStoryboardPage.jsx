@@ -10103,6 +10103,7 @@ export default function ClipStoryboardPage() {
   const navigate = useNavigate();
   const accountKey = useMemo(() => getAccountKey(user) || "guest", [user]);
   const STORE_KEY = useMemo(() => `ps:clipStoryboard:v1:${accountKey}`, [accountKey]);
+  const WORKSPACE_STORE_KEY = useMemo(() => `ps:clipStoryboard:workspace:v2:${accountKey}`, [accountKey]);
   const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
   const COMFY_VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:comfyVideoJob:v1:${accountKey}`, [accountKey]);
 
@@ -10112,8 +10113,12 @@ export default function ClipStoryboardPage() {
   const comfyStoryboardSignatureRef = useRef("");
 
   const didHydrateRef = useRef(false);
+  const initialRestoreCompleteRef = useRef(false);
   const isHydratingRef = useRef(true);
   const hydrateInFlightRef = useRef(false);
+  const reactFlowInstanceRef = useRef(null);
+  const viewportRef = useRef({ x: 0, y: 0, zoom: 1 });
+  const pendingHydratedViewportRef = useRef(null);
   const nodesCountRef = useRef(0);
   const parseTokenRef = useRef(0);
   const parseControllerRef = useRef(null);
@@ -10293,6 +10298,8 @@ export default function ClipStoryboardPage() {
   }, []);
 
   const [lastSavedAt, setLastSavedAt] = useState(0);
+  const [initialRestoreComplete, setInitialRestoreComplete] = useState(false);
+  const [shouldAutoFitOnLoad, setShouldAutoFitOnLoad] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [brainGuideOpen, setBrainGuideOpen] = useState(false);
   const brainGuideRef = useRef(null);
@@ -10313,6 +10320,31 @@ const [comfyEditor, setComfyEditor] = useState({
   nodeId: null,
   selected: 0,
 });
+
+const workspaceUiSnapshot = useMemo(() => ({
+  scenarioEditor: {
+    open: !!scenarioEditor?.open,
+    nodeId: scenarioEditor?.nodeId ? String(scenarioEditor.nodeId) : "",
+    selected: Number.isFinite(Number(scenarioEditor?.selected)) ? Number(scenarioEditor.selected) : 0,
+    selectedSceneId: String(scenarioEditor?.selectedSceneId || ""),
+  },
+  comfyEditor: {
+    open: !!comfyEditor?.open,
+    nodeId: comfyEditor?.nodeId ? String(comfyEditor.nodeId) : "",
+    selected: Number.isFinite(Number(comfyEditor?.selected)) ? Number(comfyEditor.selected) : 0,
+  },
+  activeScenarioStoryboardId: activeScenarioStoryboardId ? String(activeScenarioStoryboardId) : "",
+  isScenarioStoryboardOpen: !!isScenarioStoryboardOpen,
+  activeScenarioPipelineDebugId: activeScenarioPipelineDebugId ? String(activeScenarioPipelineDebugId) : "",
+  isScenarioPipelineDebugOpen: !!isScenarioPipelineDebugOpen,
+}), [
+  scenarioEditor,
+  comfyEditor,
+  activeScenarioStoryboardId,
+  isScenarioStoryboardOpen,
+  activeScenarioPipelineDebugId,
+  isScenarioPipelineDebugOpen,
+]);
 
 useEffect(() => {
   if (!brainGuideOpen) return;
@@ -10826,15 +10858,17 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
   console.info("[CLIP STORAGE] clear account storage", {
     reason,
     accountKey,
+    WORKSPACE_STORE_KEY,
     STORE_KEY,
     VIDEO_JOB_STORE_KEY,
     COMFY_VIDEO_JOB_STORE_KEY,
   });
+  safeDel(WORKSPACE_STORE_KEY);
   safeDel(STORE_KEY);
   safeDel(VIDEO_JOB_STORE_KEY);
   safeDel(COMFY_VIDEO_JOB_STORE_KEY);
   storageVersionRef.current += 1;
-}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
+}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
 
 const stopScenarioVideoPolling = useCallback((sceneId = "") => {
   const key = String(sceneId || "").trim();
@@ -23300,6 +23334,7 @@ const hydrate = useCallback((source = "unknown") => {
     // IMPORTANT: we always have an accountKey (fallback to "guest"), so persistence works even before auth init.
     console.info("[CLIP TRACE] hydrate start source=" + source, {
       accountKey,
+      WORKSPACE_STORE_KEY,
       STORE_KEY,
       VIDEO_JOB_STORE_KEY,
       COMFY_VIDEO_JOB_STORE_KEY,
@@ -23316,21 +23351,26 @@ const hydrate = useCallback((source = "unknown") => {
       });
       // Keep persist effects active when hydrate is intentionally skipped.
       didHydrateRef.current = true;
+      initialRestoreCompleteRef.current = true;
+      setInitialRestoreComplete(true);
       hydrateInFlightRef.current = false;
       return;
     }
 
     didHydrateRef.current = false;
+    initialRestoreCompleteRef.current = false;
+    setInitialRestoreComplete(false);
     isHydratingRef.current = true;
 
-    // Try current key first; if empty, try a few compatible legacy keys (to survive format changes)
-    let raw = safeGet(STORE_KEY);
+    // Try workspace key first; if empty, try compatible legacy keys.
+    let raw = safeGet(WORKSPACE_STORE_KEY);
     if (!raw) {
       const candidates = [];
       const add = (k) => {
         if (k && !candidates.includes(k)) candidates.push(k);
       };
 
+      add(WORKSPACE_STORE_KEY);
       add(STORE_KEY);
 
       // legacy: without/with u_ prefix
@@ -23349,7 +23389,7 @@ const hydrate = useCallback((source = "unknown") => {
         if (v) {
           raw = v;
           // migrate into current key so next loads are stable
-          if (k !== STORE_KEY) safeSet(STORE_KEY, v);
+          if (k !== WORKSPACE_STORE_KEY) safeSet(WORKSPACE_STORE_KEY, v);
           break;
         }
       }
@@ -23381,6 +23421,8 @@ const hydrate = useCallback((source = "unknown") => {
       // mark hydrated on next tick to avoid wiping storage with default state
       setTimeout(() => {
         didHydrateRef.current = true;
+        initialRestoreCompleteRef.current = true;
+        setInitialRestoreComplete(true);
         isHydratingRef.current = false;
         hydrateInFlightRef.current = false;
       }, 0);
@@ -23388,9 +23430,12 @@ const hydrate = useCallback((source = "unknown") => {
     }
 
     try {
-      const parsed = JSON.parse(raw);
+      const parsedRaw = JSON.parse(raw);
+      const parsed = parsedRaw?.workspace && typeof parsedRaw.workspace === "object" ? parsedRaw.workspace : parsedRaw;
       const savedNodes = Array.isArray(parsed?.nodes) ? parsed.nodes : null;
       const savedEdges = Array.isArray(parsed?.edges) ? parsed.edges : null;
+      const savedViewport = parsed?.viewport && typeof parsed.viewport === "object" ? parsed.viewport : null;
+      const savedUi = parsed?.ui && typeof parsed.ui === "object" ? parsed.ui : {};
       const savedAssemblyResult = parsed?.assemblyResult && typeof parsed.assemblyResult === "object" ? parsed.assemblyResult : null;
       const savedAssemblyBuildState = ["idle", "done"].includes(parsed?.assemblyBuildState)
         ? parsed.assemblyBuildState
@@ -23626,6 +23671,18 @@ const hydrate = useCallback((source = "unknown") => {
 
       const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
+      const normalizedViewport = savedViewport && Number.isFinite(Number(savedViewport.x)) && Number.isFinite(Number(savedViewport.y)) && Number.isFinite(Number(savedViewport.zoom))
+        ? {
+          x: Number(savedViewport.x),
+          y: Number(savedViewport.y),
+          zoom: Math.max(0.2, Math.min(2, Number(savedViewport.zoom))),
+        }
+        : null;
+      pendingHydratedViewportRef.current = normalizedViewport;
+      if (normalizedViewport) {
+        viewportRef.current = normalizedViewport;
+      }
+      setShouldAutoFitOnLoad(!normalizedViewport);
       if (CLIP_TRACE_GRAPH_HYDRATE || CLIP_TRACE_COMFY_REFS) {
         const tracedHydratedNodes = hydratedNodes
           .filter((nodeItem) => ["refNode", "refCharacter2", "refCharacter3"].includes(String(nodeItem?.type || "")))
@@ -23701,6 +23758,27 @@ const hydrate = useCallback((source = "unknown") => {
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${hydratedNodes.length} edgesAfter=${hydratedEdges.length}`);
       setNodes(bindHandlers(hydratedNodes, { nodesNow: hydratedNodes, edgesNow: hydratedEdges, traceReason: "hydrate:storage" }));
       setEdges(hydratedEdges);
+      if (savedUi?.scenarioEditor && typeof savedUi.scenarioEditor === "object") {
+        setScenarioEditor((prev) => ({
+          ...prev,
+          open: !!savedUi.scenarioEditor.open,
+          nodeId: savedUi.scenarioEditor.nodeId ? String(savedUi.scenarioEditor.nodeId) : null,
+          selected: Number.isFinite(Number(savedUi.scenarioEditor.selected)) ? Number(savedUi.scenarioEditor.selected) : 0,
+          selectedSceneId: String(savedUi.scenarioEditor.selectedSceneId || ""),
+        }));
+      }
+      if (savedUi?.comfyEditor && typeof savedUi.comfyEditor === "object") {
+        setComfyEditor((prev) => ({
+          ...prev,
+          open: !!savedUi.comfyEditor.open,
+          nodeId: savedUi.comfyEditor.nodeId ? String(savedUi.comfyEditor.nodeId) : null,
+          selected: Number.isFinite(Number(savedUi.comfyEditor.selected)) ? Number(savedUi.comfyEditor.selected) : 0,
+        }));
+      }
+      setActiveScenarioStoryboardId(savedUi?.activeScenarioStoryboardId ? String(savedUi.activeScenarioStoryboardId) : null);
+      setIsScenarioStoryboardOpen(!!savedUi?.isScenarioStoryboardOpen);
+      setActiveScenarioPipelineDebugId(savedUi?.activeScenarioPipelineDebugId ? String(savedUi.activeScenarioPipelineDebugId) : null);
+      setIsScenarioPipelineDebugOpen(!!savedUi?.isScenarioPipelineDebugOpen);
       if (CLIP_TRACE_BRAIN_REFRESH) {
         console.info("[CLIP TRACE BRAIN REFRESH] hydrate applied storage graph", {
           nodesCount: hydratedNodes.length,
@@ -23749,6 +23827,7 @@ const hydrate = useCallback((source = "unknown") => {
     } catch (err) {
       console.warn("[CLIP STORAGE] hydrate failed, fallback to defaults", {
         accountKey,
+        WORKSPACE_STORE_KEY,
         STORE_KEY,
         error: String(err?.message || err || "hydrate_failed"),
       });
@@ -23758,6 +23837,8 @@ const hydrate = useCallback((source = "unknown") => {
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${defaultNodes.length} edgesAfter=${defaultEdges.length}`);
       setNodes(bindHandlers(defaultNodes, { nodesNow: defaultNodes, edgesNow: defaultEdges, traceReason: "hydrate:defaults" }));
       setEdges(defaultEdges);
+      pendingHydratedViewportRef.current = null;
+      setShouldAutoFitOnLoad(true);
       if (CLIP_TRACE_BRAIN_REFRESH) {
         console.info("[CLIP TRACE BRAIN REFRESH] hydrate fallback to defaults", {
           nodesCount: defaultNodes.length,
@@ -23782,11 +23863,14 @@ const hydrate = useCallback((source = "unknown") => {
       // mark hydrated on next tick so persist effect can't overwrite storage
       setTimeout(() => {
         didHydrateRef.current = true;
+        initialRestoreCompleteRef.current = true;
+        setInitialRestoreComplete(true);
         isHydratingRef.current = false;
         hydrateInFlightRef.current = false;
       }, 0);
     }
   }, [
+    WORKSPACE_STORE_KEY,
     STORE_KEY,
     VIDEO_JOB_STORE_KEY,
     COMFY_VIDEO_JOB_STORE_KEY,
@@ -23807,6 +23891,18 @@ const hydrate = useCallback((source = "unknown") => {
     hydrateRef.current = hydrate;
     console.info("[CLIP TRACE] hydrate ref updated");
   }, [hydrate]);
+
+  useEffect(() => {
+    if (!initialRestoreComplete) return;
+    if (!pendingHydratedViewportRef.current) return;
+    if (!reactFlowInstanceRef.current?.setViewport) return;
+    const viewportToApply = pendingHydratedViewportRef.current;
+    pendingHydratedViewportRef.current = null;
+    requestAnimationFrame(() => {
+      reactFlowInstanceRef.current?.setViewport(viewportToApply, { duration: 0 });
+      viewportRef.current = viewportToApply;
+    });
+  }, [initialRestoreComplete, nodes, edges]);
 
   const addNodeFromDrawer = useCallback((type) => {
     const id = `${type}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -23905,15 +24001,32 @@ const hydrate = useCallback((source = "unknown") => {
   useEffect(() => {
     console.info("[CLIP STORAGE] active account scope", {
       accountKey,
+      WORKSPACE_STORE_KEY,
       STORE_KEY,
       VIDEO_JOB_STORE_KEY,
       COMFY_VIDEO_JOB_STORE_KEY,
     });
-  }, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, accountKey]);
+  }, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
 
 
   const lastPersistedPayloadRef = useRef("");
   const persistDepsSnapshotRef = useRef(null);
+  const workspaceBindingSnapshot = useMemo(() => {
+    const scenarioNode = nodes.find((nodeItem) => nodeItem?.type === "scenarioStoryboard") || null;
+    const debugNode = nodes.find((nodeItem) => nodeItem?.type === "scenarioPipelineDebug") || null;
+    const comfyNodeSnapshot = nodes.find((nodeItem) => nodeItem?.type === "comfyStoryboard") || null;
+    return {
+      scenarioNodeId: String(scenarioNode?.id || ""),
+      scenarioPackageId: String(scenarioNode?.data?.scenarioPackage?.id || scenarioNode?.data?.scenarioPackage?.packageId || ""),
+      storyboardRevision: String(scenarioNode?.data?.storyboardRevision || ""),
+      storyboardSignature: String(scenarioNode?.data?.storyboardSignature || ""),
+      stageStatuses: debugNode?.data?.stageStatuses && typeof debugNode.data.stageStatuses === "object" ? debugNode.data.stageStatuses : {},
+      comfyNodeId: String(comfyNodeSnapshot?.id || ""),
+      comfyStatus: String(comfyNodeSnapshot?.data?.parseStatus || ""),
+      selectedScenarioSceneId: String(scenarioEditor?.selectedSceneId || ""),
+      selectedComfySceneId: String((comfyScenes[Number(comfyEditor?.selected || 0)] || {}).sceneId || ""),
+    };
+  }, [comfyEditor?.selected, comfyScenes, nodes, scenarioEditor?.selectedSceneId]);
 
   // persist
   useEffect(() => {
@@ -23977,6 +24090,13 @@ const hydrate = useCallback((source = "unknown") => {
       return;
     }
 
+    if (!initialRestoreCompleteRef.current) {
+      if (CLIP_TRACE_PERSIST) {
+        console.info("[CLIP TRACE] persist skipped reason=restore_not_completed");
+      }
+      return;
+    }
+
     // strip handlers from data
     const serialNodes = serializeNodesForStorage(nodes);
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
@@ -24016,6 +24136,13 @@ const hydrate = useCallback((source = "unknown") => {
       storyboardSceneSignature,
       comfySceneSignature,
       accountKey,
+      viewport: {
+        x: Number(viewportRef.current?.x || 0),
+        y: Number(viewportRef.current?.y || 0),
+        zoom: Number(viewportRef.current?.zoom || 1),
+      },
+      ui: workspaceUiSnapshot,
+      workspaceBinding: workspaceBindingSnapshot,
       assemblyResult: assemblyResult?.finalVideoUrl
         ? {
           finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
@@ -24055,14 +24182,20 @@ const hydrate = useCallback((source = "unknown") => {
     if (serialEdges.length === 0) {
       console.warn("[CLIP WARN] persist attempted with empty edges");
     }
-    const ok = safeSet(STORE_KEY, JSON.stringify({
-      ...payloadComparable,
-      persistedAt: new Date().toISOString(),
-    }));
-    if (ok) {
+    const payloadToStore = {
+      workspace: {
+        ...payloadComparable,
+        persistedAt: new Date().toISOString(),
+      },
+    };
+    const workspaceOk = safeSet(WORKSPACE_STORE_KEY, JSON.stringify(payloadToStore));
+    // legacy mirror for backward compatibility
+    const legacyOk = safeSet(STORE_KEY, JSON.stringify(payloadToStore.workspace));
+    if (workspaceOk || legacyOk) {
       lastPersistedPayloadRef.current = comparablePayloadString;
       console.info("[CLIP STORAGE] persist state", {
         accountKey,
+        WORKSPACE_STORE_KEY,
         STORE_KEY,
         plannerInputSignature,
         storyboardSceneStats: collectSceneVideoStateStats(scenarioScenes, "scene"),
@@ -24073,6 +24206,7 @@ const hydrate = useCallback((source = "unknown") => {
   }, [
     nodes,
     edges,
+    WORKSPACE_STORE_KEY,
     STORE_KEY,
     accountKey,
     assemblyResult,
@@ -24080,6 +24214,8 @@ const hydrate = useCallback((source = "unknown") => {
     assemblyPayloadSignature,
     scenarioScenes,
     comfyScenes,
+    workspaceUiSnapshot,
+    workspaceBindingSnapshot,
   ]);
 
   // extra safety: flush to storage on page unload (helps when navigating away quickly)
@@ -24087,31 +24223,40 @@ const hydrate = useCallback((source = "unknown") => {
     const onBeforeUnload = () => {
       if (!didHydrateRef.current) return;
       if (isHydratingRef.current) return;
+      if (!initialRestoreCompleteRef.current) return;
 
       const serialNodes = serializeNodesForStorage(nodes);
       const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
-      const ok = safeSet(STORE_KEY, JSON.stringify({
-      nodes: serialNodes,
-      edges: serialEdges,
-      plannerInputSignature: String(plannerSignatureRef.current || ""),
-      storyboardSceneSignature: buildSceneSignature(scenarioScenes, "scene"),
-      comfySceneSignature: buildSceneSignature(comfyScenes, "comfy_scene"),
-      persistedAt: new Date().toISOString(),
-      accountKey,
-      assemblyResult: assemblyResult?.finalVideoUrl
-        ? {
-          finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
-          sceneCount: Number(assemblyResult.sceneCount || 0),
-          audioApplied: !!assemblyResult.audioApplied,
-          introIncluded: !!assemblyResult.introIncluded,
-          totalSegments: Number(assemblyResult.totalSegments || 0),
-          totalSteps: Number(assemblyResult.totalSteps || 0),
-          introDurationSec: Number(assemblyResult.introDurationSec || 0),
-        }
-        : null,
-      assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
-      assemblyPayloadSignature,
-    }));
+      const payload = {
+        nodes: serialNodes,
+        edges: serialEdges,
+        plannerInputSignature: String(plannerSignatureRef.current || ""),
+        storyboardSceneSignature: buildSceneSignature(scenarioScenes, "scene"),
+        comfySceneSignature: buildSceneSignature(comfyScenes, "comfy_scene"),
+        viewport: {
+          x: Number(viewportRef.current?.x || 0),
+          y: Number(viewportRef.current?.y || 0),
+          zoom: Number(viewportRef.current?.zoom || 1),
+        },
+        ui: workspaceUiSnapshot,
+        workspaceBinding: workspaceBindingSnapshot,
+        persistedAt: new Date().toISOString(),
+        accountKey,
+        assemblyResult: assemblyResult?.finalVideoUrl
+          ? {
+            finalVideoUrl: String(assemblyResult.finalVideoUrl || ""),
+            sceneCount: Number(assemblyResult.sceneCount || 0),
+            audioApplied: !!assemblyResult.audioApplied,
+            introIncluded: !!assemblyResult.introIncluded,
+            totalSegments: Number(assemblyResult.totalSegments || 0),
+            totalSteps: Number(assemblyResult.totalSteps || 0),
+            introDurationSec: Number(assemblyResult.introDurationSec || 0),
+          }
+          : null,
+        assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
+        assemblyPayloadSignature,
+      };
+      const ok = safeSet(WORKSPACE_STORE_KEY, JSON.stringify({ workspace: payload })) || safeSet(STORE_KEY, JSON.stringify(payload));
       if (ok) setLastSavedAt(Date.now());
     };
 
@@ -24120,6 +24265,7 @@ const hydrate = useCallback((source = "unknown") => {
   }, [
     nodes,
     edges,
+    WORKSPACE_STORE_KEY,
     STORE_KEY,
     accountKey,
     assemblyResult,
@@ -24127,6 +24273,8 @@ const hydrate = useCallback((source = "unknown") => {
     assemblyPayloadSignature,
     scenarioScenes,
     comfyScenes,
+    workspaceUiSnapshot,
+    workspaceBindingSnapshot,
   ]);
 
 
@@ -25603,6 +25751,25 @@ const hydrate = useCallback((source = "unknown") => {
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          onInit={(instance) => {
+            reactFlowInstanceRef.current = instance;
+            const currentViewport = instance?.getViewport?.();
+            if (currentViewport && Number.isFinite(Number(currentViewport.zoom))) {
+              viewportRef.current = {
+                x: Number(currentViewport.x || 0),
+                y: Number(currentViewport.y || 0),
+                zoom: Number(currentViewport.zoom || 1),
+              };
+            }
+          }}
+          onMoveEnd={(_, viewport) => {
+            if (!viewport || !Number.isFinite(Number(viewport.zoom))) return;
+            viewportRef.current = {
+              x: Number(viewport.x || 0),
+              y: Number(viewport.y || 0),
+              zoom: Number(viewport.zoom || 1),
+            };
+          }}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
@@ -25611,7 +25778,7 @@ const hydrate = useCallback((source = "unknown") => {
           connectionLineStyle={{ strokeDasharray: "6 6" }}
           connectionRadius={28}
           connectionDragThreshold={2}
-          fitView
+          fitView={shouldAutoFitOnLoad}
           minZoom={0.2}
           maxZoom={2}
         >
