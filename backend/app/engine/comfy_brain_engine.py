@@ -1396,6 +1396,8 @@ def _build_world_lock(payload: dict[str, Any], reference_profiles: dict[str, Any
     )
     continuity_rules = [
         "Keep one continuous world unless narration explicitly transitions elsewhere.",
+        f"HARD WORLD LOCK: The world MUST remain: {location_summary or location_name}",
+        "Do NOT change city, architecture, or environment family.",
         "Do not change location family, time of day, lighting logic, or material language without a story cue.",
         "References constrain world identity; audio/text drive semantic scene selection inside that world.",
         "For venue-like worlds keep the same venue identity, but vary staging across coherent connected sub-zones instead of repeating one exact corner.",
