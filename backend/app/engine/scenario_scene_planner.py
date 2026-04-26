@@ -1067,7 +1067,9 @@ def _final_semantic_route_rebalance(
 
 def _expected_scene_count_from_package(package: dict[str, Any]) -> int:
     audio_map = _safe_dict(package.get("audio_map"))
-    audio_count = len(_safe_list(audio_map.get("segments")))
+    audio_count = len(_safe_list(audio_map.get("scene_candidate_windows")))
+    if audio_count <= 0:
+        audio_count = len(_safe_list(audio_map.get("phrase_units")))
     if audio_count > 0:
         return audio_count
     story_core = _safe_dict(package.get("story_core"))
