@@ -3310,6 +3310,33 @@ def build_gemini_scene_plan(
         "scene_plan_retry_prompt_mode": str(prompt_mode or "default"),
         **capability_diag,
     }
+    audio_map = _safe_dict(package.get("audio_map"))
+    audio_segments = _safe_list(audio_map.get("segments"))
+    audio_by_id = {
+        str(_safe_dict(seg).get("segment_id") or "").strip(): _safe_dict(seg)
+        for seg in audio_segments
+        if str(_safe_dict(seg).get("segment_id") or "").strip()
+    }
+    scene_segment_timing_debug: list[dict[str, Any]] = []
+    for idx, row in enumerate(scene_segment_rows):
+        row_obj = _safe_dict(row)
+        segment_id = str(row_obj.get("segment_id") or "").strip()
+        audio_seg = _safe_dict(audio_by_id.get(segment_id))
+        if audio_seg:
+            t0 = _round3(audio_seg.get("t0"))
+            t1 = _round3(audio_seg.get("t1"))
+            row_obj["t0"] = t0
+            row_obj["t1"] = t1
+            row_obj["duration_sec"] = _round3(max(0.0, t1 - t0))
+            scene_segment_rows[idx] = row_obj
+        scene_segment_timing_debug.append(
+            {
+                "segment_id": segment_id or "unknown",
+                "t0": _round3(row_obj.get("t0")),
+                "t1": _round3(row_obj.get("t1")),
+            }
+        )
+    diagnostics["scene_segment_timing_debug"] = scene_segment_timing_debug
     invalid_timing_segments: list[str] = []
     for row in scene_segment_rows:
         row_obj = _safe_dict(row)
