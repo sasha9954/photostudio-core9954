@@ -26,7 +26,7 @@ _ALLOWED_ROUTES = {"i2v", "ia2v", "first_last"}
 _ALLOWED_MOTION_STRENGTH = {"low", "medium", "high"}
 _ALLOWED_AUGMENTATION = {"low", "medium", "high"}
 _ALLOWED_TRANSITION_KIND = {"none", "controlled", "bridge", "morph_guarded"}
-_ALLOWED_AUDIO_SYNC = {"none", "beat_sensitive", "phrase_sensitive"}
+_ALLOWED_AUDIO_SYNC = {"none", "beat_sensitive", "phrase_sensitive", "phrase"}
 _ALLOWED_FRAME_STRATEGY = {"single_init", "start_end"}
 _HUMAN_ROLES = {"character_1", "character_2", "character_3", "group", "hero", "support", "antagonist"}
 _LIP_SYNC_VARIANTS = (
@@ -1076,6 +1076,23 @@ def _sanitize_contract_prompts(*, positive_prompt: str, negative_prompt: str, ro
     }
 
 
+def _strip_ia2v_cutaway_conflicts(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    conflict_patterns = [
+        r"(?i)\bno main performer visible\b[.;:]?",
+        r"(?i)\bno visible singing face\b[.;:]?",
+        r"(?i)\bvocalist offscreen(?:\s+voiceover)?\s+only\b[.;:]?",
+        r"(?i)\bno dominant foreground human subject\b[.;:]?",
+        r"(?i)\benvironment/world-detail cutaway purpose:[^.]*[.;:]?",
+    ]
+    for pattern in conflict_patterns:
+        cleaned = re.sub(pattern, " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:")
+    return cleaned
+
+
 def _rewire_shadow_continuity(previous_seg: dict[str, Any], current_seg: dict[str, Any]) -> None:
     prev_end = str(previous_seg.get("ends_with_state") or "").lower()
     if not any(token in prev_end for token in ("deeper shadows", "shadow pocket", "corridor exit", "reflective darkness")):
@@ -1179,7 +1196,7 @@ def _normalize_route(route_value: Any) -> str:
     if route in {"lip_sync", "lip_sync_music"}:
         route = "ia2v"
     if route not in _ALLOWED_ROUTES:
-        route = "i2v"
+        return ""
     return route
 
 
@@ -1189,7 +1206,7 @@ def _engine_hints_defaults(route: str) -> dict[str, Any]:
             "motion_strength": "medium",
             "augmentation_level": "low",
             "transition_kind": "controlled",
-            "audio_sync_mode": "phrase_sensitive",
+            "audio_sync_mode": "phrase",
             "frame_strategy": "single_init",
         }
     if route == "first_last":
@@ -1882,6 +1899,10 @@ def _sanitize_segment(
             positive_prompt,
             "Performer-first composition is required: main performer visible and dominant; do not convert this shot into an empty environment plate.",
         )
+        positive_prompt = _append_clause(
+            positive_prompt,
+            "Clear vocal performance with visible mouth, readable face, and emotional delivery is required throughout the shot.",
+        )
     positive_prompt = _append_clause(positive_prompt, WORLD_SEASON_CONTINUITY_CLAUSE)
     if not environment_cutaway_i2v:
         positive_prompt = _append_clause(positive_prompt, GLOBAL_CONTINUITY_LOCK_CLAUSE)
@@ -1902,6 +1923,7 @@ def _sanitize_segment(
     if route == "ia2v":
         body = _strip_clear_vocal_fragments(positive_prompt)
         body = _strip_ia2v_positive_noise(body)
+        body = _strip_ia2v_cutaway_conflicts(body)
         positive_prompt = f"{IA2V_BASE_PROMPT_V1} {body}".strip()
         positive_prompt = _dedupe_prompt_sentences(re.sub(r"\s+", " ", positive_prompt).strip(" ,.;"))
 
@@ -1982,6 +2004,8 @@ def _sanitize_segment(
         transition_kind = engine_defaults["transition_kind"]
     if audio_sync_mode not in _ALLOWED_AUDIO_SYNC:
         audio_sync_mode = engine_defaults["audio_sync_mode"]
+    if route == "ia2v":
+        audio_sync_mode = "phrase"
     if frame_strategy not in _ALLOWED_FRAME_STRATEGY:
         frame_strategy = engine_defaults["frame_strategy"]
 
