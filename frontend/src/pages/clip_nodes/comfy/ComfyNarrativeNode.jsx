@@ -182,12 +182,12 @@ export default function ComfyNarrativeNode({ id, data }) {
       setAiLoading(true);
       const response = await fetchJson("/api/director/interpret", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           text,
           answers: aiAnswers,
           hasAudio: hasAudioSource,
           refs: aiRefs,
-        }),
+        },
       });
       setAiQuestions(null);
       setAiAnswers({});
@@ -208,11 +208,11 @@ export default function ComfyNarrativeNode({ id, data }) {
     try {
       const response = await fetchJson("/api/director/interpret", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           text,
           hasAudio: hasAudioSource,
           refs: aiRefs,
-        }),
+        },
       });
       if (response?.needs_clarification) {
         setAiQuestions(response?.questions || []);
