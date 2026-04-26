@@ -1080,6 +1080,7 @@ def _expected_scene_count_from_package(package: dict[str, Any]) -> int:
 
 def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     lookup: dict[str, dict[str, Any]] = {}
+    print("[SCENES] using scene_casting as source of truth")
     scene_casting = _safe_list(role_plan.get("scene_casting"))
     if scene_casting:
         for row_raw in scene_casting:
@@ -1104,11 +1105,16 @@ def _build_scene_role_lookup(role_plan: dict[str, Any]) -> dict[str, dict[str, A
                     ),
                 }
         return lookup
-    for row_raw in _safe_list(role_plan.get("scene_roles")):
+    for row_raw in _safe_list(role_plan.get("scene_casting")):
         row = _safe_dict(row_raw)
-        scene_id = str(row.get("scene_id") or "").strip()
+        scene_id = str(row.get("segment_id") or "").strip()
         if scene_id:
-            lookup[scene_id] = row
+            lookup[scene_id] = {
+                "scene_id": scene_id,
+                "segment_id": scene_id,
+                "primary_role": str(row.get("primary_role") or "").strip(),
+                "secondary_roles": _safe_list(row.get("secondary_roles")),
+            }
     return lookup
 
 
@@ -1237,7 +1243,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "scene_casting": _safe_list(role_plan.get("scene_casting")),
             "world_continuity": _safe_dict(story_core.get("world_lock")) or _safe_dict(role_plan.get("world_continuity")),
             "world_summary": world_summary,
-            "scene_roles": _safe_list(role_plan.get("scene_roles")),
+            "scene_roles": _safe_list(role_plan.get("scene_casting")),
             "compiled_contract": {
                 "global_contract": _safe_dict(compiled_contract.get("global_contract")),
                 "scene_contracts": _safe_list(compiled_contract.get("scene_contracts")),
