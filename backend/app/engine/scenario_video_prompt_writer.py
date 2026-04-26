@@ -678,17 +678,30 @@ def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) ->
         or route_payload.get("route")
     )
 
-    # Route truth must come from upstream scene planning layers.
-    # Final prompt writer is not allowed to silently mutate i2v -> ia2v
-    # even if this segment looks like a final emotional payoff candidate.
-    route = next(
+    route_before = str(
+        video_metadata.get("route_type")
+        or row.get("route")
+        or route_payload.get("route")
+        or fallback_row.get("route")
+        or ""
+    ).strip().lower()
+
+    route_candidate = next(
         (
             candidate
             for candidate in (scene_plan_route, scene_prompt_route, fallback_route, model_route)
             if candidate in _ALLOWED_ROUTES
         ),
-        "",
+        "i2v",
     )
+    route = route_candidate
+    original_route = scene_plan_route
+    ia2v_invalid = _has_explicit_invalid_ia2v_marker(fallback_row)
+    has_audio_signal = _has_audio_signal_for_segment(fallback_row)
+    if original_route == "ia2v":
+        route = "ia2v"
+        if ia2v_invalid and not has_audio_signal:
+            route = "i2v"
 
     diagnostics = _safe_dict(fallback_row.get("final_video_prompt_diagnostics"))
     diagnostics["final_emotional_payoff_candidate"] = bool(_is_final_emotional_payoff_candidate(fallback_row))
@@ -703,10 +716,15 @@ def _resolve_segment_route(row: dict[str, Any], fallback_row: dict[str, Any]) ->
         if route == model_route
         else "missing"
     )
+    diagnostics["route_before"] = route_before
+    diagnostics["route_after"] = route
+    diagnostics["scene_plan_original_route"] = original_route
+    diagnostics["ia2v_invalid_marker_detected"] = bool(ia2v_invalid)
+    diagnostics["has_audio_signal"] = bool(has_audio_signal)
     fallback_row["final_video_prompt_diagnostics"] = diagnostics
 
     if route not in _ALLOWED_ROUTES:
-        raise RuntimeError("FINAL_VIDEO_PROMPT_ROUTE_MISSING")
+        route = "i2v"
     return route
 
 
@@ -1196,8 +1214,49 @@ def _normalize_route(route_value: Any) -> str:
     if route in {"lip_sync", "lip_sync_music"}:
         route = "ia2v"
     if route not in _ALLOWED_ROUTES:
-        return ""
+        return "i2v"
     return route
+
+
+def _has_audio_signal_for_segment(fallback_row: dict[str, Any]) -> bool:
+    prompt_row = _safe_dict(fallback_row.get("prompt_row"))
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    audio_segment = _safe_dict(fallback_row.get("audio_segment"))
+    transcript = " ".join(
+        [
+            str(audio_segment.get("transcript_slice") or audio_segment.get("text") or "").strip(),
+            str(plan_row.get("spoken_line") or "").strip(),
+            str(prompt_row.get("spoken_line") or "").strip(),
+        ]
+    ).strip()
+    return bool(
+        transcript
+        or audio_segment.get("is_lip_sync_candidate")
+        or plan_row.get("requires_audio")
+        or prompt_row.get("requires_audio")
+    )
+
+
+def _has_explicit_invalid_ia2v_marker(fallback_row: dict[str, Any]) -> bool:
+    plan_row = _safe_dict(fallback_row.get("plan_row"))
+    prompt_row = _safe_dict(fallback_row.get("prompt_row"))
+    reason_blob = " ".join(
+        [
+            str(plan_row.get("route_reason") or ""),
+            str(plan_row.get("route_selection_reason") or ""),
+            str(prompt_row.get("route_reason") or ""),
+            str(prompt_row.get("route_selection_reason") or ""),
+        ]
+    ).strip().lower()
+    reject_reasons = _safe_list(plan_row.get("ia2v_evidence_reject_reasons")) + _safe_list(
+        prompt_row.get("ia2v_evidence_reject_reasons")
+    )
+    reject_blob = " ".join(str(item or "") for item in reject_reasons).lower()
+    return bool(
+        "forced_ia2v_invalid_downgraded_to_i2v" in reason_blob
+        or "invalid" in reject_blob
+        or "downgraded_to_i2v" in reject_blob
+    )
 
 
 def _engine_hints_defaults(route: str) -> dict[str, Any]:
@@ -1890,6 +1949,14 @@ def _sanitize_segment(
         if domestic_scene:
             route_template_source = "i2v_domestic_safety_template"
             positive_prompt = _append_clause(positive_prompt, DOMESTIC_WORLD_LOCK_BLOCK)
+        positive_prompt = _append_clause(
+            positive_prompt,
+            "Environment-first cutaway: no main performer, no visible singing face, no lip-sync performance; vocalist remains offscreen.",
+        )
+        positive_prompt = _append_clause(
+            positive_prompt,
+            "Camera behavior: slow, stable, restrained cinematic drift only.",
+        )
     elif route == "ia2v":
         route_behavior_template = "Performer-first lip-sync remains the priority: emotionally active singing delivery with readable mouth, no frozen posture, and smooth grounded body-led performance."
         route_template_source = "ia2v_lipsync_template"
@@ -2036,7 +2103,11 @@ def _sanitize_segment(
         lip_sync_allowed = False
         requires_audio = False
         audio_sync_mode = "none"
-    alias_audio_sync_mode = "lip_sync" if route == "ia2v" and lip_sync_allowed else "none"
+    if route == "ia2v":
+        requires_audio = True
+        audio_sync_mode = "phrase"
+        lip_sync_allowed = True
+    alias_audio_sync_mode = "phrase" if route == "ia2v" else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
     image_prompt = ". ".join(
         part
@@ -2151,10 +2222,13 @@ def _sanitize_segment(
     body_lock_applied = bool(has_human_subject and (route != "ia2v" or hero_continuity_lock_applied))
     continuity_fix_applied = bool(row.get("continuity_fix_applied") or hero_continuity_lock_applied)
 
+    route_diag = _safe_dict(fallback_row.get("final_video_prompt_diagnostics"))
     return {
         "segment_id": segment_id,
         "scene_id": scene_id,
         "route": route,
+        "route_before": str(route_diag.get("route_before") or "").strip(),
+        "route_after": str(route_diag.get("route_after") or route).strip(),
         "route_payload": {
             "route": route,
             "positive_prompt": _strip_literal_quoted_dialogue(positive_prompt),
@@ -2267,6 +2341,38 @@ def _sanitize_segment(
 
 
 def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict[str, Any]) -> dict[str, Any]:
+    def _build_audio_window_map() -> dict[str, dict[str, float]]:
+        windows = [row for row in _safe_list(_safe_dict(package.get("audio_map")).get("scene_candidate_windows")) if isinstance(row, dict)]
+        mapped: dict[str, dict[str, float]] = {}
+        for idx, row in enumerate(windows, start=1):
+            t0 = round(float(row.get("t0") or 0.0), 3)
+            t1 = round(float(row.get("t1") or t0), 3)
+            if t1 <= t0:
+                continue
+            payload = {"t0": t0, "t1": t1, "duration_sec": round(t1 - t0, 3)}
+            win_id = str(row.get("id") or "").strip()
+            if win_id:
+                mapped[win_id] = payload
+            mapped[f"seg_{idx:02d}"] = payload
+        return mapped
+
+    def _resolve_segment_timing(fallback_row: dict[str, Any], window_map: dict[str, dict[str, float]]) -> dict[str, float]:
+        segment_id = str(fallback_row.get("segment_id") or "").strip()
+        scene_id = str(fallback_row.get("scene_id") or "").strip()
+        plan_row = _safe_dict(fallback_row.get("plan_row"))
+        candidates: list[dict[str, float]] = []
+        mapped = window_map.get(segment_id) or window_map.get(scene_id)
+        if mapped:
+            candidates.append(mapped)
+        plan_t0 = round(float(plan_row.get("t0") or 0.0), 3)
+        plan_t1 = round(float(plan_row.get("t1") or plan_t0), 3)
+        if plan_t1 > plan_t0:
+            candidates.append({"t0": plan_t0, "t1": plan_t1, "duration_sec": round(plan_t1 - plan_t0, 3)})
+        for cand in candidates:
+            if float(cand.get("t1") or 0.0) > float(cand.get("t0") or 0.0):
+                return cand
+        raise RuntimeError(f"final_video_prompt_invalid_timing:{segment_id or scene_id or 'unknown'}")
+
     data = _safe_dict(raw)
     model_segments = _safe_list(data.get("segments"))
     by_segment_id = {
@@ -2276,6 +2382,7 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
     }
 
     normalized: list[dict[str, Any]] = []
+    window_map = _build_audio_window_map()
     previous_lip_variant = ""
     identity_ctx = _character_1_context(package)
     for fallback_row in segment_rows:
@@ -2301,6 +2408,10 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
             if repeated and not seg.get("continuity_warning"):
                 seg["continuity_warning"] = "adjacent_lip_sync_variant_repeated"
             previous_lip_variant = current_variant or previous_lip_variant
+        timing = _resolve_segment_timing(fallback_row, window_map)
+        seg["t0"] = timing["t0"]
+        seg["t1"] = timing["t1"]
+        seg["duration_sec"] = timing["duration_sec"]
         normalized.append(seg)
 
     duplicate_segments: list[str] = []
@@ -2519,6 +2630,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
 
     ok = bool(normalized_payload and _safe_list(normalized_payload.get("segments")))
     scene_contract_logs = []
+    segment_debug_logs = []
     route_diagnostics: dict[str, Any] = {
         "final_video_prompt_route_alias_applied": True,
         "final_video_prompt_route_by_segment": {},
@@ -2550,6 +2662,16 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                     "negativeContainsPositiveIdentityBlock": bool(row.get("negativeContainsPositiveIdentityBlock")),
                     "positivePromptPreview": str(route_payload.get("positive_prompt") or "")[:220],
                     "negativePromptPreview": str(route_payload.get("negative_prompt") or "")[:220],
+                }
+            )
+            segment_debug_logs.append(
+                {
+                    "segment_id": str(row.get("segment_id") or ""),
+                    "route_before": str(row.get("route_before") or ""),
+                    "route_after": str(row.get("route_after") or row.get("route") or ""),
+                    "t0": row.get("t0"),
+                    "t1": row.get("t1"),
+                    "audio_sync_mode": str(row.get("audio_sync_mode") or ""),
                 }
             )
     validation_error = ""
@@ -2593,6 +2715,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_timeout_retry_attempted": bool(timed_out and attempts > 1),
             "final_video_prompt_response_was_empty_after_timeout": response_was_empty_after_timeout,
             "final_video_prompt_scene_contract_logs": scene_contract_logs,
+            "final_video_prompt_segment_debug_logs": segment_debug_logs,
             "current_character_1_gender_hint": str(identity_ctx.get("gender_hint") or ""),
             "current_character_1_identity_label": str(identity_ctx.get("identity_label") or ""),
             "current_character_1_ref_count": int(identity_ctx.get("ref_count") or 0),
