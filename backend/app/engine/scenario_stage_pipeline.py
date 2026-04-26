@@ -2542,13 +2542,13 @@ def _scene_prompts_quality_pass(
         emotional_key = str(row.get("emotional_key") or scene_row.get("emotional_key") or core_row.get("emotional_key") or "").strip().lower()
         location_zone = str(row.get("location_zone") or scene_row.get("location_zone") or core_row.get("location_zone") or "").strip()
         candidates = [
-            ("intimate_close_lipsync", "Intimate close lip-sync: tight face framing, breath-level delivery, tiny controlled hand motion."),
-            ("grounded_static_authority", "Grounded static authority: mostly locked framing, minimal gesture, calm decisive eye-line."),
-            ("slow_walk_and_sing", "Slow walk-and-sing: measured forward drift with stable identity and readable mouth."),
-            ("waist_up_declamatory", "Waist-up declaratory frame: chest-to-head composition, deliberate emphatic gestures, steady cadence."),
-            ("close_emotional_pressure", "Close emotional pressure: compressed framing, micro-expression emphasis, controlled inner tension."),
-            ("wide_heroic_singer_in_world", "Wide heroic singer-in-world: performer remains primary but Odessa environment breathes around her."),
-            ("final_restrained_decisive_line", "Final restrained decisive line: still posture, short decisive gesture, emotionally resolved delivery."),
+            ("intimate_close_lipsync", "Singer under a weathered stone archway, close face framing with shoulder context, natural daylight, subtle hand motion, background passage depth."),
+            ("grounded_static_authority", "Singer beside a cracked plaster wall and iron gate, mostly locked waist-up framing, natural side light, minimal gesture, steady eye-line with real street depth."),
+            ("slow_walk_and_sing", "Singer walking slowly along a narrow Odessa street, cobblestones and doorways visible, gentle handheld forward drift, readable mouth, passersby in soft background."),
+            ("waist_up_declamatory", "Waist-up frame in a lived-in courtyard with hanging laundry and worn stone, chest-to-head composition, measured emphatic gestures, natural daylight, stable cadence."),
+            ("close_emotional_pressure", "Close framing near a narrow arch corridor, textured walls and shadow gradients visible, micro-expression emphasis, controlled tension, ambient daylight only."),
+            ("wide_heroic_singer_in_world", "Wide shot on seaside embankment wall, singer grounded in real pedestrian space, wind in clothing, deep background horizon, no stage lighting."),
+            ("final_restrained_decisive_line", "Singer near a quiet street corner at dusk, still posture, restrained gesture, natural fading light, architectural lines framing a resolved final delivery."),
         ]
         selected = "intimate_close_lipsync"
         if arc_role in {"climax", "pivot"} or "pressure" in emotional_key:
@@ -2575,6 +2575,12 @@ def _scene_prompts_quality_pass(
         return ""
 
     rewritten_segments: list[dict[str, Any]] = []
+    total_segments = len(segments)
+    world_concrete_clauses = [
+        "Wide environmental framing in a specific Odessa location: courtyard, archway, street, or seaside with visible depth.",
+        "Include physical texture cues: cracked plaster, worn stone, cobblestones, iron railings, laundry lines, sea wind, or weathered walls.",
+        "Use natural light behavior and clear composition: foreground/midground/background separation with stable camera intent.",
+    ]
     for idx, raw_row in enumerate(segments, start=1):
         row = deepcopy(_safe_dict(raw_row))
         segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
@@ -2616,9 +2622,22 @@ def _scene_prompts_quality_pass(
             world_clause = "World/cutaway mode: no visible singer or lip-sync framing; keep vocalist offscreen or non-dominant."
             if world_clause.lower() not in cleaned.lower():
                 cleaned = f"{world_clause} {cleaned}".strip()
+            for clause in world_concrete_clauses:
+                if clause.lower() not in cleaned.lower():
+                    cleaned = _prepend_clause_once(cleaned, clause)
             if cleaned != video_prompt:
                 row["video_prompt"] = cleaned
                 world_i2v_conflict_fixed_count += 1
+
+        if idx >= max(1, total_segments - 1):
+            closure_clause = (
+                "Final closure framing: longer hold, quieter motion, greater distance, and residual presence "
+                "(subject leaving frame or empty location after action)."
+            )
+            for key in ("video_prompt", "photo_prompt"):
+                current = str(row.get(key) or "").strip()
+                if current and closure_clause.lower() not in current.lower():
+                    row[key] = _prepend_clause_once(current, closure_clause)
 
         rewritten_segments.append(row)
 
@@ -6614,7 +6633,7 @@ def _compress_story_core_literal_segment_text(
     }
     emotional_map = {
         "setup": "measured curiosity with latent tension",
-        "build": "mounting urgency carried by accumulating witness detail",
+        "build": "mounting urgency carried by crowded bystanders, tightening street distance, and visible public attention",
         "pivot": "charged uncertainty with unstable balance of control",
         "climax": "high-voltage confrontation under social pressure",
         "release": "controlled exhale with reflective drag",
@@ -6631,8 +6650,8 @@ def _compress_story_core_literal_segment_text(
         "balanced": "Balance hero signal and environmental counterweight within the same beat",
     }
     subtext_map = {
-        "second_order": "Encode meaning through implication rather than declarative labeling",
-        "coded": "Use indirect dramatic coding and avoid literal claim statements",
+        "second_order": "Show meaning through concrete environment cues: distance between people, blocked paths, doorways, and visible reactions in frame",
+        "coded": "Use concrete visual behavior instead of slogans: exchanged glances, guarded posture, interrupted movement, and objects handled with caution",
         "direct": "Preserve clear intent while avoiding literal replay of source text",
     }
     role = str(arc_role or "").strip().lower()
@@ -6641,7 +6660,7 @@ def _compress_story_core_literal_segment_text(
     subtext_mode = str(row.get("subtext_mode") or "").strip().lower()
     mode_clause = beat_mode_map.get(beat_mode) or "Keep progression tied to concrete visual logic"
     foreground_clause = hero_world_map.get(hero_world_mode) or "Keep subject/world hierarchy coherent for this beat"
-    subtext_clause = subtext_map.get(subtext_mode) or "Maintain anti-literal framing and semantic indirection"
+    subtext_clause = subtext_map.get(subtext_mode) or "Keep cues concrete: specific place details, physical textures, and visible behavior instead of abstract labels"
     choices = function_map.get(role) or function_map["build"]
     phrase_seed = f"{str(row.get('segment_id') or '').strip()}|{beat_mode}|{hero_world_mode}|{subtext_mode}"
     selected_idx = int(hashlib.sha1(phrase_seed.encode("utf-8")).hexdigest(), 16) % len(choices)
