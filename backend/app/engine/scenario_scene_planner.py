@@ -2717,10 +2717,6 @@ def _normalize_scene_plan(
         hard_route = str(hard_route_map.get(segment_id) or "").strip().lower()
         if hard_route in ALLOWED_ROUTES:
             route = hard_route
-        if str(force_route_mode or "").strip().lower() == "strict_ai" and forced_route_list:
-            ai_route = forced_route_list[idx % len(forced_route_list)]
-            route = ai_route
-            hard_route = ai_route
         if str(structure or "").strip().lower() == "performance_cut":
             has_vocal = bool(source_row.get("has_vocal"))
             if not has_vocal:
@@ -2728,6 +2724,10 @@ def _normalize_scene_plan(
             perf_route = "ia2v" if has_vocal else "i2v"
             route = perf_route
             hard_route = perf_route
+        elif str(force_route_mode or "").strip().lower() == "strict_ai" and forced_route_list:
+            ai_route = forced_route_list[idx % len(forced_route_list)]
+            route = ai_route
+            hard_route = ai_route
         if route not in ALLOWED_ROUTES:
             illegal_route_count += 1
             validation_error = validation_error or "illegal_route"
