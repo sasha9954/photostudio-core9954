@@ -36,6 +36,10 @@ _GLOBAL_NEGATIVE_PROMPT = (
 _LIP_SYNC_NEGATIVE_PROMPT = (
     "hidden mouth, unreadable lips, mouth fully obscured for long, face fully turned away from readability, severe identity drift, duplicate main subject, severe facial deformation"
 )
+_SCENES_CORE_NEGATIVE_PROMPT = (
+    "empty walking, no-action scene, static camera, generic city shot, "
+    "lifeless environment, random motion, broken anatomy"
+)
 _IA2V_LIP_SYNC_NEGATIVE_CANON = _LIP_SYNC_NEGATIVE_PROMPT
 _IA2V_VIDEO_PROMPT_CANON = (
     "Use the uploaded image as the exact first frame and identity anchor. "
@@ -1899,6 +1903,76 @@ def _build_i2v_prompt_bundle(
     }
 
 
+def _build_scenes_core_image_prompt(scene: dict[str, Any]) -> str:
+    camera = _safe_dict(scene.get("camera"))
+    prompt_parts: list[str] = []
+    scene_specific_count = 0
+    for value in (
+        scene.get("location"),
+        scene.get("action"),
+        scene.get("environment_interaction"),
+        scene.get("visual_hook"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            prompt_parts.append(text)
+            scene_specific_count += 1
+    framing = str(camera.get("framing") or "").strip()
+    if framing:
+        prompt_parts.append(f"{framing} shot")
+        scene_specific_count += 1
+    angle = str(camera.get("angle") or "").strip()
+    if angle:
+        prompt_parts.append(f"{angle} angle")
+        scene_specific_count += 1
+
+    if scene_specific_count == 0:
+        return ""
+
+    prompt_parts.append("cinematic lighting")
+    prompt_parts.append("realistic environment")
+    prompt_parts.append("consistent character identity")
+    return ", ".join(prompt_parts)
+
+
+def _build_scenes_core_video_prompt(scene: dict[str, Any], route: str) -> str:
+    camera = _safe_dict(scene.get("camera"))
+    video_parts: list[str] = []
+    scene_specific_count = 0
+
+    action = str(scene.get("action") or "").strip()
+    if action:
+        video_parts.append(action)
+        scene_specific_count += 1
+    movement = str(camera.get("movement") or "").strip()
+    if movement:
+        video_parts.append(f"camera {movement}")
+        scene_specific_count += 1
+    environment_interaction = str(scene.get("environment_interaction") or "").strip()
+    if environment_interaction:
+        video_parts.append(f"environment reacts: {environment_interaction}")
+        scene_specific_count += 1
+    visual_hook = str(scene.get("visual_hook") or "").strip()
+    if visual_hook:
+        video_parts.append(f"visual focus: {visual_hook}")
+        scene_specific_count += 1
+    energy = str(scene.get("energy") or "").strip()
+    if energy:
+        video_parts.append(f"energy level: {energy}")
+        scene_specific_count += 1
+
+    if scene_specific_count == 0:
+        return ""
+
+    video_parts.append("no idle walking")
+    video_parts.append("no static lifeless frames")
+    if route == "ia2v":
+        video_parts.append("clear vocal performance, visible mouth articulation, expressive face")
+    elif route == "i2v":
+        video_parts.append("natural motion, no lip sync")
+    return ", ".join(video_parts)
+
+
 def _build_fallback_scene_prompts(
     package: dict[str, Any],
     scene_plan_row: dict[str, Any],
@@ -2048,6 +2122,21 @@ def _build_fallback_scene_prompts(
         else:
             video_prompt = simplified
             positive_video_prompt = simplified
+
+    scenes_core = _safe_dict(scene_plan_row.get("scenes_core")) or _safe_dict(scene_plan_row.get("scene_core"))
+    scene_prompt_source = dict(scenes_core)
+    for key in ("location", "action", "environment_interaction", "visual_hook", "energy", "camera"):
+        if key not in scene_prompt_source and key in scene_plan_row:
+            scene_prompt_source[key] = scene_plan_row.get(key)
+    if route in {"i2v", "ia2v"}:
+        structured_image_prompt = _build_scenes_core_image_prompt(scene_prompt_source)
+        structured_video_prompt = _build_scenes_core_video_prompt(scene_prompt_source, route)
+        if structured_image_prompt:
+            photo_prompt = structured_image_prompt
+        if structured_video_prompt:
+            video_prompt = structured_video_prompt
+            positive_video_prompt = structured_video_prompt
+            negative_video_prompt = _append_prompt_clause(negative_video_prompt, _SCENES_CORE_NEGATIVE_PROMPT)
 
     fallback_notes = _prompt_notes_template(route)
     fallback_notes["shot_intent"] = scene_function
