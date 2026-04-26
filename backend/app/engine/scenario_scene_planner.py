@@ -2601,6 +2601,9 @@ def _normalize_scene_plan(
     scene_segment_rows: list[dict[str, Any]],
     role_lookup: dict[str, dict[str, Any]],
     creative_config: dict[str, Any],
+    force_route_mode: str = "",
+    forced_routes: list[str] | None = None,
+    structure: str = "",
     vocal_gender: str = UNKNOWN_VOCAL_GENDER,
     vocal_owner_role: str = UNKNOWN_VOCAL_OWNER_ROLE,
     include_debug_raw: bool = False,
@@ -2693,6 +2696,12 @@ def _normalize_scene_plan(
     appearance_modes = _safe_dict(character_appearance_modes_by_role)
     scene_character_visibility_policy: list[dict[str, Any]] = []
 
+    forced_route_list = [
+        str(item).strip().lower()
+        for item in _safe_list(forced_routes)
+        if str(item).strip().lower() in ALLOWED_ROUTES
+    ]
+
     for idx, source_row in enumerate(scene_segment_rows):
         segment_id = str(source_row.get("segment_id") or "").strip()
         raw_row = _safe_dict(storyboard_by_id.get(segment_id))
@@ -2708,6 +2717,17 @@ def _normalize_scene_plan(
         hard_route = str(hard_route_map.get(segment_id) or "").strip().lower()
         if hard_route in ALLOWED_ROUTES:
             route = hard_route
+        if str(force_route_mode or "").strip().lower() == "strict_ai" and forced_route_list:
+            ai_route = forced_route_list[idx % len(forced_route_list)]
+            route = ai_route
+            hard_route = ai_route
+        if str(structure or "").strip().lower() == "performance_cut":
+            has_vocal = bool(source_row.get("has_vocal"))
+            if not has_vocal:
+                has_vocal = bool(source_row.get("is_lip_sync_candidate")) or bool(str(source_row.get("transcript_slice") or "").strip())
+            perf_route = "ia2v" if has_vocal else "i2v"
+            route = perf_route
+            hard_route = perf_route
         if route not in ALLOWED_ROUTES:
             illegal_route_count += 1
             validation_error = validation_error or "illegal_route"
@@ -3500,7 +3520,11 @@ def build_gemini_scene_plan(
     compiled_contract = _safe_dict(aux.get("compiled_contract"))
     world_summary_used = bool(aux.get("world_summary_used"))
     include_debug_raw = _scene_plan_debug_enabled(package)
-    creative_config = _normalize_creative_config(_safe_dict(package.get("input")).get("creative_config"))
+    input_payload = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_payload.get("creative_config"))
+    force_route_mode = str(input_payload.get("forceRouteMode") or "").strip().lower()
+    forced_routes = [str(item).strip().lower() for item in _safe_list(input_payload.get("forced_routes")) if str(item).strip()]
+    structure = str(input_payload.get("structure") or "").strip().lower()
     story_core_raw = _safe_dict(package.get("story_core"))
     role_plan_raw = _safe_dict(package.get("role_plan"))
     beat_map_raw = _safe_dict(package.get("beat_map"))
@@ -3794,6 +3818,9 @@ def build_gemini_scene_plan(
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            force_route_mode=force_route_mode,
+            forced_routes=forced_routes,
+            structure=structure,
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
@@ -3825,6 +3852,9 @@ def build_gemini_scene_plan(
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            force_route_mode=force_route_mode,
+            forced_routes=forced_routes,
+            structure=structure,
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
@@ -3860,6 +3890,9 @@ def build_gemini_scene_plan(
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            force_route_mode=force_route_mode,
+            forced_routes=forced_routes,
+            structure=structure,
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
@@ -3893,6 +3926,9 @@ def build_gemini_scene_plan(
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            force_route_mode=force_route_mode,
+            forced_routes=forced_routes,
+            structure=structure,
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
@@ -3941,6 +3977,9 @@ def build_gemini_scene_plan(
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            force_route_mode=force_route_mode,
+            forced_routes=forced_routes,
+            structure=structure,
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,
@@ -3994,6 +4033,9 @@ def build_gemini_scene_plan(
             scene_segment_rows=scene_segment_rows,
             role_lookup=role_lookup,
             creative_config=creative_config,
+            force_route_mode=force_route_mode,
+            forced_routes=forced_routes,
+            structure=structure,
             vocal_gender=vocal_gender,
             vocal_owner_role=vocal_owner_role,
             include_debug_raw=include_debug_raw,

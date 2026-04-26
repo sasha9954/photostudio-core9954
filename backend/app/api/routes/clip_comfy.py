@@ -1209,6 +1209,7 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
             req["forced_routes"] = ai_cfg.get("routes")
     structure = str(req.get("structure") or "").strip().lower()
     if structure == "performance_cut":
+        req["forced_routes"] = ["ia2v", "i2v"]
         req.setdefault("creative_config", {})
         if isinstance(req.get("creative_config"), dict):
             req["creative_config"]["vocal_policy"] = "ia2v_only_on_vocal_windows"
