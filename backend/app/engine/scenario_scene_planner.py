@@ -774,6 +774,63 @@ def _build_scene_segment_rows(
     story_core_v1 = _safe_dict(story_core.get("story_core_v1"))
     if not story_core_v1 and str(story_core.get("schema_version") or "").startswith("core_v1"):
         story_core_v1 = story_core
+    scenes_core = story_core_v1.get("scenes_core")
+    if scenes_core and isinstance(scenes_core, list):
+        scenes: list[dict[str, Any]] = []
+        audio_segments_source = _safe_list(audio_map.get("segments")) or _safe_list(audio_map.get("scene_candidate_windows"))
+        audio_lookup = {
+            str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+            for row in audio_segments_source
+            if str(_safe_dict(row).get("segment_id") or "").strip()
+        }
+        role_lookup = _build_scene_role_lookup(role_plan)
+        for sc_raw in scenes_core:
+            sc = _safe_dict(sc_raw)
+            segment_id = str(sc.get("segment_id") or "").strip()
+            if not segment_id:
+                continue
+            audio_row = _safe_dict(audio_lookup.get(segment_id))
+            role_row = _safe_dict(role_lookup.get(segment_id))
+            t0 = _round3(audio_row.get("t0"))
+            t1 = _round3(audio_row.get("t1"))
+            scene = {
+                "scene_id": segment_id,
+                "segment_id": segment_id,
+                "t0": t0,
+                "t1": t1,
+                "duration": _round3(t1 - t0) if t1 >= t0 else 0.0,
+                "duration_sec": _round3(t1 - t0) if t1 >= t0 else 0.0,
+                "primary_role": str(role_row.get("primary_role") or "").strip(),
+                "secondary_roles": [str(v).strip() for v in _safe_list(role_row.get("secondary_roles")) if str(v).strip()],
+                "scene_goal": str(sc.get("scene_goal") or "").strip(),
+                "location": str(sc.get("location") or "").strip(),
+                "action": str(sc.get("action") or "").strip(),
+                "environment_interaction": str(sc.get("environment_interaction") or "").strip(),
+                "visual_hook": str(sc.get("visual_hook") or "").strip(),
+                "camera": str(sc.get("camera") or "").strip(),
+                "cut_type": str(sc.get("cut_type") or "").strip(),
+                "energy": str(sc.get("energy") or "").strip(),
+                "continuity_rule": str(sc.get("continuity_rule") or "").strip(),
+            }
+            scenes.append(scene)
+        audio_segment_count = len(
+            [
+                row
+                for row in audio_segments_source
+                if str(_safe_dict(row).get("segment_id") or "").strip()
+            ]
+        )
+        scenes_have_required_timing = all(
+            str(_safe_dict(scene).get("segment_id") or "").strip()
+            and isinstance(_safe_dict(scene).get("t0"), (int, float))
+            and isinstance(_safe_dict(scene).get("t1"), (int, float))
+            and _safe_dict(scene).get("t1") >= _safe_dict(scene).get("t0")
+            for scene in scenes
+        )
+        if scenes and len(scenes) == audio_segment_count and scenes_have_required_timing:
+            print("[SCENES] built from scenes_core")
+            return scenes, []
+        print("[SCENES] scenes_core present but failed validation; falling back to legacy scene builder")
     beat_map = _safe_dict(story_core_v1.get("beat_map"))
     beat_rows = [_safe_dict(row) for row in _safe_list(beat_map.get("beats"))]
     beat_rows_by_segment = {
