@@ -3407,6 +3407,46 @@ def build_gemini_scene_plan(
         if t0 < 0.0 or t1 <= t0 or duration_sec <= 0.0 or abs(duration_sec - (t1 - t0)) > 0.02:
             invalid_timing_segments.append(segment_id)
 
+    def _ensure_scene_plan_scenes(scene_plan: dict[str, Any]) -> None:
+        existing_scenes = _safe_list(scene_plan.get("scenes"))
+        existing_route_by_segment = {
+            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): str(_safe_dict(row).get("route") or "").strip().lower()
+            for row in existing_scenes
+            if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        }
+        storyboard_route_by_segment = {
+            str(_safe_dict(row).get("segment_id") or "").strip(): str(_safe_dict(row).get("route") or "").strip().lower()
+            for row in _safe_list(scene_plan.get("storyboard"))
+            if str(_safe_dict(row).get("segment_id") or "").strip()
+        }
+        scene_segment_rows_for_plan: list[dict[str, Any]] = []
+        for source_row in scene_segment_rows:
+            source = _safe_dict(source_row)
+            segment_id = str(source.get("segment_id") or source.get("scene_id") or "").strip()
+            if not segment_id:
+                continue
+            route = (
+                str(existing_route_by_segment.get(segment_id) or "").strip().lower()
+                or str(storyboard_route_by_segment.get(segment_id) or "").strip().lower()
+                or str(source.get("route") or "").strip().lower()
+                or "i2v"
+            )
+            scene_segment_rows_for_plan.append(
+                {
+                    "scene_id": segment_id,
+                    "segment_id": segment_id,
+                    "t0": _round3(source.get("t0")),
+                    "t1": _round3(source.get("t1")),
+                    "duration_sec": _round3(source.get("duration_sec")),
+                    "route": route if route in ALLOWED_ROUTES else "i2v",
+                }
+            )
+        if scene_segment_rows_for_plan:
+            scene_plan["scenes"] = scene_segment_rows_for_plan
+        else:
+            raise ValueError("scene_plan has no scenes after build")
+        diagnostics["scene_plan_scenes_count"] = len(_safe_list(scene_plan.get("scenes")))
+
     def _collect_scene_plan_diagnostics(
         *,
         scene_plan: dict[str, Any],
@@ -3551,6 +3591,7 @@ def build_gemini_scene_plan(
             include_debug_raw=include_debug_raw,
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
+        _ensure_scene_plan_scenes(plan)
         diagnostics["error_code"] = error_code or "SCENES_SCHEMA_INVALID"
         diagnostics.update(
             _collect_scene_plan_diagnostics(
@@ -3581,6 +3622,7 @@ def build_gemini_scene_plan(
             include_debug_raw=include_debug_raw,
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
+        _ensure_scene_plan_scenes(plan)
         diagnostics["error_code"] = "SCENES_AUDIO_TIMING_REQUIRED"
         diagnostics["validation_error"] = "audio_segments_missing_timing"
         diagnostics["invalid_timing_segment_ids"] = list(dict.fromkeys(invalid_timing_segments))
@@ -3615,6 +3657,7 @@ def build_gemini_scene_plan(
             include_debug_raw=include_debug_raw,
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
+        _ensure_scene_plan_scenes(plan)
         diagnostics["error_code"] = "SCENES_CORE_SOURCE_MISSING"
         diagnostics["validation_error"] = "missing_core_source_for_segments"
         diagnostics["missing_core_source_segments"] = missing_core_segments
@@ -3647,6 +3690,7 @@ def build_gemini_scene_plan(
             include_debug_raw=include_debug_raw,
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
+        _ensure_scene_plan_scenes(plan)
         diagnostics["error_code"] = "SCENES_ROLE_SOURCE_MISSING"
         diagnostics["validation_error"] = "missing_role_source_for_segments"
         diagnostics["missing_role_source_segments"] = missing_role_segments
@@ -3698,6 +3742,7 @@ def build_gemini_scene_plan(
 
     try:
         scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _run_generation(prompt)
+        _ensure_scene_plan_scenes(scene_plan)
         normalization_diag["scene_plan_route_spacing_retry_used"] = False
         spacing_diag = _safe_dict(normalization_diag.get("route_spacing"))
         if (
@@ -3747,6 +3792,7 @@ def build_gemini_scene_plan(
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
         )
+        _ensure_scene_plan_scenes(scene_plan)
         storyboard_rows = _safe_list(scene_plan.get("storyboard"))
         has_validation_error = bool(str(validation_error or "").strip())
         ok = bool(storyboard_rows) and not has_validation_error
