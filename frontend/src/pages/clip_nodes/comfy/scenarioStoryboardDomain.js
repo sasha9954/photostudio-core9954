@@ -64,6 +64,35 @@ export function buildSegmentLookupAliases(value = "") {
   return Array.from(aliases).filter(Boolean);
 }
 
+
+export function resolveAudioSegmentForScene(scene = {}, audioSegmentById = {}, idx = 0) {
+  const candidates = [
+    scene?.segment_id,
+    scene?.segmentId,
+    scene?.canonicalSegmentId,
+    scene?.sourceSegmentId,
+    scene?.originalSegmentId,
+    scene?.scene_id,
+    scene?.sourceSceneId,
+    scene?.sceneId,
+    scene?.sceneKey,
+    scene?.uiKey,
+    scene?.id,
+    idx != null ? `seg_${String(idx + 1).padStart(2, "0")}` : "",
+    idx != null ? `SEG_${String(idx + 1).padStart(2, "0")}` : "",
+    idx != null ? `S${idx + 1}` : "",
+  ];
+
+  for (const candidate of candidates) {
+    for (const alias of buildSegmentLookupAliases(candidate)) {
+      const hit = audioSegmentById?.[alias];
+      if (hit && typeof hit === "object") return hit;
+    }
+  }
+
+  return {};
+}
+
 function shouldTraceScenarioRoleScene(sceneId = "") {
   const needle = normalizeText(SCENARIO_ROLE_TRACE_SCENE_ID);
   if (!needle) return false;
@@ -2358,7 +2387,16 @@ export function normalizeScenarioStoryboardPackage({
       || normalizedSceneBase?.sceneId
       || resolveCanonicalSegmentId(normalizedSceneBase, idx)
     ).trim();
-    const audioSeg = audioById[segmentId] || {};
+    const canonicalSegmentId = normalizeSegmentLookupKey(segmentId || `seg_${String(idx + 1).padStart(2, "0")}`);
+    const audioSeg = resolveAudioSegmentForScene(
+      {
+        ...normalizedSceneBase,
+        segment_id: segmentId,
+        segmentId,
+      },
+      audioById,
+      idx
+    );
     const sceneStart = Number(normalizedSceneBase?.startSec ?? normalizedSceneBase?.t0);
     const sceneEnd = Number(normalizedSceneBase?.endSec ?? normalizedSceneBase?.t1);
     const sceneHasRealTiming = Number.isFinite(sceneStart) && Number.isFinite(sceneEnd) && sceneEnd > sceneStart;
@@ -2408,8 +2446,10 @@ export function normalizeScenarioStoryboardPackage({
     );
     return {
       ...normalizedSceneBase,
-      segment_id: segmentId || normalizedSceneBase?.segment_id,
-      segmentId: segmentId || normalizedSceneBase?.segmentId,
+      segment_id: canonicalSegmentId || segmentId || normalizedSceneBase?.segment_id,
+      segmentId: canonicalSegmentId || segmentId || normalizedSceneBase?.segmentId,
+      canonicalSegmentId: canonicalSegmentId || segmentId,
+      display_id: normalizedSceneBase?.display_id || (canonicalSegmentId || segmentId || `seg_${String(idx + 1).padStart(2, "0")}`).toUpperCase(),
       scene_id: normalizedSceneBase?.scene_id || segmentId || normalizedSceneBase?.sceneId,
       t0: resolvedStart,
       t1: resolvedEnd,
@@ -2545,6 +2585,8 @@ export function normalizeScenarioStoryboardPackage({
       endSec: scenes[0].endSec,
       transcript: scenes[0].transcript_slice || scenes[0].transcript || "",
     },
+    firstSceneAudioLookup: scenes?.[0] && resolveAudioSegmentForScene(scenes[0], audioById, 0),
+    audioSegmentKeysSample: Object.keys(audioById || {}).slice(0, 20),
   });
   console.debug("[SCENARIO NORMALIZE PACKAGE]", {
     sceneContractSource: canonicalSceneSource,
