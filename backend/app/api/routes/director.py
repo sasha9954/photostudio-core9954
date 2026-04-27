@@ -535,8 +535,6 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
 
     extracted_answers: dict[str, str] = {}
     assistant_message = fallback_message
-    done = False
-
     parsed = _extract_json_object(_extract_text_from_gemini(result))
     if isinstance(parsed, dict):
         candidate_answers = parsed.get("extracted_answers")
@@ -548,11 +546,11 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
         candidate_message = str(parsed.get("assistant_message") or "").strip()
         if candidate_message:
             assistant_message = candidate_message
-        done = bool(parsed.get("done") is True)
+        _ = bool(parsed.get("done") is True)
 
     merged_answers = _sanitize_director_answers({**answers, **extracted_answers})
     missing_fields = _get_missing_director_fields(merged_answers)
-    resolved_done = done or len(missing_fields) == 0
+    resolved_done = len(missing_fields) == 0
 
     if resolved_done:
         assistant_message = "Режиссура собрана ✅ Можно запускать общий пайплайн."
