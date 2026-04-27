@@ -3547,11 +3547,13 @@ def _normalize_scene_plan(
 
     expected_scene_count = len(scene_segment_rows)
     scene_candidate_windows_present = bool(_safe_list(_safe_dict(audio_map).get("scene_candidate_windows")))
-    mapped_used_model = (
+    mapped_path = bool(
         str(used_model or "").strip().lower() == "mapped_from_audio_map.scene_candidate_windows"
-        or scene_candidate_windows_present
+        or bool(_safe_list(_safe_dict(audio_map).get("scene_candidate_windows")))
+        or mapped_route_budget_post_normalization_applied
+        or mapped_route_budget_lock_detected
     )
-    if mapped_used_model and normalized_storyboard:
+    if mapped_path and normalized_storyboard:
         normalized_storyboard, mapped_route_budget_post_normalization_diag = _apply_route_budget_to_scene_rows(
             normalized_storyboard,
             _safe_dict(audio_map),
@@ -3560,13 +3562,14 @@ def _normalize_scene_plan(
         )
         mapped_route_budget_post_normalization_applied = True
         mapped_route_budget_lock_detected = True
+        mapped_path = True
         for row in normalized_storyboard:
             role = str(_safe_dict(row).get("primary_role") or "").strip()
             if role:
                 mapped_default_vocal_role = role
                 break
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
-    if mapped_used_model:
+    if mapped_path:
         mapped_ia2v_count = int(_safe_dict(mapped_route_budget_post_normalization_diag.get("scene_plan_route_budget_target_counts")).get("ia2v") or 0)
         route_budget_target = {
             "i2v": max(0, expected_scene_count - mapped_ia2v_count),
@@ -3617,23 +3620,44 @@ def _normalize_scene_plan(
     }
     final_semantic_rebalance_applied = False
     final_semantic_rebalance_details: dict[str, Any] = {}
+    post_validity_route_rebalance: dict[str, Any] = {}
+    mapped_generic_rebalance_skipped = False
     if (
         hard_short_clip_target
         and len(normalized_storyboard) == expected_scene_count
         and pre_final_rebalance_route_counts != route_budget_target
         and not (scene_plan_empty_detected and not scene_plan_fallback_applied)
     ):
-        rebalanced_storyboard, rebalance_details = _final_semantic_route_rebalance(
-            normalized_storyboard=normalized_storyboard,
-            scene_segment_rows=scene_segment_rows,
-            role_lookup=role_lookup,
-            route_budget_target=route_budget_target,
-            character_1_appearance_mode=normalize_character_appearance_mode(appearance_modes.get("character_1")),
-        )
-        if bool(_safe_dict(rebalance_details).get("applied")):
-            normalized_storyboard = rebalanced_storyboard
-            final_semantic_rebalance_applied = True
-            final_semantic_rebalance_details = rebalance_details
+        if mapped_path:
+            mapped_generic_rebalance_skipped = True
+            post_validity_route_rebalance = {
+                "attempted": False,
+                "skipped": True,
+                "reason": "mapped_route_budget_already_applied",
+            }
+        else:
+            rebalanced_storyboard, rebalance_details = _final_semantic_route_rebalance(
+                normalized_storyboard=normalized_storyboard,
+                scene_segment_rows=scene_segment_rows,
+                role_lookup=role_lookup,
+                route_budget_target=route_budget_target,
+                character_1_appearance_mode=normalize_character_appearance_mode(appearance_modes.get("character_1")),
+            )
+            final_semantic_rebalance_details = _safe_dict(rebalance_details)
+            if bool(_safe_dict(rebalance_details).get("applied")):
+                normalized_storyboard = rebalanced_storyboard
+                final_semantic_rebalance_applied = True
+            post_validity_route_rebalance = {
+                "attempted": True,
+                "skipped": False,
+                **final_semantic_rebalance_details,
+            }
+    if not post_validity_route_rebalance:
+        post_validity_route_rebalance = {
+            "attempted": False,
+            "skipped": bool(mapped_path),
+            "reason": "mapped_route_budget_already_applied" if mapped_path else "not_required",
+        }
 
     validated_route_by_segment = {
         str(row.get("segment_id") or "").strip(): str(row.get("route") or "").strip().lower()
@@ -3645,6 +3669,19 @@ def _normalize_scene_plan(
         route_name: sum(1 for route_value in final_route_by_segment.values() if route_value == route_name)
         for route_name in ("i2v", "ia2v", "first_last")
     }
+    if mapped_path:
+        mapped_diag = _safe_dict(mapped_route_budget_post_normalization_diag)
+        mapped_target_counts = _safe_dict(mapped_diag.get("scene_plan_route_budget_target_counts"))
+        mapped_ia2v_target = int(mapped_target_counts.get("ia2v") or 0)
+        if mapped_ia2v_target <= 0:
+            mapped_ia2v_target = final_route_counts.get("ia2v", 0)
+        route_budget_target = {
+            "i2v": max(0, expected_scene_count - mapped_ia2v_target),
+            "ia2v": max(0, mapped_ia2v_target),
+            "first_last": 0,
+        }
+        hard_short_clip_target = True
+        mapped_route_budget_target_adjusted_for_mapped_no_first_last = True
     if mapped_route_budget_lock_detected:
         requested_route_locks_by_segment = dict(final_route_by_segment)
     else:
@@ -3809,8 +3846,13 @@ def _normalize_scene_plan(
         "scene_plan_route_budget_after_lock": final_route_counts,
         "scene_plan_route_locks_by_segment": requested_route_locks_by_segment,
         "scene_plan_route_budget_target_adjusted_for_mapped_no_first_last": mapped_route_budget_target_adjusted_for_mapped_no_first_last,
-        "scene_plan_mapped_first_last_target_removed": mapped_used_model,
-        "scene_plan_mapped_ia2v_contract_filled": mapped_used_model,
+        "scene_plan_mapped_first_last_target_removed": mapped_path,
+        "scene_plan_mapped_ia2v_contract_filled": mapped_path,
+        "scene_plan_mapped_path_final_validation": mapped_path,
+        "scene_plan_mapped_final_target_for_validation": route_budget_target,
+        "scene_plan_mapped_generic_rebalance_skipped": mapped_generic_rebalance_skipped,
+        "scene_plan_mapped_first_last_removed_from_final_validation": bool(mapped_path),
+        "scene_plan_post_validity_route_rebalance": post_validity_route_rebalance,
         "scene_plan_mapped_default_vocal_role": mapped_default_vocal_role,
         "scene_plan_mapped_route_budget_lock_detected": mapped_route_budget_lock_detected,
         "scene_plan_mapped_route_budget_override_prevented": mapped_route_budget_override_prevented,
