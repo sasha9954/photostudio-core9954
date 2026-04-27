@@ -63,7 +63,7 @@ function buildDirectorContext(data) {
       },
     ],
     constraints: {
-      max_questions: 3,
+      max_questions: 6,
     },
   };
 }
@@ -218,7 +218,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         director_config: {},
       });
     }
-  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config, directorMessages, answers]);
+  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};

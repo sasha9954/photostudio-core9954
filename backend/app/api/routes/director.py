@@ -519,7 +519,14 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
     result = post_generate_content(
         str(key_info.get("api_key") or ""),
         DIRECTOR_QUESTIONS_MODEL,
-        {"contents": [{"parts": [{"text": prompt}]}]},
+        {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.25,
+                "topP": 0.9,
+                "responseMimeType": "application/json",
+            },
+        },
         timeout=45,
     )
     if result.get("__http_error__"):
@@ -547,10 +554,10 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
     missing_fields = _get_missing_director_fields(merged_answers)
     resolved_done = done or len(missing_fields) == 0
 
-    if not resolved_done and not assistant_message:
-        assistant_message = _fallback_question_for_field(missing_fields[0], context)
     if resolved_done:
-        assistant_message = assistant_message if assistant_message else "Режиссура собрана ✅ Можно запускать общий пайплайн."
+        assistant_message = "Режиссура собрана ✅ Можно запускать общий пайплайн."
+    else:
+        assistant_message = _fallback_question_for_field(missing_fields[0], context)
 
     return {
         "assistant_message": assistant_message,
