@@ -296,6 +296,45 @@ function toNumber(value, fallback = 0) {
   return fallback;
 }
 
+export function buildAudioSegmentById(storyboardPackage = null) {
+  const safePackage = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
+  const segments = Array.isArray(safePackage?.audio_map?.segments)
+    ? safePackage.audio_map.segments
+    : [];
+  return segments.reduce((acc, seg) => {
+    const id = String(seg?.segment_id || "").trim();
+    if (!id) return acc;
+    const t0 = Number(seg?.t0 ?? seg?.startSec ?? 0);
+    const t1 = Number(seg?.t1 ?? seg?.endSec ?? 0);
+    const transcript = String(seg?.transcript_slice || seg?.transcript || seg?.spoken_line || "").trim();
+    acc[id] = {
+      segment_id: id,
+      t0,
+      t1,
+      startSec: t0,
+      endSec: t1,
+      durationSec: Math.max(0, t1 - t0),
+      transcript,
+      transcript_slice: transcript,
+      spoken_line: String(seg?.spoken_line || seg?.transcript_slice || seg?.transcript || "").trim(),
+      is_lip_sync_candidate: !!seg?.is_lip_sync_candidate,
+    };
+    return acc;
+  }, {});
+}
+
+export function resolvePackageAudioUrl(storyboardPackage = null) {
+  const safePackage = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
+  return normalizeText(
+    safePackage?.input?.audio_url
+    || safePackage?.input?.audioUrl
+    || safePackage?.input?.source?.source_value
+    || safePackage?.refs_inventory?.audio_in?.value
+    || safePackage?.refs_inventory?.audio_in?.meta?.url
+    || ""
+  );
+}
+
 function firstFiniteNumber(valueMap = {}, keys = []) {
   for (const key of keys) {
     const value = Number(valueMap?.[key]);
@@ -2119,6 +2158,8 @@ export function normalizeScenarioStoryboardPackage({
   const finalStoryboardRenderManifestRows = !finalSignatureMismatch && Array.isArray(storyboardOut?.final_storyboard?.render_manifest)
     ? storyboardOut.final_storyboard.render_manifest
     : [];
+  const audioById = buildAudioSegmentById(storyboardOut || {});
+  const packageAudioUrl = resolvePackageAudioUrl(storyboardOut || {});
   const finalStoryboardManifestById = finalStoryboardRenderManifestRows.reduce((acc, row) => {
     const safeRow = row && typeof row === "object" ? row : {};
     const segmentId = normalizeText(safeRow?.segment_id);
@@ -2252,7 +2293,7 @@ export function normalizeScenarioStoryboardPackage({
         directorSceneRaw,
       });
     }
-    return normalizeScenarioScene(scene, idx, {
+    const normalizedSceneBase = normalizeScenarioScene(scene, idx, {
       globalVisualLock,
       globalCameraProfile,
       format,
@@ -2266,6 +2307,74 @@ export function normalizeScenarioStoryboardPackage({
       contextRefs,
       refDirectives,
     });
+    const segmentId = String(
+      normalizedSceneBase?.segment_id
+      || normalizedSceneBase?.segmentId
+      || normalizedSceneBase?.scene_id
+      || normalizedSceneBase?.sceneId
+      || resolveCanonicalSegmentId(normalizedSceneBase, idx)
+    ).trim();
+    const audioSeg = audioById[segmentId] || {};
+    const sceneTimelineStart = Number(normalizedSceneBase?.startSec ?? normalizedSceneBase?.t0);
+    const sceneTimelineEnd = Number(normalizedSceneBase?.endSec ?? normalizedSceneBase?.t1);
+    const sceneHasRealTiming = sceneTimelineEnd > sceneTimelineStart;
+    const audioHasRealTiming = Number(audioSeg?.endSec) > Number(audioSeg?.startSec);
+    const resolvedStart = (!sceneHasRealTiming && audioHasRealTiming)
+      ? Number(audioSeg?.startSec ?? 0)
+      : (Number.isFinite(sceneTimelineStart) ? sceneTimelineStart : Number(audioSeg?.startSec ?? 0));
+    const resolvedEnd = (!sceneHasRealTiming && audioHasRealTiming)
+      ? Number(audioSeg?.endSec ?? resolvedStart)
+      : (Number.isFinite(sceneTimelineEnd) ? sceneTimelineEnd : Number(audioSeg?.endSec ?? resolvedStart));
+    const resolvedTranscript = String(
+      normalizedSceneBase?.transcript
+      || normalizedSceneBase?.transcript_slice
+      || normalizedSceneBase?.spoken_line
+      || audioSeg?.transcript
+      || ""
+    ).trim();
+    const resolvedTranscriptSlice = String(
+      normalizedSceneBase?.transcript_slice
+      || normalizedSceneBase?.transcript
+      || normalizedSceneBase?.spoken_line
+      || audioSeg?.transcript_slice
+      || ""
+    ).trim();
+    const resolvedSpokenLine = String(
+      normalizedSceneBase?.spoken_line
+      || normalizedSceneBase?.transcript_slice
+      || normalizedSceneBase?.transcript
+      || audioSeg?.spoken_line
+      || ""
+    ).trim();
+    const resolvedAudioUrl = normalizeText(
+      normalizedSceneBase?.audioUrl
+      || normalizedSceneBase?.audio_url
+      || packageAudioUrl
+    );
+    const resolvedOriginalAudioUrl = normalizeText(
+      normalizedSceneBase?.originalAudioUrl
+      || resolvedAudioUrl
+      || packageAudioUrl
+    );
+    return {
+      ...normalizedSceneBase,
+      segment_id: segmentId || normalizedSceneBase?.segment_id,
+      segmentId: segmentId || normalizedSceneBase?.segmentId,
+      scene_id: normalizedSceneBase?.scene_id || segmentId || normalizedSceneBase?.sceneId,
+      t0: resolvedStart,
+      t1: resolvedEnd,
+      startSec: resolvedStart,
+      endSec: resolvedEnd,
+      durationSec: Math.max(0, resolvedEnd - resolvedStart),
+      transcript: resolvedTranscript,
+      transcript_slice: resolvedTranscriptSlice,
+      spoken_line: resolvedSpokenLine,
+      audioUrl: resolvedAudioUrl,
+      audio_url: normalizeText(normalizedSceneBase?.audio_url || resolvedAudioUrl),
+      originalAudioUrl: resolvedOriginalAudioUrl,
+      audioStartSec: resolvedStart,
+      audioEndSec: resolvedEnd,
+    };
   });
 
   const storySummary = normalizeDualField({
@@ -2323,6 +2432,7 @@ export function normalizeScenarioStoryboardPackage({
     audioUrl: normalizeText(
       storyboardOut?.audioUrl
       ?? storyboardOut?.audio_url
+      ?? packageAudioUrl
     ),
     audioDurationSec: toNumber(
       storyboardOut?.audioDurationSec
@@ -2346,6 +2456,8 @@ export function normalizeScenarioStoryboardPackage({
     providerHints: storyboardOut?.providerHints ?? storyboardOut?.provider_hints,
     debug: storyboardOut?.debug,
     meta: storyboardOut?.meta,
+    audioSegmentById: audioById,
+    packageAudioUrl,
   };
   if (CLIP_TRACE_SCENARIO_FORMAT) {
     console.debug("[SCENARIO FORMAT] normalized package", {

@@ -16185,8 +16185,21 @@ Aspect ratio: ${imageFormat}`,
     }
 
     if (!sceneId) throw new Error("scene_id_required");
-    const startSec = Number(scene.t0 ?? scene.start ?? 0);
-    const endSec = Number(scene.t1 ?? scene.end ?? 0);
+    const resolvedDisplayTime = resolveSceneDisplayTime(scene || {});
+    const startSec = Number(
+      scene?.startSec
+      ?? scene?.t0
+      ?? resolvedDisplayTime.startSec
+      ?? scene?.start
+      ?? 0
+    );
+    const endSec = Number(
+      scene?.endSec
+      ?? scene?.t1
+      ?? resolvedDisplayTime.endSec
+      ?? scene?.end
+      ?? startSec
+    );
     const audioSliceVideoProfile = resolveScenarioSceneVideoProfile(scene || {});
     const audioSliceWorkflowKey =
       normalizeScenarioVideoWorkflowAlias(
@@ -20276,7 +20289,7 @@ onClipSec: (nodeId, value) => {
               ? packageFallbackMusicPrompt
               : "";
           const sourcePhrases = timelineTranscriptPhrases.length ? timelineTranscriptPhrases : timelineSemanticPhrases;
-          const phraseBreakdown = sourcePhrases
+          const phraseBreakdownFromTimeline = sourcePhrases
             .filter((phrase) => !isShortMusicIntroPhraseRow(phrase))
             .map((phrase, idx) => ({
             sceneId: mapPhraseToSceneIdByTime(phrase, scenes),
@@ -20286,6 +20299,35 @@ onClipSec: (nodeId, value) => {
             energy: String(phrase?.emotion || "").trim(),
             context: String(phrase?.meaning || phrase?.transitionHint || "").trim(),
           }));
+          const phraseBreakdownFromScenes = scenes
+            .map((sceneItem, idx) => {
+              const displayTime = resolveSceneDisplayTime(sceneItem);
+              const transcriptText = String(
+                sceneItem?.transcript_slice
+                || sceneItem?.transcript
+                || sceneItem?.spoken_line
+                || sceneItem?.localPhrase
+                || ""
+              ).trim();
+              return {
+                sceneId: String(sceneItem?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`,
+                startSec: Number(displayTime.startSec ?? sceneItem?.t0 ?? 0),
+                endSec: Number(displayTime.endSec ?? sceneItem?.t1 ?? 0),
+                text: transcriptText,
+                energy: String(sceneItem?.emotionRu || "").trim(),
+                context: String(sceneItem?.locationRu || "").trim(),
+              };
+            })
+            .filter((phrase) => !!phrase.text);
+          const phraseBreakdown = phraseBreakdownFromTimeline.length
+            ? phraseBreakdownFromTimeline
+            : phraseBreakdownFromScenes;
+          const audioSegmentCount = Object.keys(normalizedPackage?.audioSegmentById || {}).length;
+          const packageAudioUrl = String(normalizedPackage?.packageAudioUrl || normalizedPackage?.audioUrl || "").trim();
+          const zeroTimingSceneCount = scenes.filter((sceneItem) => {
+            const displayTime = resolveSceneDisplayTime(sceneItem);
+            return Number(displayTime.endSec || 0) <= Number(displayTime.startSec || 0);
+          }).length;
           console.debug("[SCENARIO PHRASE MAP]", {
             phraseSourceUsed: timelineTranscriptPhrases.length ? "transcript" : (timelineSemanticPhrases.length ? "semanticTimeline" : "none"),
             phraseCount: phraseBreakdown.length,
@@ -20297,6 +20339,17 @@ onClipSec: (nodeId, value) => {
               t1: item.endSec,
               text: item.text,
             })),
+          });
+          console.log("[STORYBOARD HYDRATE AUDIO]", {
+            sceneCount: scenes.length,
+            audioSegmentCount,
+            audioUrlPresent: !!packageAudioUrl,
+            firstSceneTiming: scenes[0] && {
+              id: scenes[0].segment_id || scenes[0].sceneId,
+              startSec: scenes[0].startSec,
+              endSec: scenes[0].endSec,
+              transcript: scenes[0].transcript_slice || scenes[0].transcript || scenes[0].spoken_line || "",
+            },
           });
           const audioData = {
             ...currentAudioData,
@@ -20388,6 +20441,13 @@ onClipSec: (nodeId, value) => {
                 ? (normalizedPackage?.musicDuration ?? 0)
                 : (currentAudioData.musicDuration ?? normalizedPackage?.musicDuration ?? 0)
             ) || 0,
+            audioSegmentById: normalizedPackage?.audioSegmentById && typeof normalizedPackage.audioSegmentById === "object"
+              ? normalizedPackage.audioSegmentById
+              : (currentAudioData?.audioSegmentById && typeof currentAudioData.audioSegmentById === "object" ? currentAudioData.audioSegmentById : {}),
+            audioHydrated: true,
+            audioSegmentCount,
+            packageAudioUrlPresent: !!packageAudioUrl,
+            zeroTimingSceneCount,
           };
           const timelineDurationFromScenes = Number(
             scenes.reduce((maxValue, sceneItem) => {
