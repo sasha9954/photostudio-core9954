@@ -1837,6 +1837,7 @@ def _apply_route_budget_to_scene_rows(
     applied_rows: list[dict[str, Any]] = []
     selected_ia2v_segments: list[str] = []
     selected_i2v_segments: list[str] = []
+    budget_route_locks_by_segment: dict[str, str] = {}
     for idx, row_raw in enumerate(rows):
         row = dict(_safe_dict(row_raw))
         seg_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
@@ -1845,12 +1846,20 @@ def _apply_route_budget_to_scene_rows(
             row["lipSync"] = True
             row["renderMode"] = str(row.get("renderMode") or "lip_sync_music")
             row["requiresAudioSensitiveVideo"] = True
+            row["routeLocked"] = True
+            row["route_lock_source"] = "mapped_route_budget"
+            row["route_assignment_source"] = "mapped_route_budget"
             selected_ia2v_segments.append(seg_id)
         else:
             row["route"] = "i2v"
             row["lipSync"] = False
             row["requiresAudioSensitiveVideo"] = False
+            row["routeLocked"] = True
+            row["route_lock_source"] = "mapped_route_budget"
+            row["route_assignment_source"] = "mapped_route_budget"
             selected_i2v_segments.append(seg_id)
+        if seg_id:
+            budget_route_locks_by_segment[seg_id] = str(row.get("route") or "").strip().lower()
         applied_rows.append(row)
 
     diagnostics = {
@@ -1863,6 +1872,12 @@ def _apply_route_budget_to_scene_rows(
         "scene_plan_route_budget_selected_ia2v_segments": selected_ia2v_segments,
         "scene_plan_route_budget_selected_i2v_segments": selected_i2v_segments,
         "scene_plan_route_budget_candidate_segments": sorted(candidate_segment_ids),
+        "scene_plan_route_locks_by_segment": budget_route_locks_by_segment,
+        "scene_plan_requested_route_locks_by_segment": budget_route_locks_by_segment,
+        "scene_plan_route_lock_applied": True,
+        "scene_plan_route_lock_source": "mapped_route_budget",
+        "scene_plan_route_assignment_source": "mapped_route_budget",
+        "scene_plan_route_budget_after_lock": {"i2v": i2v_count, "ia2v": ia2v_count, "first_last": 0},
         "scene_plan_director_config_applied": bool(director_cfg),
         "scene_plan_director_config_keys": sorted(
             key
@@ -2824,6 +2839,9 @@ def _normalize_scene_plan(
     include_debug_raw: bool = False,
     character_appearance_modes_by_role: dict[str, str] | None = None,
     empty_plan_fallback_allowed: bool = False,
+    used_model: str = "",
+    audio_map: dict[str, Any] | None = None,
+    director_config: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool, str, int, dict[str, Any], str]:
     raw_storyboard_value = raw_plan.get("storyboard")
     storyboard_missing = "storyboard" not in raw_plan
@@ -2910,6 +2928,11 @@ def _normalize_scene_plan(
         hard_route_map = _safe_dict(creative_config.get("route_assignments_by_segment"))
     appearance_modes = _safe_dict(character_appearance_modes_by_role)
     scene_character_visibility_policy: list[dict[str, Any]] = []
+    mapped_route_budget_lock_detected = False
+    mapped_route_budget_override_prevented = False
+    mapped_route_budget_post_normalization_applied = False
+    mapped_route_budget_post_normalization_diag: dict[str, Any] = {}
+    mapped_route_budget_target_adjusted_for_mapped_no_first_last = False
 
     forced_route_list = [
         str(item).strip().lower()
@@ -2930,8 +2953,19 @@ def _normalize_scene_plan(
 
         route = str(raw_row.get("route") or "").strip().lower()
         hard_route = str(hard_route_map.get(segment_id) or "").strip().lower()
-        if hard_route in ALLOWED_ROUTES:
+        row_route_assignment_source = str(raw_row.get("route_assignment_source") or "").strip().lower()
+        row_route_lock_source = str(raw_row.get("route_lock_source") or "").strip().lower()
+        row_is_mapped_route_budget = (
+            row_route_assignment_source == "mapped_route_budget"
+            or row_route_lock_source == "mapped_route_budget"
+            or bool(raw_row.get("routeLocked"))
+        )
+        if row_is_mapped_route_budget:
+            mapped_route_budget_lock_detected = True
+        if hard_route in ALLOWED_ROUTES and not row_is_mapped_route_budget:
             route = hard_route
+        elif hard_route in ALLOWED_ROUTES and row_is_mapped_route_budget:
+            mapped_route_budget_override_prevented = True
         if str(structure or "").strip().lower() == "performance_cut":
             has_vocal = bool(source_row.get("has_vocal"))
             if not has_vocal:
@@ -3367,6 +3401,17 @@ def _normalize_scene_plan(
                 "listener_reaction_allowed": listener_reaction_allowed,
                 "reaction_role": reaction_role,
                 "speaker_confidence": round(float(speaker_confidence), 3),
+                "routeLocked": bool(raw_row.get("routeLocked")) or row_is_mapped_route_budget,
+                "route_lock_source": (
+                    "mapped_route_budget"
+                    if row_is_mapped_route_budget
+                    else str(raw_row.get("route_lock_source") or "").strip()
+                ),
+                "route_assignment_source": (
+                    "mapped_route_budget"
+                    if row_is_mapped_route_budget
+                    else str(raw_row.get("route_assignment_source") or "").strip()
+                ),
             }
         )
         route_selection_reasons_by_segment[segment_id] = (
@@ -3407,7 +3452,26 @@ def _normalize_scene_plan(
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
     expected_scene_count = len(scene_segment_rows)
+    mapped_used_model = str(used_model or "").strip().lower() == "mapped_from_audio_map.scene_candidate_windows"
+    if mapped_used_model and normalized_storyboard:
+        normalized_storyboard, mapped_route_budget_post_normalization_diag = _apply_route_budget_to_scene_rows(
+            normalized_storyboard,
+            _safe_dict(audio_map),
+            creative_config,
+            _safe_dict(director_config),
+        )
+        mapped_route_budget_post_normalization_applied = True
+        mapped_route_budget_lock_detected = True
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
+    if mapped_used_model:
+        mapped_ia2v_count = int(_safe_dict(mapped_route_budget_post_normalization_diag.get("scene_plan_route_budget_target_counts")).get("ia2v") or 0)
+        route_budget_target = {
+            "i2v": max(0, expected_scene_count - mapped_ia2v_count),
+            "ia2v": max(0, mapped_ia2v_count),
+            "first_last": 0,
+        }
+        hard_short_clip_target = True
+        mapped_route_budget_target_adjusted_for_mapped_no_first_last = True
     route_budget_original_targets = {
         "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
         "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
@@ -3478,11 +3542,14 @@ def _normalize_scene_plan(
         route_name: sum(1 for route_value in final_route_by_segment.values() if route_value == route_name)
         for route_name in ("i2v", "ia2v", "first_last")
     }
-    requested_route_locks_by_segment = {
-        str(seg).strip(): str(route).strip().lower()
-        for seg, route in hard_route_map.items()
-        if str(seg).strip() and str(route).strip().lower() in ALLOWED_ROUTES
-    }
+    if mapped_route_budget_lock_detected:
+        requested_route_locks_by_segment = dict(final_route_by_segment)
+    else:
+        requested_route_locks_by_segment = {
+            str(seg).strip(): str(route).strip().lower()
+            for seg, route in hard_route_map.items()
+            if str(seg).strip() and str(route).strip().lower() in ALLOWED_ROUTES
+        }
     route_budget_mismatch = bool(hard_short_clip_target and final_route_counts != route_budget_target)
     validation_errors: list[str] = []
     error_codes: list[str] = []
@@ -3633,6 +3700,16 @@ def _normalize_scene_plan(
         "routeAssignmentSource": "creative_config.hard_route_assignments_by_segment" if hard_route_map else "gemini",
         "hard_route_assignments_by_segment": requested_route_locks_by_segment,
         "requested_route_locks_by_segment": requested_route_locks_by_segment,
+        "scene_plan_route_lock_applied": bool(requested_route_locks_by_segment),
+        "scene_plan_route_lock_source": "mapped_route_budget" if mapped_route_budget_lock_detected else "gemini_semantic_route_selection",
+        "scene_plan_route_assignment_source": "mapped_route_budget" if mapped_route_budget_lock_detected else "gemini_semantic_route_selection",
+        "scene_plan_route_budget_after_lock": final_route_counts,
+        "scene_plan_route_locks_by_segment": requested_route_locks_by_segment,
+        "scene_plan_route_budget_target_adjusted_for_mapped_no_first_last": mapped_route_budget_target_adjusted_for_mapped_no_first_last,
+        "scene_plan_mapped_route_budget_lock_detected": mapped_route_budget_lock_detected,
+        "scene_plan_mapped_route_budget_override_prevented": mapped_route_budget_override_prevented,
+        "scene_plan_mapped_route_budget_post_normalization_applied": mapped_route_budget_post_normalization_applied,
+        "scene_plan_mapped_route_budget_post_normalization_diag": mapped_route_budget_post_normalization_diag,
         "scene_plan_route_budget_target": route_budget_target,
         "scene_plan_route_budget_actual": final_route_counts,
         "scene_plan_route_budget_mismatch": route_budget_mismatch,
@@ -4211,6 +4288,9 @@ def build_gemini_scene_plan(
             include_debug_raw=include_debug_raw,
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
+            used_model=SCENE_PLAN_MODEL,
+            audio_map=audio_map,
+            director_config=director_config,
         )
 
     try:
@@ -4267,6 +4347,9 @@ def build_gemini_scene_plan(
             include_debug_raw=include_debug_raw,
             character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
             empty_plan_fallback_allowed=empty_plan_fallback_allowed,
+            used_model=SCENE_PLAN_MODEL,
+            audio_map=audio_map,
+            director_config=director_config,
         )
         _ensure_scene_plan_scenes(scene_plan)
         storyboard_rows = _safe_list(scene_plan.get("storyboard"))
