@@ -3869,15 +3869,15 @@ def _build_prompts_v11_segment_fallback(segment_row: dict[str, Any], story_core:
     framing = _trim_sentence(str(segment_row.get("framing") or "readable cinematic framing"), max_len=120)
     subject_motion = _trim_sentence(str(segment_row.get("subject_motion") or "single clear body motion"), max_len=140)
     camera_intent = _trim_sentence(str(segment_row.get("camera_intent") or "stable camera behavior"), max_len=140)
-    transcript_slice = _trim_sentence(str(segment_row.get("transcript_slice") or ""), max_len=150)
-    transcript_clause = f" Lyric/moment anchor: {transcript_slice}." if transcript_slice else ""
+    narrative_beat_summary = _trim_sentence(str(segment_row.get("beat_purpose") or segment_row.get("scene_goal") or ""), max_len=150)
+    semantic_clause = f" Narrative beat summary: {narrative_beat_summary}." if narrative_beat_summary else ""
     photo_prompt = (
         f"Route-aware still frame of {role_label} in {world_anchor}, {scene_goal}, {framing}, "
-        f"emotion={emotion}, keep identity/body/wardrobe/world continuity and avoid cast/world drift.{transcript_clause}"
+        f"emotion={emotion}, keep identity/body/wardrobe/world continuity and avoid cast/world drift.{semantic_clause}"
     ).strip()[:900]
     video_prompt = (
         f"Route-aware motion/camera prompt for {route}: {role_label} performs {subject_motion} for {narrative_function}; "
-        f"camera={camera_intent}; pacing follows scene intent while preserving the same world/identity/wardrobe continuity.{transcript_clause}"
+        f"camera={camera_intent}; pacing follows scene intent while preserving the same world/identity/wardrobe continuity.{semantic_clause}"
     ).strip()[:900]
     negative_prompt = (
         "identity drift, face swap, body proportion drift, wardrobe changes, world-family drift, "

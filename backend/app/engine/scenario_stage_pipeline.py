@@ -160,6 +160,17 @@ _OWNERSHIP_ROLE_MAP = {
 _BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 _SUBJECT_REF_TOKENS = {"char", "character", "person", "subject", "talent", "hero", "protagonist", "human", "face"}
 _OBJECT_REF_TOKENS = {"prop", "object", "item", "wardrobe", "vehicle", "accessory", "outfit", "tool", "bag", "phone"}
+_DIRECTOR_IA2V_ZONES = ["train", "train_carriage", "compartment", "train_corridor"]
+_DIRECTOR_I2V_ZONES = ["odesa_city", "odesa_courtyard", "odesa_port", "odesa_streets", "odesa_sea"]
+_IA2V_FORBIDDEN_CLAUSE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("no main performer visible", re.compile(r"(?i)\bno main performer visible\b[.;:]?")),
+    ("vocalist offscreen voiceover only", re.compile(r"(?i)\bvocalist offscreen(?:\s+voiceover)?\s+only\b[.;:]?")),
+    ("no visible singing face", re.compile(r"(?i)\bno visible singing face\b[.;:]?")),
+    ("environment-first cutaway", re.compile(r"(?i)\benvironment[-\s]*first cutaway\b[.;:]?")),
+    ("world/cutaway mode", re.compile(r"(?i)\bworld\s*/\s*cutaway mode\b[.;:]?")),
+    ("Environment-focused still frame", re.compile(r"(?i)\benvironment-focused still frame\b[.;:]?")),
+    ("Environment-focused motion shot", re.compile(r"(?i)\benvironment-focused motion shot\b[.;:]?")),
+)
 
 
 def _utc_iso() -> str:
@@ -172,6 +183,313 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _to_contract_location(value: Any) -> str:
+    token = str(value or "").strip().lower().replace(" ", "_")
+    return token
+
+
+def _to_director_route(value: Any) -> str:
+    route = str(value or "").strip().lower()
+    return route if route in {"ia2v", "i2v", "first_last"} else ""
+
+
+def _build_director_contract_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    cfg = _safe_dict(config)
+    ia2v_locations = [
+        _to_contract_location(item) for item in _safe_list(cfg.get("ia2v_locations")) if _to_contract_location(item)
+    ] or list(_DIRECTOR_IA2V_ZONES)
+    i2v_locations = [
+        _to_contract_location(item) for item in _safe_list(cfg.get("i2v_locations")) if _to_contract_location(item)
+    ] or list(_DIRECTOR_I2V_ZONES)
+    return {
+        "source": "ai_director_chat",
+        "hard_location_binding": True,
+        "route_location_rules": {
+            "ia2v": {
+                "required_world": "train",
+                "allowed_zones": ia2v_locations,
+                "performer_visibility": "required",
+                "singer_visibility": "required",
+                "lip_sync_framing": "required",
+            },
+            "i2v": {
+                "required_world": "odesa_memory",
+                "allowed_zones": i2v_locations,
+                "performer_visibility": "optional_or_absent",
+                "singer_visibility": "offscreen_or_non_dominant",
+            },
+        },
+    }
+
+
+def _normalize_director_package_input(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    director_cfg = _safe_dict(input_pkg.get("director_config"))
+    if not director_cfg:
+        source_cfg = _safe_dict(package.get("director_config"))
+        if source_cfg:
+            director_cfg = source_cfg
+    if director_cfg:
+        director_cfg.setdefault("ia2v_locations", list(_DIRECTOR_IA2V_ZONES))
+        director_cfg.setdefault("i2v_locations", list(_DIRECTOR_I2V_ZONES))
+        director_cfg.setdefault("performance_place_mode", "performance_plus_memories")
+        director_cfg.setdefault("memory_intercut", True)
+    director_contract = _safe_dict(input_pkg.get("director_contract"))
+    if not director_contract and director_cfg:
+        director_contract = _build_director_contract_from_config(director_cfg)
+    if director_cfg:
+        input_pkg["director_config"] = director_cfg
+    if director_contract:
+        input_pkg["director_contract"] = director_contract
+    package["input"] = input_pkg
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["director_config_present"] = bool(director_cfg)
+    diagnostics["director_contract_present"] = bool(director_contract)
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    for stage_key in ("core", "roles", "scenes", "prompts", "final_video_prompt", "finalize"):
+        applied.setdefault(stage_key, False)
+    diagnostics["director_contract_applied_stages"] = applied
+    diagnostics.setdefault(
+        "route_location_counts",
+        {"ia2v_train": 0, "ia2v_non_train": 0, "i2v_odesa": 0, "i2v_non_odesa": 0},
+    )
+    diagnostics.setdefault(
+        "prompt_validation",
+        {
+            "raw_lyrics_in_image_prompt_count": 0,
+            "ia2v_forbidden_clause_count": 0,
+            "invalid_route_downgrade_count": 0,
+        },
+    )
+    package["diagnostics"] = diagnostics
+
+
+def _director_allowed_zone(route: str, contract: dict[str, Any]) -> list[str]:
+    rules = _safe_dict(_safe_dict(contract.get("route_location_rules")).get(route))
+    return [_to_contract_location(item) for item in _safe_list(rules.get("allowed_zones")) if _to_contract_location(item)]
+
+
+def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    contract = _safe_dict(input_pkg.get("director_contract"))
+    cfg = _safe_dict(input_pkg.get("director_config"))
+    if not contract or str(cfg.get("performance_place_mode") or "").strip().lower() != "performance_plus_memories":
+        return
+    story_core = _safe_dict(package.get("story_core"))
+    world_lock = _safe_dict(story_core.get("world_lock"))
+    world_lock["performance_world"] = "train"
+    world_lock["memory_world"] = "odesa"
+    story_core["world_lock"] = world_lock
+    package["story_core"] = story_core
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["core_director_contract_applied"] = True
+    diagnostics["core_performance_world"] = "train"
+    diagnostics["core_memory_world"] = "odesa"
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    applied["core"] = True
+    diagnostics["director_contract_applied_stages"] = applied
+    package["diagnostics"] = diagnostics
+
+
+def _apply_director_contract_roles(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    contract = _safe_dict(input_pkg.get("director_contract"))
+    if not contract:
+        return
+    role_plan = _safe_dict(package.get("role_plan"))
+    roster = [_safe_dict(row) for row in _safe_list(role_plan.get("roster"))]
+    roster_ids = {str(row.get("entity_id") or "").strip() for row in roster}
+    if "world_memory" not in roster_ids:
+        roster.append({"entity_id": "world_memory", "role_name": "Odessa memory world", "continuity_rules": ["Odessa memory world anchors i2v."]})
+    if "world_performance" not in roster_ids:
+        roster.append({"entity_id": "world_performance", "role_name": "Train performance world", "continuity_rules": ["Train performance world anchors ia2v."]})
+    scene_rows = []
+    for row in _safe_list(role_plan.get("scene_casting")):
+        cast = dict(_safe_dict(row))
+        route = _to_director_route(cast.get("route"))
+        if route == "ia2v":
+            cast["primary_role"] = "character_1"
+            cast["presence_mode"] = "physical"
+            cast["presence_weight"] = "anchor"
+        elif route == "i2v" and str(cast.get("primary_role") or "").strip().lower() == "character_1":
+            cast["presence_mode"] = "voiceover"
+            cast["presence_weight"] = "support"
+        scene_rows.append(cast)
+    role_plan["roster"] = roster
+    role_plan["scene_casting"] = scene_rows
+    role_plan["world_memory"] = "odesa"
+    role_plan["world_performance"] = "train"
+    package["role_plan"] = role_plan
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["roles_director_world_split_applied"] = True
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    applied["roles"] = True
+    diagnostics["director_contract_applied_stages"] = applied
+    package["diagnostics"] = diagnostics
+
+
+def _strip_ia2v_forbidden_clauses(text: str) -> tuple[str, list[str]]:
+    cleaned = str(text or "")
+    removed: list[str] = []
+    for label, pattern in _IA2V_FORBIDDEN_CLAUSE_PATTERNS:
+        if pattern.search(cleaned):
+            removed.append(label)
+        cleaned = pattern.sub(" ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:")
+    return cleaned, list(dict.fromkeys(removed))
+
+
+def _apply_director_contract_scene_plan(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    contract = _safe_dict(input_pkg.get("director_contract"))
+    if not contract:
+        return
+    ia2v_allowed = set(_director_allowed_zone("ia2v", contract) or _DIRECTOR_IA2V_ZONES)
+    i2v_allowed = set(_director_allowed_zone("i2v", contract) or _DIRECTOR_I2V_ZONES)
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    source_rows = _safe_list(scene_plan.get("scenes")) or _safe_list(scene_plan.get("storyboard"))
+    scenes = []
+    counts = {"ia2v_train": 0, "ia2v_non_train": 0, "i2v_odesa": 0, "i2v_non_odesa": 0}
+    for raw in source_rows:
+        row = dict(_safe_dict(raw))
+        route = _to_director_route(row.get("route")) or "i2v"
+        zone = _to_contract_location(row.get("location_zone"))
+        if route == "ia2v":
+            if zone not in ia2v_allowed:
+                zone = next(iter(ia2v_allowed))
+            row["primary_role"] = "character_1"
+            row["mouth_visible_required"] = True
+            row["lip_sync_allowed"] = True
+            counts["ia2v_train" if zone in ia2v_allowed else "ia2v_non_train"] += 1
+            row["director_required_world"] = "train"
+        elif route == "i2v":
+            if zone not in i2v_allowed:
+                zone = next(iter(i2v_allowed))
+            counts["i2v_odesa" if zone in i2v_allowed else "i2v_non_odesa"] += 1
+            row["director_required_world"] = "odesa_memory"
+        row["location_zone"] = zone
+        row["director_location_binding_applied"] = True
+        row["route_location_valid"] = (zone in ia2v_allowed) if route == "ia2v" else (zone in i2v_allowed)
+        scenes.append(row)
+    scene_plan["scenes"] = scenes
+    if _safe_list(scene_plan.get("storyboard")):
+        scene_plan["storyboard"] = scenes
+    package["scene_plan"] = scene_plan
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["route_location_counts"] = counts
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    applied["scenes"] = True
+    diagnostics["director_contract_applied_stages"] = applied
+    package["diagnostics"] = diagnostics
+
+
+def _apply_director_contract_scene_prompts(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    contract = _safe_dict(input_pkg.get("director_contract"))
+    if not contract:
+        return
+    scene_prompts = _safe_dict(package.get("scene_prompts"))
+    rows = []
+    lyrics_count = 0
+    forbidden_count = 0
+    for raw in _safe_list(scene_prompts.get("segments")):
+        row = dict(_safe_dict(raw))
+        route = _to_director_route(row.get("route")) or "i2v"
+        photo = str(row.get("photo_prompt") or "")
+        video = str(row.get("video_prompt") or "")
+        if re.search(r"(?i)lyric/moment anchor:", photo):
+            lyrics_count += 1
+        photo = re.sub(r"(?i)\s*Lyric/moment anchor:\s*[^.]+\.?", " ", photo).strip()
+        row["lyric_text_stripped_from_image_prompt"] = True
+        if route == "ia2v":
+            photo, removed_photo = _strip_ia2v_forbidden_clauses(photo)
+            video, removed_video = _strip_ia2v_forbidden_clauses(video)
+            removed = list(dict.fromkeys([*removed_photo, *removed_video]))
+            forbidden_count += len(removed)
+            if removed:
+                row["forbidden_clause_removed"] = removed
+            if "train" not in photo.lower():
+                photo = f"Visible male singer performance in train carriage compartment, readable mouth for lip sync. {photo}".strip()
+        else:
+            if "odesa" not in photo.lower():
+                photo = f"Odessa memory world cutaway with environment-first storytelling. {photo}".strip()
+        row["photo_prompt"] = re.sub(r"\s+", " ", photo).strip(" ,.;")
+        row["video_prompt"] = re.sub(r"\s+", " ", video).strip(" ,.;")
+        rows.append(row)
+    scene_prompts["segments"] = rows
+    package["scene_prompts"] = scene_prompts
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    prompt_validation = _safe_dict(diagnostics.get("prompt_validation"))
+    prompt_validation["raw_lyrics_in_image_prompt_count"] = int(prompt_validation.get("raw_lyrics_in_image_prompt_count") or 0) + lyrics_count
+    prompt_validation["ia2v_forbidden_clause_count"] = int(prompt_validation.get("ia2v_forbidden_clause_count") or 0) + forbidden_count
+    diagnostics["prompt_validation"] = prompt_validation
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    applied["prompts"] = True
+    diagnostics["director_contract_applied_stages"] = applied
+    package["diagnostics"] = diagnostics
+
+
+def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    contract = _safe_dict(input_pkg.get("director_contract"))
+    if not contract:
+        return
+    scene_plan_rows = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(package.get("scene_plan")).get("scenes"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    payload = _safe_dict(package.get("final_video_prompt"))
+    segments = []
+    preserved = True
+    blocked = False
+    invalid_downgrade_count = 0
+    for raw in _safe_list(payload.get("segments")):
+        row = dict(_safe_dict(raw))
+        seg_id = str(row.get("segment_id") or "").strip()
+        route_before = _to_director_route(row.get("route_before"))
+        route_after = _to_director_route(row.get("route_after")) or _to_director_route(row.get("route"))
+        plan_row = _safe_dict(scene_plan_rows.get(seg_id))
+        if route_before == "ia2v" and route_after == "i2v":
+            has_ready = bool(
+                str(plan_row.get("primary_role") or "").strip().lower() == "character_1"
+                and bool(plan_row.get("lip_sync_allowed"))
+                and bool(plan_row.get("mouth_visible_required"))
+            )
+            downgrade_reason = str(row.get("route_downgrade_reason_code") or "").strip()
+            if has_ready and not downgrade_reason:
+                row["route"] = "ia2v"
+                row["route_after"] = "ia2v"
+                row["video_metadata"] = {**_safe_dict(row.get("video_metadata")), "route_type": "ia2v"}
+                blocked = True
+                invalid_downgrade_count += 1
+        route = _to_director_route(row.get("route")) or "i2v"
+        route_payload = dict(_safe_dict(row.get("route_payload")))
+        if route == "ia2v":
+            for key in ("positive_prompt", "video_prompt", "image_prompt"):
+                cleaned, removed = _strip_ia2v_forbidden_clauses(str(route_payload.get(key) or row.get(key) or ""))
+                if removed:
+                    row["forbidden_clause_removed"] = list(dict.fromkeys([*_safe_list(row.get("forbidden_clause_removed")), *removed]))
+                route_payload[key] = cleaned
+                row[key if key != "positive_prompt" else "video_prompt"] = cleaned if key != "image_prompt" else row.get("image_prompt")
+        row["route_payload"] = route_payload
+        preserved = preserved and not (route_before == "ia2v" and str(row.get("route_after") or row.get("route") or "").strip().lower() != "ia2v")
+        segments.append(row)
+    payload["segments"] = segments
+    package["final_video_prompt"] = payload
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["final_video_prompt_route_preserved"] = bool(preserved)
+    diagnostics["invalid_route_downgrade_blocked"] = bool(blocked)
+    diagnostics["route_downgrade_reason_code"] = ""
+    prompt_validation = _safe_dict(diagnostics.get("prompt_validation"))
+    prompt_validation["invalid_route_downgrade_count"] = int(prompt_validation.get("invalid_route_downgrade_count") or 0) + invalid_downgrade_count
+    diagnostics["prompt_validation"] = prompt_validation
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    applied["final_video_prompt"] = True
+    diagnostics["director_contract_applied_stages"] = applied
+    package["diagnostics"] = diagnostics
 
 
 def _stable_hash_payload(value: Any) -> str:
@@ -7519,6 +7837,8 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         ),
         "format": str(director_controls.get("format") or req.get("format") or "9:16"),
         "creative_config": _normalize_creative_config(_extract_request_creative_config(req, metadata)),
+        "director_config": _safe_dict(req.get("director_config")),
+        "director_contract": _safe_dict(req.get("director_contract")),
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
         "refs_by_role": _safe_dict(req.get("refsByRole")),
         "selected_refs": {
@@ -7539,7 +7859,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         }
         for stage_id in STAGE_IDS
     }
-    return {
+    package = {
         "package_version": "scenario_stage_pipeline_v1",
         "pipeline_mode": str(metadata.get("pipelineMode") or "scenario_stage_v1"),
         "created_at": _utc_iso(),
@@ -7583,6 +7903,8 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             },
         },
     }
+    _normalize_director_package_input(package)
+    return package
     _inject_route_strategy_diagnostics(package)
     return package
 
@@ -8623,6 +8945,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_linked_refs_by_role"] = final_refs_summary_by_role
     diagnostics["final_video_prompt_segments_with_source_image_refs"] = final_segments_with_source_image_refs
     diagnostics["final_video_prompt_missing_character_ref_segments"] = final_missing_character_ref_segments
+    applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
+    applied["finalize"] = True
+    diagnostics["director_contract_applied_stages"] = applied
     package["diagnostics"] = diagnostics
     _append_diag_event(package, f"final_storyboard built manifest={len(render_manifest)}", stage_id="finalize")
     return package
@@ -9186,6 +9511,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
                     diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
                     package["diagnostics"] = diagnostics
+                    _apply_director_contract_story_core(package)
                     _append_diag_event(package, "story_core generated", stage_id="story_core")
                     return package
                 last_error_code = error_code or CORE_SCHEMA_INVALID
@@ -12547,6 +12873,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["role_plan_candidate_failed_but_snapshot_restored"] = False
         diagnostics["role_plan_last_failed_candidate_error"] = ""
         package["diagnostics"] = diagnostics
+        _apply_director_contract_roles(package)
         _append_diag_event(package, "role_plan generated", stage_id="role_plan")
         return package
 
@@ -13274,6 +13601,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_candidate_failed_but_snapshot_restored"] = False
     diagnostics["scene_plan_last_failed_candidate_error"] = ""
     package["diagnostics"] = diagnostics
+    _apply_director_contract_scene_plan(package)
 
     if scene_plan and _safe_list(scene_plan.get("storyboard")):
         _append_diag_event(package, "scene_plan generated", stage_id="scene_plan")
@@ -13576,6 +13904,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, f"scene_prompts hard fail after retry: {hard_fail_error}", stage_id="scene_prompts")
         raise RuntimeError(hard_fail_error)
 
+    _apply_director_contract_scene_prompts(package)
     if scene_prompts and _safe_list(scene_prompts.get("segments")):
         _append_diag_event(package, "scene_prompts generated", stage_id="scene_prompts")
         if int(diagnostics.get("scene_prompts_route_semantics_mismatch_count") or 0) > 0:
@@ -13666,6 +13995,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         final_video_prompt["created_for_signature"] = current_signature
         final_video_prompt["snapshot_compatibility"] = current_snapshot_meta
         package["final_video_prompt"] = final_video_prompt
+        _apply_director_contract_final_video_prompt(package)
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["final_video_prompt_snapshot_restored"] = False
         diagnostics["final_video_prompt_snapshot_restore_blocked_by_signature"] = False
@@ -13728,6 +14058,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
             retry_payload["created_for_signature"] = current_signature
             retry_payload["snapshot_compatibility"] = current_snapshot_meta
             package["final_video_prompt"] = retry_payload
+            _apply_director_contract_final_video_prompt(package)
             diagnostics = _safe_dict(package.get("diagnostics"))
             diagnostics["final_video_prompt_snapshot_restored"] = False
             package["diagnostics"] = diagnostics
@@ -13743,6 +14074,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
+    _normalize_director_package_input(pkg)
     _set_stage_status(pkg, stage_id, "running")
     pkg["updated_at"] = _utc_iso()
 
