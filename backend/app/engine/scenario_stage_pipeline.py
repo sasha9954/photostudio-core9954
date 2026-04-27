@@ -13928,9 +13928,11 @@ def run_manual_stage(
         scene_plan_ok_for_prompts = _has_valid_scene_plan_payload_for_scene_prompts(pkg)
         audio_map_block_reason = "" if audio_map_ok_for_prompts else "audio_map_payload_invalid_for_scene_prompts"
         scene_plan_block_reason = "" if scene_plan_ok_for_prompts else "scene_plan_payload_invalid_for_scene_prompts"
-        scene_prompts_payload_gate_accepted = bool(scene_prompts_payload_gate_accepted and scene_plan_ok_for_prompts)
         scene_prompts_payload_ok_by_stage["audio_map"] = bool(audio_map_ok_for_prompts)
         scene_prompts_payload_ok_by_stage["scene_plan"] = bool(scene_plan_ok_for_prompts)
+        scene_prompts_payload_gate_accepted = bool(
+            deps and all(bool(scene_prompts_payload_ok_by_stage.get(dep_stage)) for dep_stage in deps)
+        )
         scene_prompts_missing_dependency_keys = [
             dep_stage for dep_stage in deps if not bool(scene_prompts_payload_ok_by_stage.get(dep_stage))
         ]
@@ -13949,6 +13951,7 @@ def run_manual_stage(
         diagnostics["scene_prompts_dependency_gate_mode"] = "payload_validity"
         diagnostics["scene_prompts_dependency_status_by_stage"] = scene_prompts_status_by_stage
         diagnostics["scene_prompts_dependency_payload_ok_by_stage"] = scene_prompts_payload_ok_by_stage
+        diagnostics["scene_prompts_dependency_gate_recomputed_after_payload_overrides"] = True
         diagnostics["scene_prompts_dependency_gate_false_positive_prevented"] = bool(scene_prompts_false_positive_prevented)
         diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
         diagnostics["scene_prompts_requested"] = True
