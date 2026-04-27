@@ -62,6 +62,9 @@ function buildDirectorContext(data) {
 
 function buildDirectorConfigFromAnswers(answers) {
   const safeAnswers = answers && typeof answers === "object" ? answers : {};
+  if (Object.keys(safeAnswers).length === 0) {
+    return {};
+  }
   const config = {};
 
   if (safeAnswers.performance_density === "balanced") {
@@ -103,6 +106,14 @@ function buildDirectorConfigFromAnswers(answers) {
     config.i2v_ratio = Number((1 - config.ia2v_ratio).toFixed(2));
   }
   return config;
+}
+
+function stableJson(value) {
+  try {
+    return JSON.stringify(value || {});
+  } catch {
+    return "{}";
+  }
 }
 
 export default function ComfyNarrativeNode({ id, data }) {
@@ -184,15 +195,36 @@ export default function ComfyNarrativeNode({ id, data }) {
   }, [data?.directorAnswers]);
 
   useEffect(() => {
-    const mapped = buildDirectorConfigFromAnswers(answers);
+    const safeAnswers = answers && typeof answers === "object" ? answers : {};
+    const mapped = buildDirectorConfigFromAnswers(safeAnswers);
+
+    const currentAnswers =
+      data?.directorAnswers && typeof data.directorAnswers === "object"
+        ? data.directorAnswers
+        : {};
+
+    const currentConfig =
+      data?.director_config && typeof data.director_config === "object"
+        ? data.director_config
+        : {};
+
+    const nextConfig = {
+      ...currentConfig,
+      ...mapped,
+    };
+
+    if (
+      stableJson(currentAnswers) === stableJson(safeAnswers)
+      && stableJson(currentConfig) === stableJson(nextConfig)
+    ) {
+      return;
+    }
+
     data?.onFieldChange?.(id, {
-      directorAnswers: answers,
-      director_config: {
-        ...(data?.director_config || {}),
-        ...mapped,
-      },
+      directorAnswers: safeAnswers,
+      director_config: nextConfig,
     });
-  }, [answers, data, id]);
+  }, [answers, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
 
 
   const clipModeByContentType = safeContentType === "music_video";
