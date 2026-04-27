@@ -9,6 +9,7 @@ from app.api.routes.video import router as video_router
 from app.api.routes.prints import router as prints_router
 from app.api.routes.clip import router as clip_router
 from app.api.routes.clip_comfy import router as clip_comfy_router
+from app.api.routes.director import router as director_router
 
 api_router = APIRouter()
 api_router.include_router(health_router, tags=["health"])
@@ -21,3 +22,4 @@ api_router.include_router(video_router, tags=["video"])
 api_router.include_router(prints_router, tags=["prints"])
 api_router.include_router(clip_router, tags=["clip"])
 api_router.include_router(clip_comfy_router, tags=["clip-comfy"])
+api_router.include_router(director_router, tags=["director"])
