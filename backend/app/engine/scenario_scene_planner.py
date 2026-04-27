@@ -1242,6 +1242,13 @@ def _build_scene_world_summary(role_plan: dict[str, Any], story_core: dict[str, 
 
 def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
+    director_config = _safe_dict(input_pkg.get("director_config"))
+    ia2v_ratio = director_config.get("ia2v_ratio")
+    i2v_ratio = director_config.get("i2v_ratio")
+    ia2v_locations = _safe_list(director_config.get("ia2v_locations")) or []
+    i2v_locations = _safe_list(director_config.get("i2v_locations")) or []
+    intro_scenes = _safe_list(director_config.get("intro_scenes")) or []
+    camera_style = director_config.get("camera_style")
     story_core = _safe_dict(package.get("story_core"))
     audio_map = _safe_dict(package.get("audio_map"))
     role_plan = _safe_dict(package.get("role_plan"))
@@ -1310,6 +1317,14 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         },
         "character_appearance_modes_by_role": character_appearance_modes_by_role,
         "character_presence_modes_by_role": character_presence_modes_by_role,
+        "director_control": {
+            "ia2v_ratio": ia2v_ratio,
+            "i2v_ratio": i2v_ratio,
+            "ia2v_locations": ia2v_locations,
+            "i2v_locations": i2v_locations,
+            "intro_scenes": intro_scenes,
+            "camera_style": camera_style,
+        },
         "role_plan": {
             "roles_version": str(role_plan.get("roles_version") or ""),
             "roster": _safe_list(role_plan.get("roster")),
@@ -1515,6 +1530,50 @@ def _build_compact_route_budget_retry_context(context: dict[str, Any]) -> dict[s
     }
 
 
+def _build_director_control_prompt_block(context: dict[str, Any]) -> str:
+    director_control = _safe_dict(context.get("director_control"))
+    ia2v_ratio = director_control.get("ia2v_ratio")
+    i2v_ratio = director_control.get("i2v_ratio")
+    ia2v_locations = [str(item).strip() for item in _safe_list(director_control.get("ia2v_locations")) if str(item).strip()]
+    i2v_locations = [str(item).strip() for item in _safe_list(director_control.get("i2v_locations")) if str(item).strip()]
+    intro_scenes = [str(item).strip() for item in _safe_list(director_control.get("intro_scenes")) if str(item).strip()]
+    camera_style = str(director_control.get("camera_style") or "").strip().lower()
+
+    if not any([ia2v_ratio is not None, i2v_ratio is not None, ia2v_locations, i2v_locations, intro_scenes, camera_style]):
+        return ""
+
+    lines = [
+        "DIRECTOR CONTROL:\\n",
+        "* Respect ia2v_ratio vs i2v_ratio when distributing scenes.\\n",
+        "* ia2v scenes MUST be used for vocal/performance moments.\\n",
+        "* i2v scenes MUST be used for environment, intro, transitions.\\n",
+    ]
+    if ia2v_ratio is not None or i2v_ratio is not None:
+        lines.append(f"* Ratio target hint: ia2v_ratio={ia2v_ratio}, i2v_ratio={i2v_ratio}.\\n")
+    if ia2v_locations:
+        lines.append(f"* ia2v_locations hard scope: {json.dumps(ia2v_locations, ensure_ascii=False)}.\\n")
+        lines.append("* Only place performance (ia2v) scenes in these locations.\\n")
+    if i2v_locations:
+        lines.append(f"* i2v_locations hard scope: {json.dumps(i2v_locations, ensure_ascii=False)}.\\n")
+        lines.append("* Use these locations for environment scenes.\\n")
+    if intro_scenes:
+        lines.append(f"* intro_scenes hard order hint: {json.dumps(intro_scenes, ensure_ascii=False)}.\\n")
+        lines.append("* The first 1–3 scenes MUST match these types in order.\\n")
+        lines.append("* Example: intro_scenes=[\"station_wide\",\"train_arrival\"] => first scenes reflect station -> train -> boarding.\\n")
+    lines.extend(
+        [
+            "* camera_style controls shot type.\\n",
+            "* camera_style=\"cinematic_glide\": use smooth push-in / dolly shots.\\n",
+            "* camera_style=\"still_witness\": use static frames, minimal motion.\\n",
+            "* camera_style=\"emotional_proximity\": use close-up, face-driven shots.\\n",
+        ]
+    )
+    if camera_style:
+        lines.append(f"* Requested camera_style: \"{camera_style}\".\\n")
+    lines.append("Do not ignore director_config. It is a hard constraint unless impossible.\\n")
+    return "".join(lines)
+
+
 def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", prompt_mode: str = "default") -> str:
     feedback_block = ""
     if validation_feedback:
@@ -1632,6 +1691,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "do not require mouth-visible lip-sync.\\n"
         "For first_last: state transition Anchor A -> Event -> Anchor B; use only when route_budget_contract.target_counts.first_last > 0; "
         "if first_last target is 0 then first_last is forbidden.\\n"
+        f"{_build_director_control_prompt_block(context)}"
         f"{feedback_block}"
         "Output contract:\\n"
         "{\\n"
