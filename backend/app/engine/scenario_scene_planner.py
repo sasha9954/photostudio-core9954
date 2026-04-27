@@ -1838,7 +1838,14 @@ def _apply_route_budget_to_scene_rows(
         source_match_mode_by_index[str(idx)] = source_mode
         if seg_id:
             source_match_mode_by_segment[seg_id] = source_mode
-        candidate = bool(source.get("is_lip_sync_candidate")) or bool(str(source.get("transcript_slice") or "").strip())
+        candidate = (
+            bool(source.get("is_lip_sync_candidate"))
+            or bool(source.get("has_vocal"))
+            or bool(str(source.get("transcript_slice") or "").strip())
+            or bool(str(source.get("transcript") or "").strip())
+            or bool(str(row.get("transcript_slice") or "").strip())
+            or bool(str(row.get("spoken_line") or "").strip())
+        )
         if not candidate:
             continue
         candidate_segment_ids.add(seg_id)
@@ -1887,10 +1894,37 @@ def _apply_route_budget_to_scene_rows(
             row["scene_id"] = str(row.get("scene_id") or fallback_id).strip()
             seg_id = fallback_id
         if idx in selected_ia2v_indices:
+            speaker_role = str(row.get("speaker_role") or row.get("primary_role") or "character_1").strip() or "character_1"
+            spoken_line = str(row.get("spoken_line") or "").strip()
+            if not spoken_line:
+                spoken_line = str(
+                    source.get("transcript_slice")
+                    or source.get("transcript")
+                    or row.get("transcript_slice")
+                    or ""
+                ).strip()
             row["route"] = "ia2v"
             row["lipSync"] = True
-            row["renderMode"] = str(row.get("renderMode") or "lip_sync_music")
+            row["renderMode"] = "lip_sync_music"
             row["requiresAudioSensitiveVideo"] = True
+            row["speaker_role"] = speaker_role
+            row["vocal_owner_role"] = str(row.get("vocal_owner_role") or speaker_role).strip() or speaker_role
+            row["primary_role"] = str(row.get("primary_role") or speaker_role).strip() or speaker_role
+            row["visual_focus_role"] = str(row.get("visual_focus_role") or speaker_role).strip() or speaker_role
+            row["lip_sync_allowed"] = True
+            row["lip_sync_priority"] = "high"
+            row["mouth_visible_required"] = True
+            row["singing_readiness_required"] = True
+            row["audio_visual_sync"] = str(row.get("audio_visual_sync") or "vocal performance aligned to this audio segment").strip()
+            row["story_beat_type"] = str(row.get("story_beat_type") or "performance").strip()
+            row["scene_goal"] = str(row.get("scene_goal") or "vocal performance beat").strip()
+            row["photo_staging_goal"] = str(
+                row.get("photo_staging_goal") or "mouth-readable emotional performance shot"
+            ).strip()
+            row["ltx_video_goal"] = str(
+                row.get("ltx_video_goal") or "natural singing performance, visible mouth, controlled motion"
+            ).strip()
+            row["spoken_line"] = spoken_line
             row["routeLocked"] = True
             row["route_lock_source"] = "mapped_route_budget"
             row["route_assignment_source"] = "mapped_route_budget"
@@ -1899,6 +1933,11 @@ def _apply_route_budget_to_scene_rows(
             row["route"] = "i2v"
             row["lipSync"] = False
             row["requiresAudioSensitiveVideo"] = False
+            row["lip_sync_allowed"] = False
+            row["mouth_visible_required"] = False
+            row["singing_readiness_required"] = False
+            row["story_beat_type"] = str(row.get("story_beat_type") or "world_memory").strip()
+            row["scene_goal"] = str(row.get("scene_goal") or "atmospheric world / memory beat").strip()
             row["routeLocked"] = True
             row["route_lock_source"] = "mapped_route_budget"
             row["route_assignment_source"] = "mapped_route_budget"
@@ -1913,6 +1952,8 @@ def _apply_route_budget_to_scene_rows(
         "scene_plan_route_budget_ratio_source": ia2v_ratio_source,
         "scene_plan_route_budget_target_counts": {"i2v": i2v_count, "ia2v": ia2v_count, "first_last": 0},
         "scene_plan_route_budget_first_last_disabled_for_mapped_path": True,
+        "scene_plan_mapped_first_last_target_removed": True,
+        "scene_plan_mapped_ia2v_contract_filled": True,
         "scene_plan_route_budget_candidate_ia2v_count": max_possible_ia2v,
         "scene_plan_route_budget_selected_ia2v_segments": selected_ia2v_segments,
         "scene_plan_route_budget_selected_i2v_segments": selected_i2v_segments,
@@ -2985,6 +3026,7 @@ def _normalize_scene_plan(
     mapped_route_budget_post_normalization_applied = False
     mapped_route_budget_post_normalization_diag: dict[str, Any] = {}
     mapped_route_budget_target_adjusted_for_mapped_no_first_last = False
+    mapped_default_vocal_role = "character_1"
 
     forced_route_list = [
         str(item).strip().lower()
@@ -3518,6 +3560,11 @@ def _normalize_scene_plan(
         )
         mapped_route_budget_post_normalization_applied = True
         mapped_route_budget_lock_detected = True
+        for row in normalized_storyboard:
+            role = str(_safe_dict(row).get("primary_role") or "").strip()
+            if role:
+                mapped_default_vocal_role = role
+                break
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(expected_scene_count, creative_config)
     if mapped_used_model:
         mapped_ia2v_count = int(_safe_dict(mapped_route_budget_post_normalization_diag.get("scene_plan_route_budget_target_counts")).get("ia2v") or 0)
@@ -3762,6 +3809,9 @@ def _normalize_scene_plan(
         "scene_plan_route_budget_after_lock": final_route_counts,
         "scene_plan_route_locks_by_segment": requested_route_locks_by_segment,
         "scene_plan_route_budget_target_adjusted_for_mapped_no_first_last": mapped_route_budget_target_adjusted_for_mapped_no_first_last,
+        "scene_plan_mapped_first_last_target_removed": mapped_used_model,
+        "scene_plan_mapped_ia2v_contract_filled": mapped_used_model,
+        "scene_plan_mapped_default_vocal_role": mapped_default_vocal_role,
         "scene_plan_mapped_route_budget_lock_detected": mapped_route_budget_lock_detected,
         "scene_plan_mapped_route_budget_override_prevented": mapped_route_budget_override_prevented,
         "scene_plan_mapped_route_budget_post_normalization_applied": mapped_route_budget_post_normalization_applied,
@@ -3805,6 +3855,14 @@ def build_gemini_scene_plan(
     input_pkg = _safe_dict(package.get("input"))
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     director_config = _safe_dict(input_pkg.get("director_config"))
+    connected_context = _safe_dict(input_pkg.get("connected_context_summary"))
+    role_identity_mapping = _safe_dict(connected_context.get("role_identity_mapping"))
+    present_cast_roles = [
+        str(role).strip()
+        for role, payload in role_identity_mapping.items()
+        if str(role).strip() and bool(_safe_dict(payload).get("presentCastRole"))
+    ]
+    default_vocal_role = present_cast_roles[0] if len(present_cast_roles) == 1 else "character_1"
     audio_map = _safe_dict(package.get("audio_map"))
     scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
     if not scene_windows or len(scene_windows) == 0:
@@ -3841,6 +3899,8 @@ def build_gemini_scene_plan(
                     "angle": "",
                 },
                 "route": "i2v",
+                "primary_role": default_vocal_role,
+                "visual_focus_role": default_vocal_role,
             }
         )
 
@@ -3893,6 +3953,7 @@ def build_gemini_scene_plan(
             "mapped_debug_missing_segment_id_indices": mapped_rows_missing_segment_id,
             "mapped_debug_route_counts_after_budget": route_mix_summary,
             "mapped_debug_route_budget_diag": route_budget_diag,
+            "scene_plan_mapped_default_vocal_role": default_vocal_role,
             "mapped_debug_final_segment_ids": mapped_final_segment_ids,
             "mapped_debug_final_missing_segment_id_count": mapped_final_missing_segment_id_count,
             **route_budget_diag,
