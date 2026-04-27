@@ -13758,8 +13758,16 @@ def run_manual_stage(
             missing_upstream = []
             continuation_mode = "reuse_existing_package"
         else:
-            reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
-            missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
+            reusable_upstream = [
+                dep_stage
+                for dep_stage in dep_sequence
+                if scene_plan_payload_ok_by_stage.get(dep_stage) is True
+            ]
+            missing_upstream = [
+                dep_stage
+                for dep_stage in dep_sequence
+                if dep_stage not in reusable_upstream
+            ]
             continuation_mode = "reuse_existing_package" if not missing_upstream else "recompute_missing_upstream"
         diagnostics = _safe_dict(pkg.get("diagnostics"))
         diagnostics["scene_plan_dependency_gate_mode"] = "payload_validity"
@@ -13778,6 +13786,8 @@ def run_manual_stage(
         diagnostics["scene_plan_reused_upstream_statuses_restored"] = False
         diagnostics["scene_plan_upstream_statuses_restored_before_run"] = False
         diagnostics["scene_plan_upstream_statuses_restored_before_run_stages"] = []
+        diagnostics["scene_plan_missing_upstream_from_payload_gate"] = list(missing_upstream)
+        diagnostics["scene_plan_reusable_upstream_from_payload_gate"] = list(reusable_upstream)
         pkg["diagnostics"] = diagnostics
     elif stage_id == "scene_prompts":
         deps = list(dep_sequence)
