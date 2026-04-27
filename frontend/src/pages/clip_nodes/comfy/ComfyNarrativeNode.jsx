@@ -136,7 +136,11 @@ export default function ComfyNarrativeNode({ id, data }) {
   useEffect(() => {
     setAiQuestions([]);
     setAnswers({});
-  }, [data?.directorNote]);
+    data?.onFieldChange?.(id, {
+      directorAnswers: {},
+      director_config: {},
+    });
+  }, [data?.directorNote, data?.text]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
@@ -155,7 +159,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         ...mapped,
       },
     });
-  }, [answers]);
+  }, [answers, data, id]);
 
 
   const clipModeByContentType = safeContentType === "music_video";
@@ -280,7 +284,7 @@ export default function ComfyNarrativeNode({ id, data }) {
   };
 
   const runDirectorAI = async () => {
-    if (aiLoading) return;
+    if (aiLoading || aiQuestions.length) return;
     try {
       setAiError("");
       setAiLoading(true);
