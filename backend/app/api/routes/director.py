@@ -546,7 +546,6 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
         candidate_message = str(parsed.get("assistant_message") or "").strip()
         if candidate_message:
             assistant_message = candidate_message
-        _ = bool(parsed.get("done") is True)
 
     merged_answers = _sanitize_director_answers({**answers, **extracted_answers})
     missing_fields = _get_missing_director_fields(merged_answers)
