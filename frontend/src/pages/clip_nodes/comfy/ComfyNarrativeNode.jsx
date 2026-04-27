@@ -354,13 +354,10 @@ export default function ComfyNarrativeNode({ id, data }) {
       setAiError("");
       setAiLoading(true);
       const context = buildDirectorContext(data);
-      const res = await fetch("/api/director/questions", {
+      const json = await fetchJson("/api/director/questions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(context),
+        body: context,
       });
-      if (!res.ok) throw new Error(`AI director questions failed (${res.status})`);
-      const json = await res.json();
       if (!json || !Array.isArray(json.questions)) {
         setAiQuestions([]);
         return;
