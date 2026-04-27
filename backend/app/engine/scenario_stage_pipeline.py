@@ -463,6 +463,22 @@ def _ia2v_has_memory_world_conflict(text: str, memory_label: str, memory_zones: 
     return any(token and token in raw for token in memory_tokens)
 
 
+def _sanitize_ia2v_performance_intent(text: str, memory_label: str, memory_zones: list[str]) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    tokens = _director_location_tokens(memory_label, memory_zones)
+    cleaned = raw
+    for token in tokens:
+        if not token:
+            continue
+        cleaned = re.sub(rf"(?i)\b{re.escape(token)}s?\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:-")
+    if not cleaned or _ia2v_has_memory_world_conflict(cleaned, memory_label, memory_zones):
+        return ""
+    return cleaned
+
+
 def _clean_director_contract_prompt_row(
     row: dict[str, Any],
     contract: dict[str, Any],
@@ -528,13 +544,15 @@ def _clean_director_contract_prompt_row(
             video, memory_label, memory_zones
         )
         prompt_notes = _safe_dict(plan_row.get("prompt_notes"))
-        safe_scene_intent = (
+        raw_scene_intent = (
             str(plan_row.get("scene_goal") or "").strip()
             or str(plan_row.get("narrative_function") or "").strip()
             or str(cleaned_row.get("scene_goal") or "").strip()
             or str(cleaned_row.get("narrative_function") or "").strip()
             or str(prompt_notes.get("intent") or "").strip()
-            or "Keep visual continuity with the active performance scene."
+        )
+        safe_scene_intent = _sanitize_ia2v_performance_intent(raw_scene_intent, memory_label, memory_zones) or (
+            "Keep the performance focused on the singer's emotional delivery inside the active performance world."
         )
         safe_emotion = (
             str(plan_row.get("emotion") or "").strip()
@@ -543,6 +561,8 @@ def _clean_director_contract_prompt_row(
             or str(cleaned_row.get("emotional_key") or "").strip()
             or "grounded"
         )
+        if _ia2v_has_memory_world_conflict(safe_emotion, memory_label, memory_zones):
+            safe_emotion = "grounded emotional delivery"
         identity_clause = (
             "Show the same person as the provided character_1 reference. Preserve face, age impression, body proportions, "
             "hairstyle, clothing, silhouette, and overall identity."
@@ -915,13 +935,15 @@ def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None
             has_conflict = any(_ia2v_has_memory_world_conflict(value, memory_label, memory_zones) for value in conflict_candidates)
             if has_conflict:
                 prompt_notes = _safe_dict(plan_row.get("prompt_notes"))
-                safe_scene_intent = (
+                raw_scene_intent = (
                     str(plan_row.get("scene_goal") or "").strip()
                     or str(prompt_row.get("scene_goal") or "").strip()
                     or str(plan_row.get("narrative_function") or "").strip()
                     or str(prompt_row.get("narrative_function") or "").strip()
                     or str(prompt_notes.get("intent") or "").strip()
-                    or "Keep visual continuity with the active performance scene."
+                )
+                safe_scene_intent = _sanitize_ia2v_performance_intent(raw_scene_intent, memory_label, memory_zones) or (
+                    "Keep the performance focused on the singer's emotional delivery inside the active performance world."
                 )
                 safe_emotion = (
                     str(plan_row.get("emotion") or "").strip()
@@ -930,6 +952,8 @@ def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None
                     or str(prompt_row.get("emotional_key") or "").strip()
                     or "grounded"
                 )
+                if _ia2v_has_memory_world_conflict(safe_emotion, memory_label, memory_zones):
+                    safe_emotion = "grounded emotional delivery"
                 image_prompt = (
                     f"{prefix} Show the same person as the provided character_1 reference. Preserve face, age impression, body "
                     f"proportions, hairstyle, clothing, silhouette, and overall identity. {safe_scene_intent}. Emotion: {safe_emotion}. "
