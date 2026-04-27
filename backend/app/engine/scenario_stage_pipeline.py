@@ -581,7 +581,7 @@ def _scene_plan_dependency_payload_ok(package: dict[str, Any], dependency_stage_
     if dependency_stage_id == "input_package":
         return bool(_safe_dict(pkg.get("input")))
     if dependency_stage_id == "audio_map":
-        return _is_audio_map_dependency_satisfied(pkg)
+        return _has_valid_audio_map_payload(pkg)
     if dependency_stage_id == "story_core":
         return _has_valid_story_core_payload(_safe_dict(pkg.get("story_core")))
     if dependency_stage_id == "role_plan":
@@ -644,6 +644,33 @@ def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
     if isinstance(coverage_ok, str):
         return coverage_ok.strip().lower() in {"1", "true", "yes", "ok"}
     return bool(coverage_ok)
+
+
+def _has_valid_audio_map_payload(package: dict[str, Any]) -> bool:
+    audio_map = _safe_dict(_safe_dict(package).get("audio_map"))
+    if not audio_map:
+        return False
+    segments = audio_map.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return False
+    for row in segments:
+        seg = _safe_dict(row)
+        if not str(seg.get("segment_id") or "").strip():
+            return False
+        if seg.get("t0") is None or seg.get("t1") is None:
+            return False
+    return True
+
+
+def _scene_plan_audio_map_stage_error_present(package: dict[str, Any]) -> bool:
+    pkg = _safe_dict(package)
+    stage_error = str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get("audio_map")).get("error") or "").strip()
+    if stage_error:
+        return True
+    for row in _safe_list(_safe_dict(pkg.get("diagnostics")).get("errors")):
+        if "audio_map" in str(row or "").strip().lower():
+            return True
+    return False
 
 
 def _final_video_prompt_dependency_payload_ok(package: dict[str, Any], dependency_stage_id: str) -> bool:
@@ -13740,6 +13767,14 @@ def run_manual_stage(
         diagnostics["scene_plan_dependency_payload_ok_by_stage"] = scene_plan_payload_ok_by_stage
         diagnostics["scene_plan_dependency_gate_false_positive_prevented"] = bool(scene_plan_false_positive_prevented)
         diagnostics["scene_plan_dependency_gate_accepted"] = bool(scene_plan_payload_gate_accepted)
+        audio_map = _safe_dict(pkg.get("audio_map"))
+        audio_segments = _safe_list(audio_map.get("segments"))
+        scene_plan_audio_map_payload_valid = _has_valid_audio_map_payload(pkg)
+        diagnostics["scene_plan_audio_map_payload_valid"] = bool(scene_plan_audio_map_payload_valid)
+        diagnostics["scene_plan_audio_map_segment_count"] = len(audio_segments)
+        diagnostics["scene_plan_audio_map_stage_error_ignored_due_to_valid_payload"] = bool(
+            scene_plan_audio_map_payload_valid and _scene_plan_audio_map_stage_error_present(pkg)
+        )
         diagnostics["scene_plan_reused_upstream_statuses_restored"] = False
         diagnostics["scene_plan_upstream_statuses_restored_before_run"] = False
         diagnostics["scene_plan_upstream_statuses_restored_before_run_stages"] = []
