@@ -441,13 +441,26 @@ def _strip_raw_lyric_anchor(text: str) -> tuple[str, bool]:
     return cleaned, had
 
 
+def _director_location_tokens(label: str, zones: list[str]) -> list[str]:
+    tokens = []
+    for value in [label, *zones]:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            continue
+        tokens.append(raw)
+        for part in re.split(r"[_\-\s/]+", raw):
+            part = part.strip()
+            if len(part) >= 4:
+                tokens.append(part)
+    return list(dict.fromkeys(tokens))
+
+
 def _ia2v_has_memory_world_conflict(text: str, memory_label: str, memory_zones: list[str]) -> bool:
     raw = str(text or "").lower()
     if any(token in raw for token in _IA2V_MEMORY_WORLD_CONFLICT_TOKENS):
         return True
-    if memory_label and memory_label.lower() in raw:
-        return True
-    return any(str(zone or "").strip().lower() and str(zone).strip().lower() in raw for zone in memory_zones)
+    memory_tokens = _director_location_tokens(memory_label, memory_zones)
+    return any(token and token in raw for token in memory_tokens)
 
 
 def _clean_director_contract_prompt_row(
@@ -540,7 +553,7 @@ def _clean_director_contract_prompt_row(
             ).strip()
             rebuilt_video = (
                 f"{prefix} Clear expressive lip sync, natural jaw motion, readable mouth, controlled grounded body motion, "
-                "stable cinematic camera. Preserve identity and train/performance-world continuity. No text or subtitles."
+                f"stable cinematic camera. Preserve identity and {world_ctx or 'performance-world'} continuity. No text or subtitles."
             ).strip()
             cleaned_row["video_prompt"] = rebuilt_video
             if str(cleaned_row.get("positive_video_prompt") or "").strip():
