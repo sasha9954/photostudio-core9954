@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 import { fetchJson } from "../../../services/api";
 import {
@@ -110,6 +110,8 @@ export default function ComfyNarrativeNode({ id, data }) {
   const [aiError, setAiError] = useState("");
   const [aiQuestions, setAiQuestions] = useState([]);
   const [answers, setAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
+  const directorInputSignature = `${String(data?.directorNote || "")}|||${String(data?.text || "")}`;
+  const prevDirectorInputSignatureRef = useRef(directorInputSignature);
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
@@ -134,13 +136,44 @@ export default function ComfyNarrativeNode({ id, data }) {
   }, [data?.contentType, data?.onFieldChange, id, safeContentType]);
 
   useEffect(() => {
-    setAiQuestions([]);
-    setAnswers({});
-    data?.onFieldChange?.(id, {
-      directorAnswers: {},
-      director_config: {},
-    });
-  }, [data?.directorNote, data?.text]);
+    if (prevDirectorInputSignatureRef.current === directorInputSignature) {
+      return;
+    }
+
+    prevDirectorInputSignatureRef.current = directorInputSignature;
+
+    const hasLocalAnswers = Object.keys(answers || {}).length > 0;
+    const hasLocalQuestions = Array.isArray(aiQuestions) && aiQuestions.length > 0;
+    const hasPersistedAnswers =
+      data?.directorAnswers &&
+      typeof data.directorAnswers === "object" &&
+      Object.keys(data.directorAnswers).length > 0;
+    const hasPersistedConfig =
+      data?.director_config &&
+      typeof data.director_config === "object" &&
+      Object.keys(data.director_config).length > 0;
+
+    if (hasLocalQuestions) {
+      setAiQuestions([]);
+    }
+
+    if (hasLocalAnswers) {
+      setAnswers({});
+    }
+
+    if (hasPersistedAnswers || hasPersistedConfig) {
+      data?.onFieldChange?.(id, {
+        directorAnswers: {},
+        director_config: {},
+      });
+    }
+  }, [
+    directorInputSignature,
+    id,
+    data?.onFieldChange,
+    data?.directorAnswers,
+    data?.director_config,
+  ]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
