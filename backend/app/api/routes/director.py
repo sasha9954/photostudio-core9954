@@ -12,6 +12,21 @@ router = APIRouter()
 
 DIRECTOR_QUESTIONS_MODEL = "gemini-2.5-flash"
 ALLOWED_IDS = ("performance_density", "world_mode", "intro_mode")
+ALLOWED_VALUES_BY_ID = {
+    "performance_density": {"atmospheric", "balanced", "performance_heavy"},
+    "world_mode": {
+        "train_only",
+        "train_plus_city",
+        "city_memory_dominant",
+        "club_dancefloor",
+        "club_bar_backstage",
+        "club_mixed",
+        "single_location",
+        "mixed_locations",
+        "memory_intercut",
+    },
+    "intro_mode": {"intro_environment", "intro_character", "intro_action"},
+}
 
 
 def _world_mode_options(world_hint: str) -> list[dict[str, str]]:
@@ -109,8 +124,17 @@ def _build_director_config_preview(answers_so_far: dict[str, Any]) -> dict[str, 
     return config
 
 
-def build_director_prompt(context: dict[str, Any]) -> str:
+def build_director_prompt(context: dict[str, Any], answers_so_far: dict[str, Any] | None = None) -> str:
     world_hint = str((context or {}).get("world_hint") or "generic").strip().lower()
+    safe_answers = answers_so_far if isinstance(answers_so_far, dict) else {}
+    if "performance_density" not in safe_answers:
+        next_question_id = "performance_density"
+    elif "world_mode" not in safe_answers:
+        next_question_id = "world_mode"
+    elif "intro_mode" not in safe_answers:
+        next_question_id = "intro_mode"
+    else:
+        next_question_id = ""
     world_mode_options = _world_mode_options(world_hint)
     return f"""
 Ты AI-режиссёр клипа.
@@ -133,6 +157,11 @@ def build_director_prompt(context: dict[str, Any]) -> str:
 * performance_density: atmospheric, balanced, performance_heavy
 * world_mode (для world_hint={world_hint}): {json.dumps(world_mode_options, ensure_ascii=False)}
 * intro_mode: intro_environment, intro_character, intro_action
+* Already answered:
+{json.dumps(safe_answers, ensure_ascii=False)}
+* Ask ONLY this next question id:
+{next_question_id}
+* Do not ask any answered question again.
 
 Формат ответа:
 {{
@@ -212,6 +241,9 @@ def _validate_question(
             continue
         label = str(opt.get("label") or "").strip()
         value = str(opt.get("value") or "").strip()
+        allowed_values = ALLOWED_VALUES_BY_ID.get(qid, set())
+        if value not in allowed_values:
+            continue
         if not label or not value:
             continue
         if len(label.split()) > 5:
@@ -247,7 +279,16 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
             "director_config_preview": _build_director_config_preview(safe_answers),
         }
 
-    prompt = build_director_prompt(context)
+    fallback_question = build_fallback_director_question(context, safe_answers)
+    if fallback_question is None:
+        return {
+            "done": True,
+            "question": None,
+            "answers_so_far": safe_answers,
+            "director_config_preview": _build_director_config_preview(safe_answers),
+        }
+
+    prompt = build_director_prompt(context, safe_answers)
 
     key_info = resolve_gemini_api_key()
     if not key_info.get("valid"):
@@ -273,7 +314,7 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
                 candidate_question = legacy_questions[0]
 
     validated = _validate_question(candidate_question, safe_answers)
-    question = validated or build_fallback_director_question(context, safe_answers)
+    question = validated or fallback_question
     if question is None:
         return {
             "done": True,
