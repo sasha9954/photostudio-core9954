@@ -28,82 +28,68 @@ const ROUTE_STRATEGY_PRESETS = [
   { key: "all_lipsync_0_100_0", label: "Живое пение 0/100/0", description: "на 8 сцен: до 8 ia2v, но безвокальные/инструментальные окна автоматически идут в i2v", targets: { i2v: 0, ia2v: 8, first_last: 0 }, maxConsecutiveIa2v: 8 },
   { key: "story_safe_70_20_10", label: "История безопасно 70/20/10", description: "на 8 сцен: 6 i2v / 1-2 ia2v / 0-1 первый-последний", targets: { i2v: 6, ia2v: 1, first_last: 1 }, maxConsecutiveIa2v: 2 },
 ];
-const DIRECTOR_QUESTIONS = [
-  {
-    id: "performance_density",
-    text: "Как часто герой поёт?",
-    options: [
-      { label: "Atmospheric", value: "atmospheric" },
-      { label: "Balanced", value: "balanced" },
-      { label: "Performance-heavy", value: "performance_heavy" },
-    ],
-  },
-  {
-    id: "singing_location",
-    text: "Где происходит пение?",
-    options: [
-      { label: "Только в купе", value: "compartment_only" },
-      { label: "В разных местах поезда", value: "train_full" },
-      { label: "Поезд + Одесса", value: "train_plus_city" },
-    ],
-  },
-  {
-    id: "intro_mode",
-    text: "Как начинается клип?",
-    options: [
-      { label: "Перрон → посадка", value: "boarding_train" },
-      { label: "Уже в поезде", value: "inside_train" },
-      { label: "Сразу с героя", value: "hero_start" },
-    ],
-  },
-];
+function inferWorldHint(text = "") {
+  const t = String(text || "").toLowerCase();
+  if (t.includes("поезд")) return "train";
+  if (t.includes("клуб")) return "club";
+  if (t.includes("улиц") || t.includes("город")) return "city";
+  return "generic";
+}
 
-function buildDirectorConfig(answers) {
+function buildDirectorContext(data) {
+  return {
+    mode: "clip",
+    content_type: "music_video",
+    user_input: data?.text || data?.directorNote || "",
+    audio: {
+      has_audio: Boolean(data?.audioUrl || data?.resolvedSource?.mode === "AUDIO"),
+      duration_sec: Number(data?.audioDuration || 0),
+      has_vocals: true,
+    },
+    world_hint: inferWorldHint(data?.text || data?.directorNote || ""),
+    characters: [
+      {
+        role: "character_1",
+        type: "unknown",
+        description: "main character",
+      },
+    ],
+    constraints: {
+      max_questions: 3,
+    },
+  };
+}
+
+function buildDirectorConfigFromAnswers(answers) {
   const safeAnswers = answers && typeof answers === "object" ? answers : {};
   const config = {};
 
+  if (safeAnswers.performance_density === "balanced") {
+    config.ia2v_ratio = 0.5;
+  }
   if (safeAnswers.performance_density === "atmospheric") {
     config.ia2v_ratio = 0.2;
-    config.i2v_ratio = 0.8;
-  } else if (safeAnswers.performance_density === "balanced") {
-    config.ia2v_ratio = 0.5;
-    config.i2v_ratio = 0.5;
-  } else if (safeAnswers.performance_density === "performance_heavy") {
+  }
+  if (safeAnswers.performance_density === "performance_heavy") {
     config.ia2v_ratio = 0.8;
-    config.i2v_ratio = 0.2;
   }
 
-  if (safeAnswers.singing_location === "compartment_only") {
-    config.ia2v_locations = ["train_compartment"];
-    config.i2v_locations = ["window_view"];
-  } else if (safeAnswers.singing_location === "train_full") {
-    config.ia2v_locations = ["train_compartment", "train_corridor", "train_door"];
-    config.i2v_locations = ["window_view", "train_exterior"];
-  } else if (safeAnswers.singing_location === "train_plus_city") {
-    config.ia2v_locations = ["train_compartment", "train_corridor"];
-    config.i2v_locations = ["odesa_port", "odesa_streets", "odesa_courtyard"];
+  if (safeAnswers.world_mode === "train_plus_city") {
+    config.i2v_locations = ["city"];
+    config.ia2v_locations = ["train"];
   }
 
-  if (safeAnswers.intro_mode === "boarding_train") {
-    config.intro_scenes = ["station_wide", "train_arrival", "boarding"];
-    config.camera_style = "cinematic_glide";
-  } else if (safeAnswers.intro_mode === "inside_train") {
-    config.intro_scenes = ["window_reflection", "inside_train"];
-    config.camera_style = "still_witness";
-  } else if (safeAnswers.intro_mode === "hero_start") {
-    config.intro_scenes = ["hero_closeup"];
-    config.camera_style = "emotional_proximity";
+  if (typeof config.ia2v_ratio === "number") {
+    config.i2v_ratio = Number((1 - config.ia2v_ratio).toFixed(2));
   }
-
   return config;
 }
 
 export default function ComfyNarrativeNode({ id, data }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [aiQuestions, setAiQuestions] = useState(null);
-  const [aiAnswers, setAiAnswers] = useState({});
-  const [directorAnswers, setDirectorAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
+  const [aiQuestions, setAiQuestions] = useState([]);
+  const [answers, setAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
@@ -128,13 +114,12 @@ export default function ComfyNarrativeNode({ id, data }) {
   }, [data?.contentType, data?.onFieldChange, id, safeContentType]);
 
   useEffect(() => {
-    setAiQuestions(null);
-    setAiAnswers({});
+    setAiQuestions([]);
   }, [data?.directorNote]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
-    setDirectorAnswers((prev) => {
+    setAnswers((prev) => {
       if (JSON.stringify(prev) === JSON.stringify(persistedAnswers)) return prev;
       return persistedAnswers;
     });
@@ -253,51 +238,47 @@ export default function ComfyNarrativeNode({ id, data }) {
     });
   };
 
-  const handleSubmitAIAnswers = async () => {
-    const text = String(data?.directorNote || "").trim();
-    if (!text || aiLoading) return;
-    try {
-      setAiError("");
-      setAiLoading(true);
-      const response = await fetchJson("/api/director/interpret", {
-        method: "POST",
-        body: {
-          text,
-          answers: aiAnswers,
-          hasAudio: hasAudioSource,
-          refs: aiRefs,
-        },
-      });
-      setAiQuestions(null);
-      setAiAnswers({});
-      applyAIResult(response);
-    } catch (err) {
-      setAiError(String(err?.message || "AI answers failed"));
-      setAiQuestions(null);
-    } finally {
-      setAiLoading(false);
-    }
-  };
-
-  const handleDirectorAnswer = (questionId, value) => {
-    setDirectorAnswers((prev) => {
+  const handleAnswer = (questionId, value) => {
+    setAnswers((prev) => {
       const nextAnswers = {
         ...prev,
         [questionId]: value,
       };
-      const mappedDirectorConfig = buildDirectorConfig(nextAnswers);
+      const mappedDirectorConfig = buildDirectorConfigFromAnswers(nextAnswers);
       const existingDirectorConfig = data?.director_config && typeof data.director_config === "object"
         ? data.director_config
         : {};
       data?.onFieldChange?.(id, {
         directorAnswers: nextAnswers,
         director_config: {
-          ...mappedDirectorConfig,
           ...existingDirectorConfig,
+          ...mappedDirectorConfig,
         },
       });
       return nextAnswers;
     });
+  };
+
+  const runDirectorAI = async () => {
+    if (aiLoading) return;
+    try {
+      setAiError("");
+      setAiLoading(true);
+      const context = buildDirectorContext(data);
+      const res = await fetch("/api/director/questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(context),
+      });
+      if (!res.ok) throw new Error(`AI director questions failed (${res.status})`);
+      const json = await res.json();
+      setAiQuestions(Array.isArray(json?.questions) ? json.questions : []);
+    } catch (error) {
+      setAiError(String(error?.message || "AI questions failed"));
+      setAiQuestions([]);
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   const handleAiInterpret = async () => {
@@ -315,12 +296,9 @@ export default function ComfyNarrativeNode({ id, data }) {
         },
       });
       if (response?.needs_clarification) {
-        setAiQuestions(response?.questions || []);
-        setAiAnswers({});
+        setAiError("AI clarification is disabled in this node. Используйте блок вопросов ниже.");
         return;
       }
-      setAiQuestions(null);
-      setAiAnswers({});
       applyAIResult(response);
     } catch (error) {
       setAiError(String(error?.message || "AI interpret failed"));
@@ -425,47 +403,21 @@ export default function ComfyNarrativeNode({ id, data }) {
               {aiLoading ? "AI анализ…" : "🎬 Сформировать через AI"}
             </button>
             {aiError ? <div className="clipSB_narrativeEmptyHint" role="alert">{aiError}</div> : null}
-            {aiQuestions && aiQuestions.length > 0 ? (
-              <div className="ai-questions-block">
-                {aiQuestions.map((q) => (
-                  <div key={q.id} className="ai-question-item">
-                    <div className="ai-question-text">{q.text}</div>
-                    <div className="ai-question-options">
-                      {(q.options || []).map((opt) => (
-                        <button
-                          key={opt}
-                          type="button"
-                          className={`clipSB_btn ai-option-btn ${aiAnswers[q.id] === opt ? "selected" : ""}`.trim()}
-                          onClick={() => setAiAnswers((prev) => ({ ...prev, [q.id]: opt }))}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="clipSB_btn clipSB_btnPrimary ai-submit-btn"
-                  onClick={handleSubmitAIAnswers}
-                  disabled={aiLoading || aiQuestions.some((q) => !aiAnswers[q.id])}
-                >
-                  {aiLoading ? "Обработка…" : "Продолжить"}
-                </button>
-              </div>
-            ) : null}
             <section className="clipSB_narrativeSection">
               <div className="clipSB_brainLabel">AI Director Questions</div>
-              {DIRECTOR_QUESTIONS.map((q) => (
+              <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={runDirectorAI} disabled={aiLoading}>
+                🎬 Сформировать режиссуру через AI
+              </button>
+              {aiQuestions.map((q) => (
                 <div key={q.id} className="director-question">
                   <div className="question-title">{q.text}</div>
                   <div className="ai-question-options">
-                    {q.options.map((opt) => (
+                    {(q.options || []).map((opt) => (
                       <button
                         key={opt.value}
                         type="button"
-                        className={`clipSB_btn ai-option-btn ${directorAnswers[q.id] === opt.value ? "selected" : ""}`.trim()}
-                        onClick={() => handleDirectorAnswer(q.id, opt.value)}
+                        className={`clipSB_btn ai-option-btn ${answers[q.id] === opt.value ? "selected" : ""}`.trim()}
+                        onClick={() => handleAnswer(q.id, opt.value)}
                       >
                         {opt.label}
                       </button>
