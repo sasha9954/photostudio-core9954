@@ -111,7 +111,11 @@ function hydrateSceneWithRuntime(scene = {}, runtime = {}) {
 function sceneBadges(scene = {}) {
   const badges = [];
   const profile = resolveScenarioSceneVideoProfile(scene);
-  badges.push(profile.displayRouteLabel || "i2v");
+  const isIa2v = String(scene?.route || "").trim().toLowerCase() === "ia2v"
+    || Boolean(scene?.lipSync || scene?.isLipSync)
+    || String(scene?.renderMode || "").trim().toLowerCase() === "lip_sync_music"
+    || String(scene?.resolvedWorkflowKey || "").trim().toLowerCase() === "lip_sync_music";
+  badges.push(isIa2v ? "ia2v" : (profile.displayRouteLabel || "i2v"));
   if (profile.isAudioDriven) badges.push("audio-driven");
   if (profile.requiresTwoFrames) badges.push("two-frame");
   if (profile.canonicalRoute === "f_l") badges.push("first+last");
@@ -124,11 +128,15 @@ function sceneBadges(scene = {}) {
 
 function resolveUiRoute(scene = {}) {
   const profile = resolveScenarioSceneVideoProfile(scene);
+  const isIa2v = String(scene?.route || "").trim().toLowerCase() === "ia2v"
+    || Boolean(scene?.lipSync || scene?.isLipSync)
+    || String(scene?.renderMode || "").trim().toLowerCase() === "lip_sync_music"
+    || String(scene?.resolvedWorkflowKey || "").trim().toLowerCase() === "lip_sync_music";
   return {
     source: profile.debugRouteSourceField,
     value: profile.routeRaw || profile.canonicalRoute,
-    finalRoute: profile.canonicalRoute || "i2v",
-    displayRouteLabel: profile.displayRouteLabel,
+    finalRoute: isIa2v ? "ia2v" : (profile.canonicalRoute || "i2v"),
+    displayRouteLabel: isIa2v ? "ia2v" : profile.displayRouteLabel,
   };
 }
 
@@ -1269,8 +1277,8 @@ export default function ScenarioStoryboardEditor({
   );
   const uiRouteMeta = resolveUiRoute(selectedScene || {});
   const sceneFinalRoute = uiRouteMeta.finalRoute;
-  const sceneLipSync = sceneFinalRoute === "lip_sync_music" || Boolean(selectedScene?.isLipSync ?? selectedScene?.lipSync);
-  const uiLipsyncSource = String(selectedScene?.uiLipsyncSource || (sceneFinalRoute === "lip_sync_music" ? "route" : (sceneLipSync ? "state" : "legacy")));
+  const sceneLipSync = sceneFinalRoute === "lip_sync_music" || sceneFinalRoute === "ia2v" || Boolean(selectedScene?.isLipSync ?? selectedScene?.lipSync);
+  const uiLipsyncSource = String(selectedScene?.uiLipsyncSource || ((sceneFinalRoute === "lip_sync_music" || sceneFinalRoute === "ia2v") ? "route" : (sceneLipSync ? "state" : "legacy")));
   const uiLipsyncValue = sceneLipSync ? "true" : "false";
   const lipSyncAudioMissing = sceneLipSync && !sceneAudioSliceUrl;
   const bgMusicSource = resolveMusicSource(safeAudioData);
