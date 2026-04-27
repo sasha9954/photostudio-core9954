@@ -380,6 +380,126 @@ export function buildAudioSegmentById(storyboardPackage = null) {
   }, {});
 }
 
+export function buildRouteBySegmentId(storyboardPackage = null) {
+  const safePackage = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
+  const routeSources = [
+    safePackage?.scene_plan?.storyboard,
+    safePackage?.scene_plan?.scenes,
+    safePackage?.scene_plan?.segments,
+    safePackage?.scene_prompts?.segments,
+    safePackage?.scene_prompts?.scenes,
+    safePackage?.final_video_prompt?.segments,
+    safePackage?.final_video_prompt?.scenes,
+    safePackage?.final_storyboard?.scenes,
+    safePackage?.final_storyboard?.render_manifest,
+  ];
+  const routeById = {};
+
+  const put = (id, payload) => {
+    if (!id || !payload || typeof payload !== "object") return;
+    const route = String(
+      payload?.route
+      || payload?.resolvedRoute
+      || payload?.videoRoute
+      || payload?.ltxMode
+      || payload?.route_payload?.route
+      || ""
+    ).trim().toLowerCase();
+    const renderMode = String(
+      payload?.renderMode
+      || payload?.render_mode
+      || payload?.route_payload?.renderMode
+      || payload?.route_payload?.render_mode
+      || ""
+    ).trim().toLowerCase();
+    const workflowKey = String(
+      payload?.resolvedWorkflowKey
+      || payload?.resolved_workflow_key
+      || payload?.videoGenerationRoute
+      || payload?.video_generation_route
+      || payload?.plannedVideoGenerationRoute
+      || payload?.planned_video_generation_route
+      || payload?.workflowKey
+      || payload?.workflow_key
+      || ""
+    ).trim().toLowerCase();
+    const lipSync = Boolean(
+      payload?.lipSync
+      || payload?.lip_sync
+      || payload?.requiresAudioSensitiveVideo
+      || payload?.requires_audio_sensitive_video
+      || route === "ia2v"
+      || renderMode === "lip_sync_music"
+      || workflowKey === "lip_sync_music"
+    );
+    if (!route && !renderMode && !workflowKey && !lipSync) return;
+
+    const normalizedRoute = (route === "ia2v" || lipSync || renderMode === "lip_sync_music" || workflowKey === "lip_sync_music")
+      ? "ia2v"
+      : (route === "i2v" ? "i2v" : "");
+
+    const value = {
+      route: normalizedRoute || route,
+      renderMode: renderMode || (normalizedRoute === "ia2v" ? "lip_sync_music" : ""),
+      lipSync,
+      requiresAudioSensitiveVideo: Boolean(
+        payload?.requiresAudioSensitiveVideo
+        || payload?.requires_audio_sensitive_video
+        || normalizedRoute === "ia2v"
+      ),
+      resolvedWorkflowKey: workflowKey || (normalizedRoute === "ia2v" ? "lip_sync_music" : "standard_video"),
+      sourceRouteRaw: route,
+      sourceWorkflowKey: workflowKey,
+    };
+
+    for (const alias of buildSegmentLookupAliases(id)) {
+      routeById[alias] = value;
+    }
+  };
+
+  for (const source of routeSources) {
+    if (!Array.isArray(source)) continue;
+    for (const row of source) {
+      const item = row && typeof row === "object" ? row : {};
+      const id = String(
+        item?.segment_id
+        || item?.segmentId
+        || item?.scene_id
+        || item?.sceneId
+        || ""
+      ).trim();
+      put(id, item);
+    }
+  }
+  return routeById;
+}
+
+export function resolveRouteForScene(scene = {}, routeBySegmentId = {}, idx = 0) {
+  const candidates = [
+    scene?.segment_id,
+    scene?.segmentId,
+    scene?.canonicalSegmentId,
+    scene?.sourceSegmentId,
+    scene?.originalSegmentId,
+    scene?.scene_id,
+    scene?.sourceSceneId,
+    scene?.sceneId,
+    scene?.sceneKey,
+    scene?.uiKey,
+    scene?.id,
+    idx != null ? `seg_${String(idx + 1).padStart(2, "0")}` : "",
+    idx != null ? `SEG_${String(idx + 1).padStart(2, "0")}` : "",
+  ];
+
+  for (const candidate of candidates) {
+    for (const alias of buildSegmentLookupAliases(candidate)) {
+      const hit = routeBySegmentId?.[alias];
+      if (hit && typeof hit === "object") return hit;
+    }
+  }
+  return {};
+}
+
 export function resolvePackageAudioUrl(storyboardPackage = null) {
   const safePackage = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
   return normalizeText(
@@ -1111,6 +1231,15 @@ export function resolveScenarioSceneVideoProfile(scene = {}) {
     routeRaw = rawRouteLabel;
     debugRouteSourceField = field;
     break;
+  }
+  const isIa2v = String(source.route || "").trim().toLowerCase() === "ia2v"
+    || Boolean(source.lipSync || source.lip_sync)
+    || String(source.renderMode || source.render_mode || "").trim().toLowerCase() === "lip_sync_music"
+    || String(source.resolvedWorkflowKey || source.resolved_workflow_key || "").trim().toLowerCase() === "lip_sync_music";
+  if (isIa2v) {
+    canonicalRoute = "lip_sync_music";
+    routeRaw = "ia2v";
+    debugRouteSourceField = `ia2v_override:${debugRouteSourceField}`;
   }
   if (!canonicalRoute) {
     canonicalRoute = resolveScenarioFinalRouteKey(source);
@@ -2224,6 +2353,7 @@ export function normalizeScenarioStoryboardPackage({
     ? storyboardOut.final_storyboard.render_manifest
     : [];
   const audioById = buildAudioSegmentById(safeSourcePackage || safeStoryboardOut || {});
+  const routeById = buildRouteBySegmentId(safeSourcePackage || safeStoryboardOut || {});
   const packageAudioUrl = resolvePackageAudioUrl(safeSourcePackage || safeStoryboardOut || {});
   const packageAudioDurationSec = Number(
     safeSourcePackage?.input?.audio_duration_sec
@@ -2388,6 +2518,38 @@ export function normalizeScenarioStoryboardPackage({
       || resolveCanonicalSegmentId(normalizedSceneBase, idx)
     ).trim();
     const canonicalSegmentId = normalizeSegmentLookupKey(segmentId || `seg_${String(idx + 1).padStart(2, "0")}`);
+    const routeInfo = resolveRouteForScene(
+      {
+        ...normalizedSceneBase,
+        segment_id: segmentId,
+        segmentId,
+      },
+      routeById,
+      idx
+    );
+    const baseRoute = String(normalizedSceneBase?.route || "").trim().toLowerCase();
+    const routeFromInfo = String(routeInfo?.route || "").trim().toLowerCase();
+    const resolvedRoute = (routeFromInfo === "ia2v" || baseRoute === "ia2v")
+      ? "ia2v"
+      : (routeFromInfo === "i2v" || baseRoute === "i2v")
+        ? "i2v"
+        : "i2v";
+    const resolvedLipSync = Boolean(
+      normalizedSceneBase?.lipSync
+      || normalizedSceneBase?.lip_sync
+      || routeInfo?.lipSync
+      || resolvedRoute === "ia2v"
+    );
+    const resolvedRenderMode = resolvedRoute === "ia2v"
+      ? "lip_sync_music"
+      : String(normalizedSceneBase?.renderMode || routeInfo?.renderMode || "").trim();
+    const resolvedWorkflowKey = resolvedRoute === "ia2v"
+      ? "lip_sync_music"
+      : String(
+        normalizedSceneBase?.resolvedWorkflowKey
+        || routeInfo?.resolvedWorkflowKey
+        || "standard_video"
+      ).trim();
     const audioSeg = resolveAudioSegmentForScene(
       {
         ...normalizedSceneBase,
@@ -2446,6 +2608,16 @@ export function normalizeScenarioStoryboardPackage({
     );
     return {
       ...normalizedSceneBase,
+      route: resolvedRoute,
+      ltxMode: resolvedRoute,
+      renderMode: resolvedRenderMode,
+      lipSync: resolvedLipSync,
+      requiresAudioSensitiveVideo: resolvedRoute === "ia2v",
+      resolvedWorkflowKey,
+      videoGenerationRoute: resolvedWorkflowKey,
+      plannedVideoGenerationRoute: resolvedWorkflowKey,
+      routeHydrationSource: routeInfo?.route ? "source_package_route_map" : "normalized_scene_or_default",
+      routeInfoDebug: routeInfo,
       segment_id: canonicalSegmentId || segmentId || normalizedSceneBase?.segment_id,
       segmentId: canonicalSegmentId || segmentId || normalizedSceneBase?.segmentId,
       canonicalSegmentId: canonicalSegmentId || segmentId,
@@ -2587,6 +2759,17 @@ export function normalizeScenarioStoryboardPackage({
     },
     firstSceneAudioLookup: scenes?.[0] && resolveAudioSegmentForScene(scenes[0], audioById, 0),
     audioSegmentKeysSample: Object.keys(audioById || {}).slice(0, 20),
+  });
+  console.log("[SCENARIO NORMALIZE ROUTE HYDRATE]", {
+    routeSegmentCount: Object.keys(routeById || {}).length,
+    firstRoutes: scenes.slice(0, 9).map((s) => ({
+      id: s.segment_id || s.sceneId,
+      route: s.route,
+      lipSync: s.lipSync,
+      renderMode: s.renderMode,
+      resolvedWorkflowKey: s.resolvedWorkflowKey,
+      routeHydrationSource: s.routeHydrationSource,
+    })),
   });
   console.debug("[SCENARIO NORMALIZE PACKAGE]", {
     sceneContractSource: canonicalSceneSource,
