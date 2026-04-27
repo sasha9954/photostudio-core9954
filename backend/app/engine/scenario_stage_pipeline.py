@@ -187,6 +187,21 @@ _IA2V_MEMORY_WORLD_CONFLICT_TOKENS: tuple[str, ...] = (
     "environment-focused still frame",
     "environment-focused motion shot",
 )
+_PROMPT_SYNC_FIELDS: tuple[str, ...] = (
+    "route",
+    "photo_prompt",
+    "video_prompt",
+    "positive_video_prompt",
+    "negative_prompt",
+    "primary_role",
+    "visual_focus_role",
+    "speaker_role",
+    "lip_sync_allowed",
+    "mouth_visible_required",
+    "singing_readiness_required",
+    "route_visual_directive",
+    "lyric_text_stripped_from_image_prompt",
+)
 
 
 def _utc_iso() -> str:
@@ -435,6 +450,140 @@ def _ia2v_has_memory_world_conflict(text: str, memory_label: str, memory_zones: 
     return any(str(zone or "").strip().lower() and str(zone).strip().lower() in raw for zone in memory_zones)
 
 
+def _clean_director_contract_prompt_row(
+    row: dict[str, Any],
+    contract: dict[str, Any],
+    scene_plan_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    cleaned_row = dict(_safe_dict(row))
+    hard_binding = bool(contract.get("hard_location_binding"))
+    _, performance_world = _director_world_role("ia2v", contract)
+    _, memory_world = _director_world_role("i2v", contract)
+    performance_label = str(performance_world.get("label") or "").strip()
+    memory_label = str(memory_world.get("label") or "").strip()
+    performance_zones = _director_allowed_zone("ia2v", contract)
+    memory_zones = _director_allowed_zone("i2v", contract)
+    performance_zones_set = set(performance_zones)
+    memory_zones_set = set(memory_zones)
+    seg_id = str(cleaned_row.get("segment_id") or "").strip()
+    plan_row = _safe_dict(scene_plan_by_id.get(seg_id))
+    route = _to_director_route(cleaned_row.get("route")) or _to_director_route(plan_row.get("route")) or "i2v"
+    cleaned_row["route"] = route
+    for key in ("photo_prompt", "image_prompt", "first_frame_prompt", "start_image_prompt", "end_image_prompt"):
+        cleaned, _ = _strip_raw_lyric_anchor(str(cleaned_row.get(key) or ""))
+        cleaned_row[key] = cleaned
+    cleaned_row["lyric_text_stripped_from_image_prompt"] = True
+    photo = str(cleaned_row.get("photo_prompt") or "")
+    video = str(cleaned_row.get("video_prompt") or "")
+    if route == "ia2v":
+        removed: list[str] = []
+        for key in (
+            "photo_prompt",
+            "video_prompt",
+            "positive_video_prompt",
+            "first_frame_prompt",
+            "start_image_prompt",
+            "end_image_prompt",
+            "image_prompt",
+        ):
+            key_raw = str(cleaned_row.get(key) or "")
+            key_cleaned, removed_key = _strip_ia2v_forbidden_clauses(key_raw)
+            cleaned_row[key] = key_cleaned
+            removed.extend(removed_key)
+        removed = list(dict.fromkeys(removed))
+        if removed:
+            cleaned_row["forbidden_clause_removed"] = removed
+        else:
+            cleaned_row.pop("forbidden_clause_removed", None)
+        visual_directive = _safe_dict(cleaned_row.get("route_visual_directive"))
+        if not visual_directive:
+            visual_directive = _safe_dict(plan_row.get("route_visual_directive"))
+        zone = _to_contract_location(
+            visual_directive.get("location_zone") or cleaned_row.get("location_zone") or plan_row.get("location_zone")
+        )
+        zone = zone if zone and zone in performance_zones_set else (performance_zones[0] if performance_zones else "")
+        label = str(visual_directive.get("location_label") or performance_label).strip()
+        world_ctx = ", ".join([item for item in [label, zone] if item]).strip()
+        prefix = (
+            f"Visible singer performance in {world_ctx}, readable mouth for lip sync."
+            if world_ctx
+            else "Visible singer performance, readable mouth for lip sync."
+        )
+        photo = str(cleaned_row.get("photo_prompt") or "")
+        video = str(cleaned_row.get("video_prompt") or "")
+        has_conflict = _ia2v_has_memory_world_conflict(photo, memory_label, memory_zones) or _ia2v_has_memory_world_conflict(
+            video, memory_label, memory_zones
+        )
+        prompt_notes = _safe_dict(plan_row.get("prompt_notes"))
+        safe_scene_intent = (
+            str(plan_row.get("scene_goal") or "").strip()
+            or str(plan_row.get("narrative_function") or "").strip()
+            or str(cleaned_row.get("scene_goal") or "").strip()
+            or str(cleaned_row.get("narrative_function") or "").strip()
+            or str(prompt_notes.get("intent") or "").strip()
+            or "Keep visual continuity with the active performance scene."
+        )
+        safe_emotion = (
+            str(plan_row.get("emotion") or "").strip()
+            or str(plan_row.get("emotional_key") or "").strip()
+            or str(cleaned_row.get("emotion") or "").strip()
+            or str(cleaned_row.get("emotional_key") or "").strip()
+            or "grounded"
+        )
+        identity_clause = (
+            "Show the same person as the provided character_1 reference. Preserve face, age impression, body proportions, "
+            "hairstyle, clothing, silhouette, and overall identity."
+        )
+        if has_conflict:
+            cleaned_row["photo_prompt"] = (
+                f"{prefix} {identity_clause} {safe_scene_intent}. Emotion: {safe_emotion}. No text or subtitles."
+            ).strip()
+            rebuilt_video = (
+                f"{prefix} Clear expressive lip sync, natural jaw motion, readable mouth, controlled grounded body motion, "
+                "stable cinematic camera. Preserve identity and train/performance-world continuity. No text or subtitles."
+            ).strip()
+            cleaned_row["video_prompt"] = rebuilt_video
+            if str(cleaned_row.get("positive_video_prompt") or "").strip():
+                cleaned_row["positive_video_prompt"] = rebuilt_video
+        else:
+            cleaned_row["photo_prompt"] = f"{prefix} {photo}".strip()
+            cleaned_row["video_prompt"] = f"{prefix} {video}".strip()
+            if str(cleaned_row.get("positive_video_prompt") or "").strip():
+                cleaned_row["positive_video_prompt"] = f"{prefix} {str(cleaned_row.get('positive_video_prompt') or '')}".strip()
+    else:
+        visual_directive = _safe_dict(cleaned_row.get("route_visual_directive"))
+        if not visual_directive:
+            visual_directive = _safe_dict(plan_row.get("route_visual_directive"))
+        zone = _to_contract_location(
+            visual_directive.get("location_zone") or cleaned_row.get("location_zone") or plan_row.get("location_zone")
+        )
+        zone = zone if zone and zone in memory_zones_set else (memory_zones[0] if memory_zones else "")
+        label = str(visual_directive.get("location_label") or memory_label).strip()
+        if hard_binding and (label or zone):
+            world_ctx = " ".join([item for item in [label, zone] if item]).strip()
+            prefix = f"{world_ctx} memory/world cutaway with environment-first storytelling."
+        else:
+            prefix = "Memory/world cutaway with environment-first storytelling."
+        for token in (
+            r"(?i)\breadable mouth for lip sync\b",
+            r"(?i)\bclear expressive lip sync\b",
+            r"(?i)\bnatural jaw motion\b",
+        ):
+            photo = re.sub(token, " ", photo)
+            video = re.sub(token, " ", video)
+        cleaned_row["photo_prompt"] = f"{prefix} {photo}".strip()
+        cleaned_row["video_prompt"] = f"{prefix} {video}".strip()
+    cleaned_row["photo_prompt"] = re.sub(r"\s+", " ", str(cleaned_row.get("photo_prompt") or "")).strip(" ,.;")
+    cleaned_row["video_prompt"] = re.sub(r"\s+", " ", str(cleaned_row.get("video_prompt") or "")).strip(" ,.;")
+    if str(cleaned_row.get("positive_video_prompt") or "").strip():
+        cleaned_row["positive_video_prompt"] = re.sub(
+            r"\s+",
+            " ",
+            str(cleaned_row.get("positive_video_prompt") or ""),
+        ).strip(" ,.;")
+    return cleaned_row
+
+
 def _apply_director_contract_scene_plan(package: dict[str, Any]) -> None:
     input_pkg = _safe_dict(package.get("input"))
     contract = _safe_dict(input_pkg.get("director_contract"))
@@ -529,105 +678,99 @@ def _apply_director_contract_scene_prompts(package: dict[str, Any]) -> None:
     contract = _safe_dict(input_pkg.get("director_contract"))
     if not contract:
         return
-    hard_binding = bool(contract.get("hard_location_binding"))
-    _, performance_world = _director_world_role("ia2v", contract)
-    _, memory_world = _director_world_role("i2v", contract)
-    performance_label = str(performance_world.get("label") or "").strip()
-    memory_label = str(memory_world.get("label") or "").strip()
-    performance_zones = _director_allowed_zone("ia2v", contract)
-    memory_zones = _director_allowed_zone("i2v", contract)
-    performance_zones_set = set(performance_zones)
-    memory_zones_set = set(memory_zones)
     scene_prompts = _safe_dict(package.get("scene_prompts"))
-    rows = []
-    lyrics_count = 0
-    forbidden_count = 0
-    for raw in _safe_list(scene_prompts.get("segments")):
-        row = dict(_safe_dict(raw))
+    scene_plan_by_id = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(package.get("scene_plan")).get("scenes"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    cleaned_segments = [
+        _clean_director_contract_prompt_row(dict(_safe_dict(raw)), contract, scene_plan_by_id)
+        for raw in _safe_list(scene_prompts.get("segments"))
+    ]
+    cleaned_scenes = [
+        _clean_director_contract_prompt_row(dict(_safe_dict(raw)), contract, scene_plan_by_id)
+        for raw in _safe_list(scene_prompts.get("scenes"))
+    ]
+    segment_by_id = {
+        str(row.get("segment_id") or "").strip(): row
+        for row in cleaned_segments
+        if str(row.get("segment_id") or "").strip()
+    }
+    scene_by_id = {
+        str(row.get("segment_id") or "").strip(): row
+        for row in cleaned_scenes
+        if str(row.get("segment_id") or "").strip()
+    }
+    all_ids = [seg_id for seg_id in list(segment_by_id) + list(scene_by_id) if seg_id]
+    ordered_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for seg_id in all_ids:
+        if seg_id not in seen_ids:
+            ordered_ids.append(seg_id)
+            seen_ids.add(seg_id)
+    mismatch_count = 0
+    synced_segments: list[dict[str, Any]] = []
+    synced_scenes: list[dict[str, Any]] = []
+    for seg_id in ordered_ids:
+        seg_row = dict(_safe_dict(segment_by_id.get(seg_id)))
+        scene_row = dict(_safe_dict(scene_by_id.get(seg_id)))
+        canonical = seg_row if seg_row else scene_row
+        paired = scene_row if seg_row else {}
+        if seg_row and scene_row:
+            if any(seg_row.get(field) != scene_row.get(field) for field in _PROMPT_SYNC_FIELDS):
+                mismatch_count += 1
+            for field in _PROMPT_SYNC_FIELDS:
+                scene_row[field] = canonical.get(field)
+                seg_row[field] = canonical.get(field)
+            synced_segments.append(seg_row)
+            synced_scenes.append(scene_row)
+        elif seg_row:
+            scene_clone = dict(seg_row)
+            synced_segments.append(seg_row)
+            synced_scenes.append(scene_clone)
+        else:
+            seg_clone = dict(canonical)
+            if paired:
+                for field in _PROMPT_SYNC_FIELDS:
+                    seg_clone[field] = canonical.get(field)
+            synced_segments.append(seg_clone)
+            synced_scenes.append(canonical)
+    final_rows_for_validation = [*synced_segments, *synced_scenes]
+    raw_lyrics_remaining = 0
+    ia2v_forbidden_remaining = 0
+    ia2v_memory_conflicts_remaining = 0
+    _, memory_world = _director_world_role("i2v", contract)
+    memory_label = str(memory_world.get("label") or "").strip()
+    memory_zones = _director_allowed_zone("i2v", contract)
+    for row in final_rows_for_validation:
+        if any(
+            re.search(r"(?i)lyric/moment anchor:", str(row.get(key) or ""))
+            for key in ("image_prompt", "photo_prompt", "first_frame_prompt", "start_image_prompt", "end_image_prompt")
+        ):
+            raw_lyrics_remaining += 1
         route = _to_director_route(row.get("route")) or "i2v"
+        if route != "ia2v":
+            continue
         photo = str(row.get("photo_prompt") or "")
         video = str(row.get("video_prompt") or "")
-        for key in ("photo_prompt", "image_prompt", "first_frame_prompt", "start_image_prompt", "end_image_prompt"):
-            cleaned, had_anchor = _strip_raw_lyric_anchor(str(row.get(key) or ""))
-            if had_anchor:
-                lyrics_count += 1
-            row[key] = cleaned
-        photo = str(row.get("photo_prompt") or "")
-        row["lyric_text_stripped_from_image_prompt"] = True
-        if route == "ia2v":
-            removed: list[str] = []
-            for key in ("photo_prompt", "video_prompt", "positive_video_prompt", "first_frame_prompt", "start_image_prompt", "end_image_prompt"):
-                cleaned, removed_key = _strip_ia2v_forbidden_clauses(str(row.get(key) or ""))
-                row[key] = cleaned
-                removed.extend(removed_key)
-            photo = str(row.get("photo_prompt") or "")
-            video = str(row.get("video_prompt") or "")
-            removed = list(dict.fromkeys(removed))
-            forbidden_count += len(removed)
-            if removed:
-                row["forbidden_clause_removed"] = removed
-            visual_directive = _safe_dict(row.get("route_visual_directive"))
-            zone = _to_contract_location(visual_directive.get("location_zone") or row.get("location_zone"))
-            zone = zone if zone and zone in performance_zones_set else (performance_zones[0] if performance_zones else "")
-            label = str(visual_directive.get("location_label") or performance_label).strip()
-            if hard_binding and (label or zone):
-                world_ctx = ", ".join([item for item in [label, zone] if item])
-                prefix = f"Visible singer performance in {world_ctx}, readable mouth for lip sync."
-            else:
-                prefix = "Visible singer performance, readable mouth for lip sync."
-            has_conflict = _ia2v_has_memory_world_conflict(photo, memory_label, memory_zones) or _ia2v_has_memory_world_conflict(
-                video, memory_label, memory_zones
-            )
-            prompt_notes = _safe_dict(row.get("prompt_notes"))
-            safe_scene_intent = (
-                str(row.get("scene_goal") or "").strip()
-                or str(row.get("narrative_function") or "").strip()
-                or str(prompt_notes.get("intent") or "").strip()
-            )
-            safe_emotion = str(row.get("emotion") or "").strip() or str(row.get("emotional_key") or "").strip()
-            identity_clause = (
-                "Show the same person as the provided character_1 reference. Preserve face, age impression, body proportions, "
-                "hairstyle, clothing, silhouette, and overall identity."
-            )
-            if hard_binding and has_conflict:
-                photo = (
-                    f"{prefix} {identity_clause} {safe_scene_intent}. Emotion: {safe_emotion}. No text or subtitles."
-                ).strip()
-                video = (
-                    f"{prefix} Clear expressive lip sync, natural jaw motion, readable mouth, controlled grounded body motion, "
-                    "stable cinematic camera. No text or subtitles."
-                ).strip()
-            else:
-                photo = f"{prefix} {photo}".strip()
-                video = f"{prefix} {video}".strip()
-        else:
-            visual_directive = _safe_dict(row.get("route_visual_directive"))
-            zone = _to_contract_location(visual_directive.get("location_zone") or row.get("location_zone"))
-            zone = zone if zone and zone in memory_zones_set else (memory_zones[0] if memory_zones else "")
-            label = str(visual_directive.get("location_label") or memory_label).strip()
-            if hard_binding and (label or zone):
-                world_ctx = " ".join([item for item in [label, zone] if item]).strip()
-                prefix = f"{world_ctx} memory/world cutaway with environment-first storytelling."
-            else:
-                prefix = "Memory/world cutaway with environment-first storytelling."
-            for token in (
-                r"(?i)\breadable mouth for lip sync\b",
-                r"(?i)\bclear expressive lip sync\b",
-                r"(?i)\bnatural jaw motion\b",
-            ):
-                photo = re.sub(token, " ", photo)
-                video = re.sub(token, " ", video)
-            photo = f"{prefix} {photo}".strip()
-            video = f"{prefix} {video}".strip()
-        row["photo_prompt"] = re.sub(r"\s+", " ", photo).strip(" ,.;")
-        row["video_prompt"] = re.sub(r"\s+", " ", video).strip(" ,.;")
-        rows.append(row)
-    scene_prompts["segments"] = rows
+        if any(pattern.search(photo) or pattern.search(video) for _, pattern in _IA2V_FORBIDDEN_CLAUSE_PATTERNS):
+            ia2v_forbidden_remaining += 1
+        if _ia2v_has_memory_world_conflict(photo, memory_label, memory_zones) or _ia2v_has_memory_world_conflict(
+            video, memory_label, memory_zones
+        ):
+            ia2v_memory_conflicts_remaining += 1
+    scene_prompts["segments"] = synced_segments
+    scene_prompts["scenes"] = synced_scenes
     package["scene_prompts"] = scene_prompts
     diagnostics = _safe_dict(package.get("diagnostics"))
     prompt_validation = _safe_dict(diagnostics.get("prompt_validation"))
-    prompt_validation["raw_lyrics_in_image_prompt_count"] = int(prompt_validation.get("raw_lyrics_in_image_prompt_count") or 0) + lyrics_count
-    prompt_validation["ia2v_forbidden_clause_count"] = int(prompt_validation.get("ia2v_forbidden_clause_count") or 0) + forbidden_count
+    prompt_validation["final_segments_checked_count"] = len(synced_segments)
+    prompt_validation["final_scenes_checked_count"] = len(synced_scenes)
+    prompt_validation["raw_lyrics_in_image_prompt_remaining_count"] = raw_lyrics_remaining
+    prompt_validation["ia2v_forbidden_clause_remaining_count"] = ia2v_forbidden_remaining
+    prompt_validation["ia2v_memory_world_conflict_remaining_count"] = ia2v_memory_conflicts_remaining
+    prompt_validation["segments_scenes_prompt_mismatch_count"] = mismatch_count
     diagnostics["prompt_validation"] = prompt_validation
     applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
     applied["prompts"] = True
