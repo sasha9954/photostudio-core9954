@@ -160,8 +160,8 @@ _OWNERSHIP_ROLE_MAP = {
 _BINDING_TYPES = {"carried", "worn", "held", "pocketed", "nearby", "environment"}
 _SUBJECT_REF_TOKENS = {"char", "character", "person", "subject", "talent", "hero", "protagonist", "human", "face"}
 _OBJECT_REF_TOKENS = {"prop", "object", "item", "wardrobe", "vehicle", "accessory", "outfit", "tool", "bag", "phone"}
-_DIRECTOR_IA2V_ZONES = ["train", "train_carriage", "compartment", "train_corridor"]
-_DIRECTOR_I2V_ZONES = ["odesa_city", "odesa_courtyard", "odesa_port", "odesa_streets", "odesa_sea"]
+_DEFAULT_PERFORMANCE_ZONES: list[str] = []
+_DEFAULT_MEMORY_ZONES: list[str] = []
 _IA2V_FORBIDDEN_CLAUSE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("no main performer visible", re.compile(r"(?i)\bno main performer visible\b[.;:]?")),
     ("vocalist offscreen voiceover only", re.compile(r"(?i)\bvocalist offscreen(?:\s+voiceover)?\s+only\b[.;:]?")),
@@ -199,24 +199,35 @@ def _build_director_contract_from_config(config: dict[str, Any]) -> dict[str, An
     cfg = _safe_dict(config)
     ia2v_locations = [
         _to_contract_location(item) for item in _safe_list(cfg.get("ia2v_locations")) if _to_contract_location(item)
-    ] or list(_DIRECTOR_IA2V_ZONES)
+    ] or list(_DEFAULT_PERFORMANCE_ZONES)
     i2v_locations = [
         _to_contract_location(item) for item in _safe_list(cfg.get("i2v_locations")) if _to_contract_location(item)
-    ] or list(_DIRECTOR_I2V_ZONES)
+    ] or list(_DEFAULT_MEMORY_ZONES)
+    performance_label = str(cfg.get("performance_world_label") or cfg.get("performance_world") or "").strip()
+    memory_label = str(cfg.get("memory_world_label") or cfg.get("memory_world") or "").strip()
+    hard_location_binding = bool(ia2v_locations or i2v_locations)
     return {
         "source": "ai_director_chat",
-        "hard_location_binding": True,
+        "hard_location_binding": hard_location_binding,
+        "world_roles": {
+            "performance_world": {
+                "label": performance_label,
+                "allowed_zones": ia2v_locations,
+            },
+            "memory_world": {
+                "label": memory_label,
+                "allowed_zones": i2v_locations,
+            },
+        },
         "route_location_rules": {
             "ia2v": {
-                "required_world": "train",
-                "allowed_zones": ia2v_locations,
+                "world_role": "performance_world",
                 "performer_visibility": "required",
                 "singer_visibility": "required",
                 "lip_sync_framing": "required",
             },
             "i2v": {
-                "required_world": "odesa_memory",
-                "allowed_zones": i2v_locations,
+                "world_role": "memory_world",
                 "performer_visibility": "optional_or_absent",
                 "singer_visibility": "offscreen_or_non_dominant",
             },
@@ -232,10 +243,18 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
         if source_cfg:
             director_cfg = source_cfg
     if director_cfg:
-        director_cfg.setdefault("ia2v_locations", list(_DIRECTOR_IA2V_ZONES))
-        director_cfg.setdefault("i2v_locations", list(_DIRECTOR_I2V_ZONES))
-        director_cfg.setdefault("performance_place_mode", "performance_plus_memories")
-        director_cfg.setdefault("memory_intercut", True)
+        if "ia2v_locations" in director_cfg:
+            director_cfg["ia2v_locations"] = [
+                _to_contract_location(item)
+                for item in _safe_list(director_cfg.get("ia2v_locations"))
+                if _to_contract_location(item)
+            ]
+        if "i2v_locations" in director_cfg:
+            director_cfg["i2v_locations"] = [
+                _to_contract_location(item)
+                for item in _safe_list(director_cfg.get("i2v_locations"))
+                if _to_contract_location(item)
+            ]
     director_contract = _safe_dict(input_pkg.get("director_contract"))
     if not director_contract and director_cfg:
         director_contract = _build_director_contract_from_config(director_cfg)
@@ -253,8 +272,22 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
     diagnostics["director_contract_applied_stages"] = applied
     diagnostics.setdefault(
         "route_location_counts",
-        {"ia2v_train": 0, "ia2v_non_train": 0, "i2v_odesa": 0, "i2v_non_odesa": 0},
+        {
+            "ia2v_bound_to_performance_world": 0,
+            "ia2v_unbound": 0,
+            "i2v_bound_to_memory_world": 0,
+            "i2v_unbound": 0,
+            "route_location_invalid": 0,
+        },
     )
+    world_roles = _safe_dict(director_contract.get("world_roles"))
+    performance_world = _safe_dict(world_roles.get("performance_world"))
+    memory_world = _safe_dict(world_roles.get("memory_world"))
+    diagnostics["director_contract_hard_location_binding"] = bool(director_contract.get("hard_location_binding"))
+    diagnostics["director_contract_performance_world_label"] = str(performance_world.get("label") or "")
+    diagnostics["director_contract_memory_world_label"] = str(memory_world.get("label") or "")
+    diagnostics["director_contract_performance_zones"] = _director_allowed_zone("ia2v", director_contract)
+    diagnostics["director_contract_memory_zones"] = _director_allowed_zone("i2v", director_contract)
     diagnostics.setdefault(
         "prompt_validation",
         {
@@ -268,25 +301,46 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
 
 def _director_allowed_zone(route: str, contract: dict[str, Any]) -> list[str]:
     rules = _safe_dict(_safe_dict(contract.get("route_location_rules")).get(route))
-    return [_to_contract_location(item) for item in _safe_list(rules.get("allowed_zones")) if _to_contract_location(item)]
+    explicit = [_to_contract_location(item) for item in _safe_list(rules.get("allowed_zones")) if _to_contract_location(item)]
+    if explicit:
+        return explicit
+    world_role = str(rules.get("world_role") or "").strip()
+    world = _safe_dict(_safe_dict(contract.get("world_roles")).get(world_role))
+    return [_to_contract_location(item) for item in _safe_list(world.get("allowed_zones")) if _to_contract_location(item)]
+
+
+def _director_world_role(route: str, contract: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    rules = _safe_dict(_safe_dict(contract.get("route_location_rules")).get(route))
+    role_key = str(rules.get("world_role") or "").strip()
+    if not role_key:
+        role_key = "performance_world" if route == "ia2v" else "memory_world"
+    world = _safe_dict(_safe_dict(contract.get("world_roles")).get(role_key))
+    return role_key, world
 
 
 def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
     input_pkg = _safe_dict(package.get("input"))
     contract = _safe_dict(input_pkg.get("director_contract"))
-    cfg = _safe_dict(input_pkg.get("director_config"))
-    if not contract or str(cfg.get("performance_place_mode") or "").strip().lower() != "performance_plus_memories":
+    if not contract:
+        return
+    _, performance_world = _director_world_role("ia2v", contract)
+    _, memory_world = _director_world_role("i2v", contract)
+    performance_label = str(performance_world.get("label") or "").strip()
+    memory_label = str(memory_world.get("label") or "").strip()
+    if not (performance_label or memory_label):
         return
     story_core = _safe_dict(package.get("story_core"))
     world_lock = _safe_dict(story_core.get("world_lock"))
-    world_lock["performance_world"] = "train"
-    world_lock["memory_world"] = "odesa"
+    if performance_label:
+        world_lock["performance_world"] = performance_label
+    if memory_label:
+        world_lock["memory_world"] = memory_label
     story_core["world_lock"] = world_lock
     package["story_core"] = story_core
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["core_director_contract_applied"] = True
-    diagnostics["core_performance_world"] = "train"
-    diagnostics["core_memory_world"] = "odesa"
+    diagnostics["core_performance_world"] = performance_label
+    diagnostics["core_memory_world"] = memory_label
     applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
     applied["core"] = True
     diagnostics["director_contract_applied_stages"] = applied
@@ -298,13 +352,17 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
     contract = _safe_dict(input_pkg.get("director_contract"))
     if not contract:
         return
+    _, performance_world = _director_world_role("ia2v", contract)
+    _, memory_world = _director_world_role("i2v", contract)
+    performance_label = str(performance_world.get("label") or "Performance world").strip() or "Performance world"
+    memory_label = str(memory_world.get("label") or "Memory world").strip() or "Memory world"
     role_plan = _safe_dict(package.get("role_plan"))
     roster = [_safe_dict(row) for row in _safe_list(role_plan.get("roster"))]
     roster_ids = {str(row.get("entity_id") or "").strip() for row in roster}
     if "world_memory" not in roster_ids:
-        roster.append({"entity_id": "world_memory", "role_name": "Odessa memory world", "continuity_rules": ["Odessa memory world anchors i2v."]})
+        roster.append({"entity_id": "world_memory", "role_name": memory_label, "continuity_rules": [f"{memory_label} anchors i2v."]})
     if "world_performance" not in roster_ids:
-        roster.append({"entity_id": "world_performance", "role_name": "Train performance world", "continuity_rules": ["Train performance world anchors ia2v."]})
+        roster.append({"entity_id": "world_performance", "role_name": performance_label, "continuity_rules": [f"{performance_label} anchors ia2v."]})
     scene_rows = []
     for row in _safe_list(role_plan.get("scene_casting")):
         cast = dict(_safe_dict(row))
@@ -319,8 +377,8 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
         scene_rows.append(cast)
     role_plan["roster"] = roster
     role_plan["scene_casting"] = scene_rows
-    role_plan["world_memory"] = "odesa"
-    role_plan["world_performance"] = "train"
+    role_plan["world_memory"] = memory_label
+    role_plan["world_performance"] = performance_label
     package["role_plan"] = role_plan
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["roles_director_world_split_applied"] = True
@@ -346,32 +404,56 @@ def _apply_director_contract_scene_plan(package: dict[str, Any]) -> None:
     contract = _safe_dict(input_pkg.get("director_contract"))
     if not contract:
         return
-    ia2v_allowed = set(_director_allowed_zone("ia2v", contract) or _DIRECTOR_IA2V_ZONES)
-    i2v_allowed = set(_director_allowed_zone("i2v", contract) or _DIRECTOR_I2V_ZONES)
+    ia2v_allowed = _director_allowed_zone("ia2v", contract)
+    i2v_allowed = _director_allowed_zone("i2v", contract)
+    ia2v_allowed_set = set(ia2v_allowed)
+    i2v_allowed_set = set(i2v_allowed)
+    ia2v_role, _ = _director_world_role("ia2v", contract)
+    i2v_role, _ = _director_world_role("i2v", contract)
+    hard_binding = bool(contract.get("hard_location_binding"))
     scene_plan = _safe_dict(package.get("scene_plan"))
     source_rows = _safe_list(scene_plan.get("scenes")) or _safe_list(scene_plan.get("storyboard"))
     scenes = []
-    counts = {"ia2v_train": 0, "ia2v_non_train": 0, "i2v_odesa": 0, "i2v_non_odesa": 0}
+    counts = {
+        "ia2v_bound_to_performance_world": 0,
+        "ia2v_unbound": 0,
+        "i2v_bound_to_memory_world": 0,
+        "i2v_unbound": 0,
+        "route_location_invalid": 0,
+    }
     for raw in source_rows:
         row = dict(_safe_dict(raw))
         route = _to_director_route(row.get("route")) or "i2v"
         zone = _to_contract_location(row.get("location_zone"))
         if route == "ia2v":
-            if zone not in ia2v_allowed:
-                zone = next(iter(ia2v_allowed))
+            if hard_binding and ia2v_allowed_set and zone not in ia2v_allowed_set:
+                zone = ia2v_allowed[0]
             row["primary_role"] = "character_1"
             row["mouth_visible_required"] = True
             row["lip_sync_allowed"] = True
-            counts["ia2v_train" if zone in ia2v_allowed else "ia2v_non_train"] += 1
-            row["director_required_world"] = "train"
+            is_valid = (zone in ia2v_allowed_set) if ia2v_allowed_set else True
+            if hard_binding and ia2v_allowed_set:
+                counts["ia2v_bound_to_performance_world"] += 1
+            else:
+                counts["ia2v_unbound"] += 1
+            row["director_required_world"] = ia2v_role
         elif route == "i2v":
-            if zone not in i2v_allowed:
-                zone = next(iter(i2v_allowed))
-            counts["i2v_odesa" if zone in i2v_allowed else "i2v_non_odesa"] += 1
-            row["director_required_world"] = "odesa_memory"
+            if hard_binding and i2v_allowed_set and zone not in i2v_allowed_set:
+                zone = i2v_allowed[0]
+            is_valid = (zone in i2v_allowed_set) if i2v_allowed_set else True
+            if hard_binding and i2v_allowed_set:
+                counts["i2v_bound_to_memory_world"] += 1
+            else:
+                counts["i2v_unbound"] += 1
+            row["director_required_world"] = i2v_role
+        else:
+            is_valid = False
+            counts["route_location_invalid"] += 1
         row["location_zone"] = zone
-        row["director_location_binding_applied"] = True
-        row["route_location_valid"] = (zone in ia2v_allowed) if route == "ia2v" else (zone in i2v_allowed)
+        row["director_location_binding_applied"] = bool(hard_binding and ((route == "ia2v" and ia2v_allowed_set) or (route == "i2v" and i2v_allowed_set)))
+        row["route_location_valid"] = bool(is_valid)
+        if route in {"ia2v", "i2v"} and not is_valid:
+            counts["route_location_invalid"] += 1
         scenes.append(row)
     scene_plan["scenes"] = scenes
     if _safe_list(scene_plan.get("storyboard")):
@@ -390,6 +472,15 @@ def _apply_director_contract_scene_prompts(package: dict[str, Any]) -> None:
     contract = _safe_dict(input_pkg.get("director_contract"))
     if not contract:
         return
+    hard_binding = bool(contract.get("hard_location_binding"))
+    _, performance_world = _director_world_role("ia2v", contract)
+    _, memory_world = _director_world_role("i2v", contract)
+    performance_label = str(performance_world.get("label") or "").strip()
+    memory_label = str(memory_world.get("label") or "").strip()
+    performance_zones = _director_allowed_zone("ia2v", contract)
+    memory_zones = _director_allowed_zone("i2v", contract)
+    performance_zones_set = set(performance_zones)
+    memory_zones_set = set(memory_zones)
     scene_prompts = _safe_dict(package.get("scene_prompts"))
     rows = []
     lyrics_count = 0
@@ -410,11 +501,21 @@ def _apply_director_contract_scene_prompts(package: dict[str, Any]) -> None:
             forbidden_count += len(removed)
             if removed:
                 row["forbidden_clause_removed"] = removed
-            if "train" not in photo.lower():
-                photo = f"Visible male singer performance in train carriage compartment, readable mouth for lip sync. {photo}".strip()
+            zone = _to_contract_location(row.get("location_zone"))
+            zone = zone if zone and zone in performance_zones_set else (performance_zones[0] if performance_zones else "")
+            if hard_binding and (performance_label or zone):
+                world_ctx = ", ".join([item for item in [performance_label, zone] if item])
+                photo = f"Visible singer performance in {world_ctx}, readable mouth for lip sync. {photo}".strip()
+            else:
+                photo = f"Visible singer performance, readable mouth for lip sync. {photo}".strip()
         else:
-            if "odesa" not in photo.lower():
-                photo = f"Odessa memory world cutaway with environment-first storytelling. {photo}".strip()
+            zone = _to_contract_location(row.get("location_zone"))
+            zone = zone if zone and zone in memory_zones_set else (memory_zones[0] if memory_zones else "")
+            if hard_binding and (memory_label or zone):
+                world_ctx = " ".join([item for item in [memory_label, zone] if item]).strip()
+                photo = f"{world_ctx} memory/world cutaway with environment-first storytelling. {photo}".strip()
+            else:
+                photo = f"Memory/world cutaway with environment-first storytelling. {photo}".strip()
         row["photo_prompt"] = re.sub(r"\s+", " ", photo).strip(" ,.;")
         row["video_prompt"] = re.sub(r"\s+", " ", video).strip(" ,.;")
         rows.append(row)
@@ -436,6 +537,11 @@ def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None
     contract = _safe_dict(input_pkg.get("director_contract"))
     if not contract:
         return
+    hard_binding = bool(contract.get("hard_location_binding"))
+    _, performance_world = _director_world_role("ia2v", contract)
+    performance_label = str(performance_world.get("label") or "").strip()
+    performance_zones = _director_allowed_zone("ia2v", contract)
+    performance_zones_set = set(performance_zones)
     scene_plan_rows = {
         str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
         for row in _safe_list(_safe_dict(package.get("scene_plan")).get("scenes"))
@@ -472,6 +578,12 @@ def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None
                 cleaned, removed = _strip_ia2v_forbidden_clauses(str(route_payload.get(key) or row.get(key) or ""))
                 if removed:
                     row["forbidden_clause_removed"] = list(dict.fromkeys([*_safe_list(row.get("forbidden_clause_removed")), *removed]))
+                if key in {"positive_prompt", "video_prompt"} and hard_binding and (performance_label or performance_zones):
+                    zone = _to_contract_location(_safe_dict(scene_plan_rows.get(seg_id)).get("location_zone"))
+                    zone = zone if zone and zone in performance_zones_set else (performance_zones[0] if performance_zones else "")
+                    world_ctx = ", ".join([item for item in [performance_label, zone] if item])
+                    if world_ctx:
+                        cleaned = f"Visible singer performance in {world_ctx}, readable mouth for lip sync. {cleaned}".strip()
                 route_payload[key] = cleaned
                 row[key if key != "positive_prompt" else "video_prompt"] = cleaned if key != "image_prompt" else row.get("image_prompt")
         row["route_payload"] = route_payload

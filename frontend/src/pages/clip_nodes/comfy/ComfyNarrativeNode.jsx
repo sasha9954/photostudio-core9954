@@ -148,26 +148,31 @@ function buildDirectorConfigFromAnswers(answers) {
 
 function buildDirectorContractFromConfig(directorConfig) {
   const cfg = directorConfig && typeof directorConfig === "object" ? directorConfig : {};
-  const ia2vLocations = Array.isArray(cfg.ia2v_locations) && cfg.ia2v_locations.length
-    ? cfg.ia2v_locations
-    : ["train", "train_carriage", "compartment", "train_corridor"];
-  const i2vLocations = Array.isArray(cfg.i2v_locations) && cfg.i2v_locations.length
-    ? cfg.i2v_locations
-    : ["odesa_city", "odesa_courtyard", "odesa_port", "odesa_streets", "odesa_sea"];
+  const ia2vLocations = Array.isArray(cfg.ia2v_locations) ? cfg.ia2v_locations : [];
+  const i2vLocations = Array.isArray(cfg.i2v_locations) ? cfg.i2v_locations : [];
+  const hasExplicitWorldSplit = ia2vLocations.length > 0 || i2vLocations.length > 0;
   return {
     source: "ai_director_chat",
-    hard_location_binding: true,
+    hard_location_binding: hasExplicitWorldSplit,
+    world_roles: {
+      performance_world: {
+        label: String(cfg.performance_world_label || cfg.performance_world || "").trim(),
+        allowed_zones: ia2vLocations,
+      },
+      memory_world: {
+        label: String(cfg.memory_world_label || cfg.memory_world || "").trim(),
+        allowed_zones: i2vLocations,
+      },
+    },
     route_location_rules: {
       ia2v: {
-        required_world: "train",
-        allowed_zones: ia2vLocations,
+        world_role: "performance_world",
         performer_visibility: "required",
         singer_visibility: "required",
         lip_sync_framing: "required",
       },
       i2v: {
-        required_world: "odesa_memory",
-        allowed_zones: i2vLocations,
+        world_role: "memory_world",
         performer_visibility: "optional_or_absent",
         singer_visibility: "offscreen_or_non_dominant",
       },
