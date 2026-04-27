@@ -33,6 +33,49 @@ function safeSceneDuration(scene = {}) {
   return Math.max(0, Number(endSec) - Number(startSec));
 }
 
+function resolveSceneAudioSegment(scene = {}, audioSegmentById = {}) {
+  const segmentId = String(scene?.segment_id || scene?.segmentId || scene?.scene_id || scene?.sceneId || "").trim();
+  return audioSegmentById?.[segmentId] && typeof audioSegmentById[segmentId] === "object"
+    ? audioSegmentById[segmentId]
+    : {};
+}
+
+function resolveSceneDisplayTimeWithAudio(scene = {}, audioSegmentById = {}) {
+  const timeline = resolveSceneDisplayTime(scene);
+  const audioSeg = resolveSceneAudioSegment(scene, audioSegmentById);
+  const timelineStart = Number(timeline?.startSec ?? 0);
+  const timelineEnd = Number(timeline?.endSec ?? timelineStart);
+  const timelineHasRealTiming = timelineEnd > timelineStart;
+  const audioStart = Number(audioSeg?.startSec ?? audioSeg?.t0 ?? 0);
+  const audioEnd = Number(audioSeg?.endSec ?? audioSeg?.t1 ?? audioStart);
+  const audioHasRealTiming = audioEnd > audioStart;
+  if (!timelineHasRealTiming && audioHasRealTiming) {
+    return {
+      startSec: audioStart,
+      endSec: audioEnd,
+      source: "audio_map",
+    };
+  }
+  return {
+    startSec: timelineStart,
+    endSec: Math.max(timelineStart, timelineEnd),
+    source: timeline?.source || "timeline",
+  };
+}
+
+function resolveScenePhraseText(scene = {}, audioSegmentById = {}) {
+  const audioSeg = resolveSceneAudioSegment(scene, audioSegmentById);
+  return String(
+    scene?.transcript_slice
+    || scene?.transcript
+    || scene?.spoken_line
+    || audioSeg?.transcript_slice
+    || scene?.localPhrase
+    || scene?.summaryRu
+    || ""
+  ).trim();
+}
+
 function resolveBlockStatus({ runtimeStatus = "", assetUrl = "" } = {}) {
   const status = String(runtimeStatus || "").trim().toLowerCase();
   if (["loading", "queued", "running", "generating"].includes(status)) return "loading";
@@ -676,6 +719,9 @@ export default function ScenarioStoryboardEditor({
     [safeGeneration, safeScenes]
   );
   const safeAudioData = audioData && typeof audioData === "object" ? audioData : {};
+  const audioSegmentById = safeAudioData?.audioSegmentById && typeof safeAudioData.audioSegmentById === "object"
+    ? safeAudioData.audioSegmentById
+    : {};
   const masterAudioResolution = useMemo(() => {
     const scenarioNodeAudioDataUrl = String(safeAudioData?.audioUrl || "").trim();
     if (scenarioNodeAudioDataUrl) {
@@ -862,16 +908,47 @@ export default function ScenarioStoryboardEditor({
   };
 
   const phrases = useMemo(() => {
-    if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) return safeAudioData.phrases;
+    if (Array.isArray(safeAudioData?.phrases) && safeAudioData.phrases.length) {
+      return safeAudioData.phrases.map((phrase, idx) => {
+        const fallbackScene = normalizedScenes[idx] || {};
+        const phraseSceneId = String(phrase?.sceneId || resolveSceneSelectionKey(fallbackScene, idx) || resolveSceneId(fallbackScene, idx) || "").trim();
+        const phraseAudioSeg = (phraseSceneId && audioSegmentById?.[phraseSceneId]) || resolveSceneAudioSegment(fallbackScene, audioSegmentById);
+        const phraseStart = Number(phrase?.startSec ?? phrase?.t0);
+        const phraseEndRaw = Number(phrase?.endSec ?? phrase?.t1);
+        const hasRealPhraseTiming = phraseEndRaw > phraseStart;
+        const fallbackDisplayTime = resolveSceneDisplayTimeWithAudio(fallbackScene, audioSegmentById);
+        const resolvedStart = hasRealPhraseTiming
+          ? phraseStart
+          : Number(phraseAudioSeg?.startSec ?? fallbackDisplayTime.startSec ?? 0);
+        const resolvedEnd = hasRealPhraseTiming
+          ? phraseEndRaw
+          : Number(phraseAudioSeg?.endSec ?? fallbackDisplayTime.endSec ?? resolvedStart);
+        return {
+          ...phrase,
+          sceneId: phraseSceneId,
+          startSec: resolvedStart,
+          endSec: Math.max(resolvedStart, resolvedEnd),
+          text: String(
+            phrase?.text
+            || phrase?.transcript_slice
+            || phrase?.transcript
+            || phrase?.spoken_line
+            || phraseAudioSeg?.transcript_slice
+            || resolveScenePhraseText(fallbackScene, audioSegmentById)
+            || ""
+          ).trim(),
+        };
+      });
+    }
     return normalizedScenes.map((scene, idx) => ({
       sceneId: String(resolveSceneSelectionKey(scene, idx) || resolveSceneId(scene, idx)),
-      startSec: resolveSceneDisplayTime(scene).startSec,
-      endSec: resolveSceneDisplayTime(scene).endSec,
-      text: String(scene?.localPhrase || scene?.summaryRu || "").trim(),
+      startSec: resolveSceneDisplayTimeWithAudio(scene, audioSegmentById).startSec,
+      endSec: resolveSceneDisplayTimeWithAudio(scene, audioSegmentById).endSec,
+      text: resolveScenePhraseText(scene, audioSegmentById),
       energy: String(scene?.emotionRu || "").trim(),
       context: String(scene?.locationRu || "").trim(),
     }));
-  }, [normalizedScenes, safeAudioData?.phrases]);
+  }, [audioSegmentById, normalizedScenes, safeAudioData?.phrases]);
   const phrasesForUi = useMemo(() => {
     if (!Array.isArray(phrases) || !phrases.length) return [];
     return phrases.filter((phrase) => !isShortMusicIntroPhrase(phrase));
@@ -879,7 +956,7 @@ export default function ScenarioStoryboardEditor({
 
   const safeIndex = normalizedScenes.findIndex((scene, idx) => resolveSceneSelectionKey(scene, idx) === activeSelectionId);
   const selectedScene = safeIndex >= 0 ? normalizedScenes[safeIndex] : null;
-  const selectedDisplayTime = resolveSceneDisplayTime(selectedScene);
+  const selectedDisplayTime = resolveSceneDisplayTimeWithAudio(selectedScene, audioSegmentById);
   const selectedSceneId = String(resolveSceneSelectionKey(selectedScene || {}, safeIndex >= 0 ? safeIndex : 0) || "").trim();
   const selectedSceneDisplayId = String(resolveSceneDisplayId(selectedScene || {}, safeIndex >= 0 ? safeIndex : 0) || selectedSceneId).toUpperCase();
   const selectedRuntimeAliases = [
@@ -1020,7 +1097,7 @@ export default function ScenarioStoryboardEditor({
   const handleExtractSceneAudio = async (scene) => {
     const sceneId = String(scene?.sceneId || "").trim();
     if (!sceneId) return;
-    const displayTime = resolveSceneDisplayTime(scene);
+    const displayTime = resolveSceneDisplayTimeWithAudio(scene, audioSegmentById);
     const startSec = Number(scene?.audioSliceStartSec ?? displayTime.startSec ?? 0);
     const endSec = Number(scene?.audioSliceEndSec ?? displayTime.endSec ?? startSec);
     const durationSec = Math.max(0, endSec - startSec);
@@ -1412,7 +1489,7 @@ export default function ScenarioStoryboardEditor({
 
   const formatSceneForCopy = (scene = {}, idx = 0) => {
     const sceneId = String(scene?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
-    const { startSec: t0, endSec: t1 } = resolveSceneDisplayTime(scene);
+    const { startSec: t0, endSec: t1 } = resolveSceneDisplayTimeWithAudio(scene, audioSegmentById);
     const duration = safeSceneDuration(scene);
     const warnings = Array.isArray(scene?.contractWarnings)
       ? scene.contractWarnings.map((warning) => String(warning?.label || warning?.code || "").trim()).filter(Boolean)
@@ -1485,7 +1562,7 @@ export default function ScenarioStoryboardEditor({
           {normalizedScenes.map((scene, idx) => {
             const sceneId = String(scene?.sceneId || `scene_${idx + 1}`);
             const sceneDisplayId = String(resolveSceneDisplayId(scene, idx) || sceneId).toUpperCase();
-            const displayTime = resolveSceneDisplayTime(scene);
+            const displayTime = resolveSceneDisplayTimeWithAudio(scene, audioSegmentById);
             return (
               <details key={`contract-${sceneId}-${idx}`} style={{ marginBottom: 10 }}>
                 <summary
@@ -1741,7 +1818,7 @@ export default function ScenarioStoryboardEditor({
             {normalizedScenes.map((scene, idx) => {
               const sceneKey = resolveSceneSelectionKey(scene, idx) || `scene_${idx + 1}`;
               const sceneDisplayId = String(resolveSceneDisplayId(scene, idx) || sceneKey).toUpperCase();
-              const displayTime = resolveSceneDisplayTime(scene);
+              const displayTime = resolveSceneDisplayTimeWithAudio(scene, audioSegmentById);
               const runtimeAliases = [
                 String(scene?.uiKey || "").trim(),
                 String(scene?.sceneKey || "").trim(),
@@ -1764,7 +1841,7 @@ export default function ScenarioStoryboardEditor({
                   <div className="clipSB_scenarioItemTop">
                     <div className="clipSB_storyboardSceneId">[ {sceneDisplayId} · {fmtSec(displayTime.startSec)}–{fmtSec(displayTime.endSec)} ]</div>
                   </div>
-                  <div className="clipSB_scenarioItemText">{scene?.summaryRu || scene?.localPhrase || "—"}</div>
+                  <div className="clipSB_scenarioItemText">{scene?.summaryRu || resolveScenePhraseText(scene, audioSegmentById) || "—"}</div>
                   <div className="clipSB_scenarioEditorBadgeRow">
                     {sceneBadges(scene).map((badge) => <span key={`${sceneKey}-${badge}`} className="clipSB_tag">{badge}</span>)}
                     <span className={`clipSB_tag clipSB_tagStatus clipSB_tagStatus--${status}`}>{status}</span>
