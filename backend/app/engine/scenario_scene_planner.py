@@ -271,6 +271,20 @@ def _clamp_ratio(value: Any, default: float) -> float:
         return float(default)
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return float(default)
+        if isinstance(value, str):
+            cleaned = value.strip().replace(",", ".")
+            if not cleaned:
+                return float(default)
+            return float(cleaned)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _normalize_gender_hint(value: Any) -> str:
     token = str(value or "").strip().lower()
     if not token:
