@@ -1576,7 +1576,8 @@ def _build_director_control_prompt_block(context: dict[str, Any]) -> str:
         return ""
 
     lines = [
-        "DIRECTOR CONTROL:\\n",
+        "DIRECTOR CONFIG:\\n",
+        "If present, this is the primary user-approved creative brief. Use it before creative_config.\\n",
         "* Respect ia2v_ratio vs i2v_ratio when distributing scenes.\\n",
         "* ia2v scenes MUST be used for vocal/performance moments.\\n",
         "* i2v scenes MUST be used for environment, intro, transitions.\\n",
@@ -1679,6 +1680,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "You are SCENES stage only.\\n"
         "Return STRICT JSON only. No markdown, no prose.\\n"
         "Return one storyboard row per segment_id from audio_map.segments.\\n"
+        "Return exactly one scene per audio segment and preserve all segment_id values exactly once.\\n"
         "Do not invent or remove segments.\\n"
         "Do not mutate cast. Use role_plan.scene_casting/roster as cast source; compiled_contract is legacy fallback only.\\n"
         "WHOLE-STORY CONTINUITY is mandatory: treat all scenes as one continuous music video progression.\\n"
@@ -1686,6 +1688,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "Track previous ending position/state, next start position/state, movement direction, location zone, object state, emotional progression, and performance energy progression.\\n"
         "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
         "No first_last scenes allowed.\\n"
+        "first_last route is forbidden for this clip mode.\\n"
         "If any scene is classified as state_transition, convert it to i2v.\\n"
         "state_transition is allowed as narrative concept,\\n"
         "but must always be rendered as i2v.\\n"
@@ -1701,7 +1704,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "For ia2v scenes, if vocal/performance evidence is real and character_1 is on-screen, you may output ia2v even when speaker_role/vocal_owner_role are uncertain.\\n"
         "Backend canonicalizes valid ia2v rows to character_1 roles and lip-sync flags; invalid ia2v rows automatically fallback to i2v.\\n"
         "For ia2v rows still prefer setting: speaker_role=character_1, vocal_owner_role=character_1, lip_sync_allowed=true, mouth_visible_required=true, singing_readiness_required=true.\\n"
+        "For ia2v rows, spoken_line must be copied from segment transcript/transcript_slice when available.\\n"
         "For i2v scenes enforce: speaker_role=\"\", vocal_owner_role=\"\", lip_sync_allowed=false, mouth_visible_required=false.\\n"
+        "For ia2v scenes enforce controlled camera: no chaotic handheld, one movement axis, safe motion.\\n"
         "Respect character_appearance_modes_by_role contract from context.\\n"
         "Treat character appearanceMode as behavior preference, not hard scene constraint. Never reject or drop scenes because of appearanceMode alone.\\n"
         "Map character_1 appearanceMode into character_presence_mode policy:\\n"
@@ -1727,7 +1732,9 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "- subject_priority: hero|ensemble|object|environment\\n"
         "- layout: centered|rule_of_thirds|off_balance|symmetrical\\n"
         "- depth_strategy: flat|layered|deep\\n"
-        "USER ROUTE STRATEGY IS A HARD CREATIVE CONSTRAINT.\\n"
+        "DIRECTOR CONFIG (if present) has priority over creative_config hints.\\n"
+        "If director_config is missing, use creative_config as fallback only.\\n"
+        "USER ROUTE STRATEGY IS A HARD CREATIVE CONSTRAINT only when explicit director-config ratio is present.\\n"
         "If route_budget_contract.hard_route_assignments_by_segment is non-empty, preserve requested route per segment_id whenever that route is scene-valid.\n"
         "If a requested ia2v row is invalid for lip-sync (instrumental/no-vocal, non-speaking world beat, missing valid mouth-readable performance evidence), downgrade it to i2v instead of faking ia2v.\n"
         "If route_budget_contract.targets_are_hard_for_short_clip=true, satisfy target_counts as closely as possible after route-validity checks; do not force invalid ia2v just to hit counts.\n"
@@ -3549,7 +3556,6 @@ def _normalize_scene_plan(
     scene_candidate_windows_present = bool(_safe_list(_safe_dict(audio_map).get("scene_candidate_windows")))
     mapped_path = bool(
         str(used_model or "").strip().lower() == "mapped_from_audio_map.scene_candidate_windows"
-        or bool(_safe_list(_safe_dict(audio_map).get("scene_candidate_windows")))
         or mapped_route_budget_post_normalization_applied
         or mapped_route_budget_lock_detected
     )
@@ -3690,7 +3696,18 @@ def _normalize_scene_plan(
             for seg, route in hard_route_map.items()
             if str(seg).strip() and str(route).strip().lower() in ALLOWED_ROUTES
         }
+    director_cfg = _safe_dict(director_config)
+    route_budget_mode = "director_config_hard" if director_cfg.get("ia2v_ratio") is not None else "creative_config_soft"
+    route_budget_tolerance = 1
+    target_ia2v = int(_safe_dict(route_budget_target).get("ia2v") or 0)
+    ia2v_delta = abs(int(final_route_counts.get("ia2v") or 0) - target_ia2v)
     route_budget_mismatch = bool(hard_short_clip_target and final_route_counts != route_budget_target)
+    if route_budget_mode == "director_config_hard":
+        route_budget_mismatch = bool(ia2v_delta > route_budget_tolerance)
+    else:
+        route_budget_mismatch = False
+    if int(final_route_counts.get("first_last") or 0) > 0:
+        route_budget_mismatch = True
     validation_errors: list[str] = []
     error_codes: list[str] = []
     if enum_unrepaired_count > 0:
@@ -3866,6 +3883,9 @@ def _normalize_scene_plan(
         "scene_plan_route_budget_retry_used": False,
         "scene_plan_route_budget_retry_suppressed": bool(route_budget_mismatch),
         "scene_plan_route_budget_mismatch_reason": "gemini_did_not_respect_user_route_strategy" if route_budget_mismatch else "",
+        "scene_plan_route_budget_mode": route_budget_mode,
+        "scene_plan_route_budget_tolerance": route_budget_tolerance,
+        "scene_plan_first_last_forbidden": True,
         "scene_plan_user_route_strategy_was_sent": bool(_route_strategy_active(creative_config)),
         "scene_plan_user_route_strategy_hard_constraint": bool(hard_short_clip_target),
         "scene_plan_empty_detected": scene_plan_empty_detected,
@@ -3907,100 +3927,97 @@ def build_gemini_scene_plan(
     default_vocal_role = present_cast_roles[0] if len(present_cast_roles) == 1 else "character_1"
     audio_map = _safe_dict(package.get("audio_map"))
     scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
-    if not scene_windows or len(scene_windows) == 0:
-        raise ValueError("SCENES_ERROR: scene_candidate_windows missing")
     audio_segments = [_safe_dict(seg) for seg in _safe_list(audio_map.get("segments"))]
     segment_ids_by_index = [str(seg.get("segment_id") or "").strip() for seg in audio_segments]
 
-    scene_plan: list[dict[str, Any]] = []
-    for idx, window_raw in enumerate(scene_windows):
-        window = _safe_dict(window_raw)
-        fallback_segment_id = ""
-        if idx < len(segment_ids_by_index):
-            fallback_segment_id = segment_ids_by_index[idx]
-        segment_id = str(
-            window.get("segment_id") or window.get("scene_id") or fallback_segment_id or f"seg_{idx + 1:02d}"
-        ).strip()
-        scene_plan.append(
-            {
-                "segment_id": segment_id,
-                "scene_id": str(window.get("scene_id") or segment_id).strip(),
-                "t0": window.get("t0"),
-                "t1": window.get("t1"),
-                "duration": window.get("duration_sec"),
-                "energy": window.get("local_energy_band"),
-                "cut_reason": window.get("cut_reason"),
-                "density": window.get("visual_density_hint"),
-                "location": "",
-                "action": "",
-                "environment_interaction": "",
-                "visual_hook": "",
-                "camera": {
-                    "framing": "",
-                    "movement": "",
-                    "angle": "",
-                },
-                "route": "i2v",
-                "primary_role": default_vocal_role,
-                "visual_focus_role": default_vocal_role,
-            }
+    def _build_mapped_scene_plan_fallback(*, reason: str) -> dict[str, Any]:
+        if not scene_windows:
+            raise ValueError("SCENES_ERROR: scene_candidate_windows missing")
+        mapped_scene_plan: list[dict[str, Any]] = []
+        for idx, window_raw in enumerate(scene_windows):
+            window = _safe_dict(window_raw)
+            fallback_segment_id = segment_ids_by_index[idx] if idx < len(segment_ids_by_index) else ""
+            segment_id = str(
+                window.get("segment_id") or window.get("scene_id") or fallback_segment_id or f"seg_{idx + 1:02d}"
+            ).strip()
+            mapped_scene_plan.append(
+                {
+                    "segment_id": segment_id,
+                    "scene_id": str(window.get("scene_id") or segment_id).strip(),
+                    "t0": window.get("t0"),
+                    "t1": window.get("t1"),
+                    "duration": window.get("duration_sec"),
+                    "energy": window.get("local_energy_band"),
+                    "cut_reason": window.get("cut_reason"),
+                    "density": window.get("visual_density_hint"),
+                    "location": "",
+                    "action": "",
+                    "environment_interaction": "",
+                    "visual_hook": "",
+                    "camera": {"framing": "", "movement": "", "angle": ""},
+                    "route": "i2v",
+                    "primary_role": default_vocal_role,
+                    "visual_focus_role": default_vocal_role,
+                }
+            )
+        mapped_rows_missing_segment_id = [
+            idx for idx, row in enumerate(mapped_scene_plan) if not str(_safe_dict(row).get("segment_id") or "").strip()
+        ]
+        mapped_row_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in mapped_scene_plan]
+        mapped_scene_plan, route_budget_diag = _apply_route_budget_to_scene_rows(
+            mapped_scene_plan,
+            audio_map,
+            creative_config,
+            director_config,
         )
-
-    if len(scene_plan) != len(scene_windows):
-        raise ValueError("SCENES_ERROR: scene_plan mismatch")
-
-    mapped_rows_missing_segment_id = [
-        idx for idx, row in enumerate(scene_plan) if not str(_safe_dict(row).get("segment_id") or "").strip()
-    ]
-    mapped_row_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_plan]
-
-    scene_plan, route_budget_diag = _apply_route_budget_to_scene_rows(
-        scene_plan,
-        audio_map,
-        creative_config,
-        director_config,
-    )
-    route_mix_summary = {
-        "i2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"),
-        "ia2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"),
-        "first_last": 0,
-    }
-    mapped_final_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_plan]
-    mapped_final_missing_segment_id_count = sum(1 for seg_id in mapped_final_segment_ids if not seg_id)
-    scene_plan_payload = {
-        "scenes_version": SCENES_VERSION,
-        "storyboard": scene_plan,
-        "scenes": deepcopy(scene_plan),
-        "route_mix_summary": route_mix_summary,
-    }
-    package["scene_plan"] = scene_plan_payload
-    print(f"[SCENES] built from candidate windows: {len(scene_plan)} scenes")
-    return {
-        "ok": True,
-        "scene_plan": scene_plan_payload,
-        "error": "",
-        "validation_error": "",
-        "error_code": "",
-        "used_fallback": False,
-        "diagnostics": {
-            "prompt_version": SCENE_PLAN_PROMPT_VERSION,
-            "used_model": "mapped_from_audio_map.scene_candidate_windows",
-            "scene_count": len(scene_plan),
-            "scene_plan_scenes_version": SCENES_VERSION,
-            "scene_plan_uses_segment_id_canonical": True,
-            "mapped_debug_scene_windows_count": len(scene_windows),
-            "mapped_debug_audio_segments_count": len(audio_segments),
-            "mapped_debug_initial_row_count": len(scene_plan),
-            "mapped_debug_initial_segment_ids": mapped_row_segment_ids,
-            "mapped_debug_missing_segment_id_indices": mapped_rows_missing_segment_id,
-            "mapped_debug_route_counts_after_budget": route_mix_summary,
-            "mapped_debug_route_budget_diag": route_budget_diag,
-            "scene_plan_mapped_default_vocal_role": default_vocal_role,
-            "mapped_debug_final_segment_ids": mapped_final_segment_ids,
-            "mapped_debug_final_missing_segment_id_count": mapped_final_missing_segment_id_count,
-            **route_budget_diag,
-        },
-    }
+        route_mix_summary = {
+            "i2v": sum(1 for row in mapped_scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"),
+            "ia2v": sum(1 for row in mapped_scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"),
+            "first_last": 0,
+        }
+        mapped_final_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in mapped_scene_plan]
+        mapped_final_missing_segment_id_count = sum(1 for seg_id in mapped_final_segment_ids if not seg_id)
+        scene_plan_payload = {
+            "scenes_version": SCENES_VERSION,
+            "storyboard": mapped_scene_plan,
+            "scenes": deepcopy(mapped_scene_plan),
+            "route_mix_summary": route_mix_summary,
+        }
+        package["scene_plan"] = scene_plan_payload
+        print(f"[SCENES] mapped fallback from candidate windows: {len(mapped_scene_plan)} scenes ({reason})")
+        return {
+            "ok": True,
+            "scene_plan": scene_plan_payload,
+            "error": "",
+            "validation_error": "",
+            "error_code": "",
+            "used_fallback": True,
+            "diagnostics": {
+                "prompt_version": SCENE_PLAN_PROMPT_VERSION,
+                "scene_plan_primary_strategy": "gemini_first",
+                "scene_plan_fallback_used": True,
+                "scene_plan_mapped_fallback_used": True,
+                "scene_plan_mapped_fallback_reason": reason,
+                "scene_plan_gemini_attempted": True,
+                "scene_plan_used_model": "mapped_from_audio_map.scene_candidate_windows",
+                "used_model": "mapped_from_audio_map.scene_candidate_windows",
+                "scene_count": len(mapped_scene_plan),
+                "scene_plan_scenes_version": SCENES_VERSION,
+                "scene_plan_uses_segment_id_canonical": True,
+                "mapped_debug_scene_windows_count": len(scene_windows),
+                "mapped_debug_audio_segments_count": len(audio_segments),
+                "mapped_debug_initial_row_count": len(mapped_scene_plan),
+                "mapped_debug_initial_segment_ids": mapped_row_segment_ids,
+                "mapped_debug_missing_segment_id_indices": mapped_rows_missing_segment_id,
+                "mapped_debug_route_counts_after_budget": route_mix_summary,
+                "mapped_debug_route_budget_diag": route_budget_diag,
+                "scene_plan_mapped_default_vocal_role": default_vocal_role,
+                "mapped_debug_final_segment_ids": mapped_final_segment_ids,
+                "mapped_debug_final_missing_segment_id_count": mapped_final_missing_segment_id_count,
+                "scene_plan_first_last_forbidden": True,
+                **route_budget_diag,
+            },
+        }
 
     context, aux = _build_scene_planning_context(package)
     scene_segment_rows = _safe_list(aux.get("scene_segment_rows"))
@@ -4038,10 +4055,21 @@ def build_gemini_scene_plan(
 
     diagnostics = {
         "prompt_version": SCENE_PLAN_PROMPT_VERSION,
+        "scene_plan_primary_strategy": "gemini_first",
+        "scene_plan_gemini_attempted": True,
+        "scene_plan_gemini_retry_attempted": False,
+        "scene_plan_gemini_validation_error": "",
+        "scene_plan_fallback_used": False,
+        "scene_plan_mapped_fallback_used": False,
+        "scene_plan_mapped_fallback_reason": "",
+        "scene_plan_first_last_forbidden": True,
+        "scene_plan_director_config_present": bool(director_config),
+        "scene_plan_director_config_keys": sorted(str(k).strip() for k in director_config.keys() if str(k).strip()),
         "scene_candidate_windows_bridge": bool(aux.get("uses_legacy_scene_candidate_windows_bridge")),
         "compiled_contract_bridge": bool(compiled_contract),
         "role_source_precedence": _safe_list(aux.get("scene_role_source_precedence")),
         "used_model": SCENE_PLAN_MODEL,
+        "scene_plan_used_model": SCENE_PLAN_MODEL,
         "scene_count": len(scene_segment_rows),
         "scene_plan_scenes_version": SCENES_VERSION,
         "scene_plan_uses_segment_id_canonical": True,
@@ -4460,6 +4488,8 @@ def build_gemini_scene_plan(
         if isinstance(response, dict) and response.get("__http_error__"):
             raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
         parsed = _extract_json_obj(_extract_gemini_text(response))
+        if "storyboard" not in parsed and _safe_list(parsed.get("scenes")):
+            parsed["storyboard"] = _safe_list(parsed.get("scenes"))
         return _normalize_scene_plan(
             parsed,
             scene_segment_rows=scene_segment_rows,
@@ -4482,14 +4512,7 @@ def build_gemini_scene_plan(
         scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _run_generation(prompt)
         _ensure_scene_plan_scenes(scene_plan)
         normalization_diag["scene_plan_route_spacing_retry_used"] = False
-        spacing_diag = _safe_dict(normalization_diag.get("route_spacing"))
-        if (
-            str(creative_config.get("route_mix_mode") or "auto").strip().lower() == "auto"
-            and bool(_safe_dict(normalization_diag.get("route_spacing")).get("has_adjacent_first_last"))
-        ):
-            validation_error = validation_error or "adjacent_first_last"
-            error_code = error_code or "SCENES_ROUTE_SPACING_INVALID"
-            _safe_dict(normalization_diag.get("route_spacing"))["warning"] = "adjacent_first_last_not_allowed"
+        diagnostics["scene_plan_gemini_validation_error"] = str(validation_error or "")
         diagnostics["error_code"] = error_code
         diagnostics.update(
             _collect_scene_plan_diagnostics(
@@ -4501,70 +4524,55 @@ def build_gemini_scene_plan(
         )
         storyboard_rows = _safe_list(scene_plan.get("storyboard"))
         has_validation_error = bool(str(validation_error or "").strip())
-        ok = bool(storyboard_rows) and not has_validation_error
-        error_text = ""
-        if not ok:
-            error_text = str(validation_error or error_code or "invalid_scene_plan")
-        return {
-            "ok": ok,
-            "scene_plan": scene_plan,
-            "error": error_text,
-            "validation_error": validation_error,
-            "error_code": error_code,
-            "used_fallback": used_fallback,
-            "diagnostics": diagnostics,
-        }
+        if bool(storyboard_rows) and not has_validation_error:
+            diagnostics["scene_plan_used_model"] = SCENE_PLAN_MODEL
+            diagnostics["scene_plan_fallback_used"] = False
+            diagnostics["scene_plan_mapped_fallback_used"] = False
+            return {
+                "ok": True,
+                "scene_plan": scene_plan,
+                "error": "",
+                "validation_error": "",
+                "error_code": error_code,
+                "used_fallback": used_fallback,
+                "diagnostics": diagnostics,
+            }
+        diagnostics["scene_plan_gemini_retry_attempted"] = True
+        retry_feedback = str(validation_feedback or validation_error or error_code or "scene_plan_invalid")
+        retry_prompt = _build_prompt(context, validation_feedback=retry_feedback, prompt_mode="compact_route_budget_retry")
+        retry_plan, retry_used_fallback, retry_validation_error, retry_watchability_fallback_count, retry_diag, retry_error_code = _run_generation(retry_prompt)
+        _ensure_scene_plan_scenes(retry_plan)
+        retry_diag["scene_plan_route_spacing_retry_used"] = True
+        diagnostics["scene_plan_gemini_validation_error"] = str(retry_validation_error or validation_error or "")
+        diagnostics["error_code"] = retry_error_code
+        diagnostics.update(
+            _collect_scene_plan_diagnostics(
+                scene_plan=retry_plan,
+                normalization_diag=retry_diag,
+                watchability_fallback_count=retry_watchability_fallback_count,
+                include_presence_modes=True,
+            )
+        )
+        retry_storyboard_rows = _safe_list(retry_plan.get("storyboard"))
+        retry_has_error = bool(str(retry_validation_error or "").strip())
+        if bool(retry_storyboard_rows) and not retry_has_error:
+            diagnostics["scene_plan_used_model"] = SCENE_PLAN_MODEL
+            diagnostics["scene_plan_fallback_used"] = False
+            diagnostics["scene_plan_mapped_fallback_used"] = False
+            return {
+                "ok": True,
+                "scene_plan": retry_plan,
+                "error": "",
+                "validation_error": "",
+                "error_code": retry_error_code,
+                "used_fallback": retry_used_fallback,
+                "diagnostics": diagnostics,
+            }
+        return _build_mapped_scene_plan_fallback(reason=str(retry_validation_error or validation_error or "invalid_scene_plan"))
     except Exception as exc:  # noqa: BLE001
         timeout_error = is_timeout_error(exc)
         if timeout_error:
             diagnostics["timed_out"] = True
             diagnostics["response_was_empty_after_timeout"] = True
-        scene_plan, used_fallback, validation_error, watchability_fallback_count, normalization_diag, error_code = _normalize_scene_plan(
-            {},
-            scene_segment_rows=scene_segment_rows,
-            role_lookup=role_lookup,
-            creative_config=creative_config,
-            force_route_mode=force_route_mode,
-            forced_routes=forced_routes,
-            structure=structure,
-            vocal_gender=vocal_gender,
-            vocal_owner_role=vocal_owner_role,
-            include_debug_raw=include_debug_raw,
-            character_appearance_modes_by_role=_safe_dict(aux.get("character_appearance_modes_by_role")),
-            empty_plan_fallback_allowed=empty_plan_fallback_allowed,
-            used_model=SCENE_PLAN_MODEL,
-            audio_map=audio_map,
-            director_config=director_config,
-        )
-        _ensure_scene_plan_scenes(scene_plan)
-        storyboard_rows = _safe_list(scene_plan.get("storyboard"))
-        has_validation_error = bool(str(validation_error or "").strip())
-        ok = bool(storyboard_rows) and not has_validation_error
-        if not ok and timeout_error and not has_validation_error:
-            validation_error = "scene_plan_timeout_empty_response"
-            has_validation_error = True
-        diagnostics["error_code"] = (
-            (error_code or "")
-            if ok
-            else ("SCENES_TIMEOUT_EMPTY_RESPONSE" if timeout_error else (error_code or "SCENES_SCHEMA_INVALID"))
-        )
-        diagnostics.update(
-            _collect_scene_plan_diagnostics(
-                scene_plan=scene_plan,
-                normalization_diag=normalization_diag,
-                watchability_fallback_count=watchability_fallback_count,
-                include_presence_modes=True,
-            )
-        )
-        error_text = ""
-        if not ok:
-            error_text = "scene_plan_timeout" if timeout_error else str(exc)
-        return {
-            "ok": ok,
-            "scene_plan": scene_plan,
-            "error": error_text,
-            "validation_error": validation_error,
-            "error_code": diagnostics["error_code"],
-            "used_fallback": True,
-            "diagnostics": diagnostics,
-        }
+        diagnostics["scene_plan_gemini_validation_error"] = str(exc)
+        return _build_mapped_scene_plan_fallback(reason=str(exc))
