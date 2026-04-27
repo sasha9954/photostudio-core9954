@@ -533,7 +533,7 @@ def _scene_prompts_dependency_payload_ok(package: dict[str, Any], dependency_sta
     if dependency_stage_id == "input_package":
         return bool(_safe_dict(pkg.get("input")))
     if dependency_stage_id == "audio_map":
-        return _is_audio_map_dependency_satisfied(pkg)
+        return _has_valid_audio_map_payload_for_scene_prompts(pkg)
     if dependency_stage_id == "story_core":
         return _has_valid_story_core_payload(_safe_dict(pkg.get("story_core")))
     if dependency_stage_id == "role_plan":
@@ -664,6 +664,28 @@ def _is_audio_map_dependency_satisfied(package: dict[str, Any]) -> bool:
     if isinstance(coverage_ok, str):
         return coverage_ok.strip().lower() in {"1", "true", "yes", "ok"}
     return bool(coverage_ok)
+
+
+def _has_valid_audio_map_payload_for_scene_prompts(package: dict[str, Any]) -> bool:
+    audio_map = _safe_dict(_safe_dict(package).get("audio_map"))
+    segments = _safe_list(audio_map.get("segments"))
+    if not segments:
+        return False
+    seen: list[str] = []
+    for raw in segments:
+        seg = _safe_dict(raw)
+        segment_id = str(seg.get("segment_id") or "").strip()
+        if not segment_id:
+            return False
+        try:
+            t0 = float(seg.get("t0"))
+            t1 = float(seg.get("t1"))
+        except Exception:
+            return False
+        if t1 <= t0:
+            return False
+        seen.append(segment_id)
+    return len(seen) == len(set(seen))
 
 
 def _has_valid_audio_map_payload(package: dict[str, Any]) -> bool:
@@ -13900,10 +13922,18 @@ def run_manual_stage(
             _safe_dict(pkg.get("scene_plan")).get("storyboard")
             or _safe_dict(pkg.get("scene_plan")).get("scenes")
         )
+        audio_map = _safe_dict(pkg.get("audio_map"))
+        audio_segments = _safe_list(audio_map.get("segments"))
+        audio_map_ok_for_prompts = _has_valid_audio_map_payload_for_scene_prompts(pkg)
         scene_plan_ok_for_prompts = _has_valid_scene_plan_payload_for_scene_prompts(pkg)
+        audio_map_block_reason = "" if audio_map_ok_for_prompts else "audio_map_payload_invalid_for_scene_prompts"
         scene_plan_block_reason = "" if scene_plan_ok_for_prompts else "scene_plan_payload_invalid_for_scene_prompts"
         scene_prompts_payload_gate_accepted = bool(scene_prompts_payload_gate_accepted and scene_plan_ok_for_prompts)
+        scene_prompts_payload_ok_by_stage["audio_map"] = bool(audio_map_ok_for_prompts)
         scene_prompts_payload_ok_by_stage["scene_plan"] = bool(scene_plan_ok_for_prompts)
+        scene_prompts_missing_dependency_keys = [
+            dep_stage for dep_stage in deps if not bool(scene_prompts_payload_ok_by_stage.get(dep_stage))
+        ]
         if scene_prompts_payload_gate_accepted:
             reusable_upstream = []
             missing_upstream = []
@@ -13923,10 +13953,18 @@ def run_manual_stage(
         diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
         diagnostics["scene_prompts_requested"] = True
         diagnostics["scene_prompts_force_current_stage_execution"] = bool(force_requested_stage_execution)
+        diagnostics["scene_prompts_dependency_audio_map_payload_valid"] = bool(audio_map_ok_for_prompts)
+        diagnostics["scene_prompts_dependency_audio_map_segment_count"] = len(audio_segments)
+        diagnostics["scene_prompts_dependency_audio_map_coverage_ok"] = bool(
+            _safe_dict(audio_map.get("diagnostics")).get("coverage_ok")
+        )
         diagnostics["scene_prompts_dependency_scene_plan_payload_valid"] = bool(scene_plan_ok_for_prompts)
         diagnostics["scene_prompts_dependency_scene_plan_row_count"] = len(scene_plan_rows)
         diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
-        diagnostics["scene_prompts_skipped_reason"] = "" if scene_prompts_payload_gate_accepted else str(scene_plan_block_reason or "")
+        diagnostics["scene_prompts_missing_dependency_keys"] = list(scene_prompts_missing_dependency_keys)
+        diagnostics["scene_prompts_skipped_reason"] = "" if scene_prompts_payload_gate_accepted else str(
+            audio_map_block_reason or scene_plan_block_reason or "missing_dependencies"
+        )
         diagnostics["scene_prompts_reused_upstream_statuses_restored"] = False
         diagnostics["scene_prompts_upstream_statuses_restored_before_run"] = False
         diagnostics["scene_prompts_upstream_statuses_restored_before_run_stages"] = []
@@ -13941,7 +13979,13 @@ def run_manual_stage(
             diagnostics["scene_prompts_error_code"] = "PROMPTS_BLOCKED_SCENE_PLAN_INVALID"
             diagnostics["scene_prompts_error_hint"] = "Run SCENES manually first"
             diagnostics["requested_stage_not_executed"] = True
-            diagnostics["requested_stage_not_executed_reason"] = str(scene_plan_block_reason or "missing_dependencies")
+            if not audio_map_ok_for_prompts:
+                requested_stage_not_executed_reason = "audio_map_payload_invalid_for_scene_prompts"
+            elif not scene_plan_ok_for_prompts:
+                requested_stage_not_executed_reason = "scene_plan_payload_invalid_for_scene_prompts"
+            else:
+                requested_stage_not_executed_reason = "missing_dependencies"
+            diagnostics["requested_stage_not_executed_reason"] = requested_stage_not_executed_reason
             pkg["diagnostics"] = diagnostics
             _set_stage_status(pkg, stage_id, "error", error="PROMPTS_BLOCKED_SCENE_PLAN_INVALID")
             _append_diag_event(pkg, "PROMPTS_BLOCKED_SCENE_PLAN_INVALID", stage_id=stage_id)
