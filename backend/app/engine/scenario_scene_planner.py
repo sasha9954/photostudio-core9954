@@ -1270,6 +1270,11 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     hard_route_map_applied = bool(hard_route_assignments)
     resolved_scene_count = _expected_scene_count_from_package(package)
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(resolved_scene_count, creative_config)
+    if ia2v_ratio is not None:
+        ia2v_count = int(resolved_scene_count * float(ia2v_ratio))
+        i2v_count = resolved_scene_count - ia2v_count
+        route_budget_target["ia2v"] = ia2v_count
+        route_budget_target["i2v"] = i2v_count
     route_budget_original_targets = {
         "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
         "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
@@ -1560,16 +1565,25 @@ def _build_director_control_prompt_block(context: dict[str, Any]) -> str:
         lines.append(f"* intro_scenes hard order hint: {json.dumps(intro_scenes, ensure_ascii=False)}.\\n")
         lines.append("* The first 1–3 scenes MUST match these types in order.\\n")
         lines.append("* Example: intro_scenes=[\"station_wide\",\"train_arrival\"] => first scenes reflect station -> train -> boarding.\\n")
+        lines.append("* INTRO SCENE TYPES MAPPING:\\n")
+        lines.append("  - \"station_wide\" → wide environment, large scale, no close character\\n")
+        lines.append("  - \"train_arrival\" → train movement, anticipation\\n")
+        lines.append("  - \"boarding\" → entering space, transition moment\\n")
+        lines.append("  - \"window_reflection\" → introspective reflection shot\\n")
+        lines.append("  - \"hero_closeup\" → emotional face close-up\\n")
+    lines.append("* For each scene, ALWAYS assign location_zone.\\n")
+    lines.append("* location_zone MUST match allowed ia2v_locations or i2v_locations when provided.\\n")
     lines.extend(
         [
-            "* camera_style controls shot type.\\n",
-            "* camera_style=\"cinematic_glide\": use smooth push-in / dolly shots.\\n",
-            "* camera_style=\"still_witness\": use static frames, minimal motion.\\n",
-            "* camera_style=\"emotional_proximity\": use close-up, face-driven shots.\\n",
+            "* camera_style must influence composition.framing and visual_motion.camera_intent.\\n",
+            "* camera_style=\"cinematic_glide\": medium/wide + slow push-in.\\n",
+            "* camera_style=\"still_witness\": static wide shot.\\n",
+            "* camera_style=\"emotional_proximity\": close_up + minimal motion.\\n",
         ]
     )
     if camera_style:
         lines.append(f"* Requested camera_style: \"{camera_style}\".\\n")
+    lines.append("Director control has HIGHER priority than generic scene diversity. If conflict occurs, follow director_config.\\n")
     lines.append("Do not ignore director_config. It is a hard constraint unless impossible.\\n")
     return "".join(lines)
 
