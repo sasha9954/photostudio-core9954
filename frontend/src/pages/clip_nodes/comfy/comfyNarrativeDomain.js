@@ -1096,6 +1096,16 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   if (hiddenRoutes.length) {
     creativeConfig.routes = hiddenRoutes;
   }
+  const directorConfigFromAnswers = state?.director_config && typeof state.director_config === "object"
+    ? state.director_config
+    : {};
+  const legacyAiDirectorConfig = state?.aiDirectorConfig && typeof state.aiDirectorConfig === "object"
+    ? state.aiDirectorConfig
+    : {};
+  const directorConfig = {
+    ...directorConfigFromAnswers,
+    ...legacyAiDirectorConfig,
+  };
 
 
   const markStaleFrom = String(state?.markStaleFrom || "").trim();
@@ -1138,6 +1148,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     note: narrativeDirective.note,
     directorNote: narrativeDirective.directorNote,
     narrative_note: normalizeText(state?.aiNarrative) || narrativeDirective.directorNote,
+    director_config: directorConfig,
     director_controls: {
       contentType: safeContentType,
       format,
