@@ -3697,13 +3697,19 @@ def _normalize_scene_plan(
             if str(seg).strip() and str(route).strip().lower() in ALLOWED_ROUTES
         }
     director_cfg = _safe_dict(director_config)
-    route_budget_mode = "director_config_hard" if director_cfg.get("ia2v_ratio") is not None else "creative_config_soft"
+    if director_cfg.get("ia2v_ratio") is not None:
+        route_budget_mode = "director_config_hard"
+    elif _route_strategy_active(creative_config) and not bool(creative_config.get("targets_are_soft")):
+        route_budget_mode = "creative_config_hard"
+    else:
+        route_budget_mode = "creative_config_soft"
     route_budget_tolerance = 1
     target_ia2v = int(_safe_dict(route_budget_target).get("ia2v") or 0)
     ia2v_delta = abs(int(final_route_counts.get("ia2v") or 0) - target_ia2v)
-    route_budget_mismatch = bool(hard_short_clip_target and final_route_counts != route_budget_target)
     if route_budget_mode == "director_config_hard":
         route_budget_mismatch = bool(ia2v_delta > route_budget_tolerance)
+    elif route_budget_mode == "creative_config_hard":
+        route_budget_mismatch = bool(hard_short_clip_target and final_route_counts != route_budget_target)
     else:
         route_budget_mismatch = False
     if int(final_route_counts.get("first_last") or 0) > 0:
@@ -3918,12 +3924,19 @@ def build_gemini_scene_plan(
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     director_config = _safe_dict(input_pkg.get("director_config"))
     connected_context = _safe_dict(input_pkg.get("connected_context_summary"))
-    role_identity_mapping = _safe_dict(connected_context.get("role_identity_mapping"))
+    present_cast_roles_raw = _safe_list(connected_context.get("presentCastRoles"))
     present_cast_roles = [
         str(role).strip()
-        for role, payload in role_identity_mapping.items()
-        if str(role).strip() and bool(_safe_dict(payload).get("presentCastRole"))
+        for role in present_cast_roles_raw
+        if str(role).strip()
     ]
+    if not present_cast_roles:
+        role_identity_mapping = _safe_dict(connected_context.get("role_identity_mapping"))
+        present_cast_roles = [
+            str(role).strip()
+            for role, payload in role_identity_mapping.items()
+            if str(role).strip() and bool(_safe_dict(payload).get("presentCastRole"))
+        ]
     default_vocal_role = present_cast_roles[0] if len(present_cast_roles) == 1 else "character_1"
     audio_map = _safe_dict(package.get("audio_map"))
     scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
