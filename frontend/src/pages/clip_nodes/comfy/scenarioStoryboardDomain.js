@@ -380,22 +380,34 @@ export function buildAudioSegmentById(storyboardPackage = null) {
   }, {});
 }
 
+function routeHydrationStrength(value = {}) {
+  const route = String(value?.route || "").trim().toLowerCase();
+  const renderMode = String(value?.renderMode || "").trim().toLowerCase();
+  const workflowKey = String(value?.resolvedWorkflowKey || value?.workflowKey || "").trim().toLowerCase();
+  const lipSync = Boolean(value?.lipSync || value?.requiresAudioSensitiveVideo);
+
+  if (route === "ia2v" || renderMode === "lip_sync_music" || workflowKey === "lip_sync_music" || lipSync) return 100;
+  if (route === "i2v") return 50;
+  if (workflowKey === "standard_video") return 30;
+  return 10;
+}
+
 export function buildRouteBySegmentId(storyboardPackage = null) {
   const safePackage = storyboardPackage && typeof storyboardPackage === "object" ? storyboardPackage : {};
   const routeSources = [
-    safePackage?.scene_plan?.storyboard,
-    safePackage?.scene_plan?.scenes,
-    safePackage?.scene_plan?.segments,
-    safePackage?.scene_prompts?.segments,
-    safePackage?.scene_prompts?.scenes,
-    safePackage?.final_video_prompt?.segments,
-    safePackage?.final_video_prompt?.scenes,
-    safePackage?.final_storyboard?.scenes,
-    safePackage?.final_storyboard?.render_manifest,
+    { sourceName: "scene_plan", rows: safePackage?.scene_plan?.storyboard },
+    { sourceName: "scene_plan", rows: safePackage?.scene_plan?.scenes },
+    { sourceName: "scene_plan", rows: safePackage?.scene_plan?.segments },
+    { sourceName: "scene_prompts", rows: safePackage?.scene_prompts?.segments },
+    { sourceName: "scene_prompts", rows: safePackage?.scene_prompts?.scenes },
+    { sourceName: "final_video_prompt", rows: safePackage?.final_video_prompt?.segments },
+    { sourceName: "final_video_prompt", rows: safePackage?.final_video_prompt?.scenes },
+    { sourceName: "final_storyboard", rows: safePackage?.final_storyboard?.scenes },
+    { sourceName: "render_manifest", rows: safePackage?.final_storyboard?.render_manifest },
   ];
   const routeById = {};
 
-  const put = (id, payload) => {
+  const put = (id, payload, sourceName = "") => {
     if (!id || !payload || typeof payload !== "object") return;
     const route = String(
       payload?.route
@@ -450,16 +462,41 @@ export function buildRouteBySegmentId(storyboardPackage = null) {
       resolvedWorkflowKey: workflowKey || (normalizedRoute === "ia2v" ? "lip_sync_music" : "standard_video"),
       sourceRouteRaw: route,
       sourceWorkflowKey: workflowKey,
+      routeHydrationSourceName: sourceName,
     };
 
     for (const alias of buildSegmentLookupAliases(id)) {
-      routeById[alias] = value;
+      const existing = routeById[alias];
+
+      if (!existing) {
+        routeById[alias] = value;
+        continue;
+      }
+
+      const existingStrength = routeHydrationStrength(existing);
+      const nextStrength = routeHydrationStrength(value);
+
+      const existingIsIa2v = existingStrength >= 100;
+      const nextIsPlainI2v = nextStrength <= 50 && String(value?.route || "").trim().toLowerCase() === "i2v";
+
+      if (existingIsIa2v && nextIsPlainI2v) {
+        continue;
+      }
+
+      if (nextStrength >= existingStrength) {
+        routeById[alias] = {
+          ...existing,
+          ...value,
+          routeHydrationOverrodePrevious: true,
+          previousRouteDebug: existing,
+        };
+      }
     }
   };
 
   for (const source of routeSources) {
-    if (!Array.isArray(source)) continue;
-    for (const row of source) {
+    if (!Array.isArray(source?.rows)) continue;
+    for (const row of source.rows) {
       const item = row && typeof row === "object" ? row : {};
       const id = String(
         item?.segment_id
@@ -468,7 +505,7 @@ export function buildRouteBySegmentId(storyboardPackage = null) {
         || item?.sceneId
         || ""
       ).trim();
-      put(id, item);
+      put(id, item, source.sourceName);
     }
   }
   return routeById;
@@ -2762,6 +2799,18 @@ export function normalizeScenarioStoryboardPackage({
   });
   console.log("[SCENARIO NORMALIZE ROUTE HYDRATE]", {
     routeSegmentCount: Object.keys(routeById || {}).length,
+    routeCounts: scenes.reduce((acc, s) => {
+      const route = String(s.route || "unknown").toLowerCase();
+      acc[route] = (acc[route] || 0) + 1;
+      return acc;
+    }, {}),
+    routeSources: scenes.map((s) => ({
+      id: s.segment_id,
+      route: s.route,
+      source: s.routeInfoDebug?.routeHydrationSourceName,
+      sourceRaw: s.routeInfoDebug?.sourceRouteRaw,
+      workflow: s.resolvedWorkflowKey,
+    })),
     firstRoutes: scenes.slice(0, 9).map((s) => ({
       id: s.segment_id || s.sceneId,
       route: s.route,
