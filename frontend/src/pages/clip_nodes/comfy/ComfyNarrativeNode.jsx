@@ -74,9 +74,20 @@ function buildDirectorConfigFromAnswers(answers) {
     config.ia2v_ratio = 0.8;
   }
 
-  if (safeAnswers.world_mode === "train_plus_city") {
-    config.i2v_locations = ["city"];
-    config.ia2v_locations = ["train"];
+  if (safeAnswers.world_mode) {
+    const wm = String(safeAnswers.world_mode).toLowerCase();
+
+    if (wm.includes("train")) {
+      config.ia2v_locations = ["train"];
+    }
+
+    if (wm.includes("club")) {
+      config.ia2v_locations = ["club"];
+    }
+
+    if (wm.includes("city")) {
+      config.i2v_locations = ["city"];
+    }
   }
 
   if (typeof config.ia2v_ratio === "number") {
@@ -115,6 +126,7 @@ export default function ComfyNarrativeNode({ id, data }) {
 
   useEffect(() => {
     setAiQuestions([]);
+    setAnswers({});
   }, [data?.directorNote]);
 
   useEffect(() => {
@@ -124,6 +136,17 @@ export default function ComfyNarrativeNode({ id, data }) {
       return persistedAnswers;
     });
   }, [data?.directorAnswers]);
+
+  useEffect(() => {
+    const mapped = buildDirectorConfigFromAnswers(answers);
+    data?.onFieldChange?.(id, {
+      directorAnswers: answers,
+      director_config: {
+        ...(data?.director_config || {}),
+        ...mapped,
+      },
+    });
+  }, [answers]);
 
 
   const clipModeByContentType = safeContentType === "music_video";
@@ -272,6 +295,10 @@ export default function ComfyNarrativeNode({ id, data }) {
       });
       if (!res.ok) throw new Error(`AI director questions failed (${res.status})`);
       const json = await res.json();
+      if (!json || !Array.isArray(json.questions)) {
+        setAiQuestions([]);
+        return;
+      }
       setAiQuestions(Array.isArray(json?.questions) ? json.questions : []);
     } catch (error) {
       setAiError(String(error?.message || "AI questions failed"));
