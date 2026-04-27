@@ -3452,7 +3452,11 @@ def _normalize_scene_plan(
         error_code = error_code or "SCENE_SPEAKER_ROLE_INVALID"
 
     expected_scene_count = len(scene_segment_rows)
-    mapped_used_model = str(used_model or "").strip().lower() == "mapped_from_audio_map.scene_candidate_windows"
+    scene_candidate_windows_present = bool(_safe_list(_safe_dict(audio_map).get("scene_candidate_windows")))
+    mapped_used_model = (
+        str(used_model or "").strip().lower() == "mapped_from_audio_map.scene_candidate_windows"
+        or scene_candidate_windows_present
+    )
     if mapped_used_model and normalized_storyboard:
         normalized_storyboard, mapped_route_budget_post_normalization_diag = _apply_route_budget_to_scene_rows(
             normalized_storyboard,
@@ -3709,6 +3713,8 @@ def _normalize_scene_plan(
         "scene_plan_mapped_route_budget_lock_detected": mapped_route_budget_lock_detected,
         "scene_plan_mapped_route_budget_override_prevented": mapped_route_budget_override_prevented,
         "scene_plan_mapped_route_budget_post_normalization_applied": mapped_route_budget_post_normalization_applied,
+        "scene_plan_mapped_route_budget_scene_candidate_windows_present": scene_candidate_windows_present,
+        "scene_plan_mapped_route_budget_used_model": str(used_model or ""),
         "scene_plan_mapped_route_budget_post_normalization_diag": mapped_route_budget_post_normalization_diag,
         "scene_plan_route_budget_target": route_budget_target,
         "scene_plan_route_budget_actual": final_route_counts,
