@@ -1106,6 +1106,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     ...directorConfigFromAnswers,
     ...legacyAiDirectorConfig,
   };
+  const directorContract = state?.director_contract && typeof state.director_contract === "object"
+    ? state.director_contract
+    : (state?.directorContract && typeof state.directorContract === "object" ? state.directorContract : {});
 
 
   const markStaleFrom = String(state?.markStaleFrom || "").trim();
@@ -1149,6 +1152,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     directorNote: narrativeDirective.directorNote,
     narrative_note: normalizeText(state?.aiNarrative) || narrativeDirective.directorNote,
     director_config: directorConfig,
+    director_contract: directorContract,
     director_controls: {
       contentType: safeContentType,
       format,
@@ -1182,6 +1186,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       format,
       narrativeDirectiveSource: narrativeDirective.source,
       creative_config: creativeConfig,
+      director_config: directorConfig,
+      director_contract: directorContract,
     },
   };
 
@@ -1272,6 +1278,16 @@ export function buildScenarioStageManualPayload({
     source?.connected_context_summary && typeof source.connected_context_summary === "object"
   ) ? source.connected_context_summary : (basePayload?.connected_context_summary || {});
   const connectedContextSummary = sanitizeConnectedContextSummary(connectedContextSummaryRaw);
+  const directorConfig = source?.director_config && typeof source.director_config === "object"
+    ? source.director_config
+    : (source?.directorConfig && typeof source.directorConfig === "object"
+      ? source.directorConfig
+      : (basePayload?.director_config && typeof basePayload.director_config === "object" ? basePayload.director_config : {}));
+  const directorContract = source?.director_contract && typeof source.director_contract === "object"
+    ? source.director_contract
+    : (source?.directorContract && typeof source.directorContract === "object"
+      ? source.directorContract
+      : (basePayload?.director_contract && typeof basePayload.director_contract === "object" ? basePayload.director_contract : {}));
   const debugMirrorsEnabled = Boolean(
     source?.debug
     || source?.includeDebugMirrors
@@ -1317,6 +1333,8 @@ export function buildScenarioStageManualPayload({
     source: leanSource,
     context_refs: sanitizedContextRefs,
     connected_context_summary: connectedContextSummary,
+    director_config: directorConfig,
+    director_contract: directorContract,
     director_controls: {
       ...(basePayload?.director_controls && typeof basePayload.director_controls === "object" ? basePayload.director_controls : {}),
       ...(source?.director_controls && typeof source.director_controls === "object" ? source.director_controls : {}),
@@ -1345,6 +1363,8 @@ export function buildScenarioStageManualPayload({
       contentType: normalizeText(source?.contentType || target?.scenarioMode) || "music_video",
       format: normalizeText(source?.format || target?.format) || "9:16",
       stagePayloadMode: "lean",
+      director_config: directorConfig,
+      director_contract: directorContract,
     },
     scenario: target?.scenario || source?.scenario || "",
     ...(debugMirrorsEnabled && source?.master_output && typeof source.master_output === "object" ? { master_output: source.master_output } : {}),

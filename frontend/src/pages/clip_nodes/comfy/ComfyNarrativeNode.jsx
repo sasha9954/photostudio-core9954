@@ -300,6 +300,10 @@ export default function ComfyNarrativeNode({ id, data }) {
       director_config: nextConfig,
       director_contract: nextContract,
     });
+    console.log("[DIRECTOR NODE CONFIG]", {
+      director_config: nextConfig,
+      director_contract: nextContract,
+    });
   }, [answers, id, data?.onFieldChange, data?.directorAnswers, data?.director_config, data?.director_contract]);
 
 
