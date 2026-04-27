@@ -150,11 +150,11 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
         safe_questions = [
             {
                 "id": "performance_density",
-                "text": "What performance intensity should the music video prioritize?",
+                "text": "Какой уровень перформанса в клипе?",
                 "options": [
-                    {"label": "Balanced", "value": "balanced"},
-                    {"label": "Atmospheric", "value": "atmospheric"},
-                    {"label": "Performance-heavy", "value": "performance_heavy"},
+                    {"label": "Баланс", "value": "balanced"},
+                    {"label": "Атмосфера", "value": "atmospheric"},
+                    {"label": "Максимальный перформанс", "value": "performance_heavy"},
                 ],
             },
         ]
