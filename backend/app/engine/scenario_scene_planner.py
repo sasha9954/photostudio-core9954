@@ -1761,10 +1761,6 @@ def _resolve_mapped_scene_ia2v_ratio(
     if director_ia2v_ratio is not None:
         return _clamp_ratio(director_ia2v_ratio, 0.5), "director_config.ia2v_ratio"
 
-    creative_lipsync_ratio = creative_config.get("lipsync_ratio")
-    if creative_lipsync_ratio is not None:
-        return _clamp_ratio(creative_lipsync_ratio, 0.5), "creative_config.lipsync_ratio"
-
     creative_targets = _safe_dict(creative_config.get("route_targets_per_block"))
     target_total = max(0, int(creative_targets.get("i2v") or 0)) + max(0, int(creative_targets.get("ia2v") or 0))
     if target_total > 0:
@@ -1774,6 +1770,10 @@ def _resolve_mapped_scene_ia2v_ratio(
     preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
     if preset_name == "no_first_last_50_50_0":
         return 0.5, "preset_fallback.no_first_last_50_50_0"
+
+    creative_lipsync_ratio = creative_config.get("lipsync_ratio")
+    if creative_lipsync_ratio is not None:
+        return _clamp_ratio(creative_lipsync_ratio, 0.5), "creative_config.lipsync_ratio"
     return 0.5, "default_fallback"
 
 
@@ -1793,10 +1793,10 @@ def _apply_route_budget_to_scene_rows(
         if seg_id and seg_id not in by_segment_id:
             by_segment_id[seg_id] = src
 
-    first_last_ratio = _clamp_ratio(creative_config.get("first_last_ratio"), 0.0)
+    # Mapped scene_candidate_windows path currently supports only i2v/ia2v.
+    # first_last is intentionally disabled here until start/end frame generation is route-aware.
     route_targets = _safe_dict(creative_config.get("route_targets_per_block"))
-    first_last_target = max(0, int(route_targets.get("first_last") or 0))
-    first_last_count = 0 if first_last_ratio <= 0.0 or first_last_target <= 0 else 0
+    first_last_count = 0
 
     ia2v_ratio, ia2v_ratio_source = _resolve_mapped_scene_ia2v_ratio(creative_config, director_cfg)
     candidate_scores: list[tuple[float, int, str]] = []
@@ -1858,6 +1858,7 @@ def _apply_route_budget_to_scene_rows(
         "scene_plan_route_budget_source": "creative_config/director_config",
         "scene_plan_route_budget_ratio_source": ia2v_ratio_source,
         "scene_plan_route_budget_target_counts": {"i2v": i2v_count, "ia2v": ia2v_count, "first_last": 0},
+        "scene_plan_route_budget_first_last_disabled_for_mapped_path": True,
         "scene_plan_route_budget_candidate_ia2v_count": max_possible_ia2v,
         "scene_plan_route_budget_selected_ia2v_segments": selected_ia2v_segments,
         "scene_plan_route_budget_selected_i2v_segments": selected_i2v_segments,
@@ -3679,7 +3680,8 @@ def build_gemini_scene_plan(
         window = _safe_dict(window_raw)
         scene_plan.append(
             {
-                "scene_id": window.get("scene_id"),
+                "segment_id": window.get("segment_id") or window.get("scene_id"),
+                "scene_id": window.get("scene_id") or window.get("segment_id"),
                 "t0": window.get("t0"),
                 "t1": window.get("t1"),
                 "duration": window.get("duration_sec"),
