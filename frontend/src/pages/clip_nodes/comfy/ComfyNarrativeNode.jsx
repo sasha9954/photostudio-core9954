@@ -281,10 +281,16 @@ export default function ComfyNarrativeNode({ id, data }) {
       ...currentConfig,
       ...mapped,
     };
+    const currentContract =
+      data?.director_contract && typeof data.director_contract === "object"
+        ? data.director_contract
+        : {};
+    const nextContract = buildDirectorContractFromConfig(nextConfig);
 
     if (
       stableJson(currentAnswers) === stableJson(safeAnswers)
       && stableJson(currentConfig) === stableJson(nextConfig)
+      && stableJson(currentContract) === stableJson(nextContract)
     ) {
       return;
     }
@@ -292,9 +298,9 @@ export default function ComfyNarrativeNode({ id, data }) {
     data?.onFieldChange?.(id, {
       directorAnswers: safeAnswers,
       director_config: nextConfig,
-      director_contract: buildDirectorContractFromConfig(nextConfig),
+      director_contract: nextContract,
     });
-  }, [answers, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
+  }, [answers, id, data?.onFieldChange, data?.directorAnswers, data?.director_config, data?.director_contract]);
 
 
   const clipModeByContentType = safeContentType === "music_video";

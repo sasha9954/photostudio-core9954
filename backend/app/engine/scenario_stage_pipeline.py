@@ -171,6 +171,12 @@ _IA2V_FORBIDDEN_CLAUSE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("Environment-focused still frame", re.compile(r"(?i)\benvironment-focused still frame\b[.;:]?")),
     ("Environment-focused motion shot", re.compile(r"(?i)\benvironment-focused motion shot\b[.;:]?")),
 )
+_HARD_IA2V_DOWNGRADE_REASON_CODES = {
+    "missing_audio_segment",
+    "missing_character_ref",
+    "mouth_visibility_impossible",
+    "no_vocal_audio",
+}
 
 
 def _utc_iso() -> str:
@@ -408,8 +414,10 @@ def _apply_director_contract_scene_plan(package: dict[str, Any]) -> None:
     i2v_allowed = _director_allowed_zone("i2v", contract)
     ia2v_allowed_set = set(ia2v_allowed)
     i2v_allowed_set = set(i2v_allowed)
-    ia2v_role, _ = _director_world_role("ia2v", contract)
-    i2v_role, _ = _director_world_role("i2v", contract)
+    ia2v_role, ia2v_world = _director_world_role("ia2v", contract)
+    i2v_role, i2v_world = _director_world_role("i2v", contract)
+    performance_label = str(ia2v_world.get("label") or "").strip()
+    memory_label = str(i2v_world.get("label") or "").strip()
     hard_binding = bool(contract.get("hard_location_binding"))
     scene_plan = _safe_dict(package.get("scene_plan"))
     source_rows = _safe_list(scene_plan.get("scenes")) or _safe_list(scene_plan.get("storyboard"))
@@ -437,6 +445,17 @@ def _apply_director_contract_scene_plan(package: dict[str, Any]) -> None:
             else:
                 counts["ia2v_unbound"] += 1
             row["director_required_world"] = ia2v_role
+            row["route_visual_directive"] = {
+                "mode": "performance_world",
+                "world_role": "performance_world",
+                "location_label": performance_label,
+                "location_zone": zone,
+                "performer_visible": True,
+                "mouth_visible_required": True,
+                "lip_sync_required": True,
+                "forbid_environment_cutaway": True,
+                "forbid_offscreen_voiceover": True,
+            }
         elif route == "i2v":
             if hard_binding and i2v_allowed_set and zone not in i2v_allowed_set:
                 zone = i2v_allowed[0]
@@ -446,6 +465,14 @@ def _apply_director_contract_scene_plan(package: dict[str, Any]) -> None:
             else:
                 counts["i2v_unbound"] += 1
             row["director_required_world"] = i2v_role
+            row["route_visual_directive"] = {
+                "mode": "memory_world_cutaway",
+                "world_role": "memory_world",
+                "location_label": memory_label,
+                "location_zone": zone,
+                "performer_visible": "optional_or_absent",
+                "lip_sync_required": False,
+            }
         else:
             is_valid = False
             counts["route_location_invalid"] += 1
@@ -490,32 +517,49 @@ def _apply_director_contract_scene_prompts(package: dict[str, Any]) -> None:
         route = _to_director_route(row.get("route")) or "i2v"
         photo = str(row.get("photo_prompt") or "")
         video = str(row.get("video_prompt") or "")
-        if re.search(r"(?i)lyric/moment anchor:", photo):
-            lyrics_count += 1
-        photo = re.sub(r"(?i)\s*Lyric/moment anchor:\s*[^.]+\.?", " ", photo).strip()
+        lyric_cleaner = re.compile(r"(?i)\s*Lyric/moment anchor:\s*[^.]+\.?")
+        for key in ("photo_prompt", "image_prompt", "first_frame_prompt", "start_image_prompt", "end_image_prompt"):
+            value = str(row.get(key) or "")
+            if re.search(r"(?i)lyric/moment anchor:", value):
+                lyrics_count += 1
+            row[key] = re.sub(lyric_cleaner, " ", value).strip()
+        photo = str(row.get("photo_prompt") or "")
         row["lyric_text_stripped_from_image_prompt"] = True
         if route == "ia2v":
-            photo, removed_photo = _strip_ia2v_forbidden_clauses(photo)
-            video, removed_video = _strip_ia2v_forbidden_clauses(video)
-            removed = list(dict.fromkeys([*removed_photo, *removed_video]))
+            removed: list[str] = []
+            for key in ("photo_prompt", "video_prompt", "positive_video_prompt", "first_frame_prompt", "start_image_prompt", "end_image_prompt"):
+                cleaned, removed_key = _strip_ia2v_forbidden_clauses(str(row.get(key) or ""))
+                row[key] = cleaned
+                removed.extend(removed_key)
+            photo = str(row.get("photo_prompt") or "")
+            video = str(row.get("video_prompt") or "")
+            removed = list(dict.fromkeys(removed))
             forbidden_count += len(removed)
             if removed:
                 row["forbidden_clause_removed"] = removed
-            zone = _to_contract_location(row.get("location_zone"))
+            visual_directive = _safe_dict(row.get("route_visual_directive"))
+            zone = _to_contract_location(visual_directive.get("location_zone") or row.get("location_zone"))
             zone = zone if zone and zone in performance_zones_set else (performance_zones[0] if performance_zones else "")
-            if hard_binding and (performance_label or zone):
-                world_ctx = ", ".join([item for item in [performance_label, zone] if item])
-                photo = f"Visible singer performance in {world_ctx}, readable mouth for lip sync. {photo}".strip()
+            label = str(visual_directive.get("location_label") or performance_label).strip()
+            if hard_binding and (label or zone):
+                world_ctx = ", ".join([item for item in [label, zone] if item])
+                prefix = f"Visible singer performance in {world_ctx}, readable mouth for lip sync."
             else:
-                photo = f"Visible singer performance, readable mouth for lip sync. {photo}".strip()
+                prefix = "Visible singer performance, readable mouth for lip sync."
+            photo = f"{prefix} {photo}".strip()
+            video = f"{prefix} {video}".strip()
         else:
-            zone = _to_contract_location(row.get("location_zone"))
+            visual_directive = _safe_dict(row.get("route_visual_directive"))
+            zone = _to_contract_location(visual_directive.get("location_zone") or row.get("location_zone"))
             zone = zone if zone and zone in memory_zones_set else (memory_zones[0] if memory_zones else "")
-            if hard_binding and (memory_label or zone):
-                world_ctx = " ".join([item for item in [memory_label, zone] if item]).strip()
-                photo = f"{world_ctx} memory/world cutaway with environment-first storytelling. {photo}".strip()
+            label = str(visual_directive.get("location_label") or memory_label).strip()
+            if hard_binding and (label or zone):
+                world_ctx = " ".join([item for item in [label, zone] if item]).strip()
+                prefix = f"{world_ctx} memory/world cutaway with environment-first storytelling."
             else:
-                photo = f"Memory/world cutaway with environment-first storytelling. {photo}".strip()
+                prefix = "Memory/world cutaway with environment-first storytelling."
+            photo = f"{prefix} {photo}".strip()
+            video = f"{prefix} {video}".strip()
         row["photo_prompt"] = re.sub(r"\s+", " ", photo).strip(" ,.;")
         row["video_prompt"] = re.sub(r"\s+", " ", video).strip(" ,.;")
         rows.append(row)
@@ -565,10 +609,20 @@ def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None
                 and bool(plan_row.get("mouth_visible_required"))
             )
             downgrade_reason = str(row.get("route_downgrade_reason_code") or "").strip()
-            if has_ready and not downgrade_reason:
+            allow_downgrade = downgrade_reason in _HARD_IA2V_DOWNGRADE_REASON_CODES
+            if has_ready and not allow_downgrade:
                 row["route"] = "ia2v"
                 row["route_after"] = "ia2v"
+                row["renderMode"] = "lip_sync_music"
+                row["resolvedWorkflowKey"] = "lip_sync_music"
+                row["requires_audio"] = True
+                row["audio_sync_mode"] = "lip_sync_music"
                 row["video_metadata"] = {**_safe_dict(row.get("video_metadata")), "route_type": "ia2v"}
+                route_payload = dict(_safe_dict(row.get("route_payload")))
+                route_payload["route"] = "ia2v"
+                route_payload["renderMode"] = "lip_sync_music"
+                route_payload["resolvedWorkflowKey"] = "lip_sync_music"
+                row["route_payload"] = route_payload
                 blocked = True
                 invalid_downgrade_count += 1
         route = _to_director_route(row.get("route")) or "i2v"
@@ -584,8 +638,15 @@ def _apply_director_contract_final_video_prompt(package: dict[str, Any]) -> None
                     world_ctx = ", ".join([item for item in [performance_label, zone] if item])
                     if world_ctx:
                         cleaned = f"Visible singer performance in {world_ctx}, readable mouth for lip sync. {cleaned}".strip()
-                route_payload[key] = cleaned
-                row[key if key != "positive_prompt" else "video_prompt"] = cleaned if key != "image_prompt" else row.get("image_prompt")
+                if key == "positive_prompt":
+                    route_payload["positive_prompt"] = cleaned
+                    row["video_prompt"] = cleaned
+                elif key == "video_prompt":
+                    route_payload["video_prompt"] = cleaned
+                    row["video_prompt"] = cleaned
+                elif key == "image_prompt":
+                    route_payload["image_prompt"] = cleaned
+                    row["image_prompt"] = cleaned
         row["route_payload"] = route_payload
         preserved = preserved and not (route_before == "ia2v" and str(row.get("route_after") or row.get("route") or "").strip().lower() != "ia2v")
         segments.append(row)
@@ -8016,7 +8077,6 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         },
     }
     _normalize_director_package_input(package)
-    return package
     _inject_route_strategy_diagnostics(package)
     return package
 
