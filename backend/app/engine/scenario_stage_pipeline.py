@@ -455,12 +455,25 @@ def _director_location_tokens(label: str, zones: list[str]) -> list[str]:
     return list(dict.fromkeys(tokens))
 
 
-def _ia2v_has_memory_world_conflict(text: str, memory_label: str, memory_zones: list[str]) -> bool:
-    raw = str(text or "").lower()
-    if any(token in raw for token in _IA2V_MEMORY_WORLD_CONFLICT_TOKENS):
-        return True
+def _ia2v_memory_world_conflict_tokens_detected(text: str, memory_label: str, memory_zones: list[str]) -> list[str]:
+    raw_text = str(text or "")
+    raw = raw_text.lower()
+    matched: list[str] = []
+    for phrase in _IA2V_MEMORY_WORLD_CONFLICT_TOKENS:
+        if phrase and phrase in raw:
+            matched.append(phrase)
     memory_tokens = _director_location_tokens(memory_label, memory_zones)
-    return any(token and token in raw for token in memory_tokens)
+    for token in memory_tokens:
+        if not token:
+            continue
+        pattern = rf"(?i)\b{re.escape(token)}s?\b"
+        if re.search(pattern, raw_text):
+            matched.append(token)
+    return list(dict.fromkeys(matched))
+
+
+def _ia2v_has_memory_world_conflict(text: str, memory_label: str, memory_zones: list[str]) -> bool:
+    return bool(_ia2v_memory_world_conflict_tokens_detected(text, memory_label, memory_zones))
 
 
 def _sanitize_ia2v_performance_intent(text: str, memory_label: str, memory_zones: list[str]) -> str:
@@ -789,10 +802,14 @@ def _apply_director_contract_scene_prompts(package: dict[str, Any]) -> None:
         video = str(row.get("video_prompt") or "")
         if any(pattern.search(photo) or pattern.search(video) for _, pattern in _IA2V_FORBIDDEN_CLAUSE_PATTERNS):
             ia2v_forbidden_remaining += 1
-        if _ia2v_has_memory_world_conflict(photo, memory_label, memory_zones) or _ia2v_has_memory_world_conflict(
-            video, memory_label, memory_zones
-        ):
+        conflict_tokens = _ia2v_memory_world_conflict_tokens_detected(photo, memory_label, memory_zones)
+        conflict_tokens.extend(_ia2v_memory_world_conflict_tokens_detected(video, memory_label, memory_zones))
+        deduped_conflict_tokens = list(dict.fromkeys(conflict_tokens))
+        if deduped_conflict_tokens:
             ia2v_memory_conflicts_remaining += 1
+            row["ia2v_memory_conflict_tokens_detected"] = deduped_conflict_tokens
+        else:
+            row.pop("ia2v_memory_conflict_tokens_detected", None)
     scene_prompts["segments"] = synced_segments
     scene_prompts["scenes"] = synced_scenes
     package["scene_prompts"] = scene_prompts
