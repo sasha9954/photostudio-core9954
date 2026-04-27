@@ -82,6 +82,16 @@ def build_fallback_director_question(context: dict[str, Any], answers_so_far: di
     return None
 
 
+def get_next_director_question_id(answers_so_far: dict[str, Any]) -> str:
+    safe_answers = answers_so_far if isinstance(answers_so_far, dict) else {}
+    if "performance_density" not in safe_answers:
+        return "performance_density"
+    if "world_mode" not in safe_answers:
+        return "world_mode"
+    if "intro_mode" not in safe_answers:
+        return "intro_mode"
+    return ""
+
 def _build_director_config_preview(answers_so_far: dict[str, Any]) -> dict[str, Any]:
     safe_answers = answers_so_far if isinstance(answers_so_far, dict) else {}
     config: dict[str, Any] = {}
@@ -127,14 +137,7 @@ def _build_director_config_preview(answers_so_far: dict[str, Any]) -> dict[str, 
 def build_director_prompt(context: dict[str, Any], answers_so_far: dict[str, Any] | None = None) -> str:
     world_hint = str((context or {}).get("world_hint") or "generic").strip().lower()
     safe_answers = answers_so_far if isinstance(answers_so_far, dict) else {}
-    if "performance_density" not in safe_answers:
-        next_question_id = "performance_density"
-    elif "world_mode" not in safe_answers:
-        next_question_id = "world_mode"
-    elif "intro_mode" not in safe_answers:
-        next_question_id = "intro_mode"
-    else:
-        next_question_id = ""
+    next_question_id = get_next_director_question_id(safe_answers)
     world_mode_options = _world_mode_options(world_hint)
     return f"""
 Ты AI-режиссёр клипа.
@@ -265,11 +268,19 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
         context = raw_payload
         answers_so_far = {}
 
-    safe_answers = {
-        str(k).strip(): str(v).strip()
-        for k, v in answers_so_far.items()
-        if str(k).strip() in ALLOWED_IDS and str(v).strip()
-    }
+    safe_answers = {}
+    for k, v in answers_so_far.items():
+        key = str(k).strip()
+        value = str(v).strip()
+
+        if key not in ALLOWED_IDS or not value:
+            continue
+
+        allowed_values = ALLOWED_VALUES_BY_ID.get(key, set())
+        if value not in allowed_values:
+            continue
+
+        safe_answers[key] = value
 
     if all(qid in safe_answers for qid in ALLOWED_IDS):
         return {
@@ -314,6 +325,11 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
                 candidate_question = legacy_questions[0]
 
     validated = _validate_question(candidate_question, safe_answers)
+    expected_qid = get_next_director_question_id(safe_answers)
+
+    if validated and validated.get("id") != expected_qid:
+        validated = None
+
     question = validated or fallback_question
     if question is None:
         return {
