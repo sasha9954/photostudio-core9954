@@ -146,4 +146,17 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
         if len(safe_questions) >= 3:
             break
 
+    if not safe_questions:
+        safe_questions = [
+            {
+                "id": "performance_density",
+                "text": "What performance intensity should the music video prioritize?",
+                "options": [
+                    {"label": "Balanced", "value": "balanced"},
+                    {"label": "Atmospheric", "value": "atmospheric"},
+                    {"label": "Performance-heavy", "value": "performance_heavy"},
+                ],
+            },
+        ]
+
     return {"questions": safe_questions}
