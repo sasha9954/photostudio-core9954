@@ -1276,11 +1276,16 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             if s.get("is_lip_sync_candidate")
         ]
         max_possible_ia2v = len(vocal_segments)
-        ia2v_count = min(
-            max_possible_ia2v,
-            max(1, int(round(resolved_scene_count * float(ia2v_ratio)))),
-        )
-        i2v_count = resolved_scene_count - ia2v_count
+        if max_possible_ia2v == 0:
+            ia2v_count = 0
+            i2v_count = resolved_scene_count
+        else:
+            ia2v_count = min(
+                max_possible_ia2v,
+                max(1, int(round(resolved_scene_count * float(ia2v_ratio))))
+            )
+            # NOTE: if new route types are added in future, this line must be adjusted
+            i2v_count = resolved_scene_count - ia2v_count
         route_budget_target["ia2v"] = ia2v_count
         route_budget_target["i2v"] = i2v_count
     route_budget_target["first_last"] = 0
@@ -1637,6 +1642,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             "state_transition is allowed as narrative concept,\n"
             "but must always be rendered as i2v.\n"
             "ia2v scenes must be assigned ONLY to segments where is_lip_sync_candidate=true.\n"
+            "Prefer assigning ia2v to the strongest vocal or emotional peaks, not just any valid segment.\n"
             "Do not assign ia2v to instrumental segments.\n"
             "If route_budget_contract.hard_route_assignments_by_segment is present:\n"
             "- treat it as requested creative route map that should be preserved whenever valid;\n"
@@ -1670,6 +1676,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "state_transition is allowed as narrative concept,\\n"
         "but must always be rendered as i2v.\\n"
         "ia2v scenes must be assigned ONLY to segments where is_lip_sync_candidate=true.\\n"
+        "Prefer assigning ia2v to the strongest vocal or emotional peaks, not just any valid segment.\\n"
         "Do not assign ia2v to instrumental segments.\\n"
         "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
         "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation and not a speaker-identity oracle.\\n"
