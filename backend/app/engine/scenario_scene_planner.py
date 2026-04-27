@@ -1271,7 +1271,15 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
     resolved_scene_count = _expected_scene_count_from_package(package)
     route_budget_target, hard_short_clip_target = _route_budget_target_for_plan(resolved_scene_count, creative_config)
     if ia2v_ratio is not None:
-        ia2v_count = int(resolved_scene_count * float(ia2v_ratio))
+        vocal_segments = [
+            s for s in scene_segment_rows
+            if s.get("is_lip_sync_candidate")
+        ]
+        max_possible_ia2v = len(vocal_segments)
+        ia2v_count = min(
+            max_possible_ia2v,
+            max(1, int(round(resolved_scene_count * float(ia2v_ratio)))),
+        )
         i2v_count = resolved_scene_count - ia2v_count
         route_budget_target["ia2v"] = ia2v_count
         route_budget_target["i2v"] = i2v_count
@@ -1293,7 +1301,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
             "profile": get_video_model_capability_profile(model_id, route),
             "scene_grammar_hints": get_scene_grammar_hints(model_id, route),
         }
-        for route in ("i2v", "ia2v", "first_last")
+        for route in ("i2v", "ia2v")
     }
 
     context = {
@@ -1626,6 +1634,10 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             f"first_last: {first_last_target}\n"
             f"{first_last_line}"
             "If any scene is classified as state_transition, convert it to i2v.\n"
+            "state_transition is allowed as narrative concept,\n"
+            "but must always be rendered as i2v.\n"
+            "ia2v scenes must be assigned ONLY to segments where is_lip_sync_candidate=true.\n"
+            "Do not assign ia2v to instrumental segments.\n"
             "If route_budget_contract.hard_route_assignments_by_segment is present:\n"
             "- treat it as requested creative route map that should be preserved whenever valid;\n"
             "- never keep ia2v on instrumental / no-vocal / non-lipsync-invalid windows; downgrade those rows to i2v;\n"
@@ -1655,6 +1667,10 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
         "No first_last scenes allowed.\\n"
         "If any scene is classified as state_transition, convert it to i2v.\\n"
+        "state_transition is allowed as narrative concept,\\n"
+        "but must always be rendered as i2v.\\n"
+        "ia2v scenes must be assigned ONLY to segments where is_lip_sync_candidate=true.\\n"
+        "Do not assign ia2v to instrumental segments.\\n"
         "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
         "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation and not a speaker-identity oracle.\\n"
         "Do not treat audio_map.vocal_owner_role as strict guard for route eligibility.\\n"
