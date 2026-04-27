@@ -400,6 +400,26 @@ def _has_valid_scene_plan_payload(output: Any) -> bool:
     return _has_non_empty_collection(storyboard)
 
 
+def _has_valid_scene_plan_payload_for_scene_prompts(package: dict[str, Any]) -> bool:
+    scene_plan = _safe_dict(_safe_dict(package).get("scene_plan"))
+    rows = _safe_list(scene_plan.get("storyboard") or scene_plan.get("scenes"))
+    if not rows:
+        return False
+
+    seen: list[str] = []
+    for row in rows:
+        item = _safe_dict(row)
+        segment_id = str(item.get("segment_id") or item.get("scene_id") or "").strip()
+        route = str(item.get("route") or "").strip().lower()
+        if not segment_id:
+            return False
+        if route not in {"i2v", "ia2v"}:
+            return False
+        seen.append(segment_id)
+
+    return len(seen) == len(set(seen))
+
+
 def _has_valid_scene_prompts_payload(output: Any) -> bool:
     payload = _safe_dict(output)
     prompts_version = str(payload.get("prompts_version") or "").strip()
@@ -519,7 +539,7 @@ def _scene_prompts_dependency_payload_ok(package: dict[str, Any], dependency_sta
     if dependency_stage_id == "role_plan":
         return _has_valid_role_plan_payload(_safe_dict(pkg.get("role_plan")))
     if dependency_stage_id == "scene_plan":
-        return _scene_plan_payload_supports_scene_prompts(pkg)
+        return _has_valid_scene_plan_payload_for_scene_prompts(pkg)
     return _can_reuse_stage_output(pkg, dependency_stage_id)
 
 
@@ -13875,8 +13895,14 @@ def run_manual_stage(
             scene_prompts_false_positive_prevented,
         ) = _collect_scene_prompts_dependency_gate_state(pkg, deps)
         scene_prompts_payload_gate_accepted = _can_run_scene_prompts_from_existing_payload(pkg, deps)
-        scene_plan_ok_for_prompts, scene_plan_block_reason = _scene_plan_payload_supports_scene_prompts_with_reason(pkg)
+        scene_plan_rows = _safe_list(
+            _safe_dict(pkg.get("scene_plan")).get("storyboard")
+            or _safe_dict(pkg.get("scene_plan")).get("scenes")
+        )
+        scene_plan_ok_for_prompts = _has_valid_scene_plan_payload_for_scene_prompts(pkg)
+        scene_plan_block_reason = "" if scene_plan_ok_for_prompts else "scene_plan_payload_invalid_for_scene_prompts"
         scene_prompts_payload_gate_accepted = bool(scene_prompts_payload_gate_accepted and scene_plan_ok_for_prompts)
+        scene_prompts_payload_ok_by_stage["scene_plan"] = bool(scene_plan_ok_for_prompts)
         if scene_prompts_payload_gate_accepted:
             reusable_upstream = []
             missing_upstream = []
@@ -13893,6 +13919,11 @@ def run_manual_stage(
         diagnostics["scene_prompts_dependency_payload_ok_by_stage"] = scene_prompts_payload_ok_by_stage
         diagnostics["scene_prompts_dependency_gate_false_positive_prevented"] = bool(scene_prompts_false_positive_prevented)
         diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
+        diagnostics["scene_prompts_requested"] = True
+        diagnostics["scene_prompts_dependency_scene_plan_payload_valid"] = bool(scene_plan_ok_for_prompts)
+        diagnostics["scene_prompts_dependency_scene_plan_row_count"] = len(scene_plan_rows)
+        diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
+        diagnostics["scene_prompts_skipped_reason"] = "" if scene_prompts_payload_gate_accepted else str(scene_plan_block_reason or "")
         diagnostics["scene_prompts_reused_upstream_statuses_restored"] = False
         diagnostics["scene_prompts_upstream_statuses_restored_before_run"] = False
         diagnostics["scene_prompts_upstream_statuses_restored_before_run_stages"] = []
@@ -13906,6 +13937,8 @@ def run_manual_stage(
             diagnostics = _safe_dict(pkg.get("diagnostics"))
             diagnostics["scene_prompts_error_code"] = "PROMPTS_BLOCKED_SCENE_PLAN_INVALID"
             diagnostics["scene_prompts_error_hint"] = "Run SCENES manually first"
+            diagnostics["requested_stage_not_executed"] = True
+            diagnostics["requested_stage_not_executed_reason"] = str(scene_plan_block_reason or "missing_dependencies")
             pkg["diagnostics"] = diagnostics
             _set_stage_status(pkg, stage_id, "error", error="PROMPTS_BLOCKED_SCENE_PLAN_INVALID")
             _append_diag_event(pkg, "PROMPTS_BLOCKED_SCENE_PLAN_INVALID", stage_id=stage_id)

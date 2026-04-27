@@ -1100,8 +1100,31 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
             current_stage=stage_id or "",
             include_debug=debug_mode,
         )
+        stage_statuses = package.get("stage_statuses") if isinstance(package.get("stage_statuses"), dict) else {}
+        requested_stage_status = (
+            stage_statuses.get(stage_id) if stage_id and isinstance(stage_statuses.get(stage_id), dict) else {}
+        )
+        requested_stage_status_name = str(requested_stage_status.get("status") or "").strip().lower()
+        requested_stage_error = str(requested_stage_status.get("error") or "").strip()
+        diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
+        requested_stage_not_executed = bool(stage_id) and not bool(executed_stages)
+        response_ok = True
+        response_error = ""
+        if requested_stage_not_executed:
+            requested_reason = str(
+                diagnostics.get("requested_stage_not_executed_reason")
+                or requested_stage_error
+                or f"{stage_id}_not_executed"
+            ).strip()
+            diagnostics["requested_stage_not_executed"] = True
+            diagnostics["requested_stage_not_executed_reason"] = requested_reason
+            response_ok = False
+            response_error = f"requested_stage_not_executed:{requested_reason}"
+        elif stage_id and requested_stage_status_name == "error":
+            response_ok = False
+            response_error = requested_stage_error or f"{stage_id}_failed"
         response_payload: dict[str, Any] = {
-            "ok": True,
+            "ok": response_ok,
             "pipeline": "scenario_stage_v1",
             "requestedStage": stage_id or "",
             "autoRun": auto_run,
@@ -1113,8 +1136,16 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
             },
             "debugMode": debug_mode,
         }
+        if response_error:
+            response_payload["error"] = response_error
+        if requested_stage_not_executed and stage_id:
+            response_payload["diagnostics"] = {
+                "requested_stage_not_executed": True,
+                "requested_stage_not_executed_reason": str(diagnostics.get("requested_stage_not_executed_reason") or ""),
+                "dependency_payload_ok_by_stage": diagnostics.get(f"{stage_id}_dependency_payload_ok_by_stage", {}),
+                "dependency_status_by_stage": diagnostics.get(f"{stage_id}_dependency_status_by_stage", {}),
+            }
         if debug_mode:
-            diagnostics = package.get("diagnostics") if isinstance(package.get("diagnostics"), dict) else {}
             response_payload["storyboardOut"] = (
                 package.get("final_storyboard") if isinstance(package.get("final_storyboard"), dict) else {}
             )
