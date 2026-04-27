@@ -31,6 +31,11 @@ Rules:
 * max 3 questions
 * no free text answers
 * must always return structured JSON
+* Use ONLY these question ids:
+  * performance_density
+  * world_mode
+  * intro_mode
+* Do NOT invent new ids.
 
 Return JSON:
 {{
@@ -116,23 +121,28 @@ async def director_questions(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail="gemini_invalid_json")
 
     safe_questions: list[dict[str, Any]] = []
+    ALLOWED_IDS = {"performance_density", "world_mode", "intro_mode"}
     for item in (parsed.get("questions") if isinstance(parsed.get("questions"), list) else []):
         if not isinstance(item, dict):
             continue
-        qid = str(item.get("id") or "").strip() or f"q_{len(safe_questions) + 1}"
+        qid = str(item.get("id") or "").strip()
+        if qid not in ALLOWED_IDS:
+            continue
         text = str(item.get("text") or "").strip()
-        options_raw = item.get("options")
-        options: list[dict[str, str]] = []
-        if isinstance(options_raw, list):
-            for opt in options_raw:
-                if not isinstance(opt, dict):
-                    continue
-                label = str(opt.get("label") or "").strip()
-                value = str(opt.get("value") or "").strip()
-                if label and value:
-                    options.append({"label": label, "value": value})
-        if text and options:
-            safe_questions.append({"id": qid, "text": text, "options": options[:4]})
+        options = item.get("options")
+        if not text or not isinstance(options, list) or len(options) < 2:
+            continue
+        valid_options: list[dict[str, str]] = []
+        for opt in options:
+            if not isinstance(opt, dict):
+                continue
+            label = str(opt.get("label") or "").strip()
+            value = str(opt.get("value") or "").strip()
+            if label and value:
+                valid_options.append({"label": label, "value": value})
+        if len(valid_options) < 2:
+            continue
+        safe_questions.append({"id": qid, "text": text, "options": valid_options[:4]})
         if len(safe_questions) >= 3:
             break
 
