@@ -27,6 +27,52 @@ ALLOWED_VALUES_BY_ID = {
     },
     "intro_mode": {"intro_environment", "intro_character", "intro_action"},
 }
+REQUIRED_FIELDS = [
+    "lip_sync_density",
+    "performance_place",
+    "world_zones",
+    "intro_plan",
+    "outro_plan",
+    "camera_style",
+]
+ALLOWED_DIRECTOR_VALUES: dict[str, set[str]] = {
+    "lip_sync_density": {
+        "vocal_light_30",
+        "balanced_50",
+        "vocal_heavy_70",
+        "full_vocal",
+    },
+    "performance_place": {
+        "one_main_place",
+        "multiple_places",
+        "performance_plus_memories",
+    },
+    "world_zones": {
+        "train_only",
+        "train_and_odesa",
+        "odesa_dominant",
+        "club_dancefloor",
+        "club_full",
+        "city_mixed",
+        "generic_mixed",
+    },
+    "intro_plan": {
+        "intro_location_first",
+        "intro_character_first",
+        "intro_action_first",
+    },
+    "outro_plan": {
+        "outro_stay_inside",
+        "outro_arrival",
+        "outro_exit_to_world",
+    },
+    "camera_style": {
+        "static_cinematic",
+        "smooth_glide",
+        "emotional_close",
+        "dynamic_music",
+    },
+}
 
 
 def _world_mode_options(world_hint: str) -> list[dict[str, str]]:
@@ -132,6 +178,184 @@ def _build_director_config_preview(answers_so_far: dict[str, Any]) -> dict[str, 
     elif intro == "intro_action":
         config["intro_scenes"] = ["action_start"]
     return config
+
+
+def build_director_config_from_answers(answers: dict[str, Any]) -> dict[str, Any]:
+    safe_answers = answers if isinstance(answers, dict) else {}
+    config: dict[str, Any] = {}
+
+    lip_sync_density = str(safe_answers.get("lip_sync_density") or "").strip()
+    if lip_sync_density == "vocal_light_30":
+        config["ia2v_ratio"] = 0.3
+        config["i2v_ratio"] = 0.7
+    elif lip_sync_density == "balanced_50":
+        config["ia2v_ratio"] = 0.5
+        config["i2v_ratio"] = 0.5
+    elif lip_sync_density == "vocal_heavy_70":
+        config["ia2v_ratio"] = 0.7
+        config["i2v_ratio"] = 0.3
+    elif lip_sync_density == "full_vocal":
+        config["ia2v_ratio"] = 0.9
+        config["i2v_ratio"] = 0.1
+
+    performance_place = str(safe_answers.get("performance_place") or "").strip()
+    if performance_place in {"one_main_place", "multiple_places", "performance_plus_memories"}:
+        config["performance_place_mode"] = performance_place
+
+    world_zones = str(safe_answers.get("world_zones") or "").strip()
+    if world_zones == "train_only":
+        config["ia2v_locations"] = ["train"]
+        config["i2v_locations"] = ["train"]
+    elif world_zones == "train_and_odesa":
+        config["ia2v_locations"] = ["train"]
+        config["i2v_locations"] = ["odesa_city", "odesa_port", "odesa_streets"]
+    elif world_zones == "odesa_dominant":
+        config["ia2v_locations"] = ["train"]
+        config["i2v_locations"] = ["odesa_city", "odesa_port", "odesa_streets", "odesa_courtyard"]
+        config["memory_intercut"] = True
+    elif world_zones == "club_dancefloor":
+        config["ia2v_locations"] = ["club_dancefloor"]
+        config["i2v_locations"] = ["club_dancefloor"]
+    elif world_zones == "club_full":
+        config["ia2v_locations"] = ["club_dancefloor", "club_bar", "club_backstage"]
+        config["i2v_locations"] = ["club_dancefloor", "club_bar", "club_backstage", "crowd"]
+    elif world_zones == "city_mixed":
+        config["ia2v_locations"] = ["main_location"]
+        config["i2v_locations"] = ["city", "streets", "interiors"]
+    elif world_zones == "generic_mixed":
+        config["i2v_locations"] = ["main_location", "secondary_location"]
+
+    intro_plan = str(safe_answers.get("intro_plan") or "").strip()
+    if intro_plan == "intro_location_first":
+        config["intro_scenes"] = ["location_establishing", "character_entry"]
+    elif intro_plan == "intro_character_first":
+        config["intro_scenes"] = ["hero_closeup", "emotional_setup"]
+    elif intro_plan == "intro_action_first":
+        config["intro_scenes"] = ["action_start", "rhythm_start"]
+
+    outro_plan = str(safe_answers.get("outro_plan") or "").strip()
+    if outro_plan == "outro_stay_inside":
+        config["outro_scenes"] = ["final_inside", "emotional_hold"]
+    elif outro_plan == "outro_arrival":
+        config["outro_scenes"] = ["arrival_or_resolution", "final_look"]
+    elif outro_plan == "outro_exit_to_world":
+        config["outro_scenes"] = ["exit_to_world", "wide_final"]
+
+    camera_style = str(safe_answers.get("camera_style") or "").strip()
+    if camera_style == "static_cinematic":
+        config["camera_style"] = "still_witness"
+    elif camera_style == "smooth_glide":
+        config["camera_style"] = "cinematic_glide"
+    elif camera_style == "emotional_close":
+        config["camera_style"] = "emotional_proximity"
+    elif camera_style == "dynamic_music":
+        config["camera_style"] = "dynamic_controlled"
+
+    return config
+
+
+def _sanitize_director_answers(answers: dict[str, Any] | None) -> dict[str, str]:
+    safe_answers = answers if isinstance(answers, dict) else {}
+    normalized: dict[str, str] = {}
+    for field in REQUIRED_FIELDS:
+        value = str(safe_answers.get(field) or "").strip()
+        if value and value in ALLOWED_DIRECTOR_VALUES.get(field, set()):
+            normalized[field] = value
+    return normalized
+
+
+def _get_missing_director_fields(answers: dict[str, Any]) -> list[str]:
+    safe_answers = answers if isinstance(answers, dict) else {}
+    return [field for field in REQUIRED_FIELDS if field not in safe_answers]
+
+
+def _fallback_question_for_field(field: str, context: dict[str, Any]) -> str:
+    world_hint = str((context or {}).get("world_hint") or "generic").strip().lower()
+    if field == "lip_sync_density":
+        return "Сколько пения / lip-sync показываем: больше атмосферы, 50/50, больше пения или почти весь клип поёт?"
+    if field == "performance_place":
+        if world_hint == "train":
+            return "Где герой поёт: только в купе, в разных местах поезда или поезд + воспоминания?"
+        if world_hint == "club":
+            return "Где держим главный перформанс: одна зона, разные зоны клуба или клуб + вставки?"
+        return "Где держим главный перформанс: в одном основном месте, в нескольких местах или с вставками-воспоминаниями?"
+    if field == "world_zones":
+        if world_hint == "train":
+            return "Что показываем между пением: только поезд, поезд + Одесса или больше Одессы?"
+        if world_hint == "club":
+            return "Какие зоны клуба показываем: танцпол, весь клуб или клуб + город?"
+        return "Какие зоны мира показываем между пением: основной локацией ограничимся или добавим другие пространства?"
+    if field == "intro_plan":
+        return "Как начать клип: сначала место, сразу герой или сразу действие?"
+    if field == "outro_plan":
+        return "Как закончить клип: остаться внутри, финальное прибытие или выход в мир?"
+    if field == "camera_style":
+        return "Как снимать камерой: статично-киношно, плавно, крупно-эмоционально или динамично под бит?"
+    return "Уточните режиссёрское решение."
+
+
+def build_director_chat_prompt(
+    context: dict[str, Any],
+    messages: list[dict[str, Any]],
+    answers: dict[str, Any],
+    user_message: str,
+) -> str:
+    safe_messages = messages if isinstance(messages, list) else []
+    trimmed_messages: list[dict[str, str]] = []
+    for msg in safe_messages[-12:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        content = str(msg.get("content") or "").strip()
+        if role not in {"assistant", "user"} or not content:
+            continue
+        trimmed_messages.append({"role": role, "content": content})
+
+    return f"""
+You are an AI Director assistant for a music video generator.
+
+Your job:
+1. Understand the user's free-text answer.
+2. Extract any director fields from it.
+3. Update structured answers.
+4. Ask the next missing question.
+5. Return JSON only.
+
+Important:
+* Speak Russian only.
+* Do not use technical terms like ia2v, i2v, payload, API.
+* Do not ask about clothing, refs, model quality, resolution.
+* Ask only about director choices.
+* The user may answer naturally, not with exact option names.
+* If user answer contains multiple decisions, extract all of them.
+* If answer is unclear, ask a short clarification.
+* Maximum one assistant question per response.
+* When all required fields are collected, set done=true.
+
+Return JSON:
+{{
+  "extracted_answers": {{
+    "lip_sync_density": "..."
+  }},
+  "assistant_message": "Следующий вопрос...",
+  "done": false
+}}
+
+Allowed values:
+{json.dumps({k: sorted(v) for k, v in ALLOWED_DIRECTOR_VALUES.items()}, ensure_ascii=False)}
+
+Current answers:
+{json.dumps(answers if isinstance(answers, dict) else {}, ensure_ascii=False)}
+
+Messages:
+{json.dumps(trimmed_messages, ensure_ascii=False)}
+
+User message:
+{user_message}
+
+Context:
+{json.dumps(context if isinstance(context, dict) else {}, ensure_ascii=False)}
+""".strip()
 
 
 def build_director_prompt(context: dict[str, Any], answers_so_far: dict[str, Any] | None = None) -> str:
@@ -255,6 +479,86 @@ def _validate_question(
     if not (2 <= len(valid_options) <= 3):
         return None
     return {"id": qid, "text": text, "options": valid_options}
+
+
+@router.post("/director/chat")
+async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_payload = payload if isinstance(payload, dict) else {}
+    context = raw_payload.get("context") if isinstance(raw_payload.get("context"), dict) else {}
+    messages = raw_payload.get("messages") if isinstance(raw_payload.get("messages"), list) else []
+    director_state = raw_payload.get("director_state") if isinstance(raw_payload.get("director_state"), dict) else {}
+    incoming_answers = director_state.get("answers") if isinstance(director_state, dict) else {}
+    user_message = str(raw_payload.get("user_message") or "").strip()
+
+    answers = _sanitize_director_answers(incoming_answers if isinstance(incoming_answers, dict) else {})
+    missing_fields = _get_missing_director_fields(answers)
+    if not missing_fields:
+        return {
+            "assistant_message": "",
+            "answers": answers,
+            "director_config_preview": build_director_config_from_answers(answers),
+            "missing_fields": [],
+            "done": True,
+        }
+
+    fallback_message = _fallback_question_for_field(missing_fields[0], context)
+    if not user_message and not messages:
+        return {
+            "assistant_message": fallback_message,
+            "answers": answers,
+            "director_config_preview": build_director_config_from_answers(answers),
+            "missing_fields": missing_fields,
+            "done": False,
+        }
+
+    prompt = build_director_chat_prompt(context, messages, answers, user_message)
+    key_info = resolve_gemini_api_key()
+    if not key_info.get("valid"):
+        raise HTTPException(status_code=500, detail=f"gemini_key_invalid:{key_info.get('error') or 'missing'}")
+
+    result = post_generate_content(
+        str(key_info.get("api_key") or ""),
+        DIRECTOR_QUESTIONS_MODEL,
+        {"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=45,
+    )
+    if result.get("__http_error__"):
+        status = int(result.get("status") or 502)
+        raise HTTPException(status_code=status if status > 0 else 502, detail="gemini_request_failed")
+
+    extracted_answers: dict[str, str] = {}
+    assistant_message = fallback_message
+    done = False
+
+    parsed = _extract_json_object(_extract_text_from_gemini(result))
+    if isinstance(parsed, dict):
+        candidate_answers = parsed.get("extracted_answers")
+        if isinstance(candidate_answers, dict):
+            for field, allowed in ALLOWED_DIRECTOR_VALUES.items():
+                value = str(candidate_answers.get(field) or "").strip()
+                if value in allowed:
+                    extracted_answers[field] = value
+        candidate_message = str(parsed.get("assistant_message") or "").strip()
+        if candidate_message:
+            assistant_message = candidate_message
+        done = bool(parsed.get("done") is True)
+
+    merged_answers = _sanitize_director_answers({**answers, **extracted_answers})
+    missing_fields = _get_missing_director_fields(merged_answers)
+    resolved_done = done or len(missing_fields) == 0
+
+    if not resolved_done and not assistant_message:
+        assistant_message = _fallback_question_for_field(missing_fields[0], context)
+    if resolved_done:
+        assistant_message = assistant_message if assistant_message else "Режиссура собрана ✅ Можно запускать общий пайплайн."
+
+    return {
+        "assistant_message": assistant_message,
+        "answers": merged_answers,
+        "director_config_preview": build_director_config_from_answers(merged_answers),
+        "missing_fields": missing_fields,
+        "done": resolved_done,
+    }
 
 
 @router.post("/director/questions")

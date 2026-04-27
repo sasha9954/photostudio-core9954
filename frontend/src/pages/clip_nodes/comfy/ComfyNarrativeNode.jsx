@@ -29,9 +29,12 @@ const ROUTE_STRATEGY_PRESETS = [
   { key: "story_safe_70_20_10", label: "История безопасно 70/20/10", description: "на 8 сцен: 6 i2v / 1-2 ia2v / 0-1 первый-последний", targets: { i2v: 6, ia2v: 1, first_last: 1 }, maxConsecutiveIa2v: 2 },
 ];
 const DIRECTOR_ANSWER_LABELS = {
-  performance_density: "Перформанс",
-  world_mode: "Пространство",
-  intro_mode: "Начало",
+  lip_sync_density: "Плотность пения",
+  performance_place: "Место перформанса",
+  world_zones: "Мировые зоны",
+  intro_plan: "Интро",
+  outro_plan: "Аутро",
+  camera_style: "Камера",
 };
 function inferWorldHint(text = "") {
   const t = String(text || "").toLowerCase();
@@ -67,54 +70,78 @@ function buildDirectorContext(data) {
 
 function buildDirectorConfigFromAnswers(answers) {
   const safeAnswers = answers && typeof answers === "object" ? answers : {};
-  if (Object.keys(safeAnswers).length === 0) {
-    return {};
-  }
   const config = {};
 
-  if (safeAnswers.performance_density === "balanced") {
+  if (safeAnswers.lip_sync_density === "vocal_light_30") {
+    config.ia2v_ratio = 0.3;
+    config.i2v_ratio = 0.7;
+  } else if (safeAnswers.lip_sync_density === "balanced_50") {
     config.ia2v_ratio = 0.5;
-  }
-  if (safeAnswers.performance_density === "atmospheric") {
-    config.ia2v_ratio = 0.2;
-  }
-  if (safeAnswers.performance_density === "performance_heavy") {
-    config.ia2v_ratio = 0.8;
+    config.i2v_ratio = 0.5;
+  } else if (safeAnswers.lip_sync_density === "vocal_heavy_70") {
+    config.ia2v_ratio = 0.7;
+    config.i2v_ratio = 0.3;
+  } else if (safeAnswers.lip_sync_density === "full_vocal") {
+    config.ia2v_ratio = 0.9;
+    config.i2v_ratio = 0.1;
   }
 
-  const worldMode = String(safeAnswers.world_mode || "").trim().toLowerCase();
+  const performancePlace = String(safeAnswers.performance_place || "").trim().toLowerCase();
+  if (["one_main_place", "multiple_places", "performance_plus_memories"].includes(performancePlace)) {
+    config.performance_place_mode = performancePlace;
+  }
+
+  const worldMode = String(safeAnswers.world_zones || "").trim().toLowerCase();
   if (worldMode === "train_only") {
     config.ia2v_locations = ["train"];
     config.i2v_locations = ["train"];
-  } else if (worldMode === "train_plus_city") {
+  } else if (worldMode === "train_and_odesa") {
     config.ia2v_locations = ["train"];
-    config.i2v_locations = ["city"];
-  } else if (worldMode === "city_memory_dominant") {
+    config.i2v_locations = ["odesa_city", "odesa_port", "odesa_streets"];
+  } else if (worldMode === "odesa_dominant") {
     config.ia2v_locations = ["train"];
-    config.i2v_locations = ["city"];
+    config.i2v_locations = ["odesa_city", "odesa_port", "odesa_streets", "odesa_courtyard"];
     config.memory_intercut = true;
   } else if (worldMode === "club_dancefloor") {
     config.ia2v_locations = ["club_dancefloor"];
-    config.i2v_locations = ["club"];
-  } else if (worldMode === "club_bar_backstage") {
-    config.ia2v_locations = ["club_bar", "club_backstage"];
-    config.i2v_locations = ["club"];
-  } else if (worldMode === "club_mixed") {
-    config.ia2v_locations = ["club"];
-    config.i2v_locations = ["club"];
+    config.i2v_locations = ["club_dancefloor"];
+  } else if (worldMode === "club_full") {
+    config.ia2v_locations = ["club_dancefloor", "club_bar", "club_backstage"];
+    config.i2v_locations = ["club_dancefloor", "club_bar", "club_backstage", "crowd"];
+  } else if (worldMode === "city_mixed") {
+    config.ia2v_locations = ["main_location"];
+    config.i2v_locations = ["city", "streets", "interiors"];
+  } else if (worldMode === "generic_mixed") {
+    config.i2v_locations = ["main_location", "secondary_location"];
   }
 
-  const introMode = String(safeAnswers.intro_mode || "").trim().toLowerCase();
-  if (introMode === "intro_environment") {
-    config.intro_scenes = ["environment_opening"];
-  } else if (introMode === "intro_character") {
-    config.intro_scenes = ["hero_closeup"];
-  } else if (introMode === "intro_action") {
-    config.intro_scenes = ["action_start"];
+  const introMode = String(safeAnswers.intro_plan || "").trim().toLowerCase();
+  if (introMode === "intro_location_first") {
+    config.intro_scenes = ["location_establishing", "character_entry"];
+  } else if (introMode === "intro_character_first") {
+    config.intro_scenes = ["hero_closeup", "emotional_setup"];
+  } else if (introMode === "intro_action_first") {
+    config.intro_scenes = ["action_start", "rhythm_start"];
   }
 
-  if (typeof config.ia2v_ratio === "number") {
-    config.i2v_ratio = Number((1 - config.ia2v_ratio).toFixed(2));
+  const outroPlan = String(safeAnswers.outro_plan || "").trim().toLowerCase();
+  if (outroPlan === "outro_stay_inside") {
+    config.outro_scenes = ["final_inside", "emotional_hold"];
+  } else if (outroPlan === "outro_arrival") {
+    config.outro_scenes = ["arrival_or_resolution", "final_look"];
+  } else if (outroPlan === "outro_exit_to_world") {
+    config.outro_scenes = ["exit_to_world", "wide_final"];
+  }
+
+  const cameraStyle = String(safeAnswers.camera_style || "").trim().toLowerCase();
+  if (cameraStyle === "static_cinematic") {
+    config.camera_style = "still_witness";
+  } else if (cameraStyle === "smooth_glide") {
+    config.camera_style = "cinematic_glide";
+  } else if (cameraStyle === "emotional_close") {
+    config.camera_style = "emotional_proximity";
+  } else if (cameraStyle === "dynamic_music") {
+    config.camera_style = "dynamic_controlled";
   }
   return config;
 }
@@ -130,8 +157,9 @@ function stableJson(value) {
 export default function ComfyNarrativeNode({ id, data }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [directorQuestion, setDirectorQuestion] = useState(null);
-  const [directorDone, setDirectorDone] = useState(false);
+  const [directorMessages, setDirectorMessages] = useState([]);
+  const [directorInput, setDirectorInput] = useState("");
+  const [directorChatDone, setDirectorChatDone] = useState(false);
   const [answers, setAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
   const directorInputSignature = `${String(data?.directorNote || "")}|||${String(data?.text || "")}`;
   const prevDirectorInputSignatureRef = useRef(directorInputSignature);
@@ -166,7 +194,7 @@ export default function ComfyNarrativeNode({ id, data }) {
     prevDirectorInputSignatureRef.current = directorInputSignature;
 
     const hasLocalAnswers = Object.keys(answers || {}).length > 0;
-    const hasLocalQuestion = !!directorQuestion;
+    const hasLocalMessages = Array.isArray(directorMessages) && directorMessages.length > 0;
     const hasPersistedAnswers =
       data?.directorAnswers &&
       typeof data.directorAnswers === "object" &&
@@ -176,14 +204,13 @@ export default function ComfyNarrativeNode({ id, data }) {
       typeof data.director_config === "object" &&
       Object.keys(data.director_config).length > 0;
 
-    if (hasLocalQuestion) {
-      setDirectorQuestion(null);
-    }
+    if (hasLocalMessages) setDirectorMessages([]);
 
     if (hasLocalAnswers) {
       setAnswers({});
     }
-    setDirectorDone(false);
+    setDirectorInput("");
+    setDirectorChatDone(false);
 
     if (hasPersistedAnswers || hasPersistedConfig) {
       data?.onFieldChange?.(id, {
@@ -191,7 +218,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         director_config: {},
       });
     }
-  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
+  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config, directorMessages, answers]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
@@ -346,61 +373,77 @@ export default function ComfyNarrativeNode({ id, data }) {
     });
   };
 
-  const runDirectorAIWithAnswers = async (nextAnswers) => {
+  const runDirectorChat = async ({ nextMessages, nextAnswers, userMessage }) => {
     if (aiLoading) return;
     setAiError("");
     setAiLoading(true);
     try {
       const context = buildDirectorContext(data);
-      const json = await fetchJson("/api/director/questions", {
+      const json = await fetchJson("/api/director/chat", {
         method: "POST",
         body: {
           context,
-          answers_so_far: nextAnswers && typeof nextAnswers === "object" ? nextAnswers : {},
+          messages: Array.isArray(nextMessages) ? nextMessages : [],
+          director_state: {
+            answers: nextAnswers && typeof nextAnswers === "object" ? nextAnswers : {},
+            director_config: data?.director_config && typeof data.director_config === "object" ? data.director_config : {},
+          },
+          user_message: String(userMessage || ""),
         },
       });
-      if (json?.done) {
-        setDirectorDone(true);
-        setDirectorQuestion(null);
+      const nextNormalizedAnswers = json?.answers && typeof json.answers === "object" ? json.answers : (nextAnswers || {});
+      setAnswers(nextNormalizedAnswers);
+      setDirectorChatDone(Boolean(json?.done));
 
-        if (json?.director_config_preview && typeof json.director_config_preview === "object") {
-          data?.onFieldChange?.(id, {
-            directorAnswers: nextAnswers && typeof nextAnswers === "object" ? nextAnswers : {},
-            director_config: json.director_config_preview,
-          });
-        }
-
-        return;
+      const assistantMessage = String(json?.assistant_message || "").trim();
+      if (assistantMessage) {
+        setDirectorMessages((prev) => [...(Array.isArray(prev) ? prev : []), { role: "assistant", content: assistantMessage }]);
       }
-      if (json?.question && Array.isArray(json.question.options)) {
-        setDirectorQuestion(json.question);
-        setDirectorDone(false);
-      } else {
-        setDirectorQuestion(null);
+
+      if (json?.director_config_preview && typeof json.director_config_preview === "object") {
+        data?.onFieldChange?.(id, {
+          directorAnswers: nextNormalizedAnswers,
+          director_config: json.director_config_preview,
+        });
       }
     } catch (error) {
       setAiError(String(error?.message || "AI Director failed"));
-      setDirectorQuestion(null);
     } finally {
       setAiLoading(false);
     }
   };
 
-  const handleAnswer = (questionId, value) => {
-    const nextAnswers = {
-      ...(answers && typeof answers === "object" ? answers : {}),
-      [questionId]: value,
-    };
-    setAnswers(nextAnswers);
-    setDirectorQuestion(null);
-    requestAnimationFrame(() => {
-      runDirectorAIWithAnswers(nextAnswers);
+  const startDirectorChat = async () => {
+    if (aiLoading) return;
+    setDirectorMessages([]);
+    setDirectorInput("");
+    setDirectorChatDone(false);
+    await runDirectorChat({ nextMessages: [], nextAnswers: answers, userMessage: "" });
+  };
+
+  const sendDirectorMessage = async () => {
+    const text = String(directorInput || "").trim();
+    if (!text || aiLoading || directorChatDone) return;
+    const userEntry = { role: "user", content: text };
+    const nextMessages = [...(Array.isArray(directorMessages) ? directorMessages : []), userEntry];
+    setDirectorMessages(nextMessages);
+    setDirectorInput("");
+    await runDirectorChat({
+      nextMessages,
+      nextAnswers: answers,
+      userMessage: text,
     });
   };
 
-  const runDirectorAI = async () => {
-    if (aiLoading || directorDone) return;
-    await runDirectorAIWithAnswers(answers);
+  const resetDirectorChat = () => {
+    setDirectorMessages([]);
+    setDirectorInput("");
+    setDirectorChatDone(false);
+    setAnswers({});
+    data?.onFieldChange?.(id, {
+      directorAnswers: {},
+      director_config: {},
+    });
   };
 
   const handleAiInterpret = async () => {
@@ -531,56 +574,59 @@ export default function ComfyNarrativeNode({ id, data }) {
             {aiError ? <div className="clipSB_narrativeEmptyHint" role="alert">{aiError}</div> : null}
             <section className="clipSB_narrativeSection">
               <div className="clipSB_brainLabel">AI режиссёр</div>
-              {!directorQuestion && !directorDone ? (
-                <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={runDirectorAI} disabled={aiLoading}>
-                  🎬 Начать режиссуру
+              {directorMessages.length === 0 ? (
+                <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={startDirectorChat} disabled={aiLoading}>
+                  🎬 Начать с AI режиссёром
                 </button>
-              ) : null}
-              {directorQuestion ? (
+              ) : (
                 <div className="director-question">
-                  <div className="question-title">Вопрос {Math.min(Object.keys(answers || {}).length + 1, 3)} из 3</div>
-                  <div className="question-title">{directorQuestion.text}</div>
-                  <div className="ai-question-options">
-                    {(directorQuestion.options || []).map((opt) => {
-                      const label = String(opt?.label || opt?.value || "").slice(0, 48);
+                  <div className="clipSB_narrativeContextChips" style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "stretch" }}>
+                    {directorMessages.map((message, index) => {
+                      const isAssistant = String(message?.role || "") === "assistant";
                       return (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          className={`clipSB_btn ai-option-btn ${answers[directorQuestion.id] === opt.value ? "selected" : ""}`.trim()}
-                          onClick={() => handleAnswer(directorQuestion.id, opt.value)}
-                          title={label}
+                        <div
+                          key={`director-msg-${index}`}
+                          style={{
+                            alignSelf: isAssistant ? "flex-start" : "flex-end",
+                            maxWidth: "92%",
+                            background: isAssistant ? "rgba(255,255,255,0.06)" : "rgba(113,87,255,0.2)",
+                            border: "1px solid rgba(255,255,255,0.12)",
+                            borderRadius: 8,
+                            padding: "8px 10px",
+                            whiteSpace: "pre-wrap",
+                          }}
                         >
-                          {label}
-                        </button>
+                          {String(message?.content || "")}
+                        </div>
                       );
                     })}
                   </div>
+                  <textarea
+                    className="clipSB_textarea clipSB_narrativeTextarea clipSB_narrativeTextarea--compact"
+                    value={directorInput}
+                    onChange={(e) => setDirectorInput(e.target.value)}
+                    placeholder="Ответьте своими словами..."
+                    rows={2}
+                    disabled={aiLoading || directorChatDone}
+                  />
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="button" className="clipSB_btn clipSB_btnPrimary" onClick={sendDirectorMessage} disabled={aiLoading || directorChatDone || !String(directorInput || "").trim()}>
+                      Отправить
+                    </button>
+                    <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={resetDirectorChat} disabled={aiLoading}>
+                      Сбросить режиссуру
+                    </button>
+                  </div>
                 </div>
-              ) : null}
-              {directorDone ? (
+              )}
+              {directorChatDone ? (
                 <div className="director-question">
-                  <div className="question-title">Режиссура собрана</div>
+                  <div className="question-title">Режиссура собрана ✅ Можно запускать общий пайплайн.</div>
                   <div className="clipSB_narrativeContextChips">
                     {Object.entries(answers || {}).map(([key, value]) => (
                       <span key={key} className="clipSB_narrativeContextChip isReady">{DIRECTOR_ANSWER_LABELS[key] || key}: {String(value)}</span>
                     ))}
                   </div>
-                  <button
-                    type="button"
-                    className="clipSB_btn clipSB_btnSecondary"
-                    onClick={() => {
-                      setAnswers({});
-                      setDirectorQuestion(null);
-                      setDirectorDone(false);
-                      data?.onFieldChange?.(id, {
-                        directorAnswers: {},
-                        director_config: {},
-                      });
-                    }}
-                  >
-                    Пересобрать
-                  </button>
                 </div>
               ) : null}
             </section>
