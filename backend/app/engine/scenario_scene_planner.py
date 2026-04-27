@@ -1753,6 +1753,125 @@ def compute_no_first_last_50_50_targets(scene_count: int) -> dict[str, int]:
     }
 
 
+def _resolve_mapped_scene_ia2v_ratio(
+    creative_config: dict[str, Any],
+    director_config: dict[str, Any],
+) -> tuple[float, str]:
+    director_ia2v_ratio = director_config.get("ia2v_ratio")
+    if director_ia2v_ratio is not None:
+        return _clamp_ratio(director_ia2v_ratio, 0.5), "director_config.ia2v_ratio"
+
+    creative_lipsync_ratio = creative_config.get("lipsync_ratio")
+    if creative_lipsync_ratio is not None:
+        return _clamp_ratio(creative_lipsync_ratio, 0.5), "creative_config.lipsync_ratio"
+
+    creative_targets = _safe_dict(creative_config.get("route_targets_per_block"))
+    target_total = max(0, int(creative_targets.get("i2v") or 0)) + max(0, int(creative_targets.get("ia2v") or 0))
+    if target_total > 0:
+        ia2v_target = max(0, int(creative_targets.get("ia2v") or 0))
+        return _clamp_ratio(float(ia2v_target) / float(target_total), 0.5), "creative_config.route_targets_per_block"
+
+    preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
+    if preset_name == "no_first_last_50_50_0":
+        return 0.5, "preset_fallback.no_first_last_50_50_0"
+    return 0.5, "default_fallback"
+
+
+def _apply_route_budget_to_scene_rows(
+    rows: list[dict[str, Any]],
+    audio_map: dict[str, Any],
+    creative_config: dict[str, Any],
+    director_config: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    director_cfg = _safe_dict(director_config)
+    segments = [seg for seg in _safe_list(audio_map.get("segments")) if isinstance(seg, dict)]
+    windows = [seg for seg in _safe_list(audio_map.get("scene_candidate_windows")) if isinstance(seg, dict)]
+    by_segment_id: dict[str, dict[str, Any]] = {}
+    for source in (*segments, *windows):
+        src = _safe_dict(source)
+        seg_id = str(src.get("segment_id") or src.get("scene_id") or "").strip()
+        if seg_id and seg_id not in by_segment_id:
+            by_segment_id[seg_id] = src
+
+    first_last_ratio = _clamp_ratio(creative_config.get("first_last_ratio"), 0.0)
+    route_targets = _safe_dict(creative_config.get("route_targets_per_block"))
+    first_last_target = max(0, int(route_targets.get("first_last") or 0))
+    first_last_count = 0 if first_last_ratio <= 0.0 or first_last_target <= 0 else 0
+
+    ia2v_ratio, ia2v_ratio_source = _resolve_mapped_scene_ia2v_ratio(creative_config, director_cfg)
+    candidate_scores: list[tuple[float, int, str]] = []
+    candidate_segment_ids: set[str] = set()
+    for idx, row_raw in enumerate(rows):
+        row = _safe_dict(row_raw)
+        seg_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        source = _safe_dict(by_segment_id.get(seg_id))
+        if not bool(source.get("is_lip_sync_candidate")):
+            continue
+        candidate_segment_ids.add(seg_id)
+        local_energy_band = str(source.get("local_energy_band") or "").strip().lower()
+        semantic_weight = str(source.get("semantic_weight") or "").strip().lower()
+        delivery_mode = str(source.get("delivery_mode") or "").strip().lower()
+        release_candidate = bool(source.get("release_candidate"))
+        intensity = _to_float(source.get("intensity"), 0.0)
+        score = intensity
+        if local_energy_band in {"high", "surge"}:
+            score += 3.0
+        if semantic_weight == "high":
+            score += 2.0
+        if delivery_mode in {"assertive", "pressurized", "final", "intimate"}:
+            score += 2.0
+        if release_candidate:
+            score += 1.5
+        candidate_scores.append((score, idx, seg_id))
+
+    max_possible_ia2v = len(candidate_scores)
+    if max_possible_ia2v <= 0:
+        ia2v_count = 0
+    else:
+        ia2v_count = min(max_possible_ia2v, max(0, int(round(len(rows) * ia2v_ratio))))
+    i2v_count = max(0, len(rows) - ia2v_count - first_last_count)
+
+    candidate_scores.sort(key=lambda item: (-item[0], item[1]))
+    selected_ia2v_indices = {idx for _, idx, _ in candidate_scores[:ia2v_count]}
+
+    applied_rows: list[dict[str, Any]] = []
+    selected_ia2v_segments: list[str] = []
+    selected_i2v_segments: list[str] = []
+    for idx, row_raw in enumerate(rows):
+        row = dict(_safe_dict(row_raw))
+        seg_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        if idx in selected_ia2v_indices:
+            row["route"] = "ia2v"
+            row["lipSync"] = True
+            row["renderMode"] = str(row.get("renderMode") or "lip_sync_music")
+            row["requiresAudioSensitiveVideo"] = True
+            selected_ia2v_segments.append(seg_id)
+        else:
+            row["route"] = "i2v"
+            row["lipSync"] = False
+            row["requiresAudioSensitiveVideo"] = False
+            selected_i2v_segments.append(seg_id)
+        applied_rows.append(row)
+
+    diagnostics = {
+        "scene_plan_route_budget_applied_to_mapped_rows": True,
+        "scene_plan_route_budget_source": "creative_config/director_config",
+        "scene_plan_route_budget_ratio_source": ia2v_ratio_source,
+        "scene_plan_route_budget_target_counts": {"i2v": i2v_count, "ia2v": ia2v_count, "first_last": 0},
+        "scene_plan_route_budget_candidate_ia2v_count": max_possible_ia2v,
+        "scene_plan_route_budget_selected_ia2v_segments": selected_ia2v_segments,
+        "scene_plan_route_budget_selected_i2v_segments": selected_i2v_segments,
+        "scene_plan_route_budget_candidate_segments": sorted(candidate_segment_ids),
+        "scene_plan_director_config_applied": bool(director_cfg),
+        "scene_plan_director_config_keys": sorted(
+            key
+            for key in ("ia2v_ratio", "i2v_ratio", "ia2v_locations", "i2v_locations", "camera_style")
+            if director_cfg.get(key) is not None
+        ),
+    }
+    return applied_rows, diagnostics
+
+
 def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, Any]) -> tuple[dict[str, int], bool]:
     if total_scenes <= 0:
         return {"i2v": 0, "ia2v": 0, "first_last": 0}, False
@@ -3547,6 +3666,9 @@ def build_gemini_scene_plan(
     validation_feedback: str = "",
     prompt_mode: str = "default",
 ) -> dict[str, Any]:
+    input_pkg = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    director_config = _safe_dict(input_pkg.get("director_config"))
     audio_map = _safe_dict(package.get("audio_map"))
     scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
     if not scene_windows or len(scene_windows) == 0:
@@ -3573,13 +3695,19 @@ def build_gemini_scene_plan(
                     "movement": "",
                     "angle": "",
                 },
-                "route": "ia2v" if window.get("cut_reason") == "phrase" else "i2v",
+                "route": "i2v",
             }
         )
 
     if len(scene_plan) != len(scene_windows):
         raise ValueError("SCENES_ERROR: scene_plan mismatch")
 
+    scene_plan, route_budget_diag = _apply_route_budget_to_scene_rows(
+        scene_plan,
+        audio_map,
+        creative_config,
+        director_config,
+    )
     route_mix_summary = {
         "i2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"),
         "ia2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"),
@@ -3606,6 +3734,7 @@ def build_gemini_scene_plan(
             "scene_count": len(scene_plan),
             "scene_plan_scenes_version": SCENES_VERSION,
             "scene_plan_uses_segment_id_canonical": False,
+            **route_budget_diag,
         },
     }
 
