@@ -1801,11 +1801,31 @@ def _apply_route_budget_to_scene_rows(
     ia2v_ratio, ia2v_ratio_source = _resolve_mapped_scene_ia2v_ratio(creative_config, director_cfg)
     candidate_scores: list[tuple[float, int, str]] = []
     candidate_segment_ids: set[str] = set()
+    source_match_mode_by_segment: dict[str, str] = {}
+    source_match_mode_by_index: dict[str, str] = {}
     for idx, row_raw in enumerate(rows):
         row = _safe_dict(row_raw)
         seg_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        source_mode = "none"
         source = _safe_dict(by_segment_id.get(seg_id))
-        if not bool(source.get("is_lip_sync_candidate")):
+        if source:
+            source_mode = "by_segment_id"
+        elif idx < len(segments):
+            source = _safe_dict(segments[idx])
+            source_mode = "by_index_segments"
+        elif idx < len(windows):
+            source = _safe_dict(windows[idx])
+            source_mode = "by_index_windows"
+        if not seg_id:
+            seg_id = str(source.get("segment_id") or source.get("scene_id") or f"seg_{idx + 1:02d}").strip()
+            if seg_id:
+                row["segment_id"] = seg_id
+                row["scene_id"] = str(row.get("scene_id") or seg_id).strip()
+        source_match_mode_by_index[str(idx)] = source_mode
+        if seg_id:
+            source_match_mode_by_segment[seg_id] = source_mode
+        candidate = bool(source.get("is_lip_sync_candidate")) or bool(str(source.get("transcript_slice") or "").strip())
+        if not candidate:
             continue
         candidate_segment_ids.add(seg_id)
         local_energy_band = str(source.get("local_energy_band") or "").strip().lower()
@@ -1841,6 +1861,17 @@ def _apply_route_budget_to_scene_rows(
     for idx, row_raw in enumerate(rows):
         row = dict(_safe_dict(row_raw))
         seg_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        source = _safe_dict(by_segment_id.get(seg_id))
+        if not source:
+            if idx < len(segments):
+                source = _safe_dict(segments[idx])
+            elif idx < len(windows):
+                source = _safe_dict(windows[idx])
+        if not seg_id:
+            fallback_id = str(source.get("segment_id") or source.get("scene_id") or f"seg_{idx + 1:02d}").strip()
+            row["segment_id"] = fallback_id
+            row["scene_id"] = str(row.get("scene_id") or fallback_id).strip()
+            seg_id = fallback_id
         if idx in selected_ia2v_indices:
             row["route"] = "ia2v"
             row["lipSync"] = True
@@ -1878,6 +1909,13 @@ def _apply_route_budget_to_scene_rows(
         "scene_plan_route_lock_source": "mapped_route_budget",
         "scene_plan_route_assignment_source": "mapped_route_budget",
         "scene_plan_route_budget_after_lock": {"i2v": i2v_count, "ia2v": ia2v_count, "first_last": 0},
+        "scene_plan_route_budget_rows_in": len(rows),
+        "scene_plan_route_budget_rows_out": len(applied_rows),
+        "scene_plan_route_budget_rows_missing_segment_id": sum(
+            1 for row in applied_rows if not str(_safe_dict(row).get("segment_id") or "").strip()
+        ),
+        "scene_plan_route_budget_source_match_mode": source_match_mode_by_segment,
+        "scene_plan_route_budget_source_match_mode_by_index": source_match_mode_by_index,
         "scene_plan_director_config_applied": bool(director_cfg),
         "scene_plan_director_config_keys": sorted(
             key
@@ -3757,14 +3795,22 @@ def build_gemini_scene_plan(
     scene_windows = _safe_list(audio_map.get("scene_candidate_windows"))
     if not scene_windows or len(scene_windows) == 0:
         raise ValueError("SCENES_ERROR: scene_candidate_windows missing")
+    audio_segments = [_safe_dict(seg) for seg in _safe_list(audio_map.get("segments"))]
+    segment_ids_by_index = [str(seg.get("segment_id") or "").strip() for seg in audio_segments]
 
     scene_plan: list[dict[str, Any]] = []
-    for window_raw in scene_windows:
+    for idx, window_raw in enumerate(scene_windows):
         window = _safe_dict(window_raw)
+        fallback_segment_id = ""
+        if idx < len(segment_ids_by_index):
+            fallback_segment_id = segment_ids_by_index[idx]
+        segment_id = str(
+            window.get("segment_id") or window.get("scene_id") or fallback_segment_id or f"seg_{idx + 1:02d}"
+        ).strip()
         scene_plan.append(
             {
-                "segment_id": window.get("segment_id") or window.get("scene_id"),
-                "scene_id": window.get("scene_id") or window.get("segment_id"),
+                "segment_id": segment_id,
+                "scene_id": str(window.get("scene_id") or segment_id).strip(),
                 "t0": window.get("t0"),
                 "t1": window.get("t1"),
                 "duration": window.get("duration_sec"),
@@ -3787,6 +3833,11 @@ def build_gemini_scene_plan(
     if len(scene_plan) != len(scene_windows):
         raise ValueError("SCENES_ERROR: scene_plan mismatch")
 
+    mapped_rows_missing_segment_id = [
+        idx for idx, row in enumerate(scene_plan) if not str(_safe_dict(row).get("segment_id") or "").strip()
+    ]
+    mapped_row_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_plan]
+
     scene_plan, route_budget_diag = _apply_route_budget_to_scene_rows(
         scene_plan,
         audio_map,
@@ -3798,6 +3849,8 @@ def build_gemini_scene_plan(
         "ia2v": sum(1 for row in scene_plan if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"),
         "first_last": 0,
     }
+    mapped_final_segment_ids = [str(_safe_dict(row).get("segment_id") or "").strip() for row in scene_plan]
+    mapped_final_missing_segment_id_count = sum(1 for seg_id in mapped_final_segment_ids if not seg_id)
     scene_plan_payload = {
         "scenes_version": SCENES_VERSION,
         "storyboard": scene_plan,
@@ -3818,7 +3871,16 @@ def build_gemini_scene_plan(
             "used_model": "mapped_from_audio_map.scene_candidate_windows",
             "scene_count": len(scene_plan),
             "scene_plan_scenes_version": SCENES_VERSION,
-            "scene_plan_uses_segment_id_canonical": False,
+            "scene_plan_uses_segment_id_canonical": True,
+            "mapped_debug_scene_windows_count": len(scene_windows),
+            "mapped_debug_audio_segments_count": len(audio_segments),
+            "mapped_debug_initial_row_count": len(scene_plan),
+            "mapped_debug_initial_segment_ids": mapped_row_segment_ids,
+            "mapped_debug_missing_segment_id_indices": mapped_rows_missing_segment_id,
+            "mapped_debug_route_counts_after_budget": route_mix_summary,
+            "mapped_debug_route_budget_diag": route_budget_diag,
+            "mapped_debug_final_segment_ids": mapped_final_segment_ids,
+            "mapped_debug_final_missing_segment_id_count": mapped_final_missing_segment_id_count,
             **route_budget_diag,
         },
     }
