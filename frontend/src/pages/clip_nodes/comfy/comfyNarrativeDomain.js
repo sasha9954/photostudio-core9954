@@ -1293,9 +1293,21 @@ export function buildScenarioStageManualPayload({
     stageStoryboardPackage?.input && typeof stageStoryboardPackage.input === "object"
       ? stageStoryboardPackage.input
       : {};
+  const fallbackAudioUrl = normalizeText(basePayload?.audioUrl || source?.audioUrl || source?.masterAudioUrl);
+  const fallbackAudioDurationSec = Number(basePayload?.audioDurationSec || source?.audioDurationSec || source?.source?.audioDurationSec || 0) || 0;
+  const fallbackSource = (
+    basePayload?.source && typeof basePayload.source === "object"
+      ? basePayload.source
+      : (source?.source && typeof source.source === "object" ? source.source : {})
+  );
 
   stageStoryboardPackage.input = {
     ...safeInput,
+    audio_url: normalizeText(safeInput?.audio_url || fallbackAudioUrl),
+    audio_duration_sec: Number(safeInput?.audio_duration_sec || fallbackAudioDurationSec || 0) || 0,
+    source: safeInput?.source && typeof safeInput.source === "object" && Object.keys(safeInput.source).length
+      ? safeInput.source
+      : fallbackSource,
     ...(Object.keys(directorConfig || {}).length ? { director_config: directorConfig } : {}),
     ...(Object.keys(directorContract || {}).length ? { director_contract: directorContract } : {}),
   };

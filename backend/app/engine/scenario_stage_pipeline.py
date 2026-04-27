@@ -14494,7 +14494,54 @@ def run_manual_stage(
     req = _safe_dict(payload)
     incoming_pkg = _safe_dict(req.get("storyboardPackage") or req.get("storyboard_package") or {})
     if incoming_pkg:
-        pkg = deepcopy(incoming_pkg)
+        base_pkg = deepcopy(pkg)
+        incoming_copy = deepcopy(incoming_pkg)
+
+        pkg = {
+            **base_pkg,
+            **incoming_copy,
+        }
+
+        base_input = _safe_dict(base_pkg.get("input"))
+        incoming_input = _safe_dict(incoming_copy.get("input"))
+        merged_input = {
+            **base_input,
+            **incoming_input,
+        }
+
+        top_audio_url = str(req.get("audioUrl") or req.get("audio_url") or "").strip()
+        top_audio_duration = req.get("audioDurationSec") or req.get("audio_duration_sec")
+        top_source = _safe_dict(req.get("source"))
+
+        if not str(merged_input.get("audio_url") or "").strip():
+            merged_input["audio_url"] = (
+                str(base_input.get("audio_url") or "").strip()
+                or top_audio_url
+                or str(_safe_dict(base_input.get("source")).get("source_value") or "").strip()
+                or str(top_source.get("source_value") or "").strip()
+            )
+
+        if not merged_input.get("audio_duration_sec"):
+            merged_input["audio_duration_sec"] = (
+                base_input.get("audio_duration_sec")
+                or base_input.get("audioDurationSec")
+                or top_audio_duration
+                or top_source.get("audioDurationSec")
+            )
+
+        if not _safe_dict(merged_input.get("source")):
+            merged_input["source"] = (
+                _safe_dict(base_input.get("source"))
+                or top_source
+            )
+
+        incoming_creative = _safe_dict(incoming_input.get("creative_config"))
+        base_creative = _safe_dict(base_input.get("creative_config"))
+        top_creative = _safe_dict(req.get("creative_config"))
+        if not incoming_creative or not incoming_creative.get("route_strategy_active"):
+            merged_input["creative_config"] = base_creative or top_creative or incoming_creative
+
+        pkg["input"] = merged_input
 
     input_pkg = _safe_dict(pkg.get("input"))
     incoming_director_config = _safe_dict(req.get("director_config"))
