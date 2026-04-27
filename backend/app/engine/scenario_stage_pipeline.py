@@ -13843,6 +13843,7 @@ def run_manual_stage(
     scene_plan_payload_gate_accepted = False
     scene_prompts_payload_ok_by_stage: dict[str, bool] = {}
     scene_prompts_payload_gate_accepted = False
+    force_requested_stage_execution = False
     if stage_id == "scene_plan":
         deps = list(dep_sequence)
         (
@@ -13908,6 +13909,7 @@ def run_manual_stage(
             missing_upstream = []
             continuation_mode = "downstream_only_scene_prompts"
             dep_sequence = []
+            force_requested_stage_execution = True
         else:
             reusable_upstream = [dep_stage for dep_stage in dep_sequence if _can_reuse_stage_output(pkg, dep_stage)]
             missing_upstream = [dep_stage for dep_stage in dep_sequence if dep_stage not in reusable_upstream]
@@ -13920,6 +13922,7 @@ def run_manual_stage(
         diagnostics["scene_prompts_dependency_gate_false_positive_prevented"] = bool(scene_prompts_false_positive_prevented)
         diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
         diagnostics["scene_prompts_requested"] = True
+        diagnostics["scene_prompts_force_current_stage_execution"] = bool(force_requested_stage_execution)
         diagnostics["scene_prompts_dependency_scene_plan_payload_valid"] = bool(scene_plan_ok_for_prompts)
         diagnostics["scene_prompts_dependency_scene_plan_row_count"] = len(scene_plan_rows)
         diagnostics["scene_prompts_dependency_gate_accepted"] = bool(scene_prompts_payload_gate_accepted)
@@ -13974,6 +13977,11 @@ def run_manual_stage(
     diagnostics["regenerated_stages"] = list(dep_sequence) + [stage_id]
     if missing_upstream:
         diagnostics["recompute_missing_upstream_stages"] = missing_upstream
+    if stage_id == "scene_prompts":
+        diagnostics["scene_prompts_final_dep_sequence_before_run"] = list(dep_sequence)
+        diagnostics["scene_prompts_expected_execution_stage"] = "scene_prompts"
+        if force_requested_stage_execution:
+            diagnostics["scene_prompts_current_stage_execution_path"] = "separate_stage_runner"
     pkg["diagnostics"] = diagnostics
     for dep_stage in dep_sequence:
         pkg = run_stage(dep_stage, pkg, payload)
@@ -14055,8 +14063,9 @@ def run_manual_stage(
         diagnostics["scene_prompts_upstream_statuses_restored_before_run_stages"] = restored_before_run
         diagnostics["scene_prompts_downstream_only_invalidation"] = True
         pkg["diagnostics"] = diagnostics
-    pkg = run_stage(stage_id, pkg, payload)
-    executed_stage_ids.append(stage_id)
+    if stage_id not in dep_sequence:
+        pkg = run_stage(stage_id, pkg, payload)
+        executed_stage_ids.append(stage_id)
     if stage_id == "scene_plan" and str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
         statuses = _safe_dict(pkg.get("stage_statuses"))
         restored_stages: list[str] = []
@@ -14077,6 +14086,10 @@ def run_manual_stage(
     if stage_id == "scene_prompts" and str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
         deps = resolve_stage_sequence([stage_id], include_dependencies=True)[:-1]
         pkg = _restore_payload_valid_upstream_statuses_for_stage(pkg, stage_id, deps, scene_prompts_payload_ok_by_stage)
+    if stage_id == "scene_prompts":
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["scene_prompts_executed"] = "scene_prompts" in executed_stage_ids
+        pkg["diagnostics"] = diagnostics
     if reusable_upstream:
         statuses = _safe_dict(pkg.get("stage_statuses"))
         guard_restored: list[str] = []
