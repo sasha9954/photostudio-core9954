@@ -146,6 +146,35 @@ function buildDirectorConfigFromAnswers(answers) {
   return config;
 }
 
+function buildDirectorContractFromConfig(directorConfig) {
+  const cfg = directorConfig && typeof directorConfig === "object" ? directorConfig : {};
+  const ia2vLocations = Array.isArray(cfg.ia2v_locations) && cfg.ia2v_locations.length
+    ? cfg.ia2v_locations
+    : ["train", "train_carriage", "compartment", "train_corridor"];
+  const i2vLocations = Array.isArray(cfg.i2v_locations) && cfg.i2v_locations.length
+    ? cfg.i2v_locations
+    : ["odesa_city", "odesa_courtyard", "odesa_port", "odesa_streets", "odesa_sea"];
+  return {
+    source: "ai_director_chat",
+    hard_location_binding: true,
+    route_location_rules: {
+      ia2v: {
+        required_world: "train",
+        allowed_zones: ia2vLocations,
+        performer_visibility: "required",
+        singer_visibility: "required",
+        lip_sync_framing: "required",
+      },
+      i2v: {
+        required_world: "odesa_memory",
+        allowed_zones: i2vLocations,
+        performer_visibility: "optional_or_absent",
+        singer_visibility: "offscreen_or_non_dominant",
+      },
+    },
+  };
+}
+
 function stableJson(value) {
   try {
     return JSON.stringify(value || {});
@@ -216,6 +245,7 @@ export default function ComfyNarrativeNode({ id, data }) {
       data?.onFieldChange?.(id, {
         directorAnswers: {},
         director_config: {},
+        director_contract: {},
       });
     }
   }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
@@ -257,6 +287,7 @@ export default function ComfyNarrativeNode({ id, data }) {
     data?.onFieldChange?.(id, {
       directorAnswers: safeAnswers,
       director_config: nextConfig,
+      director_contract: buildDirectorContractFromConfig(nextConfig),
     });
   }, [answers, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
 
@@ -367,6 +398,7 @@ export default function ComfyNarrativeNode({ id, data }) {
       creative_config: nextCreativeConfig,
       aiDirectorConfig: response?.director_config || {},
       director_config: response?.director_config || (data?.director_config && typeof data.director_config === "object" ? data.director_config : {}),
+      director_contract: response?.director_contract || buildDirectorContractFromConfig(response?.director_config || data?.director_config || {}),
       lip_sync: !!response?.lip_sync,
       structure,
       routes: Array.isArray(response?.routes) ? response.routes : [],
@@ -404,6 +436,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         data?.onFieldChange?.(id, {
           directorAnswers: nextNormalizedAnswers,
           director_config: json.director_config_preview,
+          director_contract: buildDirectorContractFromConfig(json.director_config_preview),
         });
       }
     } catch (error) {
@@ -443,6 +476,7 @@ export default function ComfyNarrativeNode({ id, data }) {
     data?.onFieldChange?.(id, {
       directorAnswers: {},
       director_config: {},
+      director_contract: {},
     });
   };
 
@@ -558,6 +592,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                   directorNote: e.target.value,
                   directorAnswers: {},
                   director_config: {},
+                  director_contract: {},
                 })}
                 placeholder="Например: добавь экшена, сделай мрачнее, усиль конфликт"
                 rows={3}
