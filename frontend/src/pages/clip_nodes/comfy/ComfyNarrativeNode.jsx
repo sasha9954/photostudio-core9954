@@ -76,18 +76,27 @@ function buildDirectorConfigFromAnswers(answers) {
 
   if (safeAnswers.world_mode) {
     const wm = String(safeAnswers.world_mode).toLowerCase();
+    const ia2v = [];
 
     if (wm.includes("train")) {
-      config.ia2v_locations = ["train"];
+      ia2v.push("train");
     }
 
     if (wm.includes("club")) {
-      config.ia2v_locations = ["club"];
+      ia2v.push("club");
+    }
+
+    if (ia2v.length) {
+      config.ia2v_locations = ia2v;
     }
 
     if (wm.includes("city")) {
       config.i2v_locations = ["city"];
     }
+  }
+
+  if (!config.i2v_locations) {
+    config.i2v_locations = ["generic"];
   }
 
   if (typeof config.ia2v_ratio === "number") {
@@ -263,22 +272,10 @@ export default function ComfyNarrativeNode({ id, data }) {
 
   const handleAnswer = (questionId, value) => {
     setAnswers((prev) => {
-      const nextAnswers = {
+      return {
         ...prev,
         [questionId]: value,
       };
-      const mappedDirectorConfig = buildDirectorConfigFromAnswers(nextAnswers);
-      const existingDirectorConfig = data?.director_config && typeof data.director_config === "object"
-        ? data.director_config
-        : {};
-      data?.onFieldChange?.(id, {
-        directorAnswers: nextAnswers,
-        director_config: {
-          ...existingDirectorConfig,
-          ...mappedDirectorConfig,
-        },
-      });
-      return nextAnswers;
     });
   };
 
@@ -416,7 +413,11 @@ export default function ComfyNarrativeNode({ id, data }) {
               <textarea
                 className="clipSB_textarea clipSB_narrativeTextarea clipSB_narrativeTextarea--compact"
                 value={data?.directorNote || ""}
-                onChange={(e) => data?.onFieldChange?.(id, { directorNote: e.target.value })}
+                onChange={(e) => data?.onFieldChange?.(id, {
+                  directorNote: e.target.value,
+                  directorAnswers: {},
+                  director_config: {},
+                })}
                 placeholder="Например: добавь экшена, сделай мрачнее, усиль конфликт"
                 rows={3}
               />
