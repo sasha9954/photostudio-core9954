@@ -28,6 +28,11 @@ const ROUTE_STRATEGY_PRESETS = [
   { key: "all_lipsync_0_100_0", label: "Живое пение 0/100/0", description: "на 8 сцен: до 8 ia2v, но безвокальные/инструментальные окна автоматически идут в i2v", targets: { i2v: 0, ia2v: 8, first_last: 0 }, maxConsecutiveIa2v: 8 },
   { key: "story_safe_70_20_10", label: "История безопасно 70/20/10", description: "на 8 сцен: 6 i2v / 1-2 ia2v / 0-1 первый-последний", targets: { i2v: 6, ia2v: 1, first_last: 1 }, maxConsecutiveIa2v: 2 },
 ];
+const DIRECTOR_ANSWER_LABELS = {
+  performance_density: "Перформанс",
+  world_mode: "Пространство",
+  intro_mode: "Начало",
+};
 function inferWorldHint(text = "") {
   const t = String(text || "").toLowerCase();
   if (t.includes("поезд")) return "train";
@@ -357,6 +362,14 @@ export default function ComfyNarrativeNode({ id, data }) {
       if (json?.done) {
         setDirectorDone(true);
         setDirectorQuestion(null);
+
+        if (json?.director_config_preview && typeof json.director_config_preview === "object") {
+          data?.onFieldChange?.(id, {
+            directorAnswers: nextAnswers && typeof nextAnswers === "object" ? nextAnswers : {},
+            director_config: json.director_config_preview,
+          });
+        }
+
         return;
       }
       if (json?.question && Array.isArray(json.question.options)) {
@@ -550,7 +563,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                   <div className="question-title">Режиссура собрана</div>
                   <div className="clipSB_narrativeContextChips">
                     {Object.entries(answers || {}).map(([key, value]) => (
-                      <span key={key} className="clipSB_narrativeContextChip isReady">{key}: {String(value)}</span>
+                      <span key={key} className="clipSB_narrativeContextChip isReady">{DIRECTOR_ANSWER_LABELS[key] || key}: {String(value)}</span>
                     ))}
                   </div>
                   <button
