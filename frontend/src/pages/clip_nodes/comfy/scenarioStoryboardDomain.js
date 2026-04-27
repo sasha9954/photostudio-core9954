@@ -39,6 +39,31 @@ export function resolveCanonicalSegmentId(scene = {}, idx = 0) {
   return `seg_${String(idx + 1).padStart(2, "0")}`;
 }
 
+export function normalizeSegmentLookupKey(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^scene[_-]/, "seg_")
+    .replace(/^s(\d+)$/, (_, n) => `seg_${String(n).padStart(2, "0")}`)
+    .replace(/^seg(\d+)$/, (_, n) => `seg_${String(n).padStart(2, "0")}`);
+}
+
+export function buildSegmentLookupAliases(value = "") {
+  const raw = String(value || "").trim();
+  const normalized = normalizeSegmentLookupKey(raw);
+  const aliases = new Set();
+  if (raw) {
+    aliases.add(raw);
+    aliases.add(raw.toLowerCase());
+    aliases.add(raw.toUpperCase());
+  }
+  if (normalized) {
+    aliases.add(normalized);
+    aliases.add(normalized.toUpperCase());
+  }
+  return Array.from(aliases).filter(Boolean);
+}
+
 function shouldTraceScenarioRoleScene(sceneId = "") {
   const needle = normalizeText(SCENARIO_ROLE_TRACE_SCENE_ID);
   if (!needle) return false;
@@ -307,7 +332,7 @@ export function buildAudioSegmentById(storyboardPackage = null) {
     const t0 = Number(seg?.t0 ?? seg?.startSec ?? 0);
     const t1 = Number(seg?.t1 ?? seg?.endSec ?? 0);
     const transcript = String(seg?.transcript_slice || seg?.transcript || seg?.spoken_line || "").trim();
-    acc[id] = {
+    const payload = {
       segment_id: id,
       t0,
       t1,
@@ -319,6 +344,9 @@ export function buildAudioSegmentById(storyboardPackage = null) {
       spoken_line: String(seg?.spoken_line || seg?.transcript_slice || seg?.transcript || "").trim(),
       is_lip_sync_candidate: !!seg?.is_lip_sync_candidate,
     };
+    for (const alias of buildSegmentLookupAliases(id)) {
+      acc[alias] = payload;
+    }
     return acc;
   }, {});
 }
@@ -2131,8 +2159,16 @@ function buildGlobalCameraProfile(storyboardOut = {}, directorOutput = {}) {
 export function normalizeScenarioStoryboardPackage({
   storyboardOut = null,
   directorOutput = null,
+  sourcePackage = null,
   allowDirectorSceneFallback = true,
 } = {}) {
+  const safeStoryboardOut = storyboardOut && typeof storyboardOut === "object" ? storyboardOut : {};
+  const safeDirectorOutput = directorOutput && typeof directorOutput === "object" ? directorOutput : {};
+  const safeSourcePackage = sourcePackage && typeof sourcePackage === "object" && !Array.isArray(sourcePackage)
+    ? sourcePackage
+    : safeDirectorOutput?.storyboardPackage && typeof safeDirectorOutput.storyboardPackage === "object" && !Array.isArray(safeDirectorOutput.storyboardPackage)
+      ? safeDirectorOutput.storyboardPackage
+      : safeStoryboardOut;
   const packageDiagnostics = storyboardOut?.diagnostics && typeof storyboardOut.diagnostics === "object"
     ? storyboardOut.diagnostics
     : {};
@@ -2158,8 +2194,16 @@ export function normalizeScenarioStoryboardPackage({
   const finalStoryboardRenderManifestRows = !finalSignatureMismatch && Array.isArray(storyboardOut?.final_storyboard?.render_manifest)
     ? storyboardOut.final_storyboard.render_manifest
     : [];
-  const audioById = buildAudioSegmentById(storyboardOut || {});
-  const packageAudioUrl = resolvePackageAudioUrl(storyboardOut || {});
+  const audioById = buildAudioSegmentById(safeSourcePackage || safeStoryboardOut || {});
+  const packageAudioUrl = resolvePackageAudioUrl(safeSourcePackage || safeStoryboardOut || {});
+  const packageAudioDurationSec = Number(
+    safeSourcePackage?.input?.audio_duration_sec
+    ?? safeSourcePackage?.input?.audioDurationSec
+    ?? safeSourcePackage?.audio_map?.duration_sec
+    ?? safeStoryboardOut?.audioDurationSec
+    ?? safeStoryboardOut?.audio_duration_sec
+    ?? 0
+  ) || 0;
   const finalStoryboardManifestById = finalStoryboardRenderManifestRows.reduce((acc, row) => {
     const safeRow = row && typeof row === "object" ? row : {};
     const segmentId = normalizeText(safeRow?.segment_id);
@@ -2315,16 +2359,22 @@ export function normalizeScenarioStoryboardPackage({
       || resolveCanonicalSegmentId(normalizedSceneBase, idx)
     ).trim();
     const audioSeg = audioById[segmentId] || {};
-    const sceneTimelineStart = Number(normalizedSceneBase?.startSec ?? normalizedSceneBase?.t0);
-    const sceneTimelineEnd = Number(normalizedSceneBase?.endSec ?? normalizedSceneBase?.t1);
-    const sceneHasRealTiming = sceneTimelineEnd > sceneTimelineStart;
-    const audioHasRealTiming = Number(audioSeg?.endSec) > Number(audioSeg?.startSec);
-    const resolvedStart = (!sceneHasRealTiming && audioHasRealTiming)
-      ? Number(audioSeg?.startSec ?? 0)
-      : (Number.isFinite(sceneTimelineStart) ? sceneTimelineStart : Number(audioSeg?.startSec ?? 0));
-    const resolvedEnd = (!sceneHasRealTiming && audioHasRealTiming)
-      ? Number(audioSeg?.endSec ?? resolvedStart)
-      : (Number.isFinite(sceneTimelineEnd) ? sceneTimelineEnd : Number(audioSeg?.endSec ?? resolvedStart));
+    const sceneStart = Number(normalizedSceneBase?.startSec ?? normalizedSceneBase?.t0);
+    const sceneEnd = Number(normalizedSceneBase?.endSec ?? normalizedSceneBase?.t1);
+    const sceneHasRealTiming = Number.isFinite(sceneStart) && Number.isFinite(sceneEnd) && sceneEnd > sceneStart;
+    const audioStart = Number(audioSeg?.startSec ?? audioSeg?.t0);
+    const audioEnd = Number(audioSeg?.endSec ?? audioSeg?.t1);
+    const audioHasRealTiming = Number.isFinite(audioStart) && Number.isFinite(audioEnd) && audioEnd > audioStart;
+    const resolvedStart = audioHasRealTiming && !sceneHasRealTiming
+      ? audioStart
+      : sceneHasRealTiming
+        ? sceneStart
+        : 0;
+    const resolvedEnd = audioHasRealTiming && !sceneHasRealTiming
+      ? audioEnd
+      : sceneHasRealTiming
+        ? sceneEnd
+        : resolvedStart;
     const resolvedTranscript = String(
       normalizedSceneBase?.transcript
       || normalizedSceneBase?.transcript_slice
@@ -2434,7 +2484,7 @@ export function normalizeScenarioStoryboardPackage({
       ?? storyboardOut?.audio_url
       ?? packageAudioUrl
     ),
-    audioDurationSec: toNumber(
+    audioDurationSec: packageAudioDurationSec || toNumber(
       storyboardOut?.audioDurationSec
       ?? storyboardOut?.audio_duration_sec,
       0
@@ -2482,6 +2532,20 @@ export function normalizeScenarioStoryboardPackage({
     });
   }
   const firstInputScene = Array.isArray(inputSceneCandidates) && inputSceneCandidates.length ? inputSceneCandidates[0] : null;
+  console.log("[SCENARIO NORMALIZE AUDIO HYDRATE]", {
+    hasSourcePackage: !!safeSourcePackage,
+    storyboardOutKeys: Object.keys(safeStoryboardOut || {}).slice(0, 20),
+    sourcePackageKeys: Object.keys(safeSourcePackage || {}).slice(0, 20),
+    sourcePackageHasAudioMap: !!safeSourcePackage?.audio_map,
+    audioSegmentCount: Object.keys(audioById || {}).length,
+    packageAudioUrlPresent: !!packageAudioUrl,
+    firstSceneTiming: scenes?.[0] && {
+      id: scenes[0].segment_id || scenes[0].sceneId,
+      startSec: scenes[0].startSec,
+      endSec: scenes[0].endSec,
+      transcript: scenes[0].transcript_slice || scenes[0].transcript || "",
+    },
+  });
   console.debug("[SCENARIO NORMALIZE PACKAGE]", {
     sceneContractSource: canonicalSceneSource,
     inputHasScenes: inputSceneCount > 0,

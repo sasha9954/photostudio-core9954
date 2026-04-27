@@ -19898,9 +19898,20 @@ onClipSec: (nodeId, value) => {
             || sourceNode?.data?.directorOutput?.storyboardPackage?.final_storyboard
             || null
           );
+          const sourceData = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
+          const fullStoryboardPackage = sourceData?.storyboardPackage
+            && typeof sourceData.storyboardPackage === "object"
+            && !Array.isArray(sourceData.storyboardPackage)
+            ? sourceData.storyboardPackage
+            : sourceData?.directorOutput?.storyboardPackage
+              && typeof sourceData.directorOutput.storyboardPackage === "object"
+              && !Array.isArray(sourceData.directorOutput.storyboardPackage)
+              ? sourceData.directorOutput.storyboardPackage
+              : null;
           let normalizedPackage = normalizeScenarioStoryboardPackage({
             storyboardOut,
             directorOutput,
+            sourcePackage: fullStoryboardPackage,
             allowDirectorSceneFallback: !isFinalizeOnlyStageApply,
           });
           const normalizedPackageScenesCount = Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0;
@@ -19909,6 +19920,7 @@ onClipSec: (nodeId, value) => {
             normalizedPackage = normalizeScenarioStoryboardPackage({
               storyboardOut: directFinalStoryboard,
               directorOutput,
+              sourcePackage: fullStoryboardPackage,
             });
             if (CLIP_TRACE_SCENARIO_GRAPH || isDirectPipelineSource) {
               console.debug("[SCENARIO STORYBOARD FINAL FALLBACK]", {
@@ -19944,7 +19956,6 @@ onClipSec: (nodeId, value) => {
             ).trim(),
           });
           if (isDirectPipelineSource) {
-            const sourceData = sourceNode?.data && typeof sourceNode.data === "object" ? sourceNode.data : {};
             const sourceDataStoryboardOut = sourceData?.storyboardOut && typeof sourceData.storyboardOut === "object" && !Array.isArray(sourceData.storyboardOut)
               ? sourceData.storyboardOut
               : null;
@@ -21371,6 +21382,7 @@ onClipSec: (nodeId, value) => {
                   const normalizedStoryboardOut = normalizeScenarioStoryboardPackage({
                     storyboardOut: responseInputSignatureChanged ? {} : effectiveStoryboardOut,
                     directorOutput: nextDirectorOutput || {},
+                    sourcePackage: nextStoryboardPackage,
                     allowDirectorSceneFallback: false,
                   });
                   const storedStoryboardOutSceneCount = Array.isArray(normalizedStoryboardOut?.scenes)
