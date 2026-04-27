@@ -77,29 +77,35 @@ function buildDirectorConfigFromAnswers(answers) {
     config.ia2v_ratio = 0.8;
   }
 
-  if (safeAnswers.world_mode) {
-    const wm = String(safeAnswers.world_mode).toLowerCase();
-    const ia2v = [];
-
-    if (wm.includes("train")) {
-      ia2v.push("train");
-    }
-
-    if (wm.includes("club")) {
-      ia2v.push("club");
-    }
-
-    if (ia2v.length) {
-      config.ia2v_locations = ia2v;
-    }
-
-    if (wm.includes("city")) {
-      config.i2v_locations = ["city"];
-    }
+  const worldMode = String(safeAnswers.world_mode || "").trim().toLowerCase();
+  if (worldMode === "train_only") {
+    config.ia2v_locations = ["train"];
+    config.i2v_locations = ["train"];
+  } else if (worldMode === "train_plus_city") {
+    config.ia2v_locations = ["train"];
+    config.i2v_locations = ["city"];
+  } else if (worldMode === "city_memory_dominant") {
+    config.ia2v_locations = ["train"];
+    config.i2v_locations = ["city"];
+    config.memory_intercut = true;
+  } else if (worldMode === "club_dancefloor") {
+    config.ia2v_locations = ["club_dancefloor"];
+    config.i2v_locations = ["club"];
+  } else if (worldMode === "club_bar_backstage") {
+    config.ia2v_locations = ["club_bar", "club_backstage"];
+    config.i2v_locations = ["club"];
+  } else if (worldMode === "club_mixed") {
+    config.ia2v_locations = ["club"];
+    config.i2v_locations = ["club"];
   }
 
-  if (!config.i2v_locations) {
-    config.i2v_locations = ["generic"];
+  const introMode = String(safeAnswers.intro_mode || "").trim().toLowerCase();
+  if (introMode === "intro_environment") {
+    config.intro_scenes = ["environment_opening"];
+  } else if (introMode === "intro_character") {
+    config.intro_scenes = ["hero_closeup"];
+  } else if (introMode === "intro_action") {
+    config.intro_scenes = ["action_start"];
   }
 
   if (typeof config.ia2v_ratio === "number") {
@@ -119,7 +125,8 @@ function stableJson(value) {
 export default function ComfyNarrativeNode({ id, data }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
-  const [aiQuestions, setAiQuestions] = useState([]);
+  const [directorQuestion, setDirectorQuestion] = useState(null);
+  const [directorDone, setDirectorDone] = useState(false);
   const [answers, setAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
   const directorInputSignature = `${String(data?.directorNote || "")}|||${String(data?.text || "")}`;
   const prevDirectorInputSignatureRef = useRef(directorInputSignature);
@@ -154,7 +161,7 @@ export default function ComfyNarrativeNode({ id, data }) {
     prevDirectorInputSignatureRef.current = directorInputSignature;
 
     const hasLocalAnswers = Object.keys(answers || {}).length > 0;
-    const hasLocalQuestions = Array.isArray(aiQuestions) && aiQuestions.length > 0;
+    const hasLocalQuestion = !!directorQuestion;
     const hasPersistedAnswers =
       data?.directorAnswers &&
       typeof data.directorAnswers === "object" &&
@@ -164,13 +171,14 @@ export default function ComfyNarrativeNode({ id, data }) {
       typeof data.director_config === "object" &&
       Object.keys(data.director_config).length > 0;
 
-    if (hasLocalQuestions) {
-      setAiQuestions([]);
+    if (hasLocalQuestion) {
+      setDirectorQuestion(null);
     }
 
     if (hasLocalAnswers) {
       setAnswers({});
     }
+    setDirectorDone(false);
 
     if (hasPersistedAnswers || hasPersistedConfig) {
       data?.onFieldChange?.(id, {
@@ -178,13 +186,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         director_config: {},
       });
     }
-  }, [
-    directorInputSignature,
-    id,
-    data?.onFieldChange,
-    data?.directorAnswers,
-    data?.director_config,
-  ]);
+  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
@@ -339,36 +341,53 @@ export default function ComfyNarrativeNode({ id, data }) {
     });
   };
 
+  const runDirectorAIWithAnswers = async (nextAnswers) => {
+    if (aiLoading) return;
+    setAiError("");
+    setAiLoading(true);
+    try {
+      const context = buildDirectorContext(data);
+      const json = await fetchJson("/api/director/questions", {
+        method: "POST",
+        body: {
+          context,
+          answers_so_far: nextAnswers && typeof nextAnswers === "object" ? nextAnswers : {},
+        },
+      });
+      if (json?.done) {
+        setDirectorDone(true);
+        setDirectorQuestion(null);
+        return;
+      }
+      if (json?.question && Array.isArray(json.question.options)) {
+        setDirectorQuestion(json.question);
+        setDirectorDone(false);
+      } else {
+        setDirectorQuestion(null);
+      }
+    } catch (error) {
+      setAiError(String(error?.message || "AI Director failed"));
+      setDirectorQuestion(null);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const handleAnswer = (questionId, value) => {
-    setAnswers((prev) => {
-      return {
-        ...prev,
-        [questionId]: value,
-      };
+    const nextAnswers = {
+      ...(answers && typeof answers === "object" ? answers : {}),
+      [questionId]: value,
+    };
+    setAnswers(nextAnswers);
+    setDirectorQuestion(null);
+    requestAnimationFrame(() => {
+      runDirectorAIWithAnswers(nextAnswers);
     });
   };
 
   const runDirectorAI = async () => {
-    if (aiLoading || aiQuestions.length) return;
-    try {
-      setAiError("");
-      setAiLoading(true);
-      const context = buildDirectorContext(data);
-      const json = await fetchJson("/api/director/questions", {
-        method: "POST",
-        body: context,
-      });
-      if (!json || !Array.isArray(json.questions)) {
-        setAiQuestions([]);
-        return;
-      }
-      setAiQuestions(Array.isArray(json?.questions) ? json.questions : []);
-    } catch (error) {
-      setAiError(String(error?.message || "AI questions failed"));
-      setAiQuestions([]);
-    } finally {
-      setAiLoading(false);
-    }
+    if (aiLoading || directorDone) return;
+    await runDirectorAIWithAnswers(answers);
   };
 
   const handleAiInterpret = async () => {
@@ -498,27 +517,59 @@ export default function ComfyNarrativeNode({ id, data }) {
             </button>
             {aiError ? <div className="clipSB_narrativeEmptyHint" role="alert">{aiError}</div> : null}
             <section className="clipSB_narrativeSection">
-              <div className="clipSB_brainLabel">AI Director Questions</div>
-              <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={runDirectorAI} disabled={aiLoading}>
-                🎬 Сформировать режиссуру через AI
-              </button>
-              {aiQuestions.map((q) => (
-                <div key={q.id} className="director-question">
-                  <div className="question-title">{q.text}</div>
+              <div className="clipSB_brainLabel">AI режиссёр</div>
+              {!directorQuestion && !directorDone ? (
+                <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={runDirectorAI} disabled={aiLoading}>
+                  🎬 Начать режиссуру
+                </button>
+              ) : null}
+              {directorQuestion ? (
+                <div className="director-question">
+                  <div className="question-title">Вопрос {Math.min(Object.keys(answers || {}).length + 1, 3)} из 3</div>
+                  <div className="question-title">{directorQuestion.text}</div>
                   <div className="ai-question-options">
-                    {(q.options || []).map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        className={`clipSB_btn ai-option-btn ${answers[q.id] === opt.value ? "selected" : ""}`.trim()}
-                        onClick={() => handleAnswer(q.id, opt.value)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
+                    {(directorQuestion.options || []).map((opt) => {
+                      const label = String(opt?.label || opt?.value || "").slice(0, 48);
+                      return (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          className={`clipSB_btn ai-option-btn ${answers[directorQuestion.id] === opt.value ? "selected" : ""}`.trim()}
+                          onClick={() => handleAnswer(directorQuestion.id, opt.value)}
+                          title={label}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              ))}
+              ) : null}
+              {directorDone ? (
+                <div className="director-question">
+                  <div className="question-title">Режиссура собрана</div>
+                  <div className="clipSB_narrativeContextChips">
+                    {Object.entries(answers || {}).map(([key, value]) => (
+                      <span key={key} className="clipSB_narrativeContextChip isReady">{key}: {String(value)}</span>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="clipSB_btn clipSB_btnSecondary"
+                    onClick={() => {
+                      setAnswers({});
+                      setDirectorQuestion(null);
+                      setDirectorDone(false);
+                      data?.onFieldChange?.(id, {
+                        directorAnswers: {},
+                        director_config: {},
+                      });
+                    }}
+                  >
+                    Пересобрать
+                  </button>
+                </div>
+              ) : null}
             </section>
 
             {sourceInput}
