@@ -28,12 +28,82 @@ const ROUTE_STRATEGY_PRESETS = [
   { key: "all_lipsync_0_100_0", label: "Живое пение 0/100/0", description: "на 8 сцен: до 8 ia2v, но безвокальные/инструментальные окна автоматически идут в i2v", targets: { i2v: 0, ia2v: 8, first_last: 0 }, maxConsecutiveIa2v: 8 },
   { key: "story_safe_70_20_10", label: "История безопасно 70/20/10", description: "на 8 сцен: 6 i2v / 1-2 ia2v / 0-1 первый-последний", targets: { i2v: 6, ia2v: 1, first_last: 1 }, maxConsecutiveIa2v: 2 },
 ];
+const DIRECTOR_QUESTIONS = [
+  {
+    id: "performance_density",
+    text: "Как часто герой поёт?",
+    options: [
+      { label: "Atmospheric", value: "atmospheric" },
+      { label: "Balanced", value: "balanced" },
+      { label: "Performance-heavy", value: "performance_heavy" },
+    ],
+  },
+  {
+    id: "singing_location",
+    text: "Где происходит пение?",
+    options: [
+      { label: "Только в купе", value: "compartment_only" },
+      { label: "В разных местах поезда", value: "train_full" },
+      { label: "Поезд + Одесса", value: "train_plus_city" },
+    ],
+  },
+  {
+    id: "intro_mode",
+    text: "Как начинается клип?",
+    options: [
+      { label: "Перрон → посадка", value: "boarding_train" },
+      { label: "Уже в поезде", value: "inside_train" },
+      { label: "Сразу с героя", value: "hero_start" },
+    ],
+  },
+];
+
+function buildDirectorConfig(answers) {
+  const safeAnswers = answers && typeof answers === "object" ? answers : {};
+  const config = {};
+
+  if (safeAnswers.performance_density === "atmospheric") {
+    config.ia2v_ratio = 0.2;
+    config.i2v_ratio = 0.8;
+  } else if (safeAnswers.performance_density === "balanced") {
+    config.ia2v_ratio = 0.5;
+    config.i2v_ratio = 0.5;
+  } else if (safeAnswers.performance_density === "performance_heavy") {
+    config.ia2v_ratio = 0.8;
+    config.i2v_ratio = 0.2;
+  }
+
+  if (safeAnswers.singing_location === "compartment_only") {
+    config.ia2v_locations = ["train_compartment"];
+    config.i2v_locations = ["window_view"];
+  } else if (safeAnswers.singing_location === "train_full") {
+    config.ia2v_locations = ["train_compartment", "train_corridor", "train_door"];
+    config.i2v_locations = ["window_view", "train_exterior"];
+  } else if (safeAnswers.singing_location === "train_plus_city") {
+    config.ia2v_locations = ["train_compartment", "train_corridor"];
+    config.i2v_locations = ["odesa_port", "odesa_streets", "odesa_courtyard"];
+  }
+
+  if (safeAnswers.intro_mode === "boarding_train") {
+    config.intro_scenes = ["station_wide", "train_arrival", "boarding"];
+    config.camera_style = "cinematic_glide";
+  } else if (safeAnswers.intro_mode === "inside_train") {
+    config.intro_scenes = ["window_reflection", "inside_train"];
+    config.camera_style = "still_witness";
+  } else if (safeAnswers.intro_mode === "hero_start") {
+    config.intro_scenes = ["hero_closeup"];
+    config.camera_style = "emotional_proximity";
+  }
+
+  return config;
+}
 
 export default function ComfyNarrativeNode({ id, data }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
   const [aiQuestions, setAiQuestions] = useState(null);
   const [aiAnswers, setAiAnswers] = useState({});
+  const [directorAnswers, setDirectorAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const resolvedSource = data?.resolvedSource || {};
   const connectedContext = summarizeNarrativeConnectedContext(data || {});
@@ -61,6 +131,14 @@ export default function ComfyNarrativeNode({ id, data }) {
     setAiQuestions(null);
     setAiAnswers({});
   }, [data?.directorNote]);
+
+  useEffect(() => {
+    const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
+    setDirectorAnswers((prev) => {
+      if (JSON.stringify(prev) === JSON.stringify(persistedAnswers)) return prev;
+      return persistedAnswers;
+    });
+  }, [data?.directorAnswers]);
 
 
   const clipModeByContentType = safeContentType === "music_video";
@@ -168,6 +246,7 @@ export default function ComfyNarrativeNode({ id, data }) {
       ...(String(response?.format || "").trim() ? { format: String(response.format).trim() } : {}),
       creative_config: nextCreativeConfig,
       aiDirectorConfig: response?.director_config || {},
+      director_config: response?.director_config || (data?.director_config && typeof data.director_config === "object" ? data.director_config : {}),
       lip_sync: !!response?.lip_sync,
       structure,
       routes: Array.isArray(response?.routes) ? response.routes : [],
@@ -198,6 +277,27 @@ export default function ComfyNarrativeNode({ id, data }) {
     } finally {
       setAiLoading(false);
     }
+  };
+
+  const handleDirectorAnswer = (questionId, value) => {
+    setDirectorAnswers((prev) => {
+      const nextAnswers = {
+        ...prev,
+        [questionId]: value,
+      };
+      const mappedDirectorConfig = buildDirectorConfig(nextAnswers);
+      const existingDirectorConfig = data?.director_config && typeof data.director_config === "object"
+        ? data.director_config
+        : {};
+      data?.onFieldChange?.(id, {
+        directorAnswers: nextAnswers,
+        director_config: {
+          ...mappedDirectorConfig,
+          ...existingDirectorConfig,
+        },
+      });
+      return nextAnswers;
+    });
   };
 
   const handleAiInterpret = async () => {
@@ -354,6 +454,26 @@ export default function ComfyNarrativeNode({ id, data }) {
                 </button>
               </div>
             ) : null}
+            <section className="clipSB_narrativeSection">
+              <div className="clipSB_brainLabel">AI Director Questions</div>
+              {DIRECTOR_QUESTIONS.map((q) => (
+                <div key={q.id} className="director-question">
+                  <div className="question-title">{q.text}</div>
+                  <div className="ai-question-options">
+                    {q.options.map((opt) => (
+                      <button
+                        key={opt.value}
+                        type="button"
+                        className={`clipSB_btn ai-option-btn ${directorAnswers[q.id] === opt.value ? "selected" : ""}`.trim()}
+                        onClick={() => handleDirectorAnswer(q.id, opt.value)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </section>
 
             {sourceInput}
 
