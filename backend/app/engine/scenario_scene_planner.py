@@ -217,6 +217,7 @@ SCENE_PLAN_COMPOSITION_ENUM_ALIASES: dict[str, dict[str, str]] = {
     "composition.layout": {
         "asymmetrical": "off_balance",
         "balanced": "symmetrical",
+        "dynamic": "off_balance",
         "rule of thirds": "rule_of_thirds",
         "rule-of-thirds": "rule_of_thirds",
     },
@@ -3703,6 +3704,13 @@ def _normalize_scene_plan(
         route_budget_mode = "creative_config_hard"
     else:
         route_budget_mode = "creative_config_soft"
+    scene_plan_first_last_forbidden = True
+    scene_plan_first_last_missing_is_ok = int(final_route_counts.get("first_last") or 0) == 0
+    scene_plan_route_budget_old_first_last_requirement_suppressed = bool(
+        scene_plan_first_last_forbidden
+        and int(route_budget_target.get("first_last") or 0) > 0
+        and scene_plan_first_last_missing_is_ok
+    )
     route_budget_tolerance = 1
     target_ia2v = int(_safe_dict(route_budget_target).get("ia2v") or 0)
     ia2v_delta = abs(int(final_route_counts.get("ia2v") or 0) - target_ia2v)
@@ -3891,7 +3899,9 @@ def _normalize_scene_plan(
         "scene_plan_route_budget_mismatch_reason": "gemini_did_not_respect_user_route_strategy" if route_budget_mismatch else "",
         "scene_plan_route_budget_mode": route_budget_mode,
         "scene_plan_route_budget_tolerance": route_budget_tolerance,
-        "scene_plan_first_last_forbidden": True,
+        "scene_plan_first_last_forbidden": scene_plan_first_last_forbidden,
+        "scene_plan_first_last_missing_is_ok": scene_plan_first_last_missing_is_ok,
+        "scene_plan_route_budget_old_first_last_requirement_suppressed": scene_plan_route_budget_old_first_last_requirement_suppressed,
         "scene_plan_user_route_strategy_was_sent": bool(_route_strategy_active(creative_config)),
         "scene_plan_user_route_strategy_hard_constraint": bool(hard_short_clip_target),
         "scene_plan_empty_detected": scene_plan_empty_detected,
@@ -4306,6 +4316,10 @@ def build_gemini_scene_plan(
             "scene_plan_route_budget_target": _safe_dict(normalization_diag.get("scene_plan_route_budget_target")),
             "scene_plan_route_budget_actual": _safe_dict(normalization_diag.get("scene_plan_route_budget_actual")),
             "scene_plan_route_budget_mismatch": bool(normalization_diag.get("scene_plan_route_budget_mismatch")),
+            "scene_plan_route_budget_mode": str(normalization_diag.get("scene_plan_route_budget_mode") or "creative_config_soft"),
+            "scene_plan_first_last_forbidden": bool(normalization_diag.get("scene_plan_first_last_forbidden", True)),
+            "scene_plan_first_last_missing_is_ok": bool(normalization_diag.get("scene_plan_first_last_missing_is_ok", False)),
+            "scene_plan_route_budget_old_first_last_requirement_suppressed": bool(normalization_diag.get("scene_plan_route_budget_old_first_last_requirement_suppressed")),
             "scene_plan_route_budget_retry_used": bool(normalization_diag.get("scene_plan_route_budget_retry_used")),
             "scene_plan_route_budget_retry_suppressed": bool(normalization_diag.get("scene_plan_route_budget_retry_suppressed")),
             "scene_plan_route_budget_mismatch_reason": str(normalization_diag.get("scene_plan_route_budget_mismatch_reason") or ""),

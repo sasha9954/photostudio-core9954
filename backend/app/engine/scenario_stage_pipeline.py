@@ -3040,14 +3040,18 @@ def _validate_scene_plan_route_budget(
 ) -> tuple[bool, str, dict[str, Any]]:
     input_pkg = _safe_dict(package.get("input"))
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    director_config = _safe_dict(input_pkg.get("director_config"))
     scene_rows = _scene_plan_rows_for_validation(scene_plan)
     route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
+    invalid_route_count = 0
     longest_lipsync_streak = 0
     current_lipsync_streak = 0
     for row in scene_rows:
         route = str(row.get("route") or "").strip().lower()
         if route in route_counts:
             route_counts[route] += 1
+        else:
+            invalid_route_count += 1
         if route == "ia2v":
             current_lipsync_streak += 1
             longest_lipsync_streak = max(longest_lipsync_streak, current_lipsync_streak)
@@ -3075,19 +3079,76 @@ def _validate_scene_plan_route_budget(
     tolerance = 0 if strict_no_first_last_50_50_0 else (1 if expected_scene_count >= 6 else 0)
     streak_guard_relaxed = all_lipsync_override
     lipsync_streak_warning = "all_lipsync_override_active" if streak_guard_relaxed else ""
+
+    first_last_forbidden = bool(
+        diagnostics.get("scene_plan_first_last_forbidden")
+        or _safe_dict(scene_plan.get("diagnostics")).get("scene_plan_first_last_forbidden")
+        or True
+    )
+    first_last_missing_is_ok = bool(first_last_forbidden and int(route_counts.get("first_last") or 0) == 0)
+    old_first_last_requirement_suppressed = False
+
+    route_budget_mode = "creative_config_soft"
+    director_ratio_raw = director_config.get("ia2v_ratio")
+    director_ratio = None
+    if director_ratio_raw is not None:
+        director_ratio = _clamp_ratio(director_ratio_raw, 0.0)
+        route_budget_mode = "director_config_hard"
+    elif bool(creative_config.get("route_strategy_active")) and not bool(creative_config.get("targets_are_soft")):
+        route_budget_mode = "creative_config_hard"
+
+    audio_segments = [_safe_dict(seg) for seg in _safe_list(_safe_dict(package.get("audio_map")).get("segments"))]
+    vocal_candidate_count = sum(1 for seg in audio_segments if _is_vocal_lipsync_candidate_segment(seg))
+
+    expected_ia2v_director = 0
+    ia2v_delta = 0
+    route_budget_tolerance = 1
+    if route_budget_mode == "director_config_hard" and director_ratio is not None:
+        expected_ia2v_director = int(round(expected_scene_count * director_ratio))
+        expected_ia2v_director = min(max(0, expected_ia2v_director), max(0, expected_scene_count), vocal_candidate_count or expected_scene_count)
+        ia2v_delta = abs(int(route_counts.get("ia2v") or 0) - expected_ia2v_director)
+    else:
+        route_budget_tolerance = tolerance
+
     errors: list[str] = []
-    for route_name in ("ia2v", "i2v", "first_last"):
-        if abs(route_counts.get(route_name, 0) - target_budget.get(route_name, 0)) > tolerance:
-            errors.append(
-                f"route {route_name} count={route_counts.get(route_name, 0)} target≈{target_budget.get(route_name, 0)}"
-            )
-    if longest_lipsync_streak > max_consecutive and not streak_guard_relaxed:
-        errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
-    target_first_last = int(target_budget.get("first_last") or 0)
-    if mode == "auto" and target_first_last > 0 and route_counts.get("first_last", 0) <= 0 and expected_scene_count >= 4:
-        errors.append("first_last share missing for visual variety")
+    if invalid_route_count > 0:
+        errors.append(f"route distribution invalid: unsupported route count={invalid_route_count}")
+    if expected_scene_count > 0 and len(scene_rows) != expected_scene_count:
+        errors.append(f"scene count mismatch count={len(scene_rows)} expected={expected_scene_count}")
     if mode == "custom" and expected_scene_count > 0 and sum(route_counts.values()) <= 0:
         errors.append("route distribution invalid: no supported routes found")
+    if longest_lipsync_streak > max_consecutive and not streak_guard_relaxed:
+        errors.append(f"too many consecutive lipsync scenes: streak={longest_lipsync_streak} max={max_consecutive}")
+
+    route_budget_ok = True
+    target_first_last = int(target_budget.get("first_last") or 0)
+    first_last_actual = int(route_counts.get("first_last") or 0)
+    if first_last_forbidden:
+        if first_last_actual > 0:
+            route_budget_ok = False
+            errors.append(f"first_last forbidden in clip mode but count={first_last_actual}")
+        elif mode == "auto" and target_first_last > 0 and expected_scene_count >= 4:
+            old_first_last_requirement_suppressed = True
+    elif mode == "auto" and target_first_last > 0 and first_last_actual <= 0 and expected_scene_count >= 4:
+        errors.append("first_last share missing for visual variety")
+
+    if route_budget_mode == "director_config_hard":
+        if ia2v_delta > route_budget_tolerance:
+            route_budget_ok = False
+            errors.append(
+                f"director_config ia2v count={route_counts.get('ia2v', 0)} target≈{expected_ia2v_director} tolerance={route_budget_tolerance}"
+            )
+    elif route_budget_mode == "creative_config_hard":
+        for route_name in ("ia2v", "i2v", "first_last"):
+            if abs(route_counts.get(route_name, 0) - target_budget.get(route_name, 0)) > tolerance:
+                route_budget_ok = False
+                errors.append(
+                    f"route {route_name} count={route_counts.get(route_name, 0)} target≈{target_budget.get(route_name, 0)}"
+                )
+
+    if errors and route_budget_ok:
+        route_budget_ok = False
+
     duration_sec = float(input_pkg.get("audio_duration_sec") or 0.0)
     feedback_prefix = (
         "short clip default expects mixed route distribution near 25/50/25"
@@ -3125,8 +3186,17 @@ def _validate_scene_plan_route_budget(
         "route_budget_resolved_targets": target_budget,
         "route_budget_resolved_from": resolved_from,
         "route_budget_preset": preset_name,
+        "route_budget_mode": route_budget_mode,
+        "route_budget_tolerance": route_budget_tolerance,
+        "scene_plan_first_last_forbidden": first_last_forbidden,
+        "scene_plan_first_last_missing_is_ok": first_last_missing_is_ok,
+        "scene_plan_route_budget_old_first_last_requirement_suppressed": old_first_last_requirement_suppressed,
+        "director_config_ia2v_ratio": director_ratio,
+        "route_budget_expected_ia2v": expected_ia2v_director,
+        "route_budget_ia2v_delta": ia2v_delta,
+        "route_budget_vocal_candidate_cap": vocal_candidate_count,
     }
-    return (len(errors) == 0), feedback, details
+    return route_budget_ok, feedback, details
 
 
 def _extract_user_hard_route_map(input_pkg: dict[str, Any]) -> dict[str, str]:
@@ -12472,6 +12542,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_route_budget_validation_mode"] = "mixed"
     diagnostics["scene_plan_lipsync_streak_warning"] = ""
     diagnostics["scene_plan_route_budget_mismatch"] = False
+    diagnostics["scene_plan_route_budget_mode"] = "creative_config_soft"
+    diagnostics["scene_plan_first_last_forbidden"] = True
+    diagnostics["scene_plan_first_last_missing_is_ok"] = True
+    diagnostics["scene_plan_route_budget_old_first_last_requirement_suppressed"] = False
     diagnostics["scene_plan_hard_route_map_enabled"] = False
     diagnostics["scene_plan_hard_route_map_source"] = ""
     diagnostics["scene_plan_hard_route_map_by_segment"] = {}
@@ -12859,6 +12933,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_all_lipsync_mode"] = bool(route_budget_meta.get("all_lipsync_mode"))
     diagnostics["scene_plan_lipsync_streak_guard_relaxed"] = bool(route_budget_meta.get("lipsync_streak_guard_relaxed"))
     diagnostics["scene_plan_route_budget_validation_mode"] = str(route_budget_meta.get("route_budget_validation_mode") or "mixed")
+    diagnostics["scene_plan_route_budget_mode"] = str(route_budget_meta.get("route_budget_mode") or diagnostics.get("scene_plan_route_budget_mode") or "creative_config_soft")
+    diagnostics["scene_plan_first_last_forbidden"] = bool(route_budget_meta.get("scene_plan_first_last_forbidden", True))
+    diagnostics["scene_plan_first_last_missing_is_ok"] = bool(route_budget_meta.get("scene_plan_first_last_missing_is_ok", False))
+    diagnostics["scene_plan_route_budget_old_first_last_requirement_suppressed"] = bool(route_budget_meta.get("scene_plan_route_budget_old_first_last_requirement_suppressed"))
     diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
     diagnostics["scene_plan_route_budget_mismatch"] = not bool(route_budget_ok)
     diagnostics["scene_plan_enum_invalid_detected"] = bool(scene_diag.get("scene_plan_enum_invalid_detected"))
