@@ -1275,6 +1275,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
         i2v_count = resolved_scene_count - ia2v_count
         route_budget_target["ia2v"] = ia2v_count
         route_budget_target["i2v"] = i2v_count
+    route_budget_target["first_last"] = 0
     route_budget_original_targets = {
         "i2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("i2v") or 0)),
         "ia2v": max(0, int(_safe_dict(creative_config.get("route_targets_per_block")).get("ia2v") or 0)),
@@ -1355,7 +1356,7 @@ def _build_scene_planning_context(package: dict[str, Any]) -> tuple[dict[str, An
                 "original_target_counts": route_budget_original_targets,
                 "resolved_scene_count": resolved_scene_count,
                 "resolved_from": route_budget_resolved_from,
-                "first_last_forbidden": int(route_budget_target.get("first_last") or 0) == 0,
+                "first_last_forbidden": True,
                 "ia2v_requires_vocal_or_speech_window": True,
                 "targets_are_hard_for_short_clip": bool(hard_short_clip_target),
                 "gemini_must_choose_segment_assignment": not hard_route_map_applied,
@@ -1611,8 +1612,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         ia2v_target = int(compact_target_counts.get("ia2v") or 0)
         i2v_target = int(compact_target_counts.get("i2v") or 0)
         first_last_target = int(compact_target_counts.get("first_last") or 0)
-        first_last_forbidden = bool(compact_budget.get("first_last_forbidden"))
-        first_last_line = "No first_last scenes allowed.\n" if first_last_forbidden else ""
+        first_last_line = "No first_last scenes allowed.\n"
         return (
             "You are SCENES stage only.\n"
             "Return STRICT JSON only. No markdown, no prose.\n"
@@ -1625,6 +1625,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             f"i2v: {i2v_target}\n"
             f"first_last: {first_last_target}\n"
             f"{first_last_line}"
+            "If any scene is classified as state_transition, convert it to i2v.\n"
             "If route_budget_contract.hard_route_assignments_by_segment is present:\n"
             "- treat it as requested creative route map that should be preserved whenever valid;\n"
             "- never keep ia2v on instrumental / no-vocal / non-lipsync-invalid windows; downgrade those rows to i2v;\n"
@@ -1652,11 +1653,8 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "Do not teleport hero back to prior position after completed movement unless explicit justified match cut.\\n"
         "Track previous ending position/state, next start position/state, movement direction, location zone, object state, emotional progression, and performance energy progression.\\n"
         "For ia2v/lip-sync scenes ensure vocal-shot diversity across adjacent scenes while preserving mouth readability.\\n"
-        "first_last scenes must not be adjacent.\\n"
-        "Do not place first_last on consecutive segments.\\n"
-        "If two neighboring segments both look suitable for first_last, choose only one of them.\\n"
-        "The other neighboring segment should usually become i2v reaction / observational / emotional beat.\\n"
-        "For domestic argument / dialogue scenes, first_last works best for emotional state change, not for every strong phrase.\\n"
+        "No first_last scenes allowed.\\n"
+        "If any scene is classified as state_transition, convert it to i2v.\\n"
         "speaker_role is independent from primary_role: primary_role is visual focus; speaker_role is who actually speaks this segment.\\n"
         "audio_map.segments[].is_lip_sync_candidate is permission only, not obligation and not a speaker-identity oracle.\\n"
         "Do not treat audio_map.vocal_owner_role as strict guard for route eligibility.\\n"
@@ -1685,7 +1683,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "Use route baseline only as capability context if available, not as prompt text.\\n"
         "Do not change timing grid. segment_id/t0/t1/duration are fixed by input segments.\\n"
         "Allowed enums:\\n"
-        "- route: i2v|ia2v|first_last\\n"
+        "- route: i2v|ia2v\\n"
         "- pacing: fluid|staccato|stable\\n"
         "- energy_alignment: match|counterpoint|build_against|release_after\\n"
         "- framing: close_up|medium|wide|detail|silhouette|overhead\\n"
@@ -1703,8 +1701,8 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "mouth_visible_required=true for real lip-sync scenes.\\n"
         "For i2v: one physical story action as foreground event; prefer movement/transit/atmosphere/world continuity/cutaway/wide visual breathing room; "
         "do not require mouth-visible lip-sync.\\n"
-        "For first_last: state transition Anchor A -> Event -> Anchor B; use only when route_budget_contract.target_counts.first_last > 0; "
-        "if first_last target is 0 then first_last is forbidden.\\n"
+        "No first_last scenes allowed.\\n"
+        "If any scene is classified as state_transition, convert it to i2v.\\n"
         f"{_build_director_control_prompt_block(context)}"
         f"{feedback_block}"
         "Output contract:\\n"
