@@ -1288,6 +1288,33 @@ export function buildScenarioStageManualPayload({
     : (source?.directorContract && typeof source.directorContract === "object"
       ? source.directorContract
       : (basePayload?.director_contract && typeof basePayload.director_contract === "object" ? basePayload.director_contract : {}));
+
+  const safeInput =
+    stageStoryboardPackage?.input && typeof stageStoryboardPackage.input === "object"
+      ? stageStoryboardPackage.input
+      : {};
+
+  stageStoryboardPackage.input = {
+    ...safeInput,
+    ...(Object.keys(directorConfig || {}).length ? { director_config: directorConfig } : {}),
+    ...(Object.keys(directorContract || {}).length ? { director_contract: directorContract } : {}),
+  };
+
+  if (Object.keys(directorConfig || {}).length) {
+    stageStoryboardPackage.director_config = directorConfig;
+  }
+  if (Object.keys(directorContract || {}).length) {
+    stageStoryboardPackage.director_contract = directorContract;
+  }
+
+  console.debug("[SCENARIO MANUAL DIRECTOR CONTRACT]", {
+    hasDirectorConfig: Object.keys(directorConfig || {}).length > 0,
+    hasDirectorContract: Object.keys(directorContract || {}).length > 0,
+    packageInputHasDirectorConfig: !!stageStoryboardPackage?.input?.director_config,
+    packageInputHasDirectorContract: !!stageStoryboardPackage?.input?.director_contract,
+    hardLocationBinding: !!stageStoryboardPackage?.input?.director_contract?.hard_location_binding,
+  });
+
   const debugMirrorsEnabled = Boolean(
     source?.debug
     || source?.includeDebugMirrors

@@ -14491,6 +14491,26 @@ def run_manual_stage(
     if stage_id not in STAGE_IDS:
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
+    req = _safe_dict(payload)
+    incoming_pkg = _safe_dict(req.get("storyboardPackage") or req.get("storyboard_package") or {})
+    if incoming_pkg:
+        pkg = deepcopy(incoming_pkg)
+
+    input_pkg = _safe_dict(pkg.get("input"))
+    incoming_director_config = _safe_dict(req.get("director_config"))
+    incoming_director_contract = _safe_dict(req.get("director_contract"))
+
+    if incoming_director_config:
+        input_pkg["director_config"] = incoming_director_config
+        pkg["director_config"] = incoming_director_config
+
+    if incoming_director_contract:
+        input_pkg["director_contract"] = incoming_director_contract
+        pkg["director_contract"] = incoming_director_contract
+
+    pkg["input"] = input_pkg
+    _normalize_director_package_input(pkg)
+
     executed_stage_ids: list[str] = []
     if stage_id == "final_video_prompt":
         deps = STAGE_DEPENDENCIES.get(stage_id, [])
