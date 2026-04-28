@@ -60,6 +60,16 @@ CORE_ROLE_BINDING_CONTRADICTION = "CORE_ROLE_BINDING_CONTRADICTION"
 CORE_QUALITY_GATES_FAILED = "CORE_QUALITY_GATES_FAILED"
 STORY_CORE_EMPTY_RESULT = "STORY_CORE_EMPTY_RESULT"
 STORY_CORE_SCHEMA_INVALID = "STORY_CORE_SCHEMA_INVALID"
+_STORY_CORE_SUBJECTIVE_QUALITY_GATES = {
+    "two_axis_duplicate_adjacent_pairs",
+    "two_axis_semantic_duplicates",
+    "visual_breath_contrast_event_missing",
+    "anti_literal_low_depth_streak",
+    "visual_breath_missing",
+    "flatline_after_retry",
+    "semantic_contrast_low",
+    "visual_contrast_low",
+}
 _FEMALE_CODED_TERMS = ("woman", "women", "female", "feminine", "girl", "lady", "her", "she", "heroine")
 _MALE_CODED_TERMS = ("man", "men", "male", "masculine", "boy", "gentleman", "his", "he", "hero")
 
@@ -6869,6 +6879,13 @@ def _build_core_validation_feedback(code: str, errors: list[str]) -> str:
     return f"{code}: {details}"[:1400]
 
 
+def _is_story_core_quality_gate_only_error(error_code: str, errors: list[str]) -> bool:
+    if str(error_code or "").strip() != CORE_QUALITY_GATES_FAILED:
+        return False
+    normalized_errors = [str(item or "").strip() for item in errors if str(item or "").strip()]
+    return bool(normalized_errors) and all(item in _STORY_CORE_SUBJECTIVE_QUALITY_GATES for item in normalized_errors)
+
+
 def _story_core_pressure_mode(row: dict[str, Any]) -> str:
     arc_role = str(row.get("arc_role") or "").strip().lower()
     text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".lower()
@@ -9783,6 +9800,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_response_was_empty_after_timeout"] = False
     diagnostics["story_core_hard_fail"] = False
     diagnostics["story_core_failed_payload_rejected"] = False
+    diagnostics["story_core_quality_gate_degraded_to_warning"] = False
+    diagnostics["story_core_quality_gate_degraded_reason"] = ""
+    diagnostics["story_core_quality_gate_warning_errors"] = []
     diagnostics["story_core_previous_payload_was_cleared"] = False
     diagnostics["story_core_previous_stale_payload"] = {}
     diagnostics["story_core_id_mismatch_kind"] = ""
@@ -9924,6 +9944,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         retry_removed_terms: list[str] = []
         retry_sanitized_seed: dict[str, Any] = {}
         first_attempt_normalized_fingerprint = ""
+        last_normalized_core: dict[str, Any] = {}
         last_error_code = CORE_SCHEMA_INVALID
         last_errors: list[str] = []
         configured_timeout = get_scenario_stage_timeout("story_core")
@@ -9996,6 +10017,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     normalized_core = sanitized_normalized_core
                     retry_removed_terms = sorted({*retry_removed_terms, *sanitize_removed_terms})[:24]
                 normalized_fingerprint = json.dumps(normalized_core, ensure_ascii=False, sort_keys=True)
+                last_normalized_core = deepcopy(normalized_core)
                 if attempt == 0:
                     first_attempt_normalized_fingerprint = normalized_fingerprint
                 diagnostics["story_core_normalized_payload"] = normalized_core
@@ -10288,6 +10310,79 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 _append_diag_event(package, f"story_core strict validation failed, requesting one retry: {validation_feedback}", stage_id="story_core")
                 continue
             break
+        if _is_story_core_quality_gate_only_error(last_error_code, last_errors) and last_normalized_core:
+            story_core = {
+                "core_version": "1.1",
+                "story_summary": str(last_normalized_core.get("story_summary") or "").strip(),
+                "opening_anchor": str(last_normalized_core.get("opening_anchor") or "").strip(),
+                "ending_callback_rule": str(last_normalized_core.get("ending_callback_rule") or "").strip(),
+                "global_arc": _safe_dict(last_normalized_core.get("global_arc")),
+                "identity_doctrine": _safe_dict(last_normalized_core.get("identity_doctrine")),
+                "identity_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("hero_anchor") or "")},
+                "world_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("world_doctrine") or "")},
+                "style_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("style_doctrine") or "")},
+                "story_guidance": {
+                    **_default_story_core_guidance(creative_config),
+                    "route_mix_doctrine_for_scenes": _safe_dict(last_normalized_core.get("route_mix_doctrine_for_scenes")),
+                },
+                "narrative_segments": _safe_list(last_normalized_core.get("narrative_segments")),
+            }
+            story_core_v1 = _build_story_core_v11(
+                input_pkg=input_pkg,
+                audio_map=audio_map,
+                refs_inventory=refs_inventory,
+                assigned_roles=assigned_roles,
+                parsed_story_core=story_core,
+                fallback_story_core=fallback,
+            )
+            visual_ref_applied, visual_ref_source = _collect_visual_ref_identity_diagnostics(
+                package,
+                input_pkg,
+                refs_inventory,
+            )
+            for role in ("character_1", "character_2", "character_3"):
+                if not visual_ref_applied.get(role):
+                    continue
+                _apply_visual_ref_identity_lock_to_story_core(
+                    story_core,
+                    story_core_v1,
+                    role,
+                    apply_hero_anchor_lock=role == "character_1",
+                )
+            story_core["story_core_v1"] = story_core_v1
+            package["story_core"] = story_core
+            package["story_core_v1"] = story_core_v1
+            package["story_core_stale"] = False
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["story_core_used_fallback"] = False
+            diagnostics["story_core_retry_used"] = retry_used
+            diagnostics["story_core_hard_fail"] = False
+            diagnostics["story_core_failed_payload_rejected"] = False
+            diagnostics["story_core_quality_gate_degraded_to_warning"] = True
+            diagnostics["story_core_quality_gate_degraded_reason"] = "quality_gate_only_after_retry"
+            diagnostics["story_core_quality_gate_warning_errors"] = list(last_errors)
+            diagnostics["story_core_validation_errors"] = list(last_errors)
+            diagnostics["story_core_route_mix_doctrine_source"] = route_mix_source
+            diagnostics["story_core_route_mix_doctrine_applied"] = _safe_dict(
+                last_normalized_core.get("route_mix_doctrine_for_scenes")
+            )
+            diagnostics["story_core_route_mix_doctrine_ratios"] = _safe_dict(
+                _safe_dict(last_normalized_core.get("route_mix_doctrine_for_scenes")).get("short_clip_default_target_ratios")
+            )
+            diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
+            diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
+            warnings = _safe_list(diagnostics.get("warnings"))
+            warnings.append(
+                {
+                    "stage_id": "story_core",
+                    "message": "quality_gate_degraded_to_warning:" + ";".join([str(item) for item in last_errors]),
+                }
+            )
+            diagnostics["warnings"] = warnings[-80:]
+            package["diagnostics"] = diagnostics
+            _apply_director_contract_story_core(package)
+            _append_diag_event(package, "story_core quality gates downgraded to warning after retry", stage_id="story_core")
+            return package
         raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
