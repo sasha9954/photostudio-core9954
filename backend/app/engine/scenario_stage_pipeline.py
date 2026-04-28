@@ -3228,7 +3228,7 @@ def _apply_camera_energy_map_to_scene_plan(scene_plan: dict[str, Any], camera_en
         for row in camera_energy_map
         if str(_safe_dict(row).get("segment_id") or "").strip()
     }
-    applied = 0
+    applied_segment_ids: set[str] = set()
     for field in ("storyboard", "scenes", "segments"):
         rows = [deepcopy(_safe_dict(row)) for row in _safe_list(normalized.get(field)) if isinstance(row, dict)]
         if not rows:
@@ -3241,10 +3241,10 @@ def _apply_camera_energy_map_to_scene_plan(scene_plan: dict[str, Any], camera_en
                 row["camera_energy_level"] = str(energy_row.get("camera_energy_level") or "").strip()
                 row["camera_guidance"] = _safe_list(energy_row.get("camera_guidance"))
                 row["camera_energy_scope"] = "camera_movement_and_pacing_only"
-                applied += 1
+                applied_segment_ids.add(segment_id)
             rewritten_rows.append(row)
         normalized[field] = rewritten_rows
-    return normalized, applied
+    return normalized, len(applied_segment_ids)
 
 
 def _extract_memory_beat_categories(mandatory_beats: list[str]) -> dict[str, list[str]]:
