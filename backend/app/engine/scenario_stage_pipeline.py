@@ -3019,6 +3019,7 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     scene_pkg = deepcopy(_safe_dict(package))
     input_pkg = _safe_dict(scene_pkg.get("input"))
     role_plan = _safe_dict(scene_pkg.get("role_plan"))
+    diagnostics = _safe_dict(scene_pkg.get("diagnostics"))
 
     for key in (
         "connected_visual_reference",
@@ -3119,6 +3120,113 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
             "Use only cinematic storyboard language."
         ),
     }
+
+    director_contract = _safe_dict(
+        scene_pkg.get("director_contract")
+        or scene_pkg.get("director_package")
+        or _safe_dict(input_pkg.get("director_contract"))
+        or _safe_dict(input_pkg.get("director_package"))
+    )
+    scene_distribution_contract = _safe_dict(director_contract.get("scene_distribution_contract"))
+    memory_contract = _safe_dict(director_contract.get("memory_contract"))
+    clip_contract = _safe_dict(director_contract.get("clip_contract"))
+    character_contract = _safe_dict(director_contract.get("character_contract"))
+    char2_contract = _safe_dict(character_contract.get("character_2"))
+    char3_contract = _safe_dict(character_contract.get("character_3"))
+    route_balance = str(scene_distribution_contract.get("route_balance") or "").strip().lower()
+    user_approved = bool(scene_distribution_contract.get("user_approved"))
+    scene_candidate_windows = _safe_list(_safe_dict(scene_pkg.get("audio_map")).get("scene_candidate_windows"))
+    expected_scene_count = len(scene_candidate_windows) or _expected_scene_count_from_package(scene_pkg)
+    clip_mode = _is_clip_mode_package(scene_pkg)
+    hard_user_budget_target: dict[str, int] = {}
+    hard_user_budget_applied = False
+    if clip_mode and user_approved and route_balance == "balanced_50_50" and expected_scene_count > 0:
+        ia2v_target = expected_scene_count // 2
+        i2v_target = expected_scene_count - ia2v_target
+        hard_user_budget_target = {"ia2v": ia2v_target, "i2v": i2v_target, "first_last": 0}
+        hard_user_budget_applied = True
+        creative_config = deepcopy(_safe_dict(input_pkg.get("creative_config")))
+        route_targets_per_block = _safe_dict(creative_config.get("route_targets_per_block"))
+        route_targets_per_block.update(hard_user_budget_target)
+        creative_config["route_strategy_mode"] = "custom_counts"
+        creative_config["route_mix_mode"] = "custom"
+        creative_config["route_targets_per_block"] = route_targets_per_block
+        creative_config["route_strategy_normalized_targets"] = dict(hard_user_budget_target)
+        creative_config["targets_are_soft"] = False
+        creative_config["extra_scene_policy"] = "balance_to_nearest"
+        creative_config["first_last_ratio"] = 0
+        creative_config["preferred_routes"] = ["ia2v", "i2v"]
+        forbidden_routes = [str(item).strip() for item in _safe_list(creative_config.get("forbidden_routes")) if str(item).strip()]
+        if "first_last" not in [item.lower() for item in forbidden_routes]:
+            forbidden_routes.append("first_last")
+        creative_config["forbidden_routes"] = forbidden_routes
+        input_pkg["creative_config"] = creative_config
+
+    route_semantics_injected = False
+    if clip_mode and scene_distribution_contract:
+        route_semantics_injected = True
+        role_plan["scene_prompt_rules"]["clip_route_semantics"] = {
+            "ia2v": (
+                "Adult hero performance only: character_1 in present timeline/performance world. "
+                "Require emotional lip-sync with readable mouth, face, eyes, shoulders, hands. "
+                "Do not place young hero or memory-world content as ia2v."
+            ),
+            "i2v": (
+                "Memory timeline with young hero/past-self character_2 in action-driven memory beats. "
+                "No lip-sync requirement and no adult performance focus. "
+                "Episodic text-only character may appear only when explicitly required by memory beat."
+            ),
+            "i2v_postcard_block": (
+                "Postcard-only city architecture is insufficient when mandatory memory beats exist: "
+                "i2v scenes must include character_2 or clear action consequence/trace linked to character_2."
+            ),
+        }
+
+    mandatory_memory_beats = [
+        str(item).strip()
+        for item in _safe_list(memory_contract.get("mandatory_scenes")) + _safe_list(clip_contract.get("mandatory_scenes"))
+        if str(item).strip()
+    ]
+    mandatory_memory_beats = list(dict.fromkeys(mandatory_memory_beats))
+    if mandatory_memory_beats:
+        role_plan["scene_prompt_rules"]["mandatory_memory_beats"] = mandatory_memory_beats
+
+    char2_antagonist_legacy_ignored = False
+    char2_blob = json.dumps(char2_contract, ensure_ascii=False).lower()
+    char2_is_past_self = any(
+        token in char2_blob
+        for token in ("young hero", "same hero in youth", "past self", "тот же герой в молодости", "young", "youth")
+    )
+    if char2_is_past_self:
+        char2_antagonist_legacy_ignored = True
+        role_plan["scene_prompt_rules"]["character_2_semantic_role"] = "young_hero_past_self_secondary"
+        role_plan["scene_prompt_rules"]["character_2_antagonist_legacy_ignored"] = True
+        refs_inventory = _safe_dict(scene_pkg.get("refs_inventory"))
+        ref_character_2 = _safe_dict(refs_inventory.get("ref_character_2"))
+        ref_meta = _safe_dict(ref_character_2.get("meta"))
+        if str(ref_meta.get("roleType") or "").strip().lower() == "antagonist":
+            ref_meta["roleType"] = "secondary"
+            ref_character_2["meta"] = ref_meta
+            refs_inventory["ref_character_2"] = ref_character_2
+            scene_pkg["refs_inventory"] = refs_inventory
+
+    char3_text_only_episodic = bool(
+        not _safe_dict(_safe_dict(scene_pkg.get("refs_inventory")).get("ref_character_3"))
+        and bool(char3_contract.get("no_reference_needed"))
+    )
+    if char3_text_only_episodic:
+        role_plan["scene_prompt_rules"]["character_3_usage"] = "text_only_episodic_one_scene_if_required"
+
+    diagnostics["scene_plan_hard_user_route_budget_applied"] = bool(hard_user_budget_applied)
+    diagnostics["scene_plan_hard_user_route_budget_target"] = dict(hard_user_budget_target)
+    diagnostics["scene_plan_clip_route_semantics_injected"] = bool(route_semantics_injected)
+    diagnostics["scene_plan_vocal_owner_role_forced"] = "character_1" if route_semantics_injected else ""
+    diagnostics["scene_plan_mandatory_memory_beats_present"] = bool(mandatory_memory_beats)
+    diagnostics["scene_plan_mandatory_memory_beats"] = list(mandatory_memory_beats)
+    diagnostics["scene_plan_postcard_only_memory_blocked"] = bool(mandatory_memory_beats)
+    diagnostics["scene_plan_character_2_antagonist_legacy_ignored"] = bool(char2_antagonist_legacy_ignored)
+    diagnostics["scene_plan_character_3_text_only_episodic"] = bool(char3_text_only_episodic)
+    scene_pkg["diagnostics"] = diagnostics
     input_pkg["scene_safe_identity_constraints"] = _scene_plan_safe_identity_constraints(scene_pkg)
     scene_pkg["input"] = input_pkg
     scene_pkg["role_plan"] = role_plan
@@ -3139,6 +3247,60 @@ def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
         if route in counts:
             counts[route] += 1
     return counts
+
+
+def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict[str, Any]) -> tuple[bool, list[str]]:
+    if not _is_clip_mode_package(package):
+        return True, []
+    director_contract = _safe_dict(
+        _safe_dict(package).get("director_contract")
+        or _safe_dict(package).get("director_package")
+        or _safe_dict(_safe_dict(package).get("input")).get("director_contract")
+        or _safe_dict(_safe_dict(package).get("input")).get("director_package")
+    )
+    if not _safe_dict(director_contract.get("scene_distribution_contract")):
+        return True, []
+    errors: list[str] = []
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    expected_scene_count = len(_safe_list(_safe_dict(package.get("audio_map")).get("scene_candidate_windows"))) or _expected_scene_count_from_package(package)
+    route_counts = _scene_plan_route_counts(scene_plan)
+    if expected_scene_count > 0 and len(scene_rows) != expected_scene_count:
+        errors.append(f"scene_count_mismatch:{len(scene_rows)}!={expected_scene_count}")
+    if int(route_counts.get("first_last") or 0) > 0:
+        errors.append("first_last_forbidden")
+
+    scene_distribution_contract = _safe_dict(director_contract.get("scene_distribution_contract"))
+    if bool(scene_distribution_contract.get("user_approved")) and str(scene_distribution_contract.get("route_balance") or "").strip().lower() == "balanced_50_50" and expected_scene_count > 0:
+        target = {"ia2v": expected_scene_count // 2, "i2v": expected_scene_count - (expected_scene_count // 2), "first_last": 0}
+        for route_name, target_count in target.items():
+            if int(route_counts.get(route_name) or 0) != int(target_count):
+                errors.append(f"hard_budget_{route_name}:{int(route_counts.get(route_name) or 0)}!={int(target_count)}")
+
+    mandatory_beats = [
+        str(item).strip().lower()
+        for item in _safe_list(_safe_dict(director_contract.get("memory_contract")).get("mandatory_scenes"))
+        + _safe_list(_safe_dict(director_contract.get("clip_contract")).get("mandatory_scenes"))
+        if str(item).strip()
+    ]
+    i2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"]
+    ia2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"]
+    i2v_blob = " ".join(
+        json.dumps(row, ensure_ascii=False).lower()
+        for row in i2v_rows
+    )
+    for beat in mandatory_beats:
+        if beat and beat not in i2v_blob:
+            errors.append(f"mandatory_memory_beat_missing:{beat[:48]}")
+    for row in ia2v_rows:
+        vocal_owner = str(_safe_dict(row).get("vocal_owner_role") or _safe_dict(row).get("speaker_role") or "").strip().lower()
+        if vocal_owner != "character_1":
+            errors.append("ia2v_vocal_owner_not_character_1")
+            break
+    for row in i2v_rows:
+        if bool(_safe_dict(row).get("lip_sync_allowed")) or bool(_safe_dict(row).get("mouth_visible_required")):
+            errors.append("i2v_lipsync_forbidden")
+            break
+    return not errors, errors
 
 
 def _scene_plan_signature_matches_current(package: dict[str, Any], scene_plan: dict[str, Any]) -> bool:
@@ -14423,13 +14585,46 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_retry_prompt_mode"] = ""
     diagnostics["scene_plan_retry_timed_out"] = False
     diagnostics["scene_plan_retry_empty_response"] = False
+    diagnostics["clip_sanitizer_reapplied_before_scene_plan"] = False
+    diagnostics["scene_plan_hard_user_route_budget_applied"] = False
+    diagnostics["scene_plan_hard_user_route_budget_target"] = {}
+    diagnostics["scene_plan_clip_route_semantics_injected"] = False
+    diagnostics["scene_plan_vocal_owner_role_forced"] = ""
+    diagnostics["scene_plan_mandatory_memory_beats_present"] = False
+    diagnostics["scene_plan_mandatory_memory_beats"] = []
+    diagnostics["scene_plan_postcard_only_memory_blocked"] = False
+    diagnostics["scene_plan_character_2_antagonist_legacy_ignored"] = False
+    diagnostics["scene_plan_character_3_text_only_episodic"] = False
+    diagnostics["scene_plan_clip_contract_validation_ok"] = True
+    diagnostics["scene_plan_clip_contract_validation_errors"] = []
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
     package["diagnostics"] = diagnostics
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_plan")
     hard_fail_error = ""
+    if _is_clip_mode_package(package):
+        package = _sanitize_clip_package_before_downstream(package)
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["clip_sanitizer_reapplied_before_scene_plan"] = True
+        package["diagnostics"] = diagnostics
     scene_plan_prompt_package = _build_scene_plan_prompt_package(package)
+    scene_prompt_diag = _safe_dict(scene_plan_prompt_package.get("diagnostics"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    for key in (
+        "scene_plan_hard_user_route_budget_applied",
+        "scene_plan_hard_user_route_budget_target",
+        "scene_plan_clip_route_semantics_injected",
+        "scene_plan_vocal_owner_role_forced",
+        "scene_plan_mandatory_memory_beats_present",
+        "scene_plan_mandatory_memory_beats",
+        "scene_plan_postcard_only_memory_blocked",
+        "scene_plan_character_2_antagonist_legacy_ignored",
+        "scene_plan_character_3_text_only_episodic",
+    ):
+        if key in scene_prompt_diag:
+            diagnostics[key] = scene_prompt_diag.get(key)
+    package["diagnostics"] = diagnostics
     scene_prompt_input = _safe_dict(scene_plan_prompt_package.get("input"))
     scene_prompt_creative_config = deepcopy(_safe_dict(scene_prompt_input.get("creative_config")))
     strict_preset_name = str(scene_prompt_creative_config.get("route_strategy_preset") or "").strip().lower()
@@ -14669,6 +14864,63 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     else:
         diagnostics["scene_plan_route_budget_retry_already_attempted"] = bool(route_budget_retry_already_attempted)
         diagnostics["scene_plan_route_budget_second_retry_suppressed"] = False
+
+    clip_contract_ok = True
+    clip_contract_errors: list[str] = []
+    clip_contract_ok, clip_contract_errors = _validate_scene_plan_clip_contract(package, scene_plan)
+    if not clip_contract_ok:
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["scene_plan_clip_contract_validation_ok"] = False
+        diagnostics["scene_plan_clip_contract_validation_errors"] = list(clip_contract_errors)
+        package["diagnostics"] = diagnostics
+        clip_feedback = (
+            "Clip contract mismatch. Keep scene count equal to audio windows, forbid first_last, keep balanced approved "
+            "route budget, enforce ia2v as character_1 present performance with lip-sync, enforce i2v as memory action "
+            "with no lip-sync, cover mandatory memory beats, and avoid postcard-only memory fillers. "
+            f"Fix errors: {'; '.join(clip_contract_errors[:12])}."
+        )
+        retry_result = build_gemini_scene_plan(
+            api_key=gemini_api_key,
+            package=scene_plan_prompt_package,
+            validation_feedback=clip_feedback,
+            prompt_mode="compact_route_budget_retry",
+        )
+        retry_scene_plan = _safe_dict(retry_result.get("scene_plan"))
+        if retry_scene_plan:
+            retry_scene_plan, _ = _apply_scene_plan_route_locks(
+                retry_scene_plan,
+                route_locks_by_segment,
+                overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else True,
+            )
+            retry_scene_plan, _ = _repair_scene_plan_final_semantics(
+                package=package,
+                scene_plan=retry_scene_plan,
+            )
+            retry_scene_plan, _ = _rebalance_scene_plan_routes_after_validity_repairs(
+                package=package,
+                scene_plan=retry_scene_plan,
+            )
+            retry_scene_plan, _ = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
+            retry_result["scene_plan"] = retry_scene_plan
+            clip_retry_ok, clip_retry_errors = _validate_scene_plan_clip_contract(package, retry_scene_plan)
+            if clip_retry_ok:
+                scene_plan = retry_scene_plan
+                result = retry_result
+                clip_contract_ok = True
+                clip_contract_errors = []
+            else:
+                clip_contract_ok = False
+                clip_contract_errors = clip_retry_errors
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_clip_contract_validation_ok"] = bool(clip_contract_ok)
+    diagnostics["scene_plan_clip_contract_validation_errors"] = list(clip_contract_errors)
+    package["diagnostics"] = diagnostics
+    if not clip_contract_ok:
+        result["ok"] = False
+        result["validation_error"] = "scene_plan_clip_contract_validation_failed"
+        result["error"] = "scene_plan_clip_contract_validation_failed"
+        result["error_code"] = "SCENES_CLIP_CONTRACT_VALIDATION_FAILED"
+        hard_fail_error = "scene_plan_clip_contract_validation_failed"
 
     scene_diag = _safe_dict(result.get("diagnostics"))
     final_route_counts = _scene_plan_route_counts(scene_plan)
