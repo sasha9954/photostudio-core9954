@@ -617,13 +617,11 @@ def _ensure_director_v2_legacy_contract_fields(
 
 
 
-CLIP_ROUTE_BALANCE_OPTIONS = {
+CLIP_ROUTE_BALANCE_PRESETS = {
     "balanced_50_50",
     "performance_heavy_70_30",
     "story_heavy_30_70",
     "all_lipsync",
-    "ai_decides",
-    "custom_counts",
 }
 
 
@@ -686,72 +684,19 @@ def _ensure_clip_mode_contracts(
     clip_contract["performance_route"] = "ia2v"
     clip_contract["story_route"] = "i2v"
     clip_contract["first_last_allowed"] = False
-    clip_contract["performance_definition"] = _first_non_empty_string(
-        clip_contract.get("performance_definition"),
-        "ia2v сцены: lip-sync/перформанс с читаемым ртом, эмоциями и контролируемой камерой.",
-    )
-    clip_contract["story_cutaway_definition"] = _first_non_empty_string(
-        clip_contract.get("story_cutaway_definition"),
-        "i2v сцены: сюжетные перебивки, воспоминания, действия, локации и атмосфера мира между перформансами.",
-    )
 
     distribution = _safe_dict(package.get("scene_distribution_contract") or contract.get("scene_distribution_contract"))
-    requested_balance = _first_non_empty_string(
-        distribution.get("route_balance"),
-        answers.get("route_balance"),
-        answers.get("clip_route_balance"),
-    )
-    route_balance = requested_balance if requested_balance in CLIP_ROUTE_BALANCE_OPTIONS else "ai_decides"
-
-    ratio_by_balance = {
-        "balanced_50_50": (0.5, 0.5),
-        "performance_heavy_70_30": (0.3, 0.7),
-        "story_heavy_30_70": (0.7, 0.3),
-        "all_lipsync": (0.0, 1.0),
-        "ai_decides": (0.5, 0.5),
-    }
-    i2v_ratio, ia2v_ratio = ratio_by_balance.get(route_balance, (0.5, 0.5))
-    if route_balance == "custom_counts":
-        i2v_ratio = _safe_float(distribution.get("i2v_ratio") or answers.get("i2v_ratio"), 0.5)
-        ia2v_ratio = _safe_float(distribution.get("ia2v_ratio") or answers.get("ia2v_ratio"), 0.5)
-
-    user_approved = bool(distribution.get("user_approved")) or any(
-        key in answers for key in ("route_balance", "clip_route_balance", "scene_distribution")
-    )
-
-    distribution["user_approved"] = bool(user_approved)
-    distribution["route_balance"] = route_balance
-    distribution["i2v_ratio"] = max(0.0, min(1.0, _safe_float(i2v_ratio, 0.5)))
-    distribution["ia2v_ratio"] = max(0.0, min(1.0, _safe_float(ia2v_ratio, 0.5)))
     distribution["first_last_ratio"] = 0
     distribution["first_last_allowed"] = False
-    distribution["mechanical_alternation"] = False
-    distribution["ai_can_adjust_for_audio"] = True
-    distribution["max_consecutive_ia2v"] = int(distribution.get("max_consecutive_ia2v") or 2)
-    distribution["ia2v_meaning"] = _first_non_empty_string(
-        distribution.get("ia2v_meaning"),
-        answers.get("ia2v_meaning"),
-        "Lip-sync/performance scenes with expressive close focus on performer readability.",
-    )
-    distribution["i2v_meaning"] = _first_non_empty_string(
-        distribution.get("i2v_meaning"),
-        answers.get("i2v_meaning"),
-        "Story cutaways and world actions that bridge performance scenes.",
-    )
 
     prompt_policy = _safe_dict(package.get("prompt_policy") or contract.get("prompt_policy"))
-    prompt_policy["ltx_positive_prompt_rule"] = "Only describe what must be visible and moving."
     prompt_policy["negative_rules_are_internal"] = True
     prompt_policy["do_not_copy_negative_rules_into_ltx_positive_prompt"] = True
-    prompt_policy["do_not_copy_user_negative_phrases_into_ltx_positive_prompt"] = True
-    prompt_policy["ia2v_prompt_focus"] = "performer, readable mouth, emotional eyes, subtle hands/shoulders, controlled camera"
-    prompt_policy["i2v_prompt_focus"] = "story action, world, atmosphere, continuity"
 
     package_distribution = _safe_dict(package.get("scene_distribution_contract"))
     contract_distribution = _safe_dict(contract.get("scene_distribution_contract"))
     asked_required = bool(
         answers.get("route_balance")
-        or answers.get("clip_route_balance")
         or answers.get("scene_distribution")
         or package_distribution.get("user_approved")
         or contract_distribution.get("user_approved")
@@ -775,23 +720,28 @@ def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
     if _is_clip_music_video_payload(payload):
         clip_mode_block = """
 CLIP MODE (ОБЯЗАТЕЛЬНО):
-8) Режим клипа зафиксирован: mode=clip. Нельзя менять mode без явного подтверждения пользователя.
-9) Маршрут first_last запрещён. Разрешены только ia2v и i2v.
-10) ia2v = lip-sync/перформанс, у певца должен быть видим читаемый рот.
-11) i2v = сюжетные перебивки/воспоминания/действия/мир/атмосфера между перформансами.
-12) До done=true обязательно согласуй баланс маршрутов (route balance), если пользователь ещё не ответил.
-13) Обязательно задать (или подтвердить из ответов) клип-специфичные вопросы:
+8) Режим клипа зафиксирован: mode=clip, mode_locked=true.
+9) Не задавай вопрос "что мы делаем?" в clip mode (если mode уже известен и не auto/unknown).
+10) Маршрут first_last запрещён всегда. Разрешены только ia2v и i2v.
+11) ia2v = lip-sync/перформанс: певец виден, рот читаемый, эмоции лица/тела считываются.
+12) i2v = сюжетные перебивки, воспоминания, действия, локации, атмосфера между перформансами.
+13) Все недостающие клип-решения ты обязан спросить САМ в phase=questions.
+14) Backend не будет добавлять вопросы за тебя. Не возвращай done=true, пока не собран полный clip contract (или пользователь явно делегировал решение AI).
+15) Обязательно задать (или подтвердить из ответов) клип-специфичные решения:
     - баланс маршрутов (route balance),
+    - что значит ia2v именно в этом клипе,
+    - что значит i2v именно в этом клипе,
     - где происходит перформанс,
     - что показывает i2v между перформансами,
     - обязательные сцены,
     - интро,
     - аутро/финал,
     - как использовать референсы.
-14) В director_package и director_contract обязательно включить:
+16) При done=true в director_package и director_contract обязательно включить:
     - mode_contract,
     - clip_contract,
     - scene_distribution_contract,
+    - reference_usage_contract,
     - prompt_policy.
 """.strip()
     return f"""
@@ -879,23 +829,154 @@ CLIP MODE (ОБЯЗАТЕЛЬНО):
 """.strip()
 
 
-def _clip_route_balance_question() -> dict[str, Any]:
-    return {
-        "id": "clip_route_balance",
-        "label": "Баланс сцен клипа",
-        "text": "Какой баланс сцен нужен для клипа?",
-        "type": "single_choice",
-        "options": [
-            {"value": "balanced_50_50", "label": "50/50: lip-sync и сюжетные i2v примерно поровну"},
-            {"value": "performance_heavy_70_30", "label": "Больше lip-sync/performance"},
-            {"value": "story_heavy_30_70", "label": "Больше истории/воспоминаний/i2v"},
-            {"value": "all_lipsync", "label": "Почти весь клип lip-sync"},
-            {"value": "ai_decides", "label": "AI сам решает по аудио и сюжету"},
-            {"value": "custom_counts", "label": "Задать вручную"},
-        ],
-        "required": True,
-        "applies_to": ["scenes", "audio", "final_video_prompt"],
+def _extract_payload_refs(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    refs_by_role = _safe_dict(payload.get("context_refs") or payload.get("refs_by_role"))
+    normalized_roles: dict[str, Any] = {}
+    character_refs: dict[str, Any] = {}
+    for role, value in refs_by_role.items():
+        role_key = str(role or "").strip()
+        if not role_key:
+            continue
+        role_value = value if isinstance(value, (list, dict, str)) else str(value)
+        normalized_roles[role_key] = role_value
+        if "character" in role_key.lower():
+            character_refs[role_key] = role_value
+    return normalized_roles, character_refs
+
+
+def _validate_clip_director_contract(
+    director_contract: dict[str, Any],
+    director_package: dict[str, Any],
+    payload: dict[str, Any],
+) -> tuple[bool, list[str], dict[str, Any]]:
+    if not _is_clip_music_video_payload(payload):
+        diagnostics = {
+            "clip_contract_schema_checked": False,
+            "clip_contract_valid": True,
+            "clip_contract_missing_fields": [],
+        }
+        return True, [], diagnostics
+
+    missing_fields: list[str] = []
+    contract = _safe_dict(director_contract)
+    package = _safe_dict(director_package)
+
+    mode_contract = _safe_dict(package.get("mode_contract") or contract.get("mode_contract"))
+    clip_contract = _safe_dict(package.get("clip_contract") or contract.get("clip_contract"))
+    scene_distribution = _safe_dict(package.get("scene_distribution_contract") or contract.get("scene_distribution_contract"))
+    reference_usage_contract = _safe_dict(package.get("reference_usage_contract") or contract.get("reference_usage_contract"))
+    prompt_policy = _safe_dict(package.get("prompt_policy") or contract.get("prompt_policy"))
+
+    allowed_routes = sorted(set(_safe_nonempty_list(mode_contract.get("allowed_routes"))))
+    forbidden_routes = set(_safe_nonempty_list(mode_contract.get("forbidden_routes")))
+    if str(mode_contract.get("mode") or "").strip().lower() != "clip":
+        missing_fields.append("mode_contract.mode")
+    if bool(mode_contract.get("mode_locked")) is not True:
+        missing_fields.append("mode_contract.mode_locked")
+    if allowed_routes != ["ia2v", "i2v"]:
+        missing_fields.append("mode_contract.allowed_routes")
+    if "first_last" not in forbidden_routes:
+        missing_fields.append("mode_contract.forbidden_routes")
+    if bool(mode_contract.get("first_last_allowed")) is not False:
+        missing_fields.append("mode_contract.first_last_allowed")
+
+    if bool(clip_contract.get("audio_is_primary_clock")) is not True:
+        missing_fields.append("clip_contract.audio_is_primary_clock")
+    if str(clip_contract.get("performance_route") or "").strip().lower() != "ia2v":
+        missing_fields.append("clip_contract.performance_route")
+    if str(clip_contract.get("story_route") or "").strip().lower() != "i2v":
+        missing_fields.append("clip_contract.story_route")
+    if bool(clip_contract.get("first_last_allowed")) is not False:
+        missing_fields.append("clip_contract.first_last_allowed")
+    if not _first_non_empty_string(clip_contract.get("performance_definition")):
+        missing_fields.append("clip_contract.performance_definition")
+    if not _first_non_empty_string(clip_contract.get("story_cutaway_definition")):
+        missing_fields.append("clip_contract.story_cutaway_definition")
+
+    route_balance = _first_non_empty_string(scene_distribution.get("route_balance"))
+    if not route_balance:
+        missing_fields.append("scene_distribution_contract.route_balance")
+    user_approved = bool(scene_distribution.get("user_approved"))
+    if not (user_approved or route_balance == "ai_decides"):
+        missing_fields.append("scene_distribution_contract.user_approved_or_ai_decides")
+    ia2v_ratio = scene_distribution.get("ia2v_ratio")
+    i2v_ratio = scene_distribution.get("i2v_ratio")
+    if route_balance not in CLIP_ROUTE_BALANCE_PRESETS:
+        try:
+            float(ia2v_ratio)
+        except (TypeError, ValueError):
+            missing_fields.append("scene_distribution_contract.ia2v_ratio")
+        try:
+            float(i2v_ratio)
+        except (TypeError, ValueError):
+            missing_fields.append("scene_distribution_contract.i2v_ratio")
+    if _safe_float(scene_distribution.get("first_last_ratio"), -1) != 0:
+        missing_fields.append("scene_distribution_contract.first_last_ratio")
+    if bool(scene_distribution.get("first_last_allowed")) is not False:
+        missing_fields.append("scene_distribution_contract.first_last_allowed")
+    if not _first_non_empty_string(scene_distribution.get("ia2v_meaning")):
+        missing_fields.append("scene_distribution_contract.ia2v_meaning")
+    if not _first_non_empty_string(scene_distribution.get("i2v_meaning")):
+        missing_fields.append("scene_distribution_contract.i2v_meaning")
+
+    refs_by_role, character_refs = _extract_payload_refs(payload)
+    if refs_by_role:
+        if not reference_usage_contract:
+            missing_fields.append("reference_usage_contract")
+        else:
+            if character_refs and not (
+                _first_non_empty_string(reference_usage_contract.get("character_roles"))
+                or _safe_dict(reference_usage_contract.get("roles"))
+                or _safe_list(reference_usage_contract.get("usage_rules"))
+                or _safe_dict(reference_usage_contract.get("character_usage"))
+            ):
+                missing_fields.append("reference_usage_contract.character_usage")
+
+    if bool(prompt_policy.get("negative_rules_are_internal")) is not True:
+        missing_fields.append("prompt_policy.negative_rules_are_internal")
+    if bool(prompt_policy.get("do_not_copy_negative_rules_into_ltx_positive_prompt")) is not True:
+        missing_fields.append("prompt_policy.do_not_copy_negative_rules_into_ltx_positive_prompt")
+    if not _first_non_empty_string(prompt_policy.get("ltx_positive_prompt_rule")):
+        missing_fields.append("prompt_policy.ltx_positive_prompt_rule")
+
+    valid = len(missing_fields) == 0
+    diagnostics = {
+        "clip_contract_schema_checked": True,
+        "clip_contract_valid": valid,
+        "clip_contract_missing_fields": missing_fields,
     }
+    return valid, missing_fields, diagnostics
+
+
+def _build_director_v2_retry_prompt(
+    original_payload: dict[str, Any],
+    previous_response: dict[str, Any],
+    missing_fields: list[str],
+) -> str:
+    missing = [str(x).strip() for x in missing_fields if str(x).strip()]
+    return f"""
+Your previous response marked done=true, but clip contract validation failed.
+Missing or invalid fields: {json.dumps(missing, ensure_ascii=False)}
+You must not let backend create questions.
+Return either:
+A) phase='questions' with your own Russian user-facing questions for the missing decisions;
+OR
+B) phase='done' only if you provide a complete valid director_package/director_contract.
+
+Repeat constraints:
+- clip mode forbids first_last
+- allowed routes are ia2v/i2v only
+- you must ask missing questions yourself
+- backend will not inject questions
+
+Return strict JSON only.
+
+Previous response:
+{json.dumps(previous_response, ensure_ascii=False)}
+
+Payload:
+{json.dumps(original_payload, ensure_ascii=False)}
+""".strip()
 
 
 def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -938,29 +1019,14 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
 
     scene_distribution_contract = _safe_dict(director_package.get("scene_distribution_contract") or director_contract.get("scene_distribution_contract"))
     clip_distribution_present = bool(scene_distribution_contract)
-    clip_route_balance_approved = bool(
-        answers.get("route_balance")
-        or answers.get("clip_route_balance")
-        or answers.get("scene_distribution")
-        or _safe_dict(director_package.get("scene_distribution_contract")).get("user_approved")
-        or _safe_dict(director_contract.get("scene_distribution_contract")).get("user_approved")
+    clip_valid, clip_missing_fields, clip_schema_diagnostics = _validate_clip_director_contract(
+        director_contract,
+        director_package,
+        payload,
     )
     if is_clip_music_video and not bool(scene_distribution_contract.get("user_approved")) and not clip_questions_satisfied:
         done = False
         phase = "questions"
-    if is_clip_music_video and not clip_route_balance_approved:
-        done = False
-        phase = "questions"
-        has_balance_question = any(
-            str(_safe_dict(q).get("id") or "").strip() == "clip_route_balance"
-            for q in questions
-            if isinstance(q, dict)
-        )
-        if not has_balance_question:
-            questions = [_clip_route_balance_question(), *questions]
-
-    if not done and not questions:
-        questions = [_clip_route_balance_question()] if is_clip_music_video else questions
 
     diagnostics = {
         "director_v2": True,
@@ -977,11 +1043,25 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_clip_first_last_forbidden": bool(is_clip_music_video),
         "director_clip_allowed_routes": ["ia2v", "i2v"] if is_clip_music_video else [],
         "director_clip_distribution_contract_present": bool(clip_distribution_present),
+        "director_backend_question_injection_used": False,
+        "director_ai_retry_used": False,
+        "director_ai_retry_required": bool(is_clip_music_video and done and not clip_valid),
+        "director_clip_contract_schema_checked": bool(clip_schema_diagnostics.get("clip_contract_schema_checked")),
+        "director_clip_contract_valid": bool(clip_schema_diagnostics.get("clip_contract_valid")),
+        "director_clip_contract_incomplete": bool(is_clip_music_video and not clip_valid),
+        "director_clip_missing_fields": clip_missing_fields,
     }
+    assistant_message = str(parsed.get("assistant_message") or "").strip()
+    if done and is_clip_music_video and clip_valid:
+        assistant_message = "Режиссура клипа собрана. Можно запускать пайплайн."
+    elif is_clip_music_video:
+        assistant_message = "Нужно уточнить режиссуру клипа перед запуском пайплайна."
+    elif not done:
+        assistant_message = assistant_message or "Нужно уточнить режиссуру перед запуском пайплайна."
     return {
         "ok": True,
         "phase": "done" if done else "questions",
-        "assistant_message": str(parsed.get("assistant_message") or "").strip(),
+        "assistant_message": assistant_message,
         "questions": questions,
         "story_understanding": _safe_dict(parsed.get("story_understanding")),
         "answers": answers,
@@ -1065,7 +1145,68 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
                         "refs_roles_present": [],
                     },
                 }
-        return _normalize_director_v2_output(parsed, raw_payload)
+        normalized = _normalize_director_v2_output(parsed, raw_payload)
+        diagnostics = _safe_dict(normalized.get("diagnostics"))
+        is_clip_mode = _is_clip_music_video_payload(raw_payload)
+        clip_missing_fields = _safe_list(diagnostics.get("director_clip_missing_fields"))
+        retry_required = bool(
+            is_clip_mode
+            and (str(normalized.get("phase") or "").strip().lower() == "done" or bool(normalized.get("done")))
+            and bool(diagnostics.get("director_clip_contract_schema_checked"))
+            and not bool(diagnostics.get("director_clip_contract_valid"))
+        )
+        if retry_required:
+            retry_prompt = _build_director_v2_retry_prompt(raw_payload, parsed, [str(x) for x in clip_missing_fields])
+            retry_result = post_generate_content(
+                str(key_info.get("api_key") or ""),
+                DIRECTOR_QUESTIONS_MODEL,
+                {
+                    "contents": [{"parts": [{"text": retry_prompt}]}],
+                    "generationConfig": {
+                        "temperature": 0.15,
+                        "topP": 0.9,
+                        "responseMimeType": "application/json",
+                    },
+                },
+                timeout=60,
+            )
+            retry_parsed = _extract_json_object(_extract_text_from_gemini(retry_result))
+            if isinstance(retry_parsed, dict):
+                retry_normalized = _normalize_director_v2_output(retry_parsed, raw_payload)
+                retry_diag = _safe_dict(retry_normalized.get("diagnostics"))
+                retry_valid = bool(retry_diag.get("director_clip_contract_valid"))
+                retry_is_done = bool(retry_normalized.get("done")) or str(retry_normalized.get("phase") or "") == "done"
+                retry_diag["director_ai_retry_used"] = True
+                retry_diag["director_ai_retry_required"] = bool(retry_is_done and not retry_valid)
+                retry_normalized["diagnostics"] = retry_diag
+                if retry_is_done and retry_valid:
+                    return retry_normalized
+                retry_missing_fields = _safe_list(retry_diag.get("director_clip_missing_fields")) or clip_missing_fields
+                retry_questions = _safe_list(retry_normalized.get("questions"))
+                return {
+                    **retry_normalized,
+                    "phase": "questions",
+                    "done": False,
+                    "questions": retry_questions,
+                    "assistant_message": "AI Director не завершил контракт клипа. Нужно уточнить режиссуру или повторить формирование.",
+                    "diagnostics": {
+                        **retry_diag,
+                        "director_ai_retry_used": True,
+                        "director_ai_retry_required": True,
+                        "director_clip_contract_incomplete": True,
+                        "director_clip_missing_fields": retry_missing_fields,
+                    },
+                }
+            diagnostics["director_ai_retry_used"] = True
+            diagnostics["director_ai_retry_required"] = True
+            diagnostics["director_clip_contract_incomplete"] = True
+            normalized["phase"] = "questions"
+            normalized["done"] = False
+            normalized["questions"] = []
+            normalized["assistant_message"] = "AI Director не завершил контракт клипа. Нужно уточнить режиссуру или повторить формирование."
+            normalized["diagnostics"] = diagnostics
+            return normalized
+        return normalized
 
     context = raw_payload.get("context") if isinstance(raw_payload.get("context"), dict) else {}
     messages = raw_payload.get("messages") if isinstance(raw_payload.get("messages"), list) else []
