@@ -7832,25 +7832,32 @@ def _sanitize_clip_routes_in_package(package: dict[str, Any]) -> dict[str, Any]:
             input_pkg[parent_key] = cfg
     for contract_key in ("director_contract", "director_package"):
         cfg = _safe_dict(input_pkg.get(contract_key))
-        _force_route_contract_fields(_safe_dict(cfg.get("route_contract")), f"input.{contract_key}.route_contract")
-        _force_route_contract_fields(_safe_dict(cfg.get("mode_contract")), f"input.{contract_key}.mode_contract")
+        route_contract = _safe_dict(cfg.get("route_contract"))
+        _force_route_contract_fields(route_contract, f"input.{contract_key}.route_contract")
+        cfg["route_contract"] = route_contract
+        mode_contract = _safe_dict(cfg.get("mode_contract"))
+        _force_route_contract_fields(mode_contract, f"input.{contract_key}.mode_contract")
+        cfg["mode_contract"] = mode_contract
         if cfg:
             input_pkg[contract_key] = cfg
     package["input"] = input_pkg
 
     for contract_key in ("director_contract", "director_package"):
         cfg = _safe_dict(package.get(contract_key))
-        _force_route_contract_fields(_safe_dict(cfg.get("route_contract")), f"{contract_key}.route_contract")
-        _force_route_contract_fields(_safe_dict(cfg.get("mode_contract")), f"{contract_key}.mode_contract")
+        route_contract = _safe_dict(cfg.get("route_contract"))
+        _force_route_contract_fields(route_contract, f"{contract_key}.route_contract")
+        cfg["route_contract"] = route_contract
+        mode_contract = _safe_dict(cfg.get("mode_contract"))
+        _force_route_contract_fields(mode_contract, f"{contract_key}.mode_contract")
+        cfg["mode_contract"] = mode_contract
         if cfg:
             package[contract_key] = cfg
 
     story_core = _safe_dict(package.get("story_core"))
     story_guidance = _safe_dict(story_core.get("story_guidance"))
-    _force_route_contract_fields(
-        _safe_dict(story_guidance.get("route_mix_doctrine_for_scenes")),
-        "story_core.story_guidance.route_mix_doctrine_for_scenes",
-    )
+    route_mix_doctrine = _safe_dict(story_guidance.get("route_mix_doctrine_for_scenes"))
+    _force_route_contract_fields(route_mix_doctrine, "story_core.story_guidance.route_mix_doctrine_for_scenes")
+    story_guidance["route_mix_doctrine_for_scenes"] = route_mix_doctrine
     if story_guidance:
         story_core["story_guidance"] = story_guidance
     if story_core:
@@ -7858,11 +7865,12 @@ def _sanitize_clip_routes_in_package(package: dict[str, Any]) -> dict[str, Any]:
 
     story_core_v1 = _safe_dict(package.get("story_core_v1"))
     semantic_arc = _safe_dict(story_core_v1.get("semantic_arc"))
-    _force_route_contract_fields(
-        _safe_dict(semantic_arc.get("route_mix_doctrine_for_scenes")),
-        "story_core_v1.semantic_arc.route_mix_doctrine_for_scenes",
-    )
-    _force_route_contract_fields(_safe_dict(story_core_v1.get("story_guidance")), "story_core_v1.story_guidance")
+    route_mix_doctrine = _safe_dict(semantic_arc.get("route_mix_doctrine_for_scenes"))
+    _force_route_contract_fields(route_mix_doctrine, "story_core_v1.semantic_arc.route_mix_doctrine_for_scenes")
+    semantic_arc["route_mix_doctrine_for_scenes"] = route_mix_doctrine
+    story_guidance_v1 = _safe_dict(story_core_v1.get("story_guidance"))
+    _force_route_contract_fields(story_guidance_v1, "story_core_v1.story_guidance")
+    story_core_v1["story_guidance"] = story_guidance_v1
     if semantic_arc:
         story_core_v1["semantic_arc"] = semantic_arc
     if story_core_v1:
@@ -7924,18 +7932,18 @@ def _sanitize_empty_character3_in_package(package: dict[str, Any]) -> dict[str, 
         package["diagnostics"] = diagnostics
         return package
 
-    def _promote_character_3(contract_holder: dict[str, Any], path: str) -> None:
+    def _promote_character_3(contract_holder: dict[str, Any], path: str) -> dict[str, Any]:
         nonlocal moved_to_episodic
         if not isinstance(contract_holder, dict):
-            return
+            return contract_holder
         character_contract = _safe_dict(contract_holder.get("character_contract"))
         character_3 = _safe_dict(character_contract.get("character_3"))
         if not character_3:
-            return
+            return contract_holder
         token_blob = json.dumps(character_3, ensure_ascii=False).lower()
         is_text_only = bool(character_3.get("no_reference_needed")) or "episodic" in token_blob or "text_description_only" in token_blob
         if not is_text_only:
-            return
+            return contract_holder
         episodic_text_characters = _safe_dict(contract_holder.get("episodic_text_characters"))
         target_key = "episodic_girl" if "episodic_girl" not in episodic_text_characters else "character_3"
         episodic_payload = {
@@ -7952,6 +7960,7 @@ def _sanitize_empty_character3_in_package(package: dict[str, Any]) -> dict[str, 
         contract_holder["character_contract"] = character_contract
         moved_to_episodic = True
         removed_paths.append(f"{path}.character_contract.character_3")
+        return contract_holder
 
     def _remove_role_from_list(owner: dict[str, Any], field: str, role: str, path: str) -> None:
         raw = owner.get(field)
@@ -7975,19 +7984,25 @@ def _sanitize_empty_character3_in_package(package: dict[str, Any]) -> dict[str, 
                 removed_paths.append(path)
 
     for holder_key in ("director_contract", "director_package"):
-        _promote_character_3(_safe_dict(package.get(holder_key)), holder_key)
-        _promote_character_3(_safe_dict(input_pkg.get(holder_key)), f"input.{holder_key}")
+        holder = _safe_dict(package.get(holder_key))
+        holder = _promote_character_3(holder, holder_key)
+        if holder:
+            package[holder_key] = holder
+        input_holder = _safe_dict(input_pkg.get(holder_key))
+        input_holder = _promote_character_3(input_holder, f"input.{holder_key}")
+        if input_holder:
+            input_pkg[holder_key] = input_holder
 
     connected = _safe_dict(input_pkg.get("connected_context_summary"))
     _remove_role_from_list(connected, "presentCastRoles", "character_3", "input.connected_context_summary.presentCastRoles")
     refs_present = _safe_dict(connected.get("refsPresentByRole"))
     if "character_3" in refs_present:
-        refs_present["character_3"] = False
+        refs_present["character_3"] = []
         connected["refsPresentByRole"] = refs_present
         removed_paths.append("input.connected_context_summary.refsPresentByRole.character_3")
     connected_present = _safe_dict(connected.get("connectedRefsPresentByRole"))
     if "character_3" in connected_present:
-        connected_present["character_3"] = False
+        connected_present["character_3"] = []
         connected["connectedRefsPresentByRole"] = connected_present
         removed_paths.append("input.connected_context_summary.connectedRefsPresentByRole.character_3")
     input_pkg["connected_context_summary"] = connected
@@ -8104,8 +8119,23 @@ def _sanitize_prompt_policy_guard(package: dict[str, Any]) -> dict[str, Any]:
         owner["prompt_policy"] = prompt_policy
 
     _apply_policy(package)
-    _apply_policy(_safe_dict(package.get("director_contract")))
-    _apply_policy(_safe_dict(package.get("director_package")))
+    director_contract = _safe_dict(package.get("director_contract"))
+    _apply_policy(director_contract)
+    package["director_contract"] = director_contract
+    director_package = _safe_dict(package.get("director_package"))
+    _apply_policy(director_package)
+    package["director_package"] = director_package
+    input_pkg = _safe_dict(package.get("input"))
+    input_director_contract = _safe_dict(input_pkg.get("director_contract"))
+    _apply_policy(input_director_contract)
+    if input_director_contract:
+        input_pkg["director_contract"] = input_director_contract
+    input_director_package = _safe_dict(input_pkg.get("director_package"))
+    _apply_policy(input_director_package)
+    if input_director_package:
+        input_pkg["director_package"] = input_director_package
+    if input_pkg:
+        package["input"] = input_pkg
     diagnostics["prompt_policy_sanitized"] = True
     package["diagnostics"] = diagnostics
     return package
