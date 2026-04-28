@@ -3860,12 +3860,18 @@ def _scene_satisfies_requirement(
             return False
 
     if expected_world:
+        route_visual_directive = _safe_dict(row.get("route_visual_directive"))
         world_candidates = [
             str(row.get("director_required_world") or "").strip().lower(),
             str(row.get("route_visual_directive") or "").strip().lower(),
+            str(row.get("world_role") or "").strip().lower(),
+            str(row.get("scene_world") or "").strip().lower(),
+            str(row.get("expected_world") or "").strip().lower(),
+            str(route_visual_directive.get("world") or "").strip().lower(),
+            str(route_visual_directive.get("world_role") or "").strip().lower(),
+            str(route_visual_directive.get("required_world") or "").strip().lower(),
+            str(route_visual_directive.get("director_required_world") or "").strip().lower(),
         ]
-        if isinstance(row.get("route_visual_directive"), dict):
-            world_candidates.append(str(_safe_dict(row.get("route_visual_directive")).get("world") or "").strip().lower())
         if expected_world not in [candidate for candidate in world_candidates if candidate]:
             return False
     return True
@@ -3911,7 +3917,19 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
         or _safe_dict(_safe_dict(package).get("input")).get("director_contract")
         or _safe_dict(_safe_dict(package).get("input")).get("director_package")
     )
-    if not _safe_dict(director_contract.get("scene_distribution_contract")):
+    scene_distribution_contract = _safe_dict(director_contract.get("scene_distribution_contract"))
+    route_semantics = _safe_dict(director_contract.get("route_semantics"))
+    role_usage_contract = _normalize_role_usage_contract(director_contract, package)
+    requirements = _extract_scene_requirements_from_contract(director_contract, package)
+    has_director_scene_requirements = bool(_safe_list(director_contract.get("scene_requirements")))
+    fallback_requirements_only = bool(requirements) and not has_director_scene_requirements and all(
+        bool(_to_director_route(_safe_dict(req).get("expected_route")))
+        and not _safe_list(_safe_dict(req).get("expected_roles"))
+        and not _safe_list(_safe_dict(req).get("expected_role_functions"))
+        and not str(_safe_dict(req).get("expected_world") or "").strip()
+        for req in requirements
+    )
+    if not scene_distribution_contract and not requirements:
         return True, []
     errors: list[str] = []
     scene_rows = _scene_plan_rows_for_validation(scene_plan)
@@ -3923,16 +3941,12 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     if int(route_counts.get("first_last") or 0) > 0:
         errors.append("first_last_forbidden")
 
-    scene_distribution_contract = _safe_dict(director_contract.get("scene_distribution_contract"))
     if _scene_bool(scene_distribution_contract.get("user_approved")) and str(scene_distribution_contract.get("route_balance") or "").strip().lower() == "balanced_50_50" and expected_scene_count > 0:
         target = {"ia2v": expected_scene_count // 2, "i2v": expected_scene_count - (expected_scene_count // 2), "first_last": 0}
         for route_name, target_count in target.items():
             if int(route_counts.get(route_name) or 0) != int(target_count):
                 errors.append(f"hard_budget_{route_name}:{int(route_counts.get(route_name) or 0)}!={int(target_count)}")
 
-    route_semantics = _safe_dict(director_contract.get("route_semantics"))
-    role_usage_contract = _normalize_role_usage_contract(director_contract, package)
-    requirements = _extract_scene_requirements_from_contract(director_contract, package)
     requirement_coverage = _count_requirement_coverage(scene_plan, requirements, role_usage_contract, route_semantics)
     missing_requirement_ids = [
         str(req.get("id") or "").strip()
@@ -3955,6 +3969,12 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["scene_plan_missing_requirement_ids"] = missing_requirement_ids
     diagnostics["scene_plan_role_usage_contract"] = role_usage_contract
     diagnostics["scene_plan_hardcoded_story_keyword_validation_disabled"] = bool(requirements)
+    if has_director_scene_requirements:
+        diagnostics["scene_plan_contract_requirements_source"] = "director_contract.scene_requirements"
+        diagnostics["scene_plan_contract_requirements_are_structured"] = True
+    elif fallback_requirements_only:
+        diagnostics["scene_plan_contract_requirements_source"] = "fallback_mandatory_scenes"
+        diagnostics["scene_plan_contract_requirements_are_structured"] = False
     package["diagnostics"] = diagnostics
     for req_id in missing_requirement_ids:
         errors.append(f"scene_requirement_missing:{req_id}")
@@ -4085,6 +4105,8 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["vocal_owner_role_source"] = vocal_owner_role_source
     diagnostics["scene_plan_unreferenced_episodic_visual_extras"] = sorted(unreferenced_episodic_roles)
     diagnostics["scene_plan_unreferenced_episodic_usage_counts"] = dict(role_usage_scene_count)
+    diagnostics["scene_plan_character_3_unreferenced_episodic_visual_extra"] = "character_3" in unreferenced_episodic_roles
+    diagnostics["scene_plan_character_3_usage_scene_count"] = int(role_usage_scene_count.get("character_3") or 0)
     package["diagnostics"] = diagnostics
     return not errors, errors
 
