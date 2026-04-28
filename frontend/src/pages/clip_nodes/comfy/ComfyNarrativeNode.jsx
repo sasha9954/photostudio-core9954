@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position, NodeShell, handleStyle } from "./comfyNodeShared";
 import { fetchJson } from "../../../services/api";
 import {
@@ -31,6 +31,13 @@ const ROUTE_STRATEGY_PRESETS = [
   { key: "story_safe_70_20_10", label: "История безопасно 70/20/10", description: "на 8 сцен: 6 i2v / 1-2 ia2v / 0-1 первый-последний", targets: { i2v: 6, ia2v: 1, first_last: 1 }, maxConsecutiveIa2v: 2 },
 ];
 const DIRECTOR_ANSWER_LABELS = {};
+
+function stripDirectorDiagnostics(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(diagnostics).filter(([key]) => !String(key || "").toLowerCase().includes("director"))
+  );
+}
 
 function buildDirectorContractFromConfig(directorConfig) {
   const cfg = directorConfig && typeof directorConfig === "object" ? directorConfig : {};
@@ -100,6 +107,41 @@ export default function ComfyNarrativeNode({ id, data }) {
         ? "Подключена внешняя ссылка на видео"
         : "Подключён внешний видеофайл"
     : "Подключите один source-of-truth: аудио, видеофайл или ссылку на видео.";
+  const baseDiagnostics = useMemo(() => stripDirectorDiagnostics(data?.diagnostics), [data?.diagnostics]);
+
+  const buildDirectorResetPatch = ({ clearScenarioText = false } = {}) => ({
+    assistantMessage: "",
+    dynamicQuestions: [],
+    directorStale: true,
+    director_signature_matches_current: false,
+    director_stale_reason: "manual_director_reset",
+    directorAnswers: {},
+    director_config: {},
+    director_contract: {},
+    director_package: {},
+    director_created_for_signature: "",
+    director_summary: "",
+    directorSummary: "",
+    director_summary_preview: "",
+    director_story_understanding: {},
+    directorOutput: null,
+    storyboardOut: null,
+    storyboardPackage: {},
+    stageStatuses: {},
+    diagnostics: {
+      ...baseDiagnostics,
+      current_scenario_input_signature: directorInputSignature,
+      director_signature_matches_current: false,
+      persisted_director_result_reused: false,
+    },
+    ...(clearScenarioText
+      ? {
+        directorNote: "",
+        text: "",
+        aiNarrative: "",
+      }
+      : {}),
+  });
 
   useEffect(() => {
     if ((data?.contentType || "story") !== safeContentType) {
@@ -248,7 +290,10 @@ export default function ComfyNarrativeNode({ id, data }) {
     setAiLoading(true);
     try {
       const directorPayload = buildScenarioDirectorRequestPayload(data || {}) || {};
-      const canReuseDirectorArtifacts = directorSignatureMatchesCurrent;
+      const isManualInit = phase === "init";
+      const canReuseDirectorArtifacts = !isManualInit && directorSignatureMatchesCurrent;
+      const directorNoteText = String(data?.directorNote || "").trim();
+      const storyTextValue = String(data?.text || "").trim();
       const nextAnswers = {
         ...(canReuseDirectorArtifacts && answers && typeof answers === "object" ? answers : {}),
         ...(answerPatch && typeof answerPatch === "object" ? answerPatch : {}),
@@ -257,9 +302,9 @@ export default function ComfyNarrativeNode({ id, data }) {
         ...directorPayload,
         mode: "director_v2",
         phase,
-        narrative_note: String(data?.aiNarrative || data?.directorNote || "").trim(),
-        story_text: String(data?.text || "").trim(),
-        director_note: String(data?.directorNote || "").trim(),
+        narrative_note: directorNoteText,
+        story_text: directorNoteText || storyTextValue,
+        director_note: directorNoteText,
         content_type: safeContentType,
         director_mode: String(data?.directorMode || data?.director_mode || "clip").trim() || "clip",
         format: String(data?.format || "9:16").trim() || "9:16",
@@ -269,15 +314,21 @@ export default function ComfyNarrativeNode({ id, data }) {
         },
         routeTargetsPerBlock,
         refs_by_role: connectedContext?.refsByRole || {},
-        directorAnswers: nextAnswers,
+        directorAnswers: isManualInit ? {} : nextAnswers,
         director_config: data?.director_config && typeof data.director_config === "object" ? data.director_config : {},
         director_contract: canReuseDirectorArtifacts && data?.director_contract && typeof data.director_contract === "object" ? data.director_contract : {},
         director_package: canReuseDirectorArtifacts && data?.director_package && typeof data.director_package === "object" ? data.director_package : {},
         current_scenario_input_signature: directorInputSignature,
-        force_regenerate: phase === "init",
+        force_regenerate: isManualInit,
         full_node_payload: data && typeof data === "object" ? data : {},
       };
       console.debug("[AI DIRECTOR V2 REQUEST]", {
+        director_note_sent: body?.director_note || "",
+        story_text_sent: body?.story_text || "",
+        force_regenerate: Boolean(body?.force_regenerate),
+        reused_director_artifacts: canReuseDirectorArtifacts,
+        reused_answers: !isManualInit && Object.keys(nextAnswers || {}).length > 0,
+        current_scenario_input_signature: directorInputSignature,
         hasNarrative: Boolean(String(body?.story_text || body?.narrative_note || "").trim()),
         hasAudio: Boolean(body?.metadata?.audio?.url || body?.source?.source_mode === "audio"),
         hasVideo: Boolean(body?.source?.source_mode === "video_file" || body?.source?.source_mode === "video_link"),
@@ -337,6 +388,14 @@ export default function ComfyNarrativeNode({ id, data }) {
         });
       }
 
+      if (isManualInit) {
+        patch.diagnostics = {
+          ...baseDiagnostics,
+          current_scenario_input_signature: directorInputSignature,
+          director_signature_matches_current: Boolean(patch?.director_signature_matches_current),
+          persisted_director_result_reused: false,
+        };
+      }
       data?.onFieldChange?.(id, patch);
       setStaleDirectorState(!resolvedDone);
       if (!resolvedDone && !hasQuestions && allowFallback) {
@@ -358,23 +417,19 @@ export default function ComfyNarrativeNode({ id, data }) {
   const startDirectorChat = async () => {
     if (aiLoading) return;
     setDirectorChatDone(false);
+    setAssistantMessage("");
+    setAnswers({});
+    setDynamicQuestions([]);
     await runDirectorChat({ phase: "init" });
   };
 
-  const resetDirectorChat = () => {
+  const resetDirectorChat = ({ clearScenarioText = false } = {}) => {
     setAssistantMessage("");
     setDynamicQuestions([]);
     setDirectorChatDone(false);
     setAnswers({});
     setStaleDirectorState(true);
-    data?.onFieldChange?.(id, {
-      directorStale: true,
-      directorAnswers: {},
-      director_config: {},
-      director_contract: {},
-      director_package: {},
-      director_summary: "",
-    });
+    data?.onFieldChange?.(id, buildDirectorResetPatch({ clearScenarioText }));
   };
 
   return (
@@ -461,6 +516,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                 value={data?.directorNote || ""}
                 onChange={(e) => data?.onFieldChange?.(id, {
                   directorNote: e.target.value,
+                  aiNarrative: e.target.value,
                   directorAnswers: {},
                   director_config: {},
                   director_contract: {},
@@ -469,6 +525,8 @@ export default function ComfyNarrativeNode({ id, data }) {
                   directorOutput: null,
                   storyboardOut: null,
                   storyboardPackage: {},
+                  stageStatuses: {},
+                  director_signature_matches_current: false,
                   directorStale: true,
                 })}
                 placeholder="Например: добавь экшена, сделай мрачнее, усиль конфликт"
@@ -484,6 +542,16 @@ export default function ComfyNarrativeNode({ id, data }) {
               {aiLoading ? "AI режиссёр думает…" : "🎬 Сформировать через AI"}
             </button>
             {aiError ? <div className="clipSB_narrativeEmptyHint" role="alert">{aiError}</div> : null}
+            {(dynamicQuestions.length > 0 || directorChatDone || assistantMessage) ? (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => resetDirectorChat()} disabled={aiLoading}>
+                  Сбросить режиссуру
+                </button>
+                <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => resetDirectorChat({ clearScenarioText: true })} disabled={aiLoading}>
+                  Очистить текст сценария
+                </button>
+              </div>
+            ) : null}
             <section className="clipSB_narrativeSection">
               <div className="clipSB_brainLabel">AI режиссёр</div>
               {assistantMessage ? <div className="clipSB_narrativeEmptyHint">{assistantMessage}</div> : null}
@@ -546,9 +614,6 @@ export default function ComfyNarrativeNode({ id, data }) {
                       disabled={aiLoading || directorChatDone}
                     >
                       Отправить ответы
-                    </button>
-                    <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={resetDirectorChat} disabled={aiLoading}>
-                      Сбросить режиссуру
                     </button>
                   </div>
                 </div>
