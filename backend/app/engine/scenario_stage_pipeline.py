@@ -3011,16 +3011,16 @@ def _scene_plan_safe_identity_constraints(package: dict[str, Any]) -> dict[str, 
     roster_rows = _safe_list(_safe_dict(scene_pkg.get("role_plan")).get("roster"))
 
     def _has_ref_for_role(role: str) -> bool:
-        if _has_real_ref(_safe_list(connected_refs.get(role))):
+        if _scene_has_real_ref(_safe_list(connected_refs.get(role))):
             return True
-        if _has_real_ref(_safe_list(refs_present.get(role))):
+        if _scene_has_real_ref(_safe_list(refs_present.get(role))):
             return True
         ref_item = _safe_dict(refs_inventory.get(f"ref_{role}"))
         return any(
             [
-                _has_real_ref(ref_item.get("refs")),
-                _has_real_ref(ref_item.get("value")),
-                _has_real_ref(ref_item.get("count")),
+                _scene_has_real_ref(ref_item.get("refs")),
+                _scene_has_real_ref(ref_item.get("value")),
+                _scene_has_real_ref(ref_item.get("count")),
             ]
         )
 
@@ -3081,6 +3081,30 @@ def _scene_bool(value: Any) -> bool:
     if token in {"true", "1", "yes", "required", "enabled"}:
         return True
     if token in {"false", "0", "no", "none", "", "null"}:
+        return False
+    return False
+
+
+def _scene_has_real_ref(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in {"", "0", "false", "none", "null", "undefined"}:
+            return False
+        if token.startswith(("http://", "https://", "/static/", "data:image")):
+            return True
+        return token.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif"))
+    if isinstance(value, list):
+        return any(_scene_has_real_ref(item) for item in value)
+    if isinstance(value, dict):
+        for key in ("url", "value", "src", "asset_path", "assetPath", "preview", "refs", "count"):
+            if _scene_has_real_ref(value.get(key)):
+                return True
         return False
     return False
 
@@ -3291,11 +3315,11 @@ def _scene_plan_character_3_unreferenced_episodic_visual_extra(package: dict[str
     ref_character_3 = _safe_dict(refs_inventory.get("ref_character_3"))
     has_visual_ref = any(
         [
-            _has_real_ref(refs_present),
-            _has_real_ref(connected_refs_present),
-            _has_real_ref(ref_character_3.get("refs")),
-            _has_real_ref(ref_character_3.get("value")),
-            _has_real_ref(ref_character_3.get("count")),
+            _scene_has_real_ref(refs_present),
+            _scene_has_real_ref(connected_refs_present),
+            _scene_has_real_ref(ref_character_3.get("refs")),
+            _scene_has_real_ref(ref_character_3.get("value")),
+            _scene_has_real_ref(ref_character_3.get("count")),
         ]
     )
     if has_visual_ref:
@@ -8497,21 +8521,6 @@ def _sanitize_empty_character3_in_package(package: dict[str, Any]) -> dict[str, 
     removed_paths: list[str] = []
     moved_to_episodic = False
 
-    def _has_real_ref(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return value > 0
-        if isinstance(value, str):
-            return bool(value.strip())
-        if isinstance(value, list):
-            return any(_has_real_ref(item) for item in value)
-        if isinstance(value, dict):
-            if isinstance(value.get("count"), (int, float)) and value.get("count", 0) > 0:
-                return True
-            return any(_has_real_ref(value.get(key)) for key in ("refs", "value", "url", "urls"))
-        return False
-
     input_pkg = _safe_dict(package.get("input"))
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
@@ -8519,12 +8528,12 @@ def _sanitize_empty_character3_in_package(package: dict[str, Any]) -> dict[str, 
     ref_character_3 = _safe_dict(refs_inventory.get("ref_character_3"))
     has_character_3_ref = any(
         (
-            _has_real_ref(_safe_dict(connected_summary.get("refsPresentByRole")).get("character_3")),
-            _has_real_ref(_safe_dict(connected_summary.get("connectedRefsPresentByRole")).get("character_3")),
-            _has_real_ref(ref_character_3.get("refs")),
-            _has_real_ref(ref_character_3.get("value")),
-            _has_real_ref(ref_character_3.get("count")),
-            _has_real_ref(refs_by_role.get("character_3")),
+            _scene_has_real_ref(_safe_dict(connected_summary.get("refsPresentByRole")).get("character_3")),
+            _scene_has_real_ref(_safe_dict(connected_summary.get("connectedRefsPresentByRole")).get("character_3")),
+            _scene_has_real_ref(ref_character_3.get("refs")),
+            _scene_has_real_ref(ref_character_3.get("value")),
+            _scene_has_real_ref(ref_character_3.get("count")),
+            _scene_has_real_ref(refs_by_role.get("character_3")),
         )
     )
     if has_character_3_ref:
