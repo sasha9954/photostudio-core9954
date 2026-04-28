@@ -39,6 +39,25 @@ function stripDirectorDiagnostics(diagnostics) {
   );
 }
 
+function stripDirectorRuntimeFromNodeData(nodeData) {
+  const safe = nodeData && typeof nodeData === "object" ? { ...nodeData } : {};
+  delete safe.directorAnswers;
+  delete safe.director_config;
+  delete safe.director_contract;
+  delete safe.director_package;
+  delete safe.director_created_for_signature;
+  delete safe.director_summary;
+  delete safe.directorSummary;
+  delete safe.director_summary_preview;
+  delete safe.director_story_understanding;
+  delete safe.directorOutput;
+  delete safe.storyboardOut;
+  delete safe.storyboardPackage;
+  delete safe.stageStatuses;
+  delete safe.diagnostics;
+  return safe;
+}
+
 function buildDirectorContractFromConfig(directorConfig) {
   const cfg = directorConfig && typeof directorConfig === "object" ? directorConfig : {};
   const ia2vLocations = Array.isArray(cfg.ia2v_locations) ? cfg.ia2v_locations : [];
@@ -315,12 +334,14 @@ export default function ComfyNarrativeNode({ id, data }) {
         routeTargetsPerBlock,
         refs_by_role: connectedContext?.refsByRole || {},
         directorAnswers: isManualInit ? {} : nextAnswers,
-        director_config: data?.director_config && typeof data.director_config === "object" ? data.director_config : {},
+        director_config: isManualInit ? {} : (data?.director_config && typeof data.director_config === "object" ? data.director_config : {}),
         director_contract: canReuseDirectorArtifacts && data?.director_contract && typeof data.director_contract === "object" ? data.director_contract : {},
         director_package: canReuseDirectorArtifacts && data?.director_package && typeof data.director_package === "object" ? data.director_package : {},
         current_scenario_input_signature: directorInputSignature,
         force_regenerate: isManualInit,
-        full_node_payload: data && typeof data === "object" ? data : {},
+        full_node_payload: isManualInit
+          ? stripDirectorRuntimeFromNodeData(data)
+          : (data && typeof data === "object" ? data : {}),
       };
       console.debug("[AI DIRECTOR V2 REQUEST]", {
         director_note_sent: body?.director_note || "",
@@ -334,6 +355,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         hasVideo: Boolean(body?.source?.source_mode === "video_file" || body?.source?.source_mode === "video_link"),
         refsByRole: Object.keys(body?.refs_by_role || {}),
         existingDirectorPackage: Boolean(body?.director_package && Object.keys(body.director_package).length),
+        full_node_payload_sanitized: isManualInit,
       });
       const json = await fetchJson("/api/director/chat", {
         method: "POST",
