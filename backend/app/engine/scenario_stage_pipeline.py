@@ -3102,6 +3102,151 @@ def _scene_row_vocal_owner_role(row: dict[str, Any]) -> str:
     return ""
 
 
+def _normalize_scene_plan_role_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    return token if token in {"character_1", "character_2", "character_3"} else ""
+
+
+def _resolve_scene_plan_vocal_owner_role(package: dict[str, Any]) -> tuple[str, str]:
+    pkg = _safe_dict(package)
+    input_pkg = _safe_dict(pkg.get("input"))
+    director_contract = _safe_dict(
+        pkg.get("director_contract")
+        or pkg.get("director_package")
+        or input_pkg.get("director_contract")
+        or input_pkg.get("director_package")
+    )
+    clip_contract = _safe_dict(director_contract.get("clip_contract"))
+    creative_config = _safe_dict(input_pkg.get("creative_config"))
+    audio_map = _safe_dict(pkg.get("audio_map"))
+    audio_map_diag = _safe_dict(audio_map.get("diagnostics"))
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    role_plan = _safe_dict(pkg.get("role_plan"))
+
+    prioritized_candidates: list[tuple[Any, str]] = [
+        (clip_contract.get("vocal_owner_role"), "director_contract.clip_contract.vocal_owner_role"),
+        (director_contract.get("vocal_owner_role"), "director_contract.vocal_owner_role"),
+        (creative_config.get("vocal_owner_role"), "input.creative_config.vocal_owner_role"),
+        (audio_map_diag.get("vocal_owner_role"), "audio_map.diagnostics.vocal_owner_role"),
+        (audio_map.get("vocal_owner_role"), "audio_map.vocal_owner_role"),
+        (diagnostics.get("audio_vocal_owner_role"), "diagnostics.audio_vocal_owner_role"),
+        (diagnostics.get("vocal_owner_role"), "diagnostics.vocal_owner_role"),
+    ]
+    for value, source in prioritized_candidates:
+        role = _normalize_scene_plan_role_token(value)
+        if role:
+            return role, source
+
+    for idx, row in enumerate(_safe_list(role_plan.get("roster")), start=1):
+        row_safe = _safe_dict(row)
+        role = _normalize_scene_plan_role_token(row_safe.get("vocal_owner_role"))
+        if role:
+            return role, f"role_plan.roster[{idx}].vocal_owner_role"
+    for idx, row in enumerate(_safe_list(role_plan.get("scene_casting")), start=1):
+        row_safe = _safe_dict(row)
+        role = _normalize_scene_plan_role_token(row_safe.get("vocal_owner_role") or row_safe.get("speaker_role"))
+        if role:
+            field_name = "vocal_owner_role" if _normalize_scene_plan_role_token(row_safe.get("vocal_owner_role")) else "speaker_role"
+            return role, f"role_plan.scene_casting[{idx}].{field_name}"
+    return "character_1", "fallback_character_1"
+
+
+def _normalize_camera_energy_level(value: Any, *, row: dict[str, Any] | None = None) -> str:
+    if isinstance(value, (int, float)):
+        score = max(0.0, min(1.0, float(value)))
+        if score <= 0.33:
+            return "low"
+        if score <= 0.66:
+            return "medium"
+        return "high"
+    token = str(value or "").strip().lower()
+    if token in {"low", "medium", "high", "settle"}:
+        return token
+    if token in {"final", "outro", "resolve", "tail"} and row is not None:
+        marker_blob = " ".join(
+            str(_safe_dict(row).get(field) or "").strip().lower()
+            for field in ("segment_type", "scene_type", "phase", "section", "label", "name", "beat_type")
+        )
+        if any(marker in marker_blob for marker in {"final", "outro", "resolve", "tail"}):
+            return "settle"
+    try:
+        numeric = float(token)
+    except (TypeError, ValueError):
+        return ""
+    return _normalize_camera_energy_level(numeric, row=row)
+
+
+def _camera_guidance_for_energy_level(level: str) -> list[str]:
+    return {
+        "low": ["static_hold", "very_slow_push_in", "calm_pacing"],
+        "medium": ["calm_push_in", "slow_tracking", "steady_pacing"],
+        "high": ["controlled_dynamic_push_in", "stronger_tracking", "faster_pacing"],
+        "settle": ["slow_settle", "locked_off", "emotional_hold"],
+    }.get(level, [])
+
+
+def _build_camera_energy_map_from_audio_map(audio_map: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    scene_windows = [row for row in _safe_list(_safe_dict(audio_map).get("scene_candidate_windows")) if isinstance(row, dict)]
+    segments = [row for row in _safe_list(_safe_dict(audio_map).get("segments")) if isinstance(row, dict)]
+    source_rows = scene_windows or segments
+    source = "audio_map.scene_candidate_windows" if scene_windows else "audio_map.segments"
+    camera_energy_map: list[dict[str, Any]] = []
+    for idx, segment in enumerate(source_rows, start=1):
+        row = _safe_dict(segment)
+        raw_candidates = (
+            row.get("camera_energy"),
+            row.get("camera_energy_level"),
+            row.get("energy_level"),
+            row.get("energy"),
+            row.get("intensity"),
+        )
+        level = ""
+        for candidate in raw_candidates:
+            level = _normalize_camera_energy_level(candidate, row=row)
+            if level:
+                break
+        if not level:
+            continue
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+        if not segment_id:
+            continue
+        camera_energy_map.append(
+            {
+                "segment_id": segment_id,
+                "camera_energy_level": level,
+                "camera_guidance": _camera_guidance_for_energy_level(level),
+                "camera_energy_scope": "camera_movement_and_pacing_only",
+            }
+        )
+    return camera_energy_map, source
+
+
+def _apply_camera_energy_map_to_scene_plan(scene_plan: dict[str, Any], camera_energy_map: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
+    normalized = deepcopy(_safe_dict(scene_plan))
+    by_segment = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in camera_energy_map
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    applied = 0
+    for field in ("storyboard", "scenes", "segments"):
+        rows = [deepcopy(_safe_dict(row)) for row in _safe_list(normalized.get(field)) if isinstance(row, dict)]
+        if not rows:
+            continue
+        rewritten_rows: list[dict[str, Any]] = []
+        for idx, row in enumerate(rows, start=1):
+            segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+            energy_row = _safe_dict(by_segment.get(segment_id))
+            if energy_row:
+                row["camera_energy_level"] = str(energy_row.get("camera_energy_level") or "").strip()
+                row["camera_guidance"] = _safe_list(energy_row.get("camera_guidance"))
+                row["camera_energy_scope"] = "camera_movement_and_pacing_only"
+                applied += 1
+            rewritten_rows.append(row)
+        normalized[field] = rewritten_rows
+    return normalized, applied
+
+
 def _extract_memory_beat_categories(mandatory_beats: list[str]) -> dict[str, list[str]]:
     category_keywords: dict[str, tuple[str, ...]] = {
         "past_self_memory": ("past self", "younger self", "same hero in youth", "прошл", "тот же герой"),
@@ -3375,28 +3520,11 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
         role_plan["scene_prompt_rules"]["character_3_unreferenced_episodic_visual_extra"] = (
             "character_3 may appear as unreferenced episodic visual extra in one memory scene; no identity lock and no persistent continuity."
         )
+    resolved_vocal_owner_role, resolved_vocal_owner_source = _resolve_scene_plan_vocal_owner_role(source_pkg)
+    role_plan["scene_prompt_rules"]["vocal_owner_role_resolved"] = resolved_vocal_owner_role
+    role_plan["scene_prompt_rules"]["vocal_owner_role_source"] = resolved_vocal_owner_source
 
-    audio_segments = _safe_list(_safe_dict(source_pkg.get("audio_map")).get("segments"))
-    camera_energy_map: list[dict[str, Any]] = []
-    for idx, segment in enumerate(audio_segments, start=1):
-        row = _safe_dict(segment)
-        level = str(row.get("camera_energy") or row.get("energy") or "").strip().lower()
-        if level not in {"low", "medium", "high", "settle"}:
-            continue
-        movement = {
-            "low": ["static_hold", "very_slow_push_in", "calm_pacing"],
-            "medium": ["calm_push_in", "slow_tracking", "steady_pacing"],
-            "high": ["controlled_dynamic_push_in", "stronger_tracking", "faster_pacing"],
-            "settle": ["slow_settle", "locked_off", "emotional_hold"],
-        }[level]
-        camera_energy_map.append(
-            {
-                "segment_id": str(row.get("segment_id") or f"seg_{idx:02d}").strip(),
-                "camera_energy_level": level,
-                "camera_guidance": movement,
-                "scope": "camera_movement_and_pacing_only",
-            }
-        )
+    camera_energy_map, camera_energy_source = _build_camera_energy_map_from_audio_map(_safe_dict(source_pkg.get("audio_map")))
     if camera_energy_map:
         role_plan["camera_energy_map"] = camera_energy_map
 
@@ -3423,7 +3551,7 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_hard_user_route_budget_applied"] = bool(hard_user_budget_applied)
     diagnostics["scene_plan_hard_user_route_budget_target"] = dict(hard_user_budget_target)
     diagnostics["scene_plan_clip_route_semantics_injected"] = bool(route_semantics_injected)
-    diagnostics["scene_plan_vocal_owner_role_forced"] = "resolved_vocal_owner_role_with_character_1_fallback" if route_semantics_injected else ""
+    diagnostics["scene_plan_vocal_owner_role_forced"] = resolved_vocal_owner_role if resolved_vocal_owner_role else ""
     diagnostics["scene_plan_mandatory_memory_beats_present"] = bool(mandatory_memory_beats)
     diagnostics["scene_plan_mandatory_memory_beats"] = list(mandatory_memory_beats)
     diagnostics["scene_plan_mandatory_memory_beat_categories"] = list(mandatory_memory_beat_categories.keys())
@@ -3432,9 +3560,12 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_character_2_antagonist_legacy_ignored"] = bool(char2_antagonist_legacy_ignored)
     diagnostics["scene_plan_character_3_unreferenced_episodic_visual_extra"] = _scene_bool(char3_unreferenced_episodic)
     diagnostics["scene_plan_character_3_text_only_episodic"] = _scene_bool(char3_unreferenced_episodic)
-    diagnostics["camera_energy_map_present"] = _scene_bool(camera_energy_map)
+    diagnostics["vocal_owner_role_resolved"] = [resolved_vocal_owner_role]
+    diagnostics["vocal_owner_role_source"] = [resolved_vocal_owner_source]
+    diagnostics["camera_energy_map_present"] = bool(camera_energy_map)
     diagnostics["camera_energy_segments_count"] = len(camera_energy_map)
     diagnostics["camera_energy_applied_to_scene_count"] = len(camera_energy_map)
+    diagnostics["camera_energy_map_source"] = camera_energy_source
     diagnostics["camera_energy_affects_story_content"] = False
     scene_pkg["diagnostics"] = diagnostics
     input_pkg["scene_safe_identity_constraints"] = _scene_plan_safe_identity_constraints(source_pkg)
@@ -3472,6 +3603,7 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
         return True, []
     errors: list[str] = []
     scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    resolved_vocal_owner_role, resolved_vocal_owner_source = _resolve_scene_plan_vocal_owner_role(package)
     expected_scene_count = len(_safe_list(_safe_dict(package.get("audio_map")).get("scene_candidate_windows"))) or _expected_scene_count_from_package(package)
     route_counts = _scene_plan_route_counts(scene_plan)
     if expected_scene_count > 0 and len(scene_rows) != expected_scene_count:
@@ -3524,6 +3656,23 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
         errors.append(f"mandatory_memory_beat_category_missing:{category}")
 
     char3_unreferenced_episodic = _scene_plan_character_3_unreferenced_episodic_visual_extra(package)
+    char3_usage_scene_count = 0
+    for row in scene_rows:
+        row_safe = _safe_dict(row)
+        role_tokens: list[str] = [
+            _canonical_subject_id(row_safe.get("primary_role")),
+            _canonical_subject_id(row_safe.get("visual_focus_role")),
+        ]
+        for field in ("secondary_roles", "refsUsed", "active_roles", "sceneActiveRoles"):
+            for item in _safe_list(row_safe.get(field)):
+                token = _canonical_subject_id(item)
+                if token:
+                    role_tokens.append(token)
+        if "character_3" in role_tokens:
+            char3_usage_scene_count += 1
+    if char3_unreferenced_episodic and char3_usage_scene_count > 1:
+        errors.append("character_3_unreferenced_episodic_used_multiple_scenes")
+
     if not char3_unreferenced_episodic:
         has_character_3_ref = bool(_extract_ref_urls(_safe_dict(_safe_dict(package).get("refs_inventory")).get("ref_character_3")))
         has_character_3_i2v_usage = any(
@@ -3549,15 +3698,15 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
                     source = candidate_key
                     break
             if source == "vocal_owner_role":
-                source = "fallback_character_1"
+                source = resolved_vocal_owner_source
         if not vocal_owner:
-            vocal_owner = "character_1"
+            vocal_owner = resolved_vocal_owner_role
             vocal_owner_normalized_count += 1
             row_safe["vocal_owner_role"] = vocal_owner
         vocal_owner_role_resolved.append(vocal_owner)
         vocal_owner_role_source.append(source)
         speaker_role = str(row_safe.get("speaker_role") or "").strip().lower()
-        expected_speaker_role = vocal_owner or "character_1"
+        expected_speaker_role = vocal_owner or resolved_vocal_owner_role
         if not speaker_role:
             row_safe["speaker_role"] = expected_speaker_role
             speaker_role = expected_speaker_role
@@ -3571,10 +3720,15 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
         if _scene_bool(_safe_dict(row).get("lip_sync_required")) or _scene_bool(_safe_dict(row).get("singing_readiness_required")):
             errors.append("i2v_lipsync_forbidden")
             break
+    if not vocal_owner_role_resolved:
+        vocal_owner_role_resolved = [resolved_vocal_owner_role]
+    if not vocal_owner_role_source:
+        vocal_owner_role_source = [resolved_vocal_owner_source]
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["scene_plan_vocal_owner_role_normalized_count"] = int(vocal_owner_normalized_count)
     diagnostics["vocal_owner_role_resolved"] = vocal_owner_role_resolved
     diagnostics["vocal_owner_role_source"] = vocal_owner_role_source
+    diagnostics["scene_plan_character_3_usage_scene_count"] = int(char3_usage_scene_count)
     package["diagnostics"] = diagnostics
     return not errors, errors
 
@@ -14872,6 +15026,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_character_2_antagonist_legacy_ignored"] = False
     diagnostics["scene_plan_character_3_text_only_episodic"] = False
     diagnostics["scene_plan_character_3_unreferenced_episodic_visual_extra"] = False
+    diagnostics["scene_plan_character_3_usage_scene_count"] = 0
     diagnostics["scene_plan_mandatory_memory_beat_categories"] = []
     diagnostics["scene_plan_mandatory_memory_beat_missing_categories"] = []
     diagnostics["scene_plan_vocal_owner_role_normalized_count"] = 0
@@ -14880,6 +15035,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["camera_energy_map_present"] = False
     diagnostics["camera_energy_segments_count"] = 0
     diagnostics["camera_energy_applied_to_scene_count"] = 0
+    diagnostics["camera_energy_map_source"] = ""
     diagnostics["camera_energy_affects_story_content"] = False
     diagnostics["scene_plan_hard_route_map_uses_sanitized_package"] = False
     diagnostics["scene_plan_clip_contract_validation_ok"] = True
@@ -14914,6 +15070,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         "camera_energy_map_present",
         "camera_energy_segments_count",
         "camera_energy_applied_to_scene_count",
+        "camera_energy_map_source",
         "camera_energy_affects_story_content",
     ):
         if key in scene_prompt_diag:
@@ -15051,9 +15208,12 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             scene_plan=scene_plan,
         )
         scene_plan, final_sync_meta = _sync_scene_plan_storyboard_mirror(scene_plan)
+        camera_energy_map = _safe_list(_safe_dict(_safe_dict(package.get("role_plan")).get("camera_energy_map")))
+        scene_plan, camera_energy_applied_count = _apply_camera_energy_map_to_scene_plan(scene_plan, camera_energy_map)
         diagnostics["scene_plan_final_semantic_repairs"] = dict(final_semantic_repairs)
         diagnostics["scene_plan_post_validity_route_rebalance"] = dict(post_validity_rebalance)
         diagnostics["scene_plan_final_sync"] = dict(final_sync_meta)
+        diagnostics["camera_energy_applied_to_scene_count"] = int(camera_energy_applied_count)
         result["scene_plan"] = scene_plan
     else:
         locked_route_counts = {"i2v": 0, "ia2v": 0, "first_last": 0}
@@ -15122,9 +15282,15 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     scene_plan=retry_scene_plan,
                 )
                 retry_scene_plan, retry_sync_meta = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
+                camera_energy_map = _safe_list(_safe_dict(_safe_dict(package.get("role_plan")).get("camera_energy_map")))
+                retry_scene_plan, retry_camera_energy_applied_count = _apply_camera_energy_map_to_scene_plan(
+                    retry_scene_plan,
+                    camera_energy_map,
+                )
                 diagnostics["scene_plan_final_semantic_repairs"] = dict(retry_final_semantic_repairs)
                 diagnostics["scene_plan_post_validity_route_rebalance"] = dict(retry_post_validity_rebalance)
                 diagnostics["scene_plan_final_sync"] = dict(retry_sync_meta)
+                diagnostics["camera_energy_applied_to_scene_count"] = int(retry_camera_energy_applied_count)
                 retry_result["scene_plan"] = retry_scene_plan
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
                 package=package,
@@ -15196,6 +15362,14 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 scene_plan=retry_scene_plan,
             )
             retry_scene_plan, _ = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
+            camera_energy_map = _safe_list(_safe_dict(_safe_dict(package.get("role_plan")).get("camera_energy_map")))
+            retry_scene_plan, retry_camera_energy_applied_count = _apply_camera_energy_map_to_scene_plan(
+                retry_scene_plan,
+                camera_energy_map,
+            )
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["camera_energy_applied_to_scene_count"] = int(retry_camera_energy_applied_count)
+            package["diagnostics"] = diagnostics
             retry_result["scene_plan"] = retry_scene_plan
             clip_retry_ok, clip_retry_errors = _validate_scene_plan_clip_contract(package, retry_scene_plan)
             if clip_retry_ok:
