@@ -622,6 +622,7 @@ CLIP_ROUTE_BALANCE_PRESETS = {
     "performance_heavy_70_30",
     "story_heavy_30_70",
     "all_lipsync",
+    "ai_decides",
 }
 
 
