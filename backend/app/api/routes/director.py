@@ -1506,6 +1506,31 @@ def _normalize_clip_contract_aliases(
             alias_normalization_applied = True
             normalized_aliases_used.append("clip_contract.story_cutaway_definition")
 
+    final_ia2v_meaning = _first_non_empty_string(
+        scene_distribution.get("ia2v_meaning"),
+        clip_contract.get("performance_definition"),
+        clip_contract.get("ia2v_meaning"),
+        _safe_dict(contract.get("performance_contract")).get("ia2v_meaning"),
+        _safe_dict(contract.get("performance_contract")).get("performance_focus"),
+    )
+    if final_ia2v_meaning and not _first_non_empty_string(scene_distribution.get("ia2v_meaning")):
+        scene_distribution["ia2v_meaning"] = final_ia2v_meaning
+        alias_normalization_applied = True
+        normalized_aliases_used.append("scene_distribution_contract.ia2v_meaning")
+
+    final_i2v_meaning = _first_non_empty_string(
+        scene_distribution.get("i2v_meaning"),
+        clip_contract.get("story_cutaway_definition"),
+        clip_contract.get("i2v_meaning"),
+        clip_contract.get("i2v_content_between_performances"),
+        _safe_dict(contract.get("memory_contract")).get("i2v_meaning"),
+        _safe_dict(contract.get("memory_contract")).get("memory_locations"),
+    )
+    if final_i2v_meaning and not _first_non_empty_string(scene_distribution.get("i2v_meaning")):
+        scene_distribution["i2v_meaning"] = final_i2v_meaning
+        alias_normalization_applied = True
+        normalized_aliases_used.append("scene_distribution_contract.i2v_meaning")
+
     if prompt_policy and not _first_non_empty_string(prompt_policy.get("ltx_positive_prompt_rule")):
         prompt_policy["ltx_positive_prompt_rule"] = "Only describe what must be visible and moving."
         alias_normalization_applied = True
