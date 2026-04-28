@@ -2134,41 +2134,145 @@ def _normalize_role_label(value: Any) -> str:
 def _sanitize_assigned_roles_and_refs(
     refs_inventory: dict[str, Any],
     assigned_roles_input: dict[str, Any],
+    director_contract: dict[str, Any] | None = None,
+    director_package: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    def _extract_director_character_role_override(req_or_input: dict[str, Any], role: str) -> dict[str, Any]:
+        allowed_fields = (
+            "story_role",
+            "appearance_mode",
+            "screen_presence_mode",
+            "visual_reference_mode",
+            "identity_label",
+            "gender_hint",
+            "ref_urls",
+        )
+
+        def _normalize_override_row(row: dict[str, Any]) -> dict[str, Any]:
+            normalized: dict[str, Any] = {}
+            story_role = _normalize_role_label(row.get("story_role") or row.get("roleType"))
+            if story_role:
+                normalized["story_role"] = story_role
+            for field in ("appearance_mode", "screen_presence_mode", "visual_reference_mode", "identity_label", "gender_hint"):
+                value = str(row.get(field) or "").strip()
+                if value:
+                    normalized[field] = value
+            ref_urls = [str(item).strip() for item in _safe_list(row.get("ref_urls")) if str(item).strip()]
+            if ref_urls:
+                normalized["ref_urls"] = ref_urls
+            return normalized
+
+        def _pick_character_contract_row(container: dict[str, Any], role_id: str) -> dict[str, Any]:
+            character_contract = _safe_dict(_safe_dict(container).get("character_contract"))
+            if not character_contract:
+                return {}
+            direct_row = _safe_dict(character_contract.get(role_id))
+            if direct_row:
+                return direct_row
+            role_token = role_id.strip().lower()
+            for key, value in character_contract.items():
+                key_token = str(key or "").strip().lower()
+                if role_token and role_token in key_token:
+                    row = _safe_dict(value)
+                    if row:
+                        return row
+            return {}
+
+        source = _safe_dict(req_or_input)
+        direct_contract = _safe_dict(source.get("director_contract"))
+        direct_package = _safe_dict(source.get("director_package"))
+        input_contract = _safe_dict(_safe_dict(source.get("input")).get("director_contract"))
+        contract_row = _pick_character_contract_row(direct_contract, role)
+        package_row = _pick_character_contract_row(direct_package, role)
+        input_contract_row = _pick_character_contract_row(input_contract, role)
+
+        override: dict[str, Any] = {}
+        for row in (package_row, input_contract_row, contract_row):
+            normalized = _normalize_override_row(row)
+            for field in allowed_fields:
+                if field in normalized:
+                    override[field] = normalized[field]
+        override["director_contract_role"] = _normalize_role_label(contract_row.get("story_role") or contract_row.get("roleType"))
+        override["director_package_role"] = _normalize_role_label(package_row.get("story_role") or package_row.get("roleType"))
+        if not override.get("director_contract_role"):
+            override["director_contract_role"] = _normalize_role_label(
+                input_contract_row.get("story_role") or input_contract_row.get("roleType")
+            )
+        return override
+
     refs = deepcopy(_safe_dict(refs_inventory))
     assigned_roles = _safe_dict(assigned_roles_input)
     role_debug: dict[str, Any] = {}
+    override_source = {
+        "director_contract": _safe_dict(director_contract),
+        "director_package": _safe_dict(director_package),
+        "input": {"director_contract": _safe_dict(director_contract)},
+    }
     for role in ("character_1", "character_2", "character_3"):
         ref_key = _role_to_ref_key(role)
         ref_row = _safe_dict(refs.get(ref_key))
         ref_meta = _safe_dict(ref_row.get("meta"))
         original_node_role = _normalize_role_label(assigned_roles_input.get(role))
         original_node_relation = _normalize_role_label(ref_meta.get("story_role") or ref_meta.get("ownershipRole"))
-        refs_inventory_role = _normalize_role_label(ref_meta.get("roleType"))
+        refs_inventory_role_before = _normalize_role_label(ref_meta.get("roleType"))
         role_was_stale_corrected = False
         role_source = "current_node_payload"
-        if original_node_role:
+        director_override = _extract_director_character_role_override(override_source, role)
+        director_contract_role = _normalize_role_label(director_override.get("director_contract_role"))
+        director_package_role = _normalize_role_label(director_override.get("director_package_role"))
+        override_story_role = _normalize_role_label(director_override.get("story_role"))
+        previous_assigned_role = _normalize_role_label(assigned_roles.get(role))
+        if override_story_role:
+            serialized_role = override_story_role
+            ref_meta["roleType"] = serialized_role
+            ref_meta["story_role"] = serialized_role
+            assigned_roles[role] = serialized_role
+            if director_override.get("appearance_mode"):
+                ref_meta["appearanceMode"] = str(director_override.get("appearance_mode"))
+                ref_meta["screenPresenceMode"] = str(director_override.get("appearance_mode"))
+            if director_override.get("screen_presence_mode"):
+                ref_meta["screenPresenceMode"] = str(director_override.get("screen_presence_mode"))
+            if director_override.get("visual_reference_mode"):
+                ref_meta["visual_reference_mode"] = str(director_override.get("visual_reference_mode"))
+            if director_override.get("identity_label"):
+                ref_meta["identity_label"] = str(director_override.get("identity_label"))
+            if director_override.get("gender_hint"):
+                ref_meta["gender_hint"] = str(director_override.get("gender_hint"))
+            if director_override.get("ref_urls"):
+                ref_row["refs"] = _safe_list(director_override.get("ref_urls"))
+            role_source = "director_contract"
+            role_was_stale_corrected = bool(
+                (original_node_role and original_node_role != serialized_role)
+                or (previous_assigned_role and previous_assigned_role != serialized_role)
+                or (refs_inventory_role_before and refs_inventory_role_before != serialized_role)
+            )
+        elif original_node_role:
             serialized_role = original_node_role
+            ref_meta["story_role"] = serialized_role
             ref_meta["roleType"] = serialized_role
             assigned_roles[role] = serialized_role
+            role_source = "current_node_payload"
         else:
             serialized_role = ""
             if role in assigned_roles:
                 assigned_roles.pop(role, None)
                 role_was_stale_corrected = True
-            if refs_inventory_role:
+            if refs_inventory_role_before:
                 ref_meta.pop("roleType", None)
                 role_was_stale_corrected = True
             role_source = "current_node_payload_neutral"
         ref_row["meta"] = ref_meta
         refs[ref_key] = ref_row
+        refs_inventory_role_after = _normalize_role_label(_safe_dict(_safe_dict(refs.get(ref_key)).get("meta")).get("roleType"))
         role_debug[role] = {
             "original_node_role": original_node_role,
             "original_node_relation": original_node_relation,
+            "refs_inventory_role_before": refs_inventory_role_before,
+            "director_contract_role": director_contract_role,
+            "director_package_role": director_package_role,
             "serialized_role": serialized_role,
-            "serialized_relation": original_node_relation,
-            "package_input_role": _normalize_role_label(assigned_roles.get(role)),
-            "refs_inventory_role": _normalize_role_label(_safe_dict(_safe_dict(refs.get(ref_key)).get("meta")).get("roleType")),
+            "package_input_role": previous_assigned_role,
+            "refs_inventory_role_after": refs_inventory_role_after,
             "assigned_role_after_normalization": _normalize_role_label(assigned_roles.get(role)),
             "role_source": role_source,
             "role_was_stale_corrected": bool(role_was_stale_corrected),
@@ -8446,6 +8550,8 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
     assigned_roles_normalized, refs_inventory, role_normalization_debug = _sanitize_assigned_roles_and_refs(
         refs_inventory,
         _safe_dict(req.get("roleTypeByRole")),
+        _safe_dict(req.get("director_contract")),
+        _safe_dict(req.get("director_package")),
     )
     source = _safe_dict(req.get("source"))
     source_mode = str(source.get("source_mode") or source.get("sourceMode") or "").strip().lower()
@@ -8531,10 +8637,12 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "character_2_role_was_stale_corrected": bool(_safe_dict(role_normalization_debug.get("character_2")).get("role_was_stale_corrected")),
             "character_2_original_node_role": _safe_dict(role_normalization_debug.get("character_2")).get("original_node_role"),
             "character_2_original_node_relation": _safe_dict(role_normalization_debug.get("character_2")).get("original_node_relation"),
+            "character_2_director_contract_role": _safe_dict(role_normalization_debug.get("character_2")).get("director_contract_role"),
+            "character_2_director_package_role": _safe_dict(role_normalization_debug.get("character_2")).get("director_package_role"),
             "character_2_serialized_role": _safe_dict(role_normalization_debug.get("character_2")).get("serialized_role"),
-            "character_2_serialized_relation": _safe_dict(role_normalization_debug.get("character_2")).get("serialized_relation"),
             "character_2_package_input_role": _safe_dict(role_normalization_debug.get("character_2")).get("package_input_role"),
-            "character_2_refs_inventory_role": _safe_dict(role_normalization_debug.get("character_2")).get("refs_inventory_role"),
+            "character_2_refs_inventory_role_before": _safe_dict(role_normalization_debug.get("character_2")).get("refs_inventory_role_before"),
+            "character_2_refs_inventory_role_after": _safe_dict(role_normalization_debug.get("character_2")).get("refs_inventory_role_after"),
             "character_2_assigned_role_after_normalization": _safe_dict(role_normalization_debug.get("character_2")).get("assigned_role_after_normalization"),
         },
         "stage_statuses": stages,
@@ -13013,18 +13121,20 @@ def _build_audio_map_timeout_fallback(*, duration_sec: float, audio_id: str, ana
     index = 1
     while cursor < duration - 1e-6:
         next_t1 = min(duration, round(cursor + target_window, 3))
+        segment_duration = round(max(0.0, next_t1 - cursor), 3)
+        is_lip_sync_candidate = bool(segment_duration >= 3.0)
         windows.append(
             {
                 "segment_id": f"seg_{index:02d}",
                 "t0": round(cursor, 3),
                 "t1": round(next_t1, 3),
-                "duration_sec": round(max(0.0, next_t1 - cursor), 3),
+                "duration_sec": segment_duration,
                 "transcript_slice": "",
                 "intensity": 0.45,
-                "is_lip_sync_candidate": False,
+                "is_lip_sync_candidate": is_lip_sync_candidate,
                 "rhythmic_anchor": "none",
                 "first_last_candidate": False,
-                "route_hints": {"i2v_fit": "ok", "lip_sync_fit": "too_short", "first_last_fit": "too_short"},
+                "route_hints": {"i2v_fit": "ok", "lip_sync_fit": "ok" if is_lip_sync_candidate else "too_short", "first_last_fit": "too_short"},
                 "local_energy_band": "medium",
                 "energy_delta_vs_prev": "hold" if index > 1 else "reset",
                 "delivery_mode": "observational",
@@ -13035,6 +13145,9 @@ def _build_audio_map_timeout_fallback(*, duration_sec: float, audio_id: str, ana
                 "visual_density_hint": "moderate",
                 "stillness_candidate": False,
                 "lyrical_density": "low",
+                "fallback_lip_sync_candidate_unknown": True,
+                "fallback_generated_due_to_timeout": True,
+                "transcript_available": False,
             }
         )
         cursor = next_t1
@@ -13124,6 +13237,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_segmentation_transport_error"] = ""
     diagnostics["audio_map_stage_branch"] = ""
     diagnostics["audio_map_primary_fallback_reason"] = ""
+    diagnostics["audio_map_timeout_fallback_segment_count"] = 0
+    diagnostics["audio_map_timeout_fallback_lipsync_candidate_count"] = 0
     diagnostics["audio_map_dynamics_error"] = ""
     diagnostics["audio_map_primary_source"] = "gemini"
     diagnostics["audio_map_model_led_segmentation"] = True
@@ -13342,6 +13457,19 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 if not strict_result.ok:
                     raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
                 audio_map = fallback_audio_map
+                fallback_segments = _safe_list(audio_map.get("segments"))
+                fallback_lipsync_count = sum(1 for row in fallback_segments if bool(_safe_dict(row).get("is_lip_sync_candidate")))
+                audio_map["audio_map_primary_source"] = "timeout_fallback"
+                audio_map["audio_map_model_led_segmentation"] = False
+                audio_map["audio_map_segmentation_backend"] = "timeout_fallback"
+                audio_map["analysis_mode"] = "audio_map_v1_1_timeout_fallback"
+                diagnostics["audio_map_segmentation_backend"] = "timeout_fallback"
+                diagnostics["audio_map_primary_source"] = "timeout_fallback"
+                diagnostics["audio_map_model_led_segmentation"] = False
+                diagnostics["audio_map_analysis_mode"] = "audio_map_v1_1_timeout_fallback"
+                diagnostics["audio_map_phrase_mode"] = "audio_map_v1_1_timeout_fallback"
+                diagnostics["audio_map_timeout_fallback_segment_count"] = len(fallback_segments)
+                diagnostics["audio_map_timeout_fallback_lipsync_candidate_count"] = int(fallback_lipsync_count)
             else:
                 raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
 
@@ -13446,8 +13574,15 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     music_signal_mode = "dynamics+transcript" if dynamics_available else "transcript_only"
     audio_map.update(grid_metrics)
-    audio_map["audio_map_primary_source"] = "gemini"
-    audio_map["audio_map_model_led_segmentation"] = True
+    used_timeout_fallback = bool(diagnostics.get("audio_map_used_fallback"))
+    if not used_timeout_fallback:
+        audio_map["audio_map_primary_source"] = "gemini"
+        audio_map["audio_map_model_led_segmentation"] = True
+        audio_map["audio_map_segmentation_backend"] = "gemini"
+    else:
+        audio_map["audio_map_primary_source"] = "timeout_fallback"
+        audio_map["audio_map_model_led_segmentation"] = False
+        audio_map["audio_map_segmentation_backend"] = "timeout_fallback"
     audio_map["audio_map_validation_flags"] = validation_flags
     audio_map["audio_map_backend_repair_applied"] = False
     audio_map["audio_map_music_signal_mode"] = music_signal_mode
@@ -13459,7 +13594,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     }
 
     diagnostics["audio_map_analysis_mode"] = str(audio_map.get("analysis_mode") or "audio_map_v1_1_strict")
-    diagnostics["audio_map_segmentation_backend"] = "gemini"
+    diagnostics["audio_map_segmentation_backend"] = "timeout_fallback" if used_timeout_fallback else "gemini"
     diagnostics["audio_map_timeout_count"] = int(timeout_count)
     diagnostics["audio_map_timeout_attempts"] = int(timeout_count)
     diagnostics["audio_map_final_error_code"] = str(last_error_code or "")
@@ -13471,8 +13606,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_error"] = str(diagnostics.get("audio_map_segmentation_error") or "")
     diagnostics["audio_map_segmentation_error_detail"] = str(diagnostics.get("audio_map_segmentation_error_detail") or "")
     diagnostics["audio_map_validation_flags"] = validation_flags
-    diagnostics["audio_map_primary_source"] = "gemini"
-    diagnostics["audio_map_model_led_segmentation"] = True
+    diagnostics["audio_map_primary_source"] = "timeout_fallback" if used_timeout_fallback else "gemini"
+    diagnostics["audio_map_model_led_segmentation"] = not used_timeout_fallback
     diagnostics["audio_map_backend_repair_applied"] = False
     diagnostics["audio_map_phrase_mode"] = str(audio_map.get("analysis_mode") or "audio_map_v1_1_strict")
     diagnostics["transcript_available"] = bool(audio_map.get("transcript_available"))
