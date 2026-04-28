@@ -2356,6 +2356,37 @@ def _role_to_ref_key(role: str) -> str:
     return clean if clean.startswith("ref_") else f"ref_{clean}"
 
 
+def _is_active_character_ref(refs_inventory: dict[str, Any], role: str) -> bool:
+    ref_key = _role_to_ref_key(role)
+    row = _safe_dict(_safe_dict(refs_inventory).get(ref_key))
+    refs = _safe_list(row.get("refs"))
+    value = str(row.get("value") or "").strip()
+    preview = str(row.get("preview") or "").strip()
+    meta = _safe_dict(row.get("meta"))
+    has_payload = bool(refs or value or preview)
+    has_meaningful_meta = bool(
+        meta.get("kind")
+        or meta.get("type")
+        or meta.get("roleType")
+        or meta.get("story_role")
+        or meta.get("identity_label")
+        or refs
+        or value
+    )
+    return has_payload and has_meaningful_meta
+
+
+def _collect_active_character_roles(refs_inventory: dict[str, Any]) -> tuple[list[str], list[str]]:
+    active_roles: list[str] = []
+    inactive_roles: list[str] = []
+    for role in ("character_1", "character_2", "character_3"):
+        if _is_active_character_ref(refs_inventory, role):
+            active_roles.append(role)
+        else:
+            inactive_roles.append(role)
+    return active_roles, inactive_roles
+
+
 def _visual_ref_identity_rule(role: str) -> str:
     clean_role = str(role or "").strip() or "character_1"
     return (
@@ -5490,6 +5521,31 @@ def _extract_forbidden_drift(note_text: str) -> list[str]:
     return list(dict.fromkeys(drift))[:12]
 
 
+def _sanitize_forbidden_drift_tokens(tokens: list[str]) -> tuple[list[str], list[str]]:
+    allowed_semantic_roots = {"neon", "club", "fantasy", "cyberpunk", "horror", "gore", "identity_replacement", "ungrounded_world_jump"}
+    banned_words = {"нужен", "эпизодический", "персонаж", "реф", "без", "нельзя", "использовать", "переносить", "как"}
+    sanitized: list[str] = []
+    removed: list[str] = []
+    for token in _safe_list(tokens):
+        raw = str(token or "").strip()
+        if not raw:
+            continue
+        norm = raw if raw.startswith("forbid:") else f"forbid:{raw}"
+        body = norm.replace("forbid:", "").strip().lower()
+        body_parts = [part for part in re.split(r"[_\-\s]+", body) if part]
+        if not body_parts:
+            removed.append(norm)
+            continue
+        if any(part in banned_words for part in body_parts):
+            removed.append(norm)
+            continue
+        if body not in allowed_semantic_roots:
+            removed.append(norm)
+            continue
+        sanitized.append(f"forbid:{body}")
+    return list(dict.fromkeys(sanitized))[:12], list(dict.fromkeys(removed))[:24]
+
+
 def _ref_record(ref_id: str, row: dict[str, Any]) -> dict[str, str]:
     meta = _normalize_ref_meta(row.get("meta"))
     label = _first_text(row.get("source_label"), row.get("label"), row.get("value"), ref_id)[:120]
@@ -5673,6 +5729,9 @@ def _build_story_core_v11(
     character_1_lip_sync_only = character_1_appearance_mode == "lip_sync_only" or character_1_presence_mode == "lip_sync_only"
     core_segments, core_source = _coerce_core_audio_segments(audio_map)
     total_slots = len(core_segments)
+    active_character_roles, inactive_character_roles = _collect_active_character_roles(refs_inventory)
+    active_character_role_set = set(active_character_roles)
+    episodic_text_characters = _extract_episodic_text_characters(input_pkg)
 
     primary_subject = _canonical_subject_id(assigned_roles.get("primary_role")) or "character_1"
     role_subjects = [
@@ -5700,6 +5759,8 @@ def _build_story_core_v11(
         if _is_subject_ref(record):
             canonical_ref_subject = _canonical_subject_id(record["ref_id"]) or _canonical_subject_id(record["label"])
             if canonical_ref_subject and canonical_ref_subject != primary_subject:
+                if canonical_ref_subject.startswith("character_") and canonical_ref_subject not in active_character_role_set:
+                    continue
                 ref_subjects.append(canonical_ref_subject)
                 if record["label"]:
                     secondary_subject_labels[canonical_ref_subject] = record["label"]
@@ -5739,13 +5800,25 @@ def _build_story_core_v11(
     for candidate in [*role_subjects, *connected_subjects]:
         canonical_candidate = _canonical_subject_id(candidate)
         if canonical_candidate and canonical_candidate != primary_subject:
+            if canonical_candidate.startswith("character_") and canonical_candidate not in active_character_role_set:
+                continue
             ref_subjects.append(canonical_candidate)
             if canonical_candidate not in secondary_subject_labels and str(candidate).strip():
                 secondary_subject_labels[canonical_candidate] = str(candidate).strip()[:120]
     secondary_subjects = list(dict.fromkeys(ref_subjects))[:6]
+    secondary_subjects = [
+        role for role in secondary_subjects
+        if not role.startswith("character_") or role in active_character_role_set
+    ]
     if not secondary_subjects and continuity_objects:
         mapped_subject = _canonical_subject_id(continuity_objects[0].get("ownership_role"))
-        secondary_subjects = [mapped_subject] if mapped_subject and mapped_subject != primary_subject else []
+        secondary_subjects = (
+            [mapped_subject]
+            if mapped_subject
+            and mapped_subject != primary_subject
+            and (not mapped_subject.startswith("character_") or mapped_subject in active_character_role_set)
+            else []
+        )
     active_subjects = list(dict.fromkeys([primary_subject, *secondary_subjects]))
     domestic_argument_duet = _is_domestic_argument_duet(text_bundle, active_subjects)
     if domestic_argument_duet:
@@ -5756,7 +5829,10 @@ def _build_story_core_v11(
     ending_callback_rule = _first_text(parsed_story_core.get("ending_callback_rule"), fallback_story_core.get("ending_callback_rule"))
     style_rule = _first_text(_safe_dict(parsed_story_core.get("style_lock")).get("rule"), _safe_dict(fallback_story_core.get("style_lock")).get("rule"))
     note_text = " ".join([text_bundle.get("note", ""), text_bundle.get("director_note", "")]).strip()
-    forbidden_drift = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
+    forbidden_drift_raw = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
+    forbidden_drift, forbidden_drift_removed_tokens = _sanitize_forbidden_drift_tokens(forbidden_drift_raw)
+    if not forbidden_drift:
+        forbidden_drift = ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
     parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
     canonical_by_segment_id = {
         str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
@@ -5905,6 +5981,11 @@ def _build_story_core_v11(
         "style_anchor": _first_text(style_hints[0] if style_hints else "", style_rule, "coherent_cinematic_style"),
         "allowed_variation": ["lighting_shift", "framing_shift", "performance_intensity_shift", "weather_or_time_shift_if_text_supported"],
         "forbidden_drift": forbidden_drift,
+        "director_constraints": [
+            "young hero ref is identity-only",
+            "episodic girl appears only in one memory scene",
+            "do not romanticize violence",
+        ],
         "world_continuity_rules": [
             "location_and_style_changes_require_semantic_bridge",
             "forbidden_drift_tokens_cannot_be_introduced",
@@ -6154,6 +6235,7 @@ def _build_story_core_v11(
             "duet_presence_rule": duet_presence_rule,
             "object_transition_rules": ["ownership_or_binding_change_must_be_explicit_in_transition_events", "persistent_objects_should_reappear_within_two_beats"],
             "transition_events": transition_events[:16],
+            "episodic_text_characters": episodic_text_characters,
         },
         "semantic_arc": {
             "global_intent": str(parsed_story_core.get("story_summary") or fallback_story_core.get("story_summary") or ""),
@@ -6242,6 +6324,15 @@ def _build_story_core_v11(
                 "connected_refs_summary": _safe_dict(input_pkg.get("connected_context_summary")),
                 "refs_inventory_keys": sorted([str(key) for key in refs_inventory.keys()])[:40],
             },
+            "episodic_text_characters": episodic_text_characters,
+        },
+        "core_diagnostics": {
+            "core_active_character_roles": active_character_roles,
+            "core_inactive_character_roles_filtered": inactive_character_roles,
+            "core_episodic_text_characters": [str(row.get("id") or "") for row in episodic_text_characters if str(row.get("id") or "").strip()],
+            "core_character_3_filtered_because_empty_ref": "character_3" in inactive_character_roles,
+            "core_forbidden_drift_sanitized": bool(forbidden_drift_removed_tokens),
+            "core_forbidden_drift_removed_tokens": forbidden_drift_removed_tokens,
         },
     }
     return story_core_v1
@@ -6485,6 +6576,81 @@ def _extract_story_user_concept(input_pkg: dict[str, Any]) -> str:
     return ""
 
 
+def _extract_episodic_text_characters(input_pkg: dict[str, Any]) -> list[dict[str, Any]]:
+    director_contract = _safe_dict(input_pkg.get("director_contract"))
+    director_package = _safe_dict(input_pkg.get("director_package"))
+    contract_rows = [
+        _safe_dict(_safe_dict(director_package.get("character_contract")).get("girl")),
+        _safe_dict(_safe_dict(director_contract.get("character_contract")).get("girl")),
+    ]
+    for row in contract_rows:
+        if not row:
+            continue
+        story_role = str(row.get("story_role") or "").strip().lower()
+        visual_reference_mode = str(row.get("visual_reference_mode") or "").strip().lower()
+        if story_role != "episodic" and visual_reference_mode != "text_description_only":
+            continue
+        identity_label = str(row.get("identity_label") or "девушка").strip() or "девушка"
+        allowed_scene_context = str(
+            row.get("allowed_scene_context")
+            or row.get("scene_context")
+            or "romantic flowers memory scene"
+        ).strip()
+        return [
+            {
+                "id": "episodic_girl",
+                "source": "director_contract.character_contract.girl",
+                "story_role": "episodic",
+                "identity_label": identity_label,
+                "usage": "one_scene_only",
+                "visual_reference_mode": "text_description_only",
+                "allowed_scene_context": allowed_scene_context,
+            }
+        ]
+    return []
+
+
+def _flatten_story_text_tokens(value: Any) -> list[str]:
+    out: list[str] = []
+    if isinstance(value, str):
+        text = str(value).strip()
+        if text:
+            out.append(text)
+        return out
+    if isinstance(value, dict):
+        for key in sorted(value.keys(), key=lambda item: str(item)):
+            out.extend(_flatten_story_text_tokens(value.get(key)))
+        return out
+    if isinstance(value, list):
+        for row in value:
+            out.extend(_flatten_story_text_tokens(row))
+        return out
+    return out
+
+
+def _extract_director_memory_beats(input_pkg: dict[str, Any]) -> list[str]:
+    director_contract = _safe_dict(input_pkg.get("director_contract"))
+    director_package = _safe_dict(input_pkg.get("director_package"))
+    source_blocks = [
+        _safe_dict(director_package.get("memory_contract")),
+        _safe_dict(director_contract.get("memory_contract")),
+        _safe_dict(director_package.get("scene_contract")),
+        _safe_dict(director_contract.get("scene_contract")),
+        _safe_dict(_safe_dict(director_package.get("performance_contract")).get("character_2_young_hero_performance")),
+        _safe_dict(_safe_dict(director_contract.get("performance_contract")).get("character_2_young_hero_performance")),
+        _safe_dict(_safe_dict(director_package.get("reference_usage_contract")).get("character_2_young_hero_usage")),
+        _safe_dict(_safe_dict(director_contract.get("reference_usage_contract")).get("character_2_young_hero_usage")),
+    ]
+    beats: list[str] = []
+    for block in source_blocks:
+        for token in _flatten_story_text_tokens(block):
+            normalized = re.sub(r"\s+", " ", str(token)).strip(" .,:;!?")
+            if len(normalized) < 3:
+                continue
+            beats.append(normalized[:180])
+    return list(dict.fromkeys(beats))[:40]
+
+
 def _collect_story_core_refs_by_role(
     input_pkg: dict[str, Any],
     refs_inventory: dict[str, Any],
@@ -6611,12 +6777,27 @@ def _build_story_core_input_context(
     grounding_level: str,
 ) -> dict[str, Any]:
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    active_character_roles, inactive_character_roles = _collect_active_character_roles(refs_inventory)
     normalized_refs_by_role, refs_sources_used = _collect_story_core_refs_by_role(input_pkg, refs_inventory, connected_summary)
+    for role in inactive_character_roles:
+        normalized_refs_by_role.pop(role, None)
     compact_refs_manifest, attached_ref_roles = _build_story_core_compact_refs_manifest(
         refs_by_role=normalized_refs_by_role,
         ref_attachment_summary=ref_attachment_summary,
         connected_summary=connected_summary,
     )
+    filtered_available_roles = [
+        role
+        for role in _safe_list(compact_refs_manifest.get("available_roles"))
+        if (not str(role).startswith("character_")) or str(role) in set(active_character_roles)
+    ]
+    compact_refs_manifest["available_roles"] = filtered_available_roles
+    compact_attached = _safe_dict(compact_refs_manifest.get("attached_refs"))
+    for role in list(compact_attached.keys()):
+        if str(role).startswith("character_") and str(role) not in set(active_character_roles):
+            compact_attached.pop(role, None)
+    compact_refs_manifest["attached_refs"] = compact_attached
+    attached_ref_roles = [role for role in attached_ref_roles if (not str(role).startswith("character_")) or str(role) in set(active_character_roles)]
     story_user_concept = _extract_story_user_concept(input_pkg)
     model_id = _resolve_active_video_model_id(input_pkg)
     i2v_profile = get_video_model_capability_profile(model_id, "i2v")
@@ -6648,6 +6829,24 @@ def _build_story_core_input_context(
         ],
     }
     director_world_lock_summary = _extract_director_world_lock_summary(input_pkg, story_user_concept)
+    episodic_text_characters = _extract_episodic_text_characters(input_pkg)
+    director_contract = _safe_dict(input_pkg.get("director_contract"))
+    director_package = _safe_dict(input_pkg.get("director_package"))
+    director_package_summary = {
+        "timeline_contract": _safe_dict(director_package.get("timeline_contract") or director_contract.get("timeline_contract")),
+        "character_contract": _safe_dict(director_package.get("character_contract") or director_contract.get("character_contract")),
+        "route_contract": _safe_dict(director_package.get("route_contract") or director_contract.get("route_contract")),
+        "memory_contract": _safe_dict(director_package.get("memory_contract") or director_contract.get("memory_contract")),
+        "scene_contract": _safe_dict(director_package.get("scene_contract") or director_contract.get("scene_contract")),
+        "reference_usage_contract": _safe_dict(
+            director_package.get("reference_usage_contract") or director_contract.get("reference_usage_contract")
+        ),
+        "prompt_contract_global_style_rules": _safe_list(
+            _safe_dict(director_package.get("prompt_contract") or director_contract.get("prompt_contract")).get("global_style_rules")
+        ),
+        "episodic_text_characters": episodic_text_characters,
+        "memory_beat_inventory": _extract_director_memory_beats(input_pkg),
+    }
     connected_role_summary = {
         "connectedRoleIds": [str(role).strip() for role in _safe_list(connected_summary.get("connectedRoleIds")) if str(role).strip()],
         "refsPresentByRole": _safe_dict(connected_summary.get("refsPresentByRole")),
@@ -6677,6 +6876,10 @@ def _build_story_core_input_context(
             "required_1_to_1_output": "narrative_segments[] by segment_id",
         },
         "connected_role_summary": connected_role_summary,
+        "active_character_roles": active_character_roles,
+        "inactive_character_roles_filtered": inactive_character_roles,
+        "director_package_summary": director_package_summary,
+        "episodic_text_characters": episodic_text_characters,
         "compact_refs_manifest": compact_refs_manifest,
         "assigned_roles": _safe_dict(input_pkg.get("assigned_roles_override")),
         "story_core_prop_contracts": prop_contracts,
@@ -6706,6 +6909,9 @@ def _build_story_core_input_context(
         "available_roles": _safe_list(compact_refs_manifest.get("available_roles")),
         "refs_by_role": normalized_refs_by_role,
         "story_core_attached_ref_roles": attached_ref_roles,
+        "active_character_roles": active_character_roles,
+        "inactive_character_roles_filtered": inactive_character_roles,
+        "episodic_text_characters": episodic_text_characters,
         "story_core_director_world_lock_summary": director_world_lock_summary,
         "story_core_compact_context_size_estimate": len(json.dumps(_compact_prompt_payload(compact_context), ensure_ascii=False)),
         "story_core_refs_sources_used": refs_sources_used,
@@ -7059,6 +7265,44 @@ def _infer_meaning_axes(row: dict[str, Any]) -> dict[str, str]:
         "social_pressure": social_pressure,
         "hero_vs_world_ratio": hero_world_ratio,
     }
+
+
+_GENERIC_BEAT_PHRASES = (
+    "escalate momentum",
+    "push maximum pressure",
+    "shift from impact",
+    "reframe intent",
+    "world response",
+    "public consequence",
+    "coded subtext",
+)
+
+
+def _collect_concrete_story_tokens(core_input_context: dict[str, Any]) -> set[str]:
+    tokens: set[str] = set()
+    director_summary = _safe_dict(core_input_context.get("director_package_summary"))
+    for text in _flatten_story_text_tokens(director_summary):
+        for token in re.findall(r"[a-zа-я0-9]{4,}", str(text).lower()):
+            tokens.add(token)
+    return tokens
+
+
+def _detect_generic_narrative_segments(
+    narrative_segments: list[dict[str, Any]],
+    *,
+    concrete_tokens: set[str],
+) -> list[str]:
+    generic_segment_ids: list[str] = []
+    for row in narrative_segments:
+        segment_id = str(row.get("segment_id") or "").strip()
+        text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".strip().lower()
+        if not text:
+            continue
+        has_generic_phrase = any(phrase in text for phrase in _GENERIC_BEAT_PHRASES)
+        has_concrete_anchor = any(token in text for token in concrete_tokens if len(token) >= 4)
+        if has_generic_phrase and not has_concrete_anchor:
+            generic_segment_ids.append(segment_id or "unknown_segment")
+    return generic_segment_ids[:24]
 
 
 def _evaluate_story_core_quality_gates(
@@ -7446,7 +7690,11 @@ def _normalize_identity_label_hint(value: Any) -> str:
     return ""
 
 
-def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_roles: dict[str, Any]) -> dict[str, str]:
+def _extract_role_identity_expectations(
+    input_pkg: dict[str, Any],
+    assigned_roles: dict[str, Any],
+    active_character_roles: list[str] | None = None,
+) -> dict[str, str]:
     expectations: dict[str, str] = {}
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
     nested_identity_sources: list[dict[str, Any]] = [
@@ -7480,7 +7728,10 @@ def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_role
             hint = _normalize_gender_hint(row.get(role))
             if hint:
                 expectations[role] = hint
-    return expectations
+    if active_character_roles is None:
+        return expectations
+    allowed = {str(role).strip() for role in _safe_list(active_character_roles) if str(role).strip()}
+    return {role: hint for role, hint in expectations.items() if role in allowed}
 
 
 def _extract_role_identity_mapping_payload(input_pkg: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -7582,12 +7833,15 @@ def _detect_core_role_binding_contradictions(
     return contradictions[:8]
 
 
-def _collect_present_cast_roles(input_present_cast_roles: Any) -> set[str]:
+def _collect_present_cast_roles(input_present_cast_roles: Any, active_character_roles: list[str] | None = None) -> set[str]:
     allowed = {"character_1", "character_2"}
     for row in _safe_list(input_present_cast_roles):
         token = str(row or "").strip().lower()
         if token.startswith("character_"):
             allowed.add(token)
+    if active_character_roles is not None:
+        active = {str(role).strip() for role in _safe_list(active_character_roles) if str(role).strip()}
+        allowed = {role for role in allowed if role in active or role in {"character_1", "character_2"}}
     return allowed
 
 
@@ -8505,6 +8759,9 @@ def _build_story_core_prompt(
         "World must feel specific through lived texture and human environment, not through repeated stereotype tags.\n"
         "SEMANTIC COMPRESSION RULE (hard): when user concept contains location/object lists, compress them into coherent world doctrine and progression logic; never output checklist-style 'show X, Y, Z'.\n"
         "Keep grounded anchors (city, hero, world identity, musical character), but rewrite literal directives into dramaturgical function.\n"
+        "DIRECTOR PACKAGE PRIORITY (hard): if CORE_INPUT_CONTEXT.director_package_summary contains concrete memory/performance/scene beats, use them before abstract dramaturgy language.\n"
+        "Do not replace concrete beats with generic phrases like 'escalate momentum', 'push pressure', or 'shift impact' when specific places/actions/characters exist.\n"
+        "EPISODIC CHARACTER RULE (hard): episodic_text_characters are scene-local only; do not convert episodic girl into character_3 unless connected ref_character_3 is truly active.\n"
         "For narrative_segments, write beat purpose as scene function + relation between hero and world + progression pressure, not as direct paraphrase of lyrics or user note.\n"
         "ATMOSPHERE RULE: criminal/tense/street atmosphere means social pressure and risk logic in the world; it is NOT a request for costume shorthand.\n"
         "IDENTITY INVENTION GUARD (hard): if character refs exist, do not invent exact wardrobe/accessories/headwear/jewelry/tattoos/facial-hair packages unless explicitly grounded in refs or user text.\n"
@@ -9728,6 +9985,19 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map = _safe_dict(package.get("audio_map"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
+    active_character_roles, inactive_character_roles = _collect_active_character_roles(refs_inventory)
+    assigned_roles = {
+        key: value
+        for key, value in assigned_roles.items()
+        if not str(key).startswith("character_") or str(key) in set(active_character_roles)
+    }
+    active_roles_assigned = [
+        str(role).strip()
+        for role in _safe_list(assigned_roles.get("active_roles"))
+        if str(role).strip() in set(active_character_roles)
+    ]
+    if active_roles_assigned:
+        assigned_roles["active_roles"] = active_roles_assigned
     story_core_mode = _detect_story_core_mode(input_pkg)
     model_id = _resolve_active_video_model_id(input_pkg)
     capability_profile = get_video_model_capability_profile(model_id, "i2v")
@@ -9859,6 +10129,17 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_local_breath_segment_ids"] = []
     diagnostics["story_core_visual_breath_fail_spans"] = []
     diagnostics["story_core_second_attempt_changed_payload"] = False
+    diagnostics["core_active_character_roles"] = []
+    diagnostics["core_inactive_character_roles_filtered"] = []
+    diagnostics["core_episodic_text_characters"] = []
+    diagnostics["core_character_3_filtered_because_empty_ref"] = False
+    diagnostics["core_generic_segment_repair_count"] = 0
+    diagnostics["core_generic_segment_repair_applied"] = False
+    diagnostics["core_forbidden_drift_sanitized"] = False
+    diagnostics["core_forbidden_drift_removed_tokens"] = []
+    diagnostics["core_active_character_roles"] = active_character_roles
+    diagnostics["core_inactive_character_roles_filtered"] = inactive_character_roles
+    diagnostics["core_character_3_filtered_because_empty_ref"] = "character_3" in set(inactive_character_roles)
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
     diagnostics["story_core_capability_guard_applied"] = True
@@ -9905,6 +10186,16 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["story_core_director_world_lock_summary"] = str(core_input_context.get("story_core_director_world_lock_summary") or "")
         diagnostics["story_core_compact_context_size_estimate"] = int(core_input_context.get("story_core_compact_context_size_estimate") or 0)
         diagnostics["story_core_refs_sources_used"] = _safe_list(core_input_context.get("story_core_refs_sources_used"))
+        diagnostics["core_active_character_roles"] = _safe_list(core_input_context.get("active_character_roles"))
+        diagnostics["core_inactive_character_roles_filtered"] = _safe_list(core_input_context.get("inactive_character_roles_filtered"))
+        diagnostics["core_episodic_text_characters"] = [
+            str(row.get("id") or "")
+            for row in _safe_list(core_input_context.get("episodic_text_characters"))
+            if isinstance(row, dict) and str(row.get("id") or "").strip()
+        ]
+        diagnostics["core_character_3_filtered_because_empty_ref"] = "character_3" in set(
+            _safe_list(core_input_context.get("inactive_character_roles_filtered"))
+        )
         diagnostics["story_core_payload_mode"] = "lean"
         diagnostics.update(
             build_capability_diagnostics_summary(
@@ -9929,7 +10220,12 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         core_segments, core_segments_source = _coerce_core_audio_segments(audio_map)
         user_concept = _extract_story_user_concept(input_pkg)
-        role_identity_expectations = _extract_role_identity_expectations(input_pkg, assigned_roles)
+        active_roles_for_core = _safe_list(core_input_context.get("active_character_roles"))
+        role_identity_expectations = _extract_role_identity_expectations(
+            input_pkg,
+            assigned_roles,
+            active_character_roles=active_roles_for_core,
+        )
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["story_core_role_identity_expectations"] = role_identity_expectations
         package["diagnostics"] = diagnostics
@@ -10023,9 +10319,17 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 )
                 diagnostics["story_core_narrative_sanitizer_applied"] = bool(sanitize_applied)
                 diagnostics["story_core_narrative_sanitizer_removed_terms"] = sanitize_removed_terms[:24]
+                generic_segment_ids = _detect_generic_narrative_segments(
+                    _safe_list(normalized_core.get("narrative_segments")),
+                    concrete_tokens=_collect_concrete_story_tokens(core_input_context),
+                )
+                if generic_segment_ids:
+                    diagnostics["core_generic_segment_repair_count"] = int(diagnostics.get("core_generic_segment_repair_count") or 0) + 1
+                    diagnostics["core_generic_segment_repair_applied"] = True
                 technical_spawn_debug: dict[str, Any] = {}
                 present_cast_roles = _collect_present_cast_roles(
-                    _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles")
+                    _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles"),
+                    active_character_roles=active_roles_for_core,
                 )
                 audio_map_diag = _safe_dict(_safe_dict(audio_map).get("diagnostics"))
                 audio_map_source = str(
@@ -10225,6 +10529,16 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
                 diagnostics["story_core_audio_segments_source"] = core_segments_source
                 package["diagnostics"] = diagnostics
+                if ok and generic_segment_ids and attempt == 0:
+                    last_error_code = CORE_QUALITY_GATES_FAILED
+                    last_errors = [f"generic_narrative_segments:{','.join(generic_segment_ids[:8])}"]
+                    validation_feedback = (
+                        "Replace abstract dramaturgy with concrete story beat from director_package memory/performance contract."
+                    )
+                    diagnostics["story_core_validation_errors"] = last_errors
+                    package["diagnostics"] = diagnostics
+                    retry_used = True
+                    continue
                 if ok:
                     story_core = {
                         "core_version": "1.1",
@@ -10281,6 +10595,17 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     )
                     diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
                     diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
+                    core_diag = _safe_dict(story_core_v1.get("core_diagnostics"))
+                    diagnostics["core_active_character_roles"] = _safe_list(core_diag.get("core_active_character_roles"))
+                    diagnostics["core_inactive_character_roles_filtered"] = _safe_list(core_diag.get("core_inactive_character_roles_filtered"))
+                    diagnostics["core_episodic_text_characters"] = _safe_list(core_diag.get("core_episodic_text_characters"))
+                    diagnostics["core_character_3_filtered_because_empty_ref"] = bool(
+                        core_diag.get("core_character_3_filtered_because_empty_ref")
+                    )
+                    diagnostics["core_forbidden_drift_sanitized"] = bool(core_diag.get("core_forbidden_drift_sanitized"))
+                    diagnostics["core_forbidden_drift_removed_tokens"] = _safe_list(
+                        core_diag.get("core_forbidden_drift_removed_tokens")
+                    )
                     package["diagnostics"] = diagnostics
                     _apply_director_contract_story_core(package)
                     _append_diag_event(package, "story_core generated", stage_id="story_core")
