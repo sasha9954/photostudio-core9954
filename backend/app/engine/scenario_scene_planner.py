@@ -3031,10 +3031,13 @@ def _normalize_scene_plan(
     scene_character_visibility_policy: list[dict[str, Any]] = []
     mapped_route_budget_lock_detected = False
     mapped_route_budget_override_prevented = False
+    mapped_route_budget_overridden_by_hard_map = False
+    hard_route_override_applied_segments: list[str] = []
     mapped_route_budget_post_normalization_applied = False
     mapped_route_budget_post_normalization_diag: dict[str, Any] = {}
     mapped_route_budget_target_adjusted_for_mapped_no_first_last = False
     mapped_default_vocal_role = "character_1"
+    strict_hard_route_map_active = bool(hard_route_map) and bool(creative_config.get("routes_are_hard_locked"))
 
     forced_route_list = [
         str(item).strip().lower()
@@ -3067,7 +3070,13 @@ def _normalize_scene_plan(
         if hard_route in ALLOWED_ROUTES and not row_is_mapped_route_budget:
             route = hard_route
         elif hard_route in ALLOWED_ROUTES and row_is_mapped_route_budget:
-            mapped_route_budget_override_prevented = True
+            if strict_hard_route_map_active:
+                route = hard_route
+                mapped_route_budget_override_prevented = False
+                mapped_route_budget_overridden_by_hard_map = True
+                hard_route_override_applied_segments.append(segment_id)
+            else:
+                mapped_route_budget_override_prevented = True
         if str(structure or "").strip().lower() == "performance_cut":
             has_vocal = bool(source_row.get("has_vocal"))
             if not has_vocal:
@@ -3887,6 +3896,8 @@ def _normalize_scene_plan(
         "scene_plan_mapped_default_vocal_role": mapped_default_vocal_role,
         "scene_plan_mapped_route_budget_lock_detected": mapped_route_budget_lock_detected,
         "scene_plan_mapped_route_budget_override_prevented": mapped_route_budget_override_prevented,
+        "mapped_route_budget_overridden_by_hard_map": mapped_route_budget_overridden_by_hard_map,
+        "hard_route_override_applied_segments": sorted(set(hard_route_override_applied_segments)),
         "scene_plan_mapped_route_budget_post_normalization_applied": mapped_route_budget_post_normalization_applied,
         "scene_plan_mapped_route_budget_scene_candidate_windows_present": scene_candidate_windows_present,
         "scene_plan_mapped_route_budget_used_model": str(used_model or ""),
