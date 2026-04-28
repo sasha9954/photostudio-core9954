@@ -2280,22 +2280,6 @@ def _sanitize_assigned_roles_and_refs(
     return assigned_roles, refs, role_debug
 
 
-def _apply_director_contract_role_normalization(package: dict[str, Any]) -> None:
-    input_pkg = _safe_dict(package.get("input"))
-    assigned_roles, normalized_refs, role_debug = _sanitize_assigned_roles_and_refs(
-        _safe_dict(package.get("refs_inventory")),
-        _safe_dict(package.get("assigned_roles")),
-        _safe_dict(input_pkg.get("director_contract") or package.get("director_contract")),
-        _safe_dict(package.get("director_package")),
-    )
-    package["assigned_roles"] = assigned_roles
-    package["refs_inventory"] = normalized_refs
-    diagnostics = _safe_dict(package.get("diagnostics"))
-    diagnostics["role_type_alignment"] = role_debug
-    diagnostics["director_contract_role_normalization_applied"] = True
-    package["diagnostics"] = diagnostics
-
-
 def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
     audio_in = _safe_dict(refs_inventory.get("audio_in"))
     meta = _safe_dict(audio_in.get("meta"))
@@ -2354,37 +2338,6 @@ def _role_to_ref_key(role: str) -> str:
     if not clean:
         return ""
     return clean if clean.startswith("ref_") else f"ref_{clean}"
-
-
-def _is_active_character_ref(refs_inventory: dict[str, Any], role: str) -> bool:
-    ref_key = _role_to_ref_key(role)
-    row = _safe_dict(_safe_dict(refs_inventory).get(ref_key))
-    refs = _safe_list(row.get("refs"))
-    value = str(row.get("value") or "").strip()
-    preview = str(row.get("preview") or "").strip()
-    meta = _safe_dict(row.get("meta"))
-    has_payload = bool(refs or value or preview)
-    has_meaningful_meta = bool(
-        meta.get("kind")
-        or meta.get("type")
-        or meta.get("roleType")
-        or meta.get("story_role")
-        or meta.get("identity_label")
-        or refs
-        or value
-    )
-    return has_payload and has_meaningful_meta
-
-
-def _collect_active_character_roles(refs_inventory: dict[str, Any]) -> tuple[list[str], list[str]]:
-    active_roles: list[str] = []
-    inactive_roles: list[str] = []
-    for role in ("character_1", "character_2", "character_3"):
-        if _is_active_character_ref(refs_inventory, role):
-            active_roles.append(role)
-        else:
-            inactive_roles.append(role)
-    return active_roles, inactive_roles
 
 
 def _visual_ref_identity_rule(role: str) -> str:
@@ -5521,31 +5474,6 @@ def _extract_forbidden_drift(note_text: str) -> list[str]:
     return list(dict.fromkeys(drift))[:12]
 
 
-def _sanitize_forbidden_drift_tokens(tokens: list[str]) -> tuple[list[str], list[str]]:
-    allowed_semantic_roots = {"neon", "club", "fantasy", "cyberpunk", "horror", "gore", "identity_replacement", "ungrounded_world_jump"}
-    banned_words = {"нужен", "эпизодический", "персонаж", "реф", "без", "нельзя", "использовать", "переносить", "как"}
-    sanitized: list[str] = []
-    removed: list[str] = []
-    for token in _safe_list(tokens):
-        raw = str(token or "").strip()
-        if not raw:
-            continue
-        norm = raw if raw.startswith("forbid:") else f"forbid:{raw}"
-        body = norm.replace("forbid:", "").strip().lower()
-        body_parts = [part for part in re.split(r"[_\-\s]+", body) if part]
-        if not body_parts:
-            removed.append(norm)
-            continue
-        if any(part in banned_words for part in body_parts):
-            removed.append(norm)
-            continue
-        if body not in allowed_semantic_roots:
-            removed.append(norm)
-            continue
-        sanitized.append(f"forbid:{body}")
-    return list(dict.fromkeys(sanitized))[:12], list(dict.fromkeys(removed))[:24]
-
-
 def _ref_record(ref_id: str, row: dict[str, Any]) -> dict[str, str]:
     meta = _normalize_ref_meta(row.get("meta"))
     label = _first_text(row.get("source_label"), row.get("label"), row.get("value"), ref_id)[:120]
@@ -5729,9 +5657,6 @@ def _build_story_core_v11(
     character_1_lip_sync_only = character_1_appearance_mode == "lip_sync_only" or character_1_presence_mode == "lip_sync_only"
     core_segments, core_source = _coerce_core_audio_segments(audio_map)
     total_slots = len(core_segments)
-    active_character_roles, inactive_character_roles = _collect_active_character_roles(refs_inventory)
-    active_character_role_set = set(active_character_roles)
-    episodic_text_characters = _extract_episodic_text_characters(input_pkg)
 
     primary_subject = _canonical_subject_id(assigned_roles.get("primary_role")) or "character_1"
     role_subjects = [
@@ -5759,8 +5684,6 @@ def _build_story_core_v11(
         if _is_subject_ref(record):
             canonical_ref_subject = _canonical_subject_id(record["ref_id"]) or _canonical_subject_id(record["label"])
             if canonical_ref_subject and canonical_ref_subject != primary_subject:
-                if canonical_ref_subject.startswith("character_") and canonical_ref_subject not in active_character_role_set:
-                    continue
                 ref_subjects.append(canonical_ref_subject)
                 if record["label"]:
                     secondary_subject_labels[canonical_ref_subject] = record["label"]
@@ -5800,25 +5723,13 @@ def _build_story_core_v11(
     for candidate in [*role_subjects, *connected_subjects]:
         canonical_candidate = _canonical_subject_id(candidate)
         if canonical_candidate and canonical_candidate != primary_subject:
-            if canonical_candidate.startswith("character_") and canonical_candidate not in active_character_role_set:
-                continue
             ref_subjects.append(canonical_candidate)
             if canonical_candidate not in secondary_subject_labels and str(candidate).strip():
                 secondary_subject_labels[canonical_candidate] = str(candidate).strip()[:120]
     secondary_subjects = list(dict.fromkeys(ref_subjects))[:6]
-    secondary_subjects = [
-        role for role in secondary_subjects
-        if not role.startswith("character_") or role in active_character_role_set
-    ]
     if not secondary_subjects and continuity_objects:
         mapped_subject = _canonical_subject_id(continuity_objects[0].get("ownership_role"))
-        secondary_subjects = (
-            [mapped_subject]
-            if mapped_subject
-            and mapped_subject != primary_subject
-            and (not mapped_subject.startswith("character_") or mapped_subject in active_character_role_set)
-            else []
-        )
+        secondary_subjects = [mapped_subject] if mapped_subject and mapped_subject != primary_subject else []
     active_subjects = list(dict.fromkeys([primary_subject, *secondary_subjects]))
     domestic_argument_duet = _is_domestic_argument_duet(text_bundle, active_subjects)
     if domestic_argument_duet:
@@ -5829,10 +5740,7 @@ def _build_story_core_v11(
     ending_callback_rule = _first_text(parsed_story_core.get("ending_callback_rule"), fallback_story_core.get("ending_callback_rule"))
     style_rule = _first_text(_safe_dict(parsed_story_core.get("style_lock")).get("rule"), _safe_dict(fallback_story_core.get("style_lock")).get("rule"))
     note_text = " ".join([text_bundle.get("note", ""), text_bundle.get("director_note", "")]).strip()
-    forbidden_drift_raw = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
-    forbidden_drift, forbidden_drift_removed_tokens = _sanitize_forbidden_drift_tokens(forbidden_drift_raw)
-    if not forbidden_drift:
-        forbidden_drift = ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
+    forbidden_drift = _extract_forbidden_drift(note_text) or ["forbid:identity_replacement", "forbid:ungrounded_world_jump"]
     parsed_narrative_segments = [row for row in _safe_list(parsed_story_core.get("narrative_segments")) if isinstance(row, dict)]
     canonical_by_segment_id = {
         str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
@@ -5981,11 +5889,6 @@ def _build_story_core_v11(
         "style_anchor": _first_text(style_hints[0] if style_hints else "", style_rule, "coherent_cinematic_style"),
         "allowed_variation": ["lighting_shift", "framing_shift", "performance_intensity_shift", "weather_or_time_shift_if_text_supported"],
         "forbidden_drift": forbidden_drift,
-        "director_constraints": [
-            "young hero ref is identity-only",
-            "episodic girl appears only in one memory scene",
-            "do not romanticize violence",
-        ],
         "world_continuity_rules": [
             "location_and_style_changes_require_semantic_bridge",
             "forbidden_drift_tokens_cannot_be_introduced",
@@ -6235,7 +6138,6 @@ def _build_story_core_v11(
             "duet_presence_rule": duet_presence_rule,
             "object_transition_rules": ["ownership_or_binding_change_must_be_explicit_in_transition_events", "persistent_objects_should_reappear_within_two_beats"],
             "transition_events": transition_events[:16],
-            "episodic_text_characters": episodic_text_characters,
         },
         "semantic_arc": {
             "global_intent": str(parsed_story_core.get("story_summary") or fallback_story_core.get("story_summary") or ""),
@@ -6324,15 +6226,6 @@ def _build_story_core_v11(
                 "connected_refs_summary": _safe_dict(input_pkg.get("connected_context_summary")),
                 "refs_inventory_keys": sorted([str(key) for key in refs_inventory.keys()])[:40],
             },
-            "episodic_text_characters": episodic_text_characters,
-        },
-        "core_diagnostics": {
-            "core_active_character_roles": active_character_roles,
-            "core_inactive_character_roles_filtered": inactive_character_roles,
-            "core_episodic_text_characters": [str(row.get("id") or "") for row in episodic_text_characters if str(row.get("id") or "").strip()],
-            "core_character_3_filtered_because_empty_ref": "character_3" in inactive_character_roles,
-            "core_forbidden_drift_sanitized": bool(forbidden_drift_removed_tokens),
-            "core_forbidden_drift_removed_tokens": forbidden_drift_removed_tokens,
         },
     }
     return story_core_v1
@@ -6576,88 +6469,6 @@ def _extract_story_user_concept(input_pkg: dict[str, Any]) -> str:
     return ""
 
 
-def _extract_episodic_text_characters(input_pkg: dict[str, Any]) -> list[dict[str, Any]]:
-    director_contract = _safe_dict(input_pkg.get("director_contract"))
-    director_package = _safe_dict(input_pkg.get("director_package"))
-    contract_rows = [
-        _safe_dict(_safe_dict(director_package.get("character_contract")).get("girl")),
-        _safe_dict(_safe_dict(director_contract.get("character_contract")).get("girl")),
-    ]
-    for row in contract_rows:
-        if not row:
-            continue
-        story_role = str(row.get("story_role") or "").strip().lower()
-        visual_reference_mode = str(row.get("visual_reference_mode") or "").strip().lower()
-        if story_role != "episodic" and visual_reference_mode != "text_description_only":
-            continue
-        identity_label = str(row.get("identity_label") or "девушка").strip() or "девушка"
-        allowed_scene_context = str(
-            row.get("allowed_scene_context")
-            or row.get("scene_context")
-            or "romantic flowers memory scene"
-        ).strip()
-        return [
-            {
-                "id": "episodic_girl",
-                "source": "director_contract.character_contract.girl",
-                "story_role": "episodic",
-                "identity_label": identity_label,
-                "usage": "one_scene_only",
-                "visual_reference_mode": "text_description_only",
-                "allowed_scene_context": allowed_scene_context,
-            }
-        ]
-    return []
-
-
-def _flatten_story_text_tokens(value: Any) -> list[str]:
-    out: list[str] = []
-    if isinstance(value, str):
-        text = str(value).strip()
-        if text:
-            out.append(text)
-        return out
-    if isinstance(value, dict):
-        for key in sorted(value.keys(), key=lambda item: str(item)):
-            out.extend(_flatten_story_text_tokens(value.get(key)))
-        return out
-    if isinstance(value, list):
-        for row in value:
-            out.extend(_flatten_story_text_tokens(row))
-        return out
-    return out
-
-
-def _extract_director_memory_beats(input_pkg: dict[str, Any]) -> list[str]:
-    director_contract = _safe_dict(input_pkg.get("director_contract"))
-    director_package = _safe_dict(input_pkg.get("director_package"))
-    episodic_text_characters = _extract_episodic_text_characters(input_pkg)
-    source_blocks = [
-        director_package.get("memory_contract"),
-        director_contract.get("memory_contract"),
-        director_package.get("scene_contract"),
-        director_contract.get("scene_contract"),
-        director_package.get("performance_contract"),
-        director_contract.get("performance_contract"),
-        director_package.get("reference_usage_contract"),
-        director_contract.get("reference_usage_contract"),
-        director_package.get("story_intent"),
-        director_contract.get("route_contract"),
-        director_package.get("route_contract"),
-        director_contract.get("character_contract"),
-        director_package.get("character_contract"),
-        episodic_text_characters,
-    ]
-    beats: list[str] = []
-    for block in source_blocks:
-        for token in _flatten_story_text_tokens(block):
-            normalized = re.sub(r"\s+", " ", str(token)).strip(" .,:;!?")
-            if len(normalized) < 3:
-                continue
-            beats.append(normalized[:180])
-    return list(dict.fromkeys(beats))[:40]
-
-
 def _collect_story_core_refs_by_role(
     input_pkg: dict[str, Any],
     refs_inventory: dict[str, Any],
@@ -6784,27 +6595,12 @@ def _build_story_core_input_context(
     grounding_level: str,
 ) -> dict[str, Any]:
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
-    active_character_roles, inactive_character_roles = _collect_active_character_roles(refs_inventory)
     normalized_refs_by_role, refs_sources_used = _collect_story_core_refs_by_role(input_pkg, refs_inventory, connected_summary)
-    for role in inactive_character_roles:
-        normalized_refs_by_role.pop(role, None)
     compact_refs_manifest, attached_ref_roles = _build_story_core_compact_refs_manifest(
         refs_by_role=normalized_refs_by_role,
         ref_attachment_summary=ref_attachment_summary,
         connected_summary=connected_summary,
     )
-    filtered_available_roles = [
-        role
-        for role in _safe_list(compact_refs_manifest.get("available_roles"))
-        if (not str(role).startswith("character_")) or str(role) in set(active_character_roles)
-    ]
-    compact_refs_manifest["available_roles"] = filtered_available_roles
-    compact_attached = _safe_dict(compact_refs_manifest.get("attached_refs"))
-    for role in list(compact_attached.keys()):
-        if str(role).startswith("character_") and str(role) not in set(active_character_roles):
-            compact_attached.pop(role, None)
-    compact_refs_manifest["attached_refs"] = compact_attached
-    attached_ref_roles = [role for role in attached_ref_roles if (not str(role).startswith("character_")) or str(role) in set(active_character_roles)]
     story_user_concept = _extract_story_user_concept(input_pkg)
     model_id = _resolve_active_video_model_id(input_pkg)
     i2v_profile = get_video_model_capability_profile(model_id, "i2v")
@@ -6836,25 +6632,6 @@ def _build_story_core_input_context(
         ],
     }
     director_world_lock_summary = _extract_director_world_lock_summary(input_pkg, story_user_concept)
-    episodic_text_characters = _extract_episodic_text_characters(input_pkg)
-    director_contract = _safe_dict(input_pkg.get("director_contract"))
-    director_package = _safe_dict(input_pkg.get("director_package"))
-    memory_beat_inventory = _extract_director_memory_beats(input_pkg)
-    director_package_summary = {
-        "timeline_contract": _safe_dict(director_package.get("timeline_contract") or director_contract.get("timeline_contract")),
-        "character_contract": _safe_dict(director_package.get("character_contract") or director_contract.get("character_contract")),
-        "route_contract": _safe_dict(director_package.get("route_contract") or director_contract.get("route_contract")),
-        "memory_contract": _safe_dict(director_package.get("memory_contract") or director_contract.get("memory_contract")),
-        "scene_contract": _safe_dict(director_package.get("scene_contract") or director_contract.get("scene_contract")),
-        "reference_usage_contract": _safe_dict(
-            director_package.get("reference_usage_contract") or director_contract.get("reference_usage_contract")
-        ),
-        "prompt_contract_global_style_rules": _safe_list(
-            _safe_dict(director_package.get("prompt_contract") or director_contract.get("prompt_contract")).get("global_style_rules")
-        ),
-        "episodic_text_characters": episodic_text_characters,
-        "memory_beat_inventory": memory_beat_inventory,
-    }
     connected_role_summary = {
         "connectedRoleIds": [str(role).strip() for role in _safe_list(connected_summary.get("connectedRoleIds")) if str(role).strip()],
         "refsPresentByRole": _safe_dict(connected_summary.get("refsPresentByRole")),
@@ -6884,10 +6661,6 @@ def _build_story_core_input_context(
             "required_1_to_1_output": "narrative_segments[] by segment_id",
         },
         "connected_role_summary": connected_role_summary,
-        "active_character_roles": active_character_roles,
-        "inactive_character_roles_filtered": inactive_character_roles,
-        "director_package_summary": director_package_summary,
-        "episodic_text_characters": episodic_text_characters,
         "compact_refs_manifest": compact_refs_manifest,
         "assigned_roles": _safe_dict(input_pkg.get("assigned_roles_override")),
         "story_core_prop_contracts": prop_contracts,
@@ -6917,14 +6690,9 @@ def _build_story_core_input_context(
         "available_roles": _safe_list(compact_refs_manifest.get("available_roles")),
         "refs_by_role": normalized_refs_by_role,
         "story_core_attached_ref_roles": attached_ref_roles,
-        "active_character_roles": active_character_roles,
-        "inactive_character_roles_filtered": inactive_character_roles,
-        "episodic_text_characters": episodic_text_characters,
         "story_core_director_world_lock_summary": director_world_lock_summary,
         "story_core_compact_context_size_estimate": len(json.dumps(_compact_prompt_payload(compact_context), ensure_ascii=False)),
         "story_core_refs_sources_used": refs_sources_used,
-        "core_memory_beat_inventory_count": len(memory_beat_inventory),
-        "core_memory_beat_inventory_preview": memory_beat_inventory[:8],
     }
 
 
@@ -6965,7 +6733,7 @@ def _default_story_core_guidance(creative_config: dict[str, Any] | None = None) 
             "ownership_grammar": {
                 "character_1": "primary-role owned object",
                 "character_2": "support-role owned object",
-                "character_3": "third-character owned object when connected",
+                "character_3": "antagonist-role owned object",
                 "shared": "multi-role shared object",
                 "environment": "world/environment object",
             },
@@ -7274,839 +7042,6 @@ def _infer_meaning_axes(row: dict[str, Any]) -> dict[str, str]:
         "narrative_function": narrative_function,
         "social_pressure": social_pressure,
         "hero_vs_world_ratio": hero_world_ratio,
-    }
-
-
-_GENERIC_BEAT_PHRASES = (
-    "establish world and intent",
-    "increase pressure",
-    "escalate momentum",
-    "drive peak force",
-    "shift from impact",
-    "reframe intent",
-    "close on a persistent trace",
-    "world response",
-    "public consequence",
-    "concrete visual logic",
-    "hero agency",
-    "world in command",
-    "external reaction and consequence",
-    "layering social observation",
-    "movement vectors",
-    "relational distance",
-    "bridging evidence",
-    "literal replay",
-    "progression tied",
-    "anchors stay grounded",
-    "coded subtext",
-)
-
-_GENERIC_NON_CONCRETE_TOKENS = {
-    "world", "city", "place", "memory", "past", "present", "consequence", "pressure", "intent", "context",
-    "action", "story", "emotion", "visual", "concrete", "hero", "character", "progression", "tension", "response",
-}
-
-_ATOM_DISALLOWED_TYPES = {
-    "negative_rule",
-    "ref_rule",
-    "camera_rule",
-    "style_rule",
-    "summary",
-    "trigger_note",
-    "meta_contract",
-}
-
-_ATOM_SOURCE_PRIORITY = {
-    "episodic_text_characters": 100,
-    "contract_composed_scene": 95,
-    "director_package.scene_contract": 90,
-    "director_contract.scene_contract": 88,
-    "director_package.memory_contract": 85,
-    "director_contract.memory_contract": 83,
-    "director_package.performance_contract": 80,
-    "director_contract.performance_contract": 78,
-    "director_package.user_story": 76,
-    "director_package.director_note": 75,
-    "director_contract.director_note": 74,
-    "audio_transcript": 20,
-    "director_package.story_intent": 10,
-    "director_package.route_contract": 8,
-    "director_contract.route_contract": 7,
-    "director_package.reference_usage_contract": 5,
-    "director_contract.reference_usage_contract": 4,
-}
-
-
-def _split_text_clauses(value: str) -> list[str]:
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not text:
-        return []
-    parts = [part.strip(" ,;:") for part in re.split(r"[.!?\n]|(?:\s+-\s+)|(?:\s+;\s+)", text) if part.strip(" ,;:")]
-    out: list[str] = []
-    for part in parts:
-        if len(part) <= 220:
-            out.append(part)
-            continue
-        chunks = [p.strip(" ,;:") for p in re.split(r",|\band\b|\bи\b", part) if p.strip(" ,;:")]
-        out.extend(chunks or [part[:220]])
-    return out
-
-
-def _is_camera_or_composition_rule(text: str) -> bool:
-    low = str(text or "").strip().lower()
-    if not low:
-        return False
-    camera_patterns = (
-        r"\bcamera\b",
-        r"\bframing\b",
-        r"\bpush[-\s]?in\b",
-        r"\bshot\b",
-        r"\bangle\b",
-        r"\bplan\b",
-        r"\bкамер\w*\b",
-        r"\bкадр\w*\b",
-        r"\bприближен\w*\b",
-        r"\bв лицо\b",
-        r"оставить\s+живое\s+пространство",
-    )
-    return any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in camera_patterns)
-
-
-def _build_contract_composed_scene_atoms(
-    input_pkg: dict[str, Any],
-    core_input_context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    director_package = _safe_dict(input_pkg.get("director_package"))
-    director_contract = _safe_dict(input_pkg.get("director_contract"))
-    route_contract = _safe_dict(director_package.get("route_contract") or director_contract.get("route_contract"))
-    character_contract = _safe_dict(director_package.get("character_contract") or director_contract.get("character_contract"))
-    scene_contract = _safe_dict(director_package.get("scene_contract") or director_contract.get("scene_contract"))
-    performance_contract = _safe_dict(director_package.get("performance_contract") or director_contract.get("performance_contract"))
-    memory_contract = _safe_dict(director_package.get("memory_contract") or director_contract.get("memory_contract"))
-    world_roles = _safe_dict(director_contract.get("world_roles"))
-    perf_world = _safe_dict(world_roles.get("performance_world"))
-    mem_world = _safe_dict(world_roles.get("memory_world"))
-    present_places = _flatten_story_text_tokens(
-        [_safe_list(scene_contract.get("present_scenes_locations")), perf_world.get("label")]
-    )
-    memory_places = _flatten_story_text_tokens(
-        [_safe_list(scene_contract.get("past_scenes_locations")), mem_world.get("label")]
-    )
-    present_action_clauses = _split_text_clauses(
-        " ".join(_flatten_story_text_tokens([performance_contract, core_input_context.get("user_concept")]))
-    )
-    memory_action_clauses = _split_text_clauses(
-        " ".join(_flatten_story_text_tokens([memory_contract, performance_contract, core_input_context.get("user_concept")]))
-    )
-    performance_role = str(_safe_dict(route_contract.get("ia2v")).get("primary_role") or "").strip()
-    memory_role = str(_safe_dict(route_contract.get("i2v")).get("primary_role") or "").strip()
-    lip_sync_enabled = bool(
-        _safe_dict(_safe_dict(director_contract.get("audio_contract")).get("audio_visual_sync_rules")).get("lip_sync_required")
-    ) or bool(_safe_dict(route_contract.get("ia2v")).get("lip_sync_required"))
-    atoms: list[dict[str, Any]] = []
-
-    def _role_subject(role_id: str) -> str:
-        if not role_id:
-            return ""
-        role_row = _safe_dict(character_contract.get(role_id))
-        return str(role_row.get("identity_label") or role_row.get("role_name") or role_id).strip()
-
-    if performance_role and present_places:
-        for place in present_places[:4]:
-            action = "performs with visible emotion" if lip_sync_enabled else "acts with visible emotion"
-            for clause in present_action_clauses[:8]:
-                if _is_camera_or_composition_rule(clause):
-                    continue
-                if re.search(r"\b(feel|emotion|express|perform|sing|react)\w*\b", clause.lower()):
-                    action = clause
-                    break
-            raw_text = f"{_role_subject(performance_role) or performance_role} {action} in {place}".strip()
-            atoms.append(
-                {
-                    "id": f"contract_atom_{len(atoms) + 1:02d}",
-                    "source": "contract_composed_scene",
-                    "source_priority": _ATOM_SOURCE_PRIORITY.get("contract_composed_scene", 0),
-                    "timeline": "present",
-                    "atom_type": "performance_scene",
-                    "subject_hint": performance_role,
-                    "place_hint": str(place).strip()[:120],
-                    "action_hint": str(action).strip()[:120],
-                    "object_hint": "",
-                    "emotion_hint": "",
-                    "raw_text": raw_text[:220],
-                    "repair_eligible": True,
-                    "quality_score": 90,
-                    "reject_reason": "",
-                }
-            )
-    if memory_role and memory_places:
-        for place in memory_places[:4]:
-            action = ""
-            for clause in memory_action_clauses[:10]:
-                low = clause.lower()
-                if _is_camera_or_composition_rule(clause):
-                    continue
-                if re.search(r"\b(recall|remember|run|walk|find|hold|lose|meet|escape|return|react)\w*\b", low):
-                    action = clause
-                    break
-            if not action:
-                action = "moves through a concrete event"
-            raw_text = f"{_role_subject(memory_role) or memory_role} {action} in {place}".strip()
-            atoms.append(
-                {
-                    "id": f"contract_atom_{len(atoms) + 1:02d}",
-                    "source": "contract_composed_scene",
-                    "source_priority": _ATOM_SOURCE_PRIORITY.get("contract_composed_scene", 0),
-                    "timeline": "memory",
-                    "atom_type": "scene_event",
-                    "subject_hint": memory_role,
-                    "place_hint": str(place).strip()[:120],
-                    "action_hint": str(action).strip()[:120],
-                    "object_hint": "",
-                    "emotion_hint": "",
-                    "raw_text": raw_text[:220],
-                    "repair_eligible": True,
-                    "quality_score": 90,
-                    "reject_reason": "",
-                }
-            )
-    return atoms[:16]
-
-
-def _extract_concrete_beat_atoms(
-    input_pkg: dict[str, Any],
-    core_input_context: dict[str, Any],
-    audio_map: dict[str, Any],
-) -> list[dict[str, Any]]:
-    director_package = _safe_dict(input_pkg.get("director_package"))
-    director_contract = _safe_dict(input_pkg.get("director_contract"))
-    episodic_text_characters = _safe_list(core_input_context.get("episodic_text_characters"))
-    route_contract = _safe_dict(director_package.get("route_contract") or director_contract.get("route_contract"))
-    character_contract = _safe_dict(director_package.get("character_contract") or director_contract.get("character_contract"))
-    world_roles = _safe_dict(_safe_dict(director_contract.get("world_roles")).get("performance_world"))
-    world_roles_memory = _safe_dict(_safe_dict(director_contract.get("world_roles")).get("memory_world"))
-    location_candidates = _flatten_story_text_tokens(
-        [
-            director_package.get("scene_contract"),
-            director_contract.get("scene_contract"),
-            core_input_context.get("user_concept"),
-            world_roles,
-            world_roles_memory,
-        ]
-    )
-    role_names = {str(key).lower(): str(key) for key in character_contract.keys()}
-    performance_role = str(_safe_dict(route_contract.get("ia2v")).get("primary_role") or "").strip().lower()
-    memory_role = str(_safe_dict(route_contract.get("i2v")).get("primary_role") or "").strip().lower()
-    lip_sync_role = str(_safe_dict(director_contract.get("audio_contract")).get("lip_sync_target_role") or "").strip().lower()
-    audio_segments = _safe_list(audio_map.get("segments"))
-    audio_sources = [
-        " ".join(_flatten_story_text_tokens(seg))
-        for seg in audio_segments
-        if isinstance(seg, dict)
-    ]
-    source_specs: list[tuple[str, Any, str]] = [
-        ("episodic_text_characters", episodic_text_characters, "memory"),
-        ("director_package.scene_contract", director_package.get("scene_contract"), "memory"),
-        ("director_contract.scene_contract", director_contract.get("scene_contract"), "memory"),
-        ("director_package.memory_contract", director_package.get("memory_contract"), "memory"),
-        ("director_contract.memory_contract", director_contract.get("memory_contract"), "memory"),
-        ("director_package.performance_contract", director_package.get("performance_contract"), "present"),
-        ("director_contract.performance_contract", director_contract.get("performance_contract"), "present"),
-        ("director_package.user_story", director_package.get("user_story"), "unknown"),
-        ("director_package.director_note", director_package.get("director_note"), "unknown"),
-        ("director_contract.director_note", director_contract.get("director_note"), "unknown"),
-        ("audio_transcript", audio_sources, "present"),
-        ("director_package.story_intent", director_package.get("story_intent"), "unknown"),
-        ("director_package.route_contract", director_package.get("route_contract"), "present"),
-        ("director_contract.route_contract", director_contract.get("route_contract"), "present"),
-        ("director_package.reference_usage_contract", director_package.get("reference_usage_contract"), "memory"),
-        ("director_contract.reference_usage_contract", director_contract.get("reference_usage_contract"), "memory"),
-        ("director_package.character_contract", director_package.get("character_contract"), "unknown"),
-        ("director_contract.character_contract", director_contract.get("character_contract"), "unknown"),
-    ]
-
-    def _extract_hint(clause: str, pattern: str) -> str:
-        match = re.search(pattern, clause, flags=re.IGNORECASE)
-        if not match:
-            return ""
-        return re.sub(r"\s+", " ", match.group(0)).strip(" ,.:;!?")[:120]
-
-    atoms: list[dict[str, Any]] = _build_contract_composed_scene_atoms(input_pkg, core_input_context)
-    seen: set[str] = set()
-    negative_patterns = (
-        r"(^|\s)не\s+\w+",
-        r"\bнельзя\b",
-        r"\bбез\b",
-        r"\bdo not\b",
-        r"\bdon't\b",
-        r"\bno\b",
-        r"\bavoid\b",
-        r"\bforbid\w*\b",
-        r"\bforbidden\b",
-        r"\bnegative\b",
-    )
-    ref_patterns = (
-        r"identity\s+only",
-        r"reference\s+only",
-        r"strict_identity",
-        r"visual_reference_mode",
-        r"только\s+как\s+identity",
-        r"не\s+переносить",
-    )
-    meta_patterns = (
-        r"\bcontract\b",
-        r"\bprompt\b",
-        r"\bschema\b",
-        r"\broute\b",
-        r"\bia2v\b",
-        r"\bi2v\b",
-        r"lip[-\s]?sync\s+использовать",
-        r"source[_\s]?url",
-        r"audio_source_url",
-        r"package_version",
-    )
-    summary_patterns = (
-        r"музыкальный\s+видеоклип",
-        r"story_intent",
-        r"\bsummary\b",
-        r"core_message",
-        r"key_themes",
-        r"global_style_rules",
-    )
-    trigger_patterns = (
-        r"\b(song|music|audio)\b.*\b(trigger|memory|recall)\b",
-        r"песня.*геро\w+",
-    )
-
-    def _classify_atom(
-        *,
-        source_name: str,
-        clause: str,
-        subject_hint: str,
-        place_hint: str,
-        action_hint: str,
-        object_hint: str,
-        emotion_hint: str,
-        timeline_hint: str,
-    ) -> dict[str, Any]:
-        low = clause.lower()
-        has_negative = any(re.search(p, low, flags=re.IGNORECASE) for p in negative_patterns)
-        has_ref = any(re.search(p, low, flags=re.IGNORECASE) for p in ref_patterns)
-        has_meta = any(re.search(p, low, flags=re.IGNORECASE) for p in meta_patterns)
-        has_summary = any(re.search(p, low, flags=re.IGNORECASE) for p in summary_patterns)
-        has_camera = _is_camera_or_composition_rule(low)
-        has_trigger = any(re.search(p, low, flags=re.IGNORECASE) for p in trigger_patterns)
-        has_action = bool(action_hint) or bool(re.search(r"\b\w+(ed|ing|ет|ит|етcя|ется|лся|лась|ли)\b", low))
-        has_place = bool(place_hint)
-        has_subject = bool(subject_hint) or "episodic" in low
-        abstract_ratio = 0.0
-        words = re.findall(r"[a-zа-яё]{3,}", low)
-        if words:
-            abstract_hits = sum(
-                1
-                for w in words
-                if w in {"intent", "context", "summary", "style", "theme", "message", "pressure", "consequence", "story"}
-            )
-            abstract_ratio = abstract_hits / max(1, len(words))
-        atom_type = "scene_event"
-        if has_negative:
-            atom_type = "negative_rule"
-        elif has_ref:
-            atom_type = "ref_rule"
-        elif has_camera:
-            atom_type = "camera_rule"
-        elif has_meta:
-            atom_type = "meta_contract"
-        elif has_summary:
-            atom_type = "summary"
-        elif has_trigger and not (has_action and has_place):
-            atom_type = "trigger_note"
-        elif "style" in low:
-            atom_type = "style_rule"
-        elif "episodic" in low or subject_hint == "episodic_text_character":
-            atom_type = "episodic_scene"
-        elif timeline_hint == "present" and ("perform" in low or "sing" in low):
-            atom_type = "performance_scene"
-        elif has_subject and has_action:
-            atom_type = "character_action"
-        elif has_place and has_action:
-            atom_type = "place_action"
-        elif has_place:
-            atom_type = "world_texture"
-        quality = 0
-        if has_place:
-            quality += 30
-        if has_action:
-            quality += 30
-        if has_subject:
-            quality += 20
-        if object_hint:
-            quality += 10
-        if emotion_hint:
-            quality += 10
-        if atom_type in _ATOM_DISALLOWED_TYPES:
-            quality -= 50
-        if abstract_ratio > 0.45:
-            quality -= 30
-        quality = max(0, min(100, quality))
-        eligible_shape = bool(
-            has_action
-            or (has_place and has_subject and (has_action or object_hint or emotion_hint))
-            or atom_type in {"episodic_scene", "performance_scene", "character_action", "place_action", "scene_event"}
-        )
-        repair_eligible = (
-            eligible_shape
-            and atom_type not in _ATOM_DISALLOWED_TYPES
-            and quality >= 40
-            and not (source_name == "audio_transcript" and not (has_place and has_subject and has_action))
-        )
-        reject_reason = ""
-        if not repair_eligible:
-            if atom_type in _ATOM_DISALLOWED_TYPES:
-                reject_reason = atom_type
-            elif quality < 40:
-                reject_reason = "low_quality_score"
-            elif source_name == "audio_transcript":
-                reject_reason = "audio_context_only"
-            else:
-                reject_reason = "not_concrete_enough"
-        return {
-            "atom_type": atom_type,
-            "repair_eligible": repair_eligible,
-            "quality_score": quality,
-            "reject_reason": reject_reason,
-        }
-
-    for source_name, raw_value, timeline in source_specs:
-        for token in _flatten_story_text_tokens(raw_value):
-            for clause in _split_text_clauses(token):
-                low = clause.lower()
-                if len(low) < 12:
-                    continue
-                subject_hint = ""
-                for role_key in ("character_1", "character_2", "character_3"):
-                    if role_key in low:
-                        subject_hint = role_key
-                        break
-                if not subject_hint and performance_role and performance_role in low:
-                    subject_hint = performance_role
-                if not subject_hint and lip_sync_role and lip_sync_role in low:
-                    subject_hint = lip_sync_role
-                if not subject_hint and memory_role and memory_role in low:
-                    subject_hint = memory_role
-                if not subject_hint:
-                    for role_key in role_names:
-                        if role_key and role_key in low:
-                            subject_hint = role_names.get(role_key, "")
-                            break
-                if not subject_hint and "episodic" in low:
-                    subject_hint = "episodic_text_character"
-                place_hint = ""
-                for candidate in location_candidates[:48]:
-                    candidate_text = str(candidate).strip().lower()
-                    if len(candidate_text) >= 4 and candidate_text in low:
-                        place_hint = candidate_text[:120]
-                        break
-                action_hint = _extract_hint(clause, r"\b\w+(?:ed|ing|s)\b(?:\s+\w+){0,4}") if re.search(r"\b\w+(?:ed|ing)\b", low) else ""
-                object_hint = _extract_hint(clause, r"\b(with|holding|carrying|wearing|using|near)\s+[^,.;:!?]+")
-                emotion_hint = _extract_hint(clause, r"\b(fear|hope|love|anger|regret|longing|calm|panic|relief|tender|anxious|joy|sad)\w*")
-                if not action_hint and not place_hint and not object_hint:
-                    continue
-                timeline_hint = timeline
-                if "ia2v" in low or (lip_sync_role and lip_sync_role in low):
-                    timeline_hint = "present"
-                elif "i2v" in low or "memory" in low or "past" in low:
-                    timeline_hint = "memory"
-                key = f"{source_name}|{clause.lower()}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                classification = _classify_atom(
-                    source_name=source_name,
-                    clause=clause,
-                    subject_hint=subject_hint,
-                    place_hint=place_hint,
-                    action_hint=action_hint,
-                    object_hint=object_hint,
-                    emotion_hint=emotion_hint,
-                    timeline_hint=timeline_hint if timeline_hint in {"present", "memory"} else "unknown",
-                )
-                atoms.append(
-                    {
-                        "id": f"atom_{len(atoms) + 1:02d}",
-                        "source": source_name,
-                        "source_priority": int(_ATOM_SOURCE_PRIORITY.get(source_name, 30)),
-                        "timeline": timeline_hint if timeline_hint in {"present", "memory"} else "unknown",
-                        "subject_hint": subject_hint,
-                        "place_hint": place_hint,
-                        "action_hint": action_hint,
-                        "object_hint": object_hint,
-                        "emotion_hint": emotion_hint,
-                        "raw_text": clause[:220],
-                        **classification,
-                    }
-                )
-    atoms.sort(
-        key=lambda atom: (
-            int(_safe_dict(atom).get("source_priority") or 0),
-            int(_safe_dict(atom).get("quality_score") or 0),
-            str(_safe_dict(atom).get("id") or ""),
-        ),
-        reverse=True,
-    )
-    return atoms[:120]
-
-
-def _segment_has_concrete_atom(segment_text: str, atoms: list[dict[str, Any]]) -> bool:
-    text = str(segment_text or "").strip().lower()
-    if not text:
-        return False
-    for atom in atoms:
-        row = _safe_dict(atom)
-        for field in ("subject_hint", "place_hint", "action_hint", "object_hint"):
-            value = str(row.get(field) or "").strip().lower()
-            if not value:
-                continue
-            tokens = [tok for tok in re.findall(r"[a-zа-я0-9_]{3,}", value) if tok not in _GENERIC_NON_CONCRETE_TOKENS]
-            if not tokens:
-                continue
-            if any(tok in text for tok in tokens):
-                return True
-    return False
-
-
-def _collect_concrete_story_tokens(core_input_context: dict[str, Any]) -> set[str]:
-    tokens: set[str] = set()
-    director_summary = _safe_dict(core_input_context.get("director_package_summary"))
-    for text in _flatten_story_text_tokens(director_summary):
-        for token in re.findall(r"[a-zа-я0-9]{4,}", str(text).lower()):
-            tokens.add(token)
-    return tokens
-
-
-def _detect_generic_narrative_segments(
-    narrative_segments: list[dict[str, Any]],
-    *,
-    concrete_tokens: set[str],
-    concrete_atoms: list[dict[str, Any]] | None = None,
-) -> list[str]:
-    atoms = concrete_atoms or []
-    generic_segment_ids: list[str] = []
-    for row in narrative_segments:
-        segment_id = str(row.get("segment_id") or "").strip()
-        text = f"{row.get('beat_purpose') or ''} {row.get('emotional_key') or ''}".strip().lower()
-        if not text:
-            continue
-        has_generic_phrase = any(phrase in text for phrase in _GENERIC_BEAT_PHRASES)
-        has_concrete_anchor = _segment_has_concrete_atom(text, atoms) or any(
-            token in text and token not in _GENERIC_NON_CONCRETE_TOKENS for token in concrete_tokens if len(token) >= 4
-        )
-        generic_validator_voice = sum(
-            1 for token in ("intent", "progression", "pressure", "context", "consequence", "world response")
-            if token in text
-        ) >= 2
-        if has_generic_phrase or not has_concrete_anchor or generic_validator_voice:
-            generic_segment_ids.append(segment_id or "unknown_segment")
-    return generic_segment_ids[:24]
-
-
-def _repair_generic_core_segments_with_atoms(
-    narrative_segments: list[dict[str, Any]],
-    atoms: list[dict[str, Any]],
-    audio_segments: list[dict[str, Any]],
-    director_contract: dict[str, Any],
-    director_package: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    def _is_negative_or_safety_instruction(text: str) -> bool:
-        low = str(text or "").strip().lower()
-        if not low:
-            return False
-        banned_patterns = (
-            r"(^|\s)не\s+\w+",
-            r"\bнельзя\b",
-            r"\bне\s+должен\b",
-            r"\bне\s+нужно\b",
-            r"\bне\s+агрессивн\w*\b",
-            r"\bне\s+переносить\b",
-            r"\bне\s+использовать\b",
-            r"\bбез\b",
-            r"\bdo not\b",
-            r"\bdon't\b",
-            r"\bno\b",
-            r"\bavoid\b",
-            r"\bforbid\w*\b",
-            r"\bforbidden\b",
-            r"\bnegative\b",
-            r"\breference\s+only\b",
-            r"\bidentity\s+only\b",
-            r"\bstrict_identity\b",
-            r"\bvisual_reference_mode\b",
-            r"\bcontract\b",
-            r"\bprompt\b",
-        )
-        if any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in banned_patterns):
-            return True
-        if _is_camera_or_composition_rule(low):
-            has_action = bool(re.search(r"\b\w+(ed|ing|ет|ит|лся|лась|ется)\b", low))
-            return not has_action
-        return False
-
-    def _clean_repair_clause(text: str) -> str:
-        cleaned = re.sub(r"\s+", " ", str(text or "")).strip(" \n\t,.;:!?")
-        if not cleaned:
-            return ""
-        cleaned = re.sub(r"(?i)\b(route|prompt|contract|schema|atom|validator)s?\b", "", cleaned)
-        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:!?")
-        return cleaned[:220]
-
-    def _is_human_readable_clause(text: str) -> bool:
-        candidate = _clean_repair_clause(text)
-        if len(candidate) < 6:
-            return False
-        return bool(re.search(r"[a-zа-яё]", candidate, flags=re.IGNORECASE))
-
-    def _resolve_subject_label(subject_hint: str) -> str:
-        key = str(subject_hint or "").strip().lower()
-        package_character_contract = _safe_dict(director_package.get("character_contract"))
-        director_character_contract = _safe_dict(director_contract.get("character_contract"))
-        if key in {"character_1", "character_2"}:
-            row = _safe_dict(package_character_contract.get(key) or director_character_contract.get(key))
-            return str(row.get("identity_label") or row.get("role_name") or "").strip()
-        if key == "episodic_text_character":
-            episodic_rows = _safe_list(director_package.get("episodic_text_characters")) or _safe_list(
-                director_contract.get("episodic_text_characters")
-            )
-            if not episodic_rows:
-                episodic_rows = _extract_episodic_text_characters(
-                    {"director_contract": director_contract, "director_package": director_package}
-                )
-            for episodic in episodic_rows:
-                label = str(_safe_dict(episodic).get("identity_label") or "").strip()
-                if label:
-                    return label
-            return ""
-        return key
-
-    def _replace_role_ids_with_labels(text: str) -> str:
-        replaced = str(text or "")
-        replacement_map = {
-            "character_1": _resolve_subject_label("character_1"),
-            "character_2": _resolve_subject_label("character_2"),
-            "episodic_text_character": _resolve_subject_label("episodic_text_character"),
-        }
-        for role_id, label in replacement_map.items():
-            safe_label = str(label or "").strip() or "the character"
-            replaced = re.sub(rf"(?i)\b{re.escape(role_id)}\b", safe_label, replaced)
-        return replaced
-
-    generic_ids = _detect_generic_narrative_segments(
-        narrative_segments,
-        concrete_tokens=set(),
-        concrete_atoms=atoms,
-    )
-    eligible_atoms = [
-        _safe_dict(atom)
-        for atom in atoms
-        if bool(_safe_dict(atom).get("repair_eligible"))
-        and int(_safe_dict(atom).get("quality_score") or 0) >= 40
-        and str(_safe_dict(atom).get("atom_type") or "scene_event") not in _ATOM_DISALLOWED_TYPES
-    ]
-    eligible_ids = {str(_safe_dict(atom).get("id") or "") for atom in eligible_atoms}
-    reject_summary: dict[str, int] = {}
-    for atom in atoms:
-        row = _safe_dict(atom)
-        if str(row.get("id") or "") in eligible_ids:
-            continue
-        reason = str(row.get("reject_reason") or row.get("atom_type") or "ineligible")
-        reject_summary[reason] = reject_summary.get(reason, 0) + 1
-    if not generic_ids or not atoms:
-        return narrative_segments, {
-            "core_generic_segment_repair_applied": False,
-            "core_generic_segment_repair_count": 0,
-            "core_generic_segment_repaired_ids": [],
-            "core_generic_segment_unrepaired_ids": generic_ids,
-            "core_generic_segment_repair_atom_sources": [],
-            "core_generic_segment_repair_used_raw_text_count": 0,
-            "core_generic_segment_repair_used_template_count": 0,
-            "core_generic_segment_repair_skipped_negative_atom_count": 0,
-            "core_concrete_beat_atom_eligible_count": len(eligible_atoms),
-            "core_concrete_beat_atom_rejected_count": max(0, len(atoms) - len(eligible_atoms)),
-            "core_concrete_beat_atom_reject_reasons_summary": reject_summary,
-            "core_generic_segment_repair_skipped_ineligible_atom_count": len(generic_ids),
-            "core_generic_segment_repair_reused_atom_ids": [],
-            "core_generic_segment_repair_unique_atom_count": 0,
-            "core_generic_segment_post_repair_bad_ids": [],
-            "core_generic_segment_post_repair_reverted_ids": [],
-        }
-    atoms_by_timeline = {
-        "present": [a for a in eligible_atoms if str(_safe_dict(a).get("timeline")) == "present"],
-        "memory": [a for a in eligible_atoms if str(_safe_dict(a).get("timeline")) == "memory"],
-        "unknown": [a for a in eligible_atoms if str(_safe_dict(a).get("timeline")) == "unknown"],
-    }
-    repaired_ids: list[str] = []
-    unrepaired_ids: list[str] = []
-    atom_sources: list[str] = []
-    used_raw_text_count = 0
-    used_template_count = 0
-    skipped_negative_atom_count = 0
-    skipped_ineligible_atom_count = 0
-    reused_atom_ids: list[str] = []
-    used_episodic = False
-    atom_use_count: dict[str, int] = {}
-    output: list[dict[str, Any]] = []
-    original_by_segment: dict[str, dict[str, Any]] = {}
-    for idx, row in enumerate(narrative_segments):
-        seg = _safe_dict(row)
-        segment_id = str(seg.get("segment_id") or f"segment_{idx+1}")
-        original_by_segment[segment_id] = dict(seg)
-        if segment_id not in generic_ids:
-            output.append(seg)
-            continue
-        beat_mode = str(seg.get("beat_mode") or "").strip().lower()
-        preferred = "present" if beat_mode in {"performance", "threshold"} else "memory" if beat_mode in {"world_observation", "world_pressure", "social_texture", "aftermath"} else "unknown"
-        if idx == len(narrative_segments) - 1:
-            ending_hint = " ".join(
-                _flatten_story_text_tokens([director_package.get("story_intent"), seg.get("arc_role"), seg.get("emotional_key")])
-            ).lower()
-            if any(token in ending_hint for token in ("ending", "arrival", "resolve", "callback", "closure", "release")):
-                preferred = "memory" if atoms_by_timeline["memory"] else preferred
-        pools = [atoms_by_timeline.get(preferred, []), atoms_by_timeline["unknown"], atoms_by_timeline["present"], atoms_by_timeline["memory"]]
-        chosen: dict[str, Any] = {}
-        performance_compatible = beat_mode in {"performance", "threshold"}
-        for pool in pools:
-            ranked_pool = sorted(
-                pool,
-                key=lambda atom: (int(_safe_dict(atom).get("quality_score") or 0), int(_safe_dict(atom).get("source_priority") or 0)),
-                reverse=True,
-            )
-            for atom in ranked_pool:
-                atom_row = _safe_dict(atom)
-                atom_id = str(atom_row.get("id") or "")
-                if str(atom_row.get("subject_hint") or "") == "episodic_text_character" and used_episodic:
-                    continue
-                atom_type = str(atom_row.get("atom_type") or "")
-                if performance_compatible and atom_type not in {"performance_scene", "character_action", "place_action"}:
-                    continue
-                if not performance_compatible and atom_type == "performance_scene":
-                    continue
-                if atom_use_count.get(atom_id, 0) > 0:
-                    continue
-                chosen = atom_row
-                break
-            if chosen:
-                break
-        if not chosen:
-            for pool in pools:
-                for atom in pool:
-                    atom_row = _safe_dict(atom)
-                    atom_id = str(atom_row.get("id") or "")
-                    if atom_use_count.get(atom_id, 0) > 0:
-                        reused_atom_ids.append(atom_id)
-                        continue
-                    chosen = atom_row
-                    break
-                if chosen:
-                    break
-        if not chosen:
-            output.append(seg)
-            unrepaired_ids.append(segment_id)
-            skipped_ineligible_atom_count += 1
-            continue
-        raw_text = str(chosen.get("raw_text") or "").strip()
-        raw_text = _replace_role_ids_with_labels(raw_text)
-        cleaned_raw_text = _clean_repair_clause(raw_text) if _is_human_readable_clause(raw_text) else ""
-        raw_text_usable = bool(cleaned_raw_text) and not _is_negative_or_safety_instruction(raw_text)
-        if not raw_text_usable and raw_text and _is_negative_or_safety_instruction(raw_text):
-            skipped_negative_atom_count += 1
-        subject = _resolve_subject_label(str(chosen.get("subject_hint") or "")) or "the scene"
-        if subject in {"character_1", "character_2", "episodic_text_character"}:
-            subject = "the scene"
-        action = str(chosen.get("action_hint") or "").strip()
-        if not action and raw_text_usable:
-            action = cleaned_raw_text
-        place = str(chosen.get("place_hint") or "").strip()
-        obj = str(chosen.get("object_hint") or "").strip()
-        emotion = str(chosen.get("emotion_hint") or "").strip()
-        beat_line = ""
-        if raw_text_usable:
-            beat_line = cleaned_raw_text
-            used_raw_text_count += 1
-        else:
-            fragments = [subject]
-            if action:
-                fragments.append(action)
-            if place:
-                fragments.append(f"in {place}")
-            if obj:
-                fragments.append(obj)
-            beat_line = _clean_repair_clause(" ".join([frag for frag in fragments if frag]))
-            if beat_line:
-                used_template_count += 1
-        if not beat_line:
-            output.append(seg)
-            unrepaired_ids.append(segment_id)
-            continue
-        emotional_line = emotion or (cleaned_raw_text[:120] if raw_text_usable else "") or str(seg.get("emotional_key") or "").strip()
-        repaired = dict(seg)
-        repaired["beat_purpose"] = beat_line
-        repaired["emotional_key"] = emotional_line
-        output.append(repaired)
-        repaired_ids.append(segment_id)
-        atom_sources.append(str(chosen.get("source") or ""))
-        chosen_id = str(chosen.get("id") or "")
-        atom_use_count[chosen_id] = atom_use_count.get(chosen_id, 0) + 1
-        if str(chosen.get("subject_hint") or "") == "episodic_text_character":
-            used_episodic = True
-    post_bad_ids: list[str] = []
-    post_reverted_ids: list[str] = []
-    seen_lines: set[str] = set()
-    bad_post_patterns = (
-        "песня взрослого героя",
-        "музыкальный видеоклип",
-        "не агрессивное",
-        "не переносить",
-        "без ",
-        "camera",
-        "камера",
-        "contract",
-        "prompt",
-    )
-    for idx, seg in enumerate(output):
-        seg_row = _safe_dict(seg)
-        segment_id = str(seg_row.get("segment_id") or f"segment_{idx+1}")
-        if segment_id not in set(repaired_ids):
-            continue
-        line = str(seg_row.get("beat_purpose") or "").strip().lower()
-        has_bad = any(pattern in line for pattern in bad_post_patterns)
-        repeated = line in seen_lines
-        if line:
-            seen_lines.add(line)
-        if has_bad or repeated:
-            post_bad_ids.append(segment_id)
-            original = original_by_segment.get(segment_id)
-            if original:
-                output[idx] = original
-                post_reverted_ids.append(segment_id)
-            repaired_ids = [rid for rid in repaired_ids if rid != segment_id]
-            if segment_id not in unrepaired_ids:
-                unrepaired_ids.append(segment_id)
-    return output, {
-        "core_generic_segment_repair_applied": bool(repaired_ids),
-        "core_generic_segment_repair_count": len(repaired_ids),
-        "core_generic_segment_repaired_ids": repaired_ids,
-        "core_generic_segment_unrepaired_ids": unrepaired_ids,
-        "core_generic_segment_repair_atom_sources": list(dict.fromkeys(atom_sources)),
-        "core_generic_segment_repair_used_raw_text_count": used_raw_text_count,
-        "core_generic_segment_repair_used_template_count": used_template_count,
-        "core_generic_segment_repair_skipped_negative_atom_count": skipped_negative_atom_count,
-        "core_concrete_beat_atom_eligible_count": len(eligible_atoms),
-        "core_concrete_beat_atom_rejected_count": max(0, len(atoms) - len(eligible_atoms)),
-        "core_concrete_beat_atom_reject_reasons_summary": reject_summary,
-        "core_generic_segment_repair_skipped_ineligible_atom_count": skipped_ineligible_atom_count,
-        "core_generic_segment_repair_reused_atom_ids": list(dict.fromkeys(reused_atom_ids)),
-        "core_generic_segment_repair_unique_atom_count": len([atom_id for atom_id, count in atom_use_count.items() if count == 1]),
-        "core_generic_segment_post_repair_bad_ids": post_bad_ids,
-        "core_generic_segment_post_repair_reverted_ids": post_reverted_ids,
     }
 
 
@@ -8495,11 +7430,7 @@ def _normalize_identity_label_hint(value: Any) -> str:
     return ""
 
 
-def _extract_role_identity_expectations(
-    input_pkg: dict[str, Any],
-    assigned_roles: dict[str, Any],
-    active_character_roles: list[str] | None = None,
-) -> dict[str, str]:
+def _extract_role_identity_expectations(input_pkg: dict[str, Any], assigned_roles: dict[str, Any]) -> dict[str, str]:
     expectations: dict[str, str] = {}
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
     nested_identity_sources: list[dict[str, Any]] = [
@@ -8533,10 +7464,7 @@ def _extract_role_identity_expectations(
             hint = _normalize_gender_hint(row.get(role))
             if hint:
                 expectations[role] = hint
-    if active_character_roles is None:
-        return expectations
-    allowed = {str(role).strip() for role in _safe_list(active_character_roles) if str(role).strip()}
-    return {role: hint for role, hint in expectations.items() if role in allowed}
+    return expectations
 
 
 def _extract_role_identity_mapping_payload(input_pkg: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -8638,15 +7566,12 @@ def _detect_core_role_binding_contradictions(
     return contradictions[:8]
 
 
-def _collect_present_cast_roles(input_present_cast_roles: Any, active_character_roles: list[str] | None = None) -> set[str]:
+def _collect_present_cast_roles(input_present_cast_roles: Any) -> set[str]:
     allowed = {"character_1", "character_2"}
     for row in _safe_list(input_present_cast_roles):
         token = str(row or "").strip().lower()
         if token.startswith("character_"):
             allowed.add(token)
-    if active_character_roles is not None:
-        active = {str(role).strip() for role in _safe_list(active_character_roles) if str(role).strip()}
-        allowed = {role for role in allowed if role in active or role in {"character_1", "character_2"}}
     return allowed
 
 
@@ -9564,9 +8489,6 @@ def _build_story_core_prompt(
         "World must feel specific through lived texture and human environment, not through repeated stereotype tags.\n"
         "SEMANTIC COMPRESSION RULE (hard): when user concept contains location/object lists, compress them into coherent world doctrine and progression logic; never output checklist-style 'show X, Y, Z'.\n"
         "Keep grounded anchors (city, hero, world identity, musical character), but rewrite literal directives into dramaturgical function.\n"
-        "DIRECTOR PACKAGE PRIORITY (hard): if CORE_INPUT_CONTEXT.director_package_summary contains concrete memory/performance/scene beats, use them before abstract dramaturgy language.\n"
-        "Do not replace concrete beats with generic phrases like 'escalate momentum', 'push pressure', or 'shift impact' when specific places/actions/characters exist.\n"
-        "EPISODIC CHARACTER RULE (hard): episodic_text_characters are scene-local only; do not convert episodic girl into character_3 unless connected ref_character_3 is truly active.\n"
         "For narrative_segments, write beat purpose as scene function + relation between hero and world + progression pressure, not as direct paraphrase of lyrics or user note.\n"
         "ATMOSPHERE RULE: criminal/tense/street atmosphere means social pressure and risk logic in the world; it is NOT a request for costume shorthand.\n"
         "IDENTITY INVENTION GUARD (hard): if character refs exist, do not invent exact wardrobe/accessories/headwear/jewelry/tattoos/facial-hair packages unless explicitly grounded in refs or user text.\n"
@@ -10790,19 +9712,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map = _safe_dict(package.get("audio_map"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
     assigned_roles = _safe_dict(package.get("assigned_roles"))
-    active_character_roles, inactive_character_roles = _collect_active_character_roles(refs_inventory)
-    assigned_roles = {
-        key: value
-        for key, value in assigned_roles.items()
-        if not str(key).startswith("character_") or str(key) in set(active_character_roles)
-    }
-    active_roles_assigned = [
-        str(role).strip()
-        for role in _safe_list(assigned_roles.get("active_roles"))
-        if str(role).strip() in set(active_character_roles)
-    ]
-    if active_roles_assigned:
-        assigned_roles["active_roles"] = active_roles_assigned
     story_core_mode = _detect_story_core_mode(input_pkg)
     model_id = _resolve_active_video_model_id(input_pkg)
     capability_profile = get_video_model_capability_profile(model_id, "i2v")
@@ -10934,28 +9843,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["story_core_local_breath_segment_ids"] = []
     diagnostics["story_core_visual_breath_fail_spans"] = []
     diagnostics["story_core_second_attempt_changed_payload"] = False
-    diagnostics["core_active_character_roles"] = []
-    diagnostics["core_inactive_character_roles_filtered"] = []
-    diagnostics["core_episodic_text_characters"] = []
-    diagnostics["core_character_3_filtered_because_empty_ref"] = False
-    diagnostics["core_generic_segment_repair_count"] = 0
-    diagnostics["core_generic_segment_repair_applied"] = False
-    diagnostics["core_generic_segment_ids"] = []
-    diagnostics["core_generic_segment_repaired_ids"] = []
-    diagnostics["core_generic_segment_unrepaired_ids"] = []
-    diagnostics["core_generic_segment_repair_atom_sources"] = []
-    diagnostics["core_generic_segment_repair_used_raw_text_count"] = 0
-    diagnostics["core_generic_segment_repair_used_template_count"] = 0
-    diagnostics["core_generic_segment_repair_skipped_negative_atom_count"] = 0
-    diagnostics["core_forbidden_drift_sanitized"] = False
-    diagnostics["core_forbidden_drift_removed_tokens"] = []
-    diagnostics["core_memory_beat_inventory_count"] = 0
-    diagnostics["core_memory_beat_inventory_preview"] = []
-    diagnostics["core_concrete_beat_atom_count"] = 0
-    diagnostics["core_concrete_beat_atom_preview"] = []
-    diagnostics["core_active_character_roles"] = active_character_roles
-    diagnostics["core_inactive_character_roles_filtered"] = inactive_character_roles
-    diagnostics["core_character_3_filtered_because_empty_ref"] = "character_3" in set(inactive_character_roles)
     diagnostics["active_video_model_capability_profile"] = model_id
     diagnostics["active_route_capability_mode"] = "story_core_planning_bounds"
     diagnostics["story_core_capability_guard_applied"] = True
@@ -11002,34 +9889,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["story_core_director_world_lock_summary"] = str(core_input_context.get("story_core_director_world_lock_summary") or "")
         diagnostics["story_core_compact_context_size_estimate"] = int(core_input_context.get("story_core_compact_context_size_estimate") or 0)
         diagnostics["story_core_refs_sources_used"] = _safe_list(core_input_context.get("story_core_refs_sources_used"))
-        diagnostics["core_active_character_roles"] = _safe_list(core_input_context.get("active_character_roles"))
-        diagnostics["core_inactive_character_roles_filtered"] = _safe_list(core_input_context.get("inactive_character_roles_filtered"))
-        diagnostics["core_episodic_text_characters"] = [
-            str(row.get("id") or "")
-            for row in _safe_list(core_input_context.get("episodic_text_characters"))
-            if isinstance(row, dict) and str(row.get("id") or "").strip()
-        ]
-        diagnostics["core_character_3_filtered_because_empty_ref"] = "character_3" in set(
-            _safe_list(core_input_context.get("inactive_character_roles_filtered"))
-        )
-        diagnostics["core_memory_beat_inventory_count"] = int(core_input_context.get("core_memory_beat_inventory_count") or 0)
-        diagnostics["core_memory_beat_inventory_preview"] = _safe_list(core_input_context.get("core_memory_beat_inventory_preview"))
-        concrete_beat_atoms = _extract_concrete_beat_atoms(input_with_assignments, core_input_context, audio_map)
-        diagnostics["core_concrete_beat_atom_count"] = len(concrete_beat_atoms)
-        diagnostics["core_concrete_beat_atom_preview"] = [
-            {
-                "id": str(_safe_dict(atom).get("id") or ""),
-                "source": str(_safe_dict(atom).get("source") or ""),
-                "timeline": str(_safe_dict(atom).get("timeline") or ""),
-                "subject_hint": str(_safe_dict(atom).get("subject_hint") or ""),
-                "place_hint": str(_safe_dict(atom).get("place_hint") or ""),
-                "action_hint": str(_safe_dict(atom).get("action_hint") or ""),
-                "atom_type": str(_safe_dict(atom).get("atom_type") or ""),
-                "repair_eligible": bool(_safe_dict(atom).get("repair_eligible")),
-                "quality_score": int(_safe_dict(atom).get("quality_score") or 0),
-            }
-            for atom in concrete_beat_atoms[:8]
-        ]
         diagnostics["story_core_payload_mode"] = "lean"
         diagnostics.update(
             build_capability_diagnostics_summary(
@@ -11054,12 +9913,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         core_segments, core_segments_source = _coerce_core_audio_segments(audio_map)
         user_concept = _extract_story_user_concept(input_pkg)
-        active_roles_for_core = _safe_list(core_input_context.get("active_character_roles"))
-        role_identity_expectations = _extract_role_identity_expectations(
-            input_pkg,
-            assigned_roles,
-            active_character_roles=active_roles_for_core,
-        )
+        role_identity_expectations = _extract_role_identity_expectations(input_pkg, assigned_roles)
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["story_core_role_identity_expectations"] = role_identity_expectations
         package["diagnostics"] = diagnostics
@@ -11070,7 +9924,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         retry_removed_terms: list[str] = []
         retry_sanitized_seed: dict[str, Any] = {}
         first_attempt_normalized_fingerprint = ""
-        last_normalized_core: dict[str, Any] = {}
         last_error_code = CORE_SCHEMA_INVALID
         last_errors: list[str] = []
         configured_timeout = get_scenario_stage_timeout("story_core")
@@ -11143,7 +9996,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     normalized_core = sanitized_normalized_core
                     retry_removed_terms = sorted({*retry_removed_terms, *sanitize_removed_terms})[:24]
                 normalized_fingerprint = json.dumps(normalized_core, ensure_ascii=False, sort_keys=True)
-                last_normalized_core = _safe_dict(normalized_core)
                 if attempt == 0:
                     first_attempt_normalized_fingerprint = normalized_fingerprint
                 diagnostics["story_core_normalized_payload"] = normalized_core
@@ -11153,16 +10005,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 )
                 diagnostics["story_core_narrative_sanitizer_applied"] = bool(sanitize_applied)
                 diagnostics["story_core_narrative_sanitizer_removed_terms"] = sanitize_removed_terms[:24]
-                generic_segment_ids = _detect_generic_narrative_segments(
-                    _safe_list(normalized_core.get("narrative_segments")),
-                    concrete_tokens=_collect_concrete_story_tokens(core_input_context),
-                    concrete_atoms=concrete_beat_atoms,
-                )
-                diagnostics["core_generic_segment_ids"] = generic_segment_ids[:24]
                 technical_spawn_debug: dict[str, Any] = {}
                 present_cast_roles = _collect_present_cast_roles(
-                    _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles"),
-                    active_character_roles=active_roles_for_core,
+                    _safe_dict(input_pkg.get("connected_context_summary")).get("presentCastRoles")
                 )
                 audio_map_diag = _safe_dict(_safe_dict(audio_map).get("diagnostics"))
                 audio_map_source = str(
@@ -11362,76 +10207,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["story_core_legacy_fields_non_canonical"] = ["scene_slots", "phrase_units", "scene_candidate_windows"]
                 diagnostics["story_core_audio_segments_source"] = core_segments_source
                 package["diagnostics"] = diagnostics
-                if ok and generic_segment_ids and attempt == 0:
-                    last_error_code = CORE_QUALITY_GATES_FAILED
-                    last_errors = [f"generic_narrative_segments:{','.join(generic_segment_ids[:8])}"]
-                    validation_feedback = (
-                        f"These segment_ids are too generic: {json.dumps(generic_segment_ids[:12], ensure_ascii=False)}. "
-                        "Replace abstract dramaturgy with concrete story beats extracted from "
-                        "director_package_summary.memory_beat_inventory and concrete_beat_atoms. "
-                        "Each beat_purpose must name a concrete subject/action/place/object or event from current payload. "
-                        "Do not use generic phrases such as 'increase pressure', 'world response', "
-                        "'concrete visual logic', 'hero agency', or 'external consequence'. "
-                        f"concrete_beat_atoms_preview: {json.dumps(diagnostics.get('core_concrete_beat_atom_preview') or [], ensure_ascii=False)}"
-                    )
-                    diagnostics["story_core_validation_errors"] = last_errors
-                    package["diagnostics"] = diagnostics
-                    retry_used = True
-                    continue
                 if ok:
-                    repaired_segments, repair_diag = _repair_generic_core_segments_with_atoms(
-                        _safe_list(normalized_core.get("narrative_segments")),
-                        concrete_beat_atoms,
-                        core_segments,
-                        _safe_dict(input_pkg.get("director_contract")),
-                        _safe_dict(input_pkg.get("director_package")),
-                    )
-                    if bool(repair_diag.get("core_generic_segment_repair_applied")):
-                        normalized_core["narrative_segments"] = repaired_segments
-                        diagnostics["core_generic_segment_repair_applied"] = True
-                    diagnostics["core_generic_segment_repair_count"] = int(repair_diag.get("core_generic_segment_repair_count") or 0)
-                    diagnostics["core_generic_segment_repaired_ids"] = _safe_list(
-                        repair_diag.get("core_generic_segment_repaired_ids")
-                    )
-                    diagnostics["core_generic_segment_unrepaired_ids"] = _safe_list(
-                        repair_diag.get("core_generic_segment_unrepaired_ids")
-                    )
-                    diagnostics["core_generic_segment_repair_atom_sources"] = _safe_list(
-                        repair_diag.get("core_generic_segment_repair_atom_sources")
-                    )
-                    diagnostics["core_generic_segment_repair_used_raw_text_count"] = int(
-                        repair_diag.get("core_generic_segment_repair_used_raw_text_count") or 0
-                    )
-                    diagnostics["core_generic_segment_repair_used_template_count"] = int(
-                        repair_diag.get("core_generic_segment_repair_used_template_count") or 0
-                    )
-                    diagnostics["core_generic_segment_repair_skipped_negative_atom_count"] = int(
-                        repair_diag.get("core_generic_segment_repair_skipped_negative_atom_count") or 0
-                    )
-                    diagnostics["core_concrete_beat_atom_eligible_count"] = int(
-                        repair_diag.get("core_concrete_beat_atom_eligible_count") or 0
-                    )
-                    diagnostics["core_concrete_beat_atom_rejected_count"] = int(
-                        repair_diag.get("core_concrete_beat_atom_rejected_count") or 0
-                    )
-                    diagnostics["core_concrete_beat_atom_reject_reasons_summary"] = _safe_dict(
-                        repair_diag.get("core_concrete_beat_atom_reject_reasons_summary")
-                    )
-                    diagnostics["core_generic_segment_repair_skipped_ineligible_atom_count"] = int(
-                        repair_diag.get("core_generic_segment_repair_skipped_ineligible_atom_count") or 0
-                    )
-                    diagnostics["core_generic_segment_repair_reused_atom_ids"] = _safe_list(
-                        repair_diag.get("core_generic_segment_repair_reused_atom_ids")
-                    )
-                    diagnostics["core_generic_segment_repair_unique_atom_count"] = int(
-                        repair_diag.get("core_generic_segment_repair_unique_atom_count") or 0
-                    )
-                    diagnostics["core_generic_segment_post_repair_bad_ids"] = _safe_list(
-                        repair_diag.get("core_generic_segment_post_repair_bad_ids")
-                    )
-                    diagnostics["core_generic_segment_post_repair_reverted_ids"] = _safe_list(
-                        repair_diag.get("core_generic_segment_post_repair_reverted_ids")
-                    )
                     story_core = {
                         "core_version": "1.1",
                         "story_summary": str(normalized_core.get("story_summary") or "").strip(),
@@ -11487,17 +10263,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     )
                     diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
                     diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
-                    core_diag = _safe_dict(story_core_v1.get("core_diagnostics"))
-                    diagnostics["core_active_character_roles"] = _safe_list(core_diag.get("core_active_character_roles"))
-                    diagnostics["core_inactive_character_roles_filtered"] = _safe_list(core_diag.get("core_inactive_character_roles_filtered"))
-                    diagnostics["core_episodic_text_characters"] = _safe_list(core_diag.get("core_episodic_text_characters"))
-                    diagnostics["core_character_3_filtered_because_empty_ref"] = bool(
-                        core_diag.get("core_character_3_filtered_because_empty_ref")
-                    )
-                    diagnostics["core_forbidden_drift_sanitized"] = bool(core_diag.get("core_forbidden_drift_sanitized"))
-                    diagnostics["core_forbidden_drift_removed_tokens"] = _safe_list(
-                        core_diag.get("core_forbidden_drift_removed_tokens")
-                    )
                     package["diagnostics"] = diagnostics
                     _apply_director_contract_story_core(package)
                     _append_diag_event(package, "story_core generated", stage_id="story_core")
@@ -11523,60 +10288,6 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 _append_diag_event(package, f"story_core strict validation failed, requesting one retry: {validation_feedback}", stage_id="story_core")
                 continue
             break
-        if (
-            last_error_code == CORE_QUALITY_GATES_FAILED
-            and "two_axis_duplicate_adjacent_pairs" in {str(item).strip() for item in last_errors}
-            and last_normalized_core
-        ):
-            story_core = {
-                "core_version": "1.1",
-                "story_summary": str(last_normalized_core.get("story_summary") or "").strip(),
-                "opening_anchor": str(last_normalized_core.get("opening_anchor") or "").strip(),
-                "ending_callback_rule": str(last_normalized_core.get("ending_callback_rule") or "").strip(),
-                "global_arc": _safe_dict(last_normalized_core.get("global_arc")),
-                "identity_doctrine": _safe_dict(last_normalized_core.get("identity_doctrine")),
-                "identity_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("hero_anchor") or "")},
-                "world_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("world_doctrine") or "")},
-                "style_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("style_doctrine") or "")},
-                "story_guidance": {
-                    **_default_story_core_guidance(creative_config),
-                    "route_mix_doctrine_for_scenes": _safe_dict(last_normalized_core.get("route_mix_doctrine_for_scenes")),
-                },
-                "narrative_segments": _safe_list(last_normalized_core.get("narrative_segments")),
-            }
-            story_core_v1 = _build_story_core_v11(
-                input_pkg=input_pkg,
-                audio_map=audio_map,
-                refs_inventory=refs_inventory,
-                assigned_roles=assigned_roles,
-                parsed_story_core=story_core,
-                fallback_story_core=fallback,
-            )
-            story_core["story_core_v1"] = story_core_v1
-            package["story_core"] = story_core
-            package["story_core_v1"] = story_core_v1
-            package["story_core_stale"] = False
-            diagnostics = _safe_dict(package.get("diagnostics"))
-            diagnostics["story_core_hard_fail"] = False
-            diagnostics["story_core_failed_payload_rejected"] = False
-            diagnostics["story_core_quality_gate_degraded_to_warning"] = True
-            diagnostics["story_core_quality_gate_degraded_reason"] = "two_axis_duplicate_adjacent_pairs_after_retry"
-            warnings = _safe_list(diagnostics.get("warnings"))
-            warnings.append(
-                {
-                    "stage_id": "story_core",
-                    "message": "quality_gate_degraded:two_axis_duplicate_adjacent_pairs_after_retry",
-                }
-            )
-            diagnostics["warnings"] = warnings[-80:]
-            package["diagnostics"] = diagnostics
-            _apply_director_contract_story_core(package)
-            _append_diag_event(
-                package,
-                "story_core quality gate downgraded to warning for two_axis_duplicate_adjacent_pairs after retry",
-                stage_id="story_core",
-            )
-            return package
         raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
@@ -16280,7 +14991,6 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
     _normalize_director_package_input(pkg)
-    _apply_director_contract_role_normalization(pkg)
     _set_stage_status(pkg, stage_id, "running")
     pkg["updated_at"] = _utc_iso()
 
@@ -16464,7 +15174,6 @@ def run_manual_stage(
 
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
-    _apply_director_contract_role_normalization(pkg)
 
     executed_stage_ids: list[str] = []
     if stage_id == "final_video_prompt":
