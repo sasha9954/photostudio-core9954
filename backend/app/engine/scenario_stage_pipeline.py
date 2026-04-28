@@ -5189,7 +5189,38 @@ def _resolve_scene_plan_route_locks(
     return _fallback_scene_plan_route_fill(scene_plan), "fallback_backend_route_fill"
 
 
-def _preferred_validated_route_locks(scene_plan: dict[str, Any], requested_route_locks: dict[str, str]) -> tuple[dict[str, str], str]:
+def _is_strict_hard_route_contract(
+    package: dict[str, Any],
+    backend_hard_route_map: dict[str, str] | None = None,
+) -> bool:
+    if not _is_clip_mode_package(package):
+        return False
+    input_pkg = _safe_dict(package.get("input"))
+    creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    hard_map_present = bool(_safe_dict(backend_hard_route_map) or _safe_dict(creative_config.get("hard_route_assignments_by_segment")))
+    routes_are_hard_locked = bool(creative_config.get("routes_are_hard_locked"))
+    if not hard_map_present and not routes_are_hard_locked:
+        return False
+    strict_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower() == "no_first_last_50_50_0"
+    scene_distribution_contract = _safe_dict(creative_config.get("scene_distribution_contract"))
+    approved_balanced_50_50 = bool(scene_distribution_contract.get("user_approved")) and (
+        str(scene_distribution_contract.get("route_balance") or "").strip().lower() == "balanced_50_50"
+    )
+    if not strict_preset and not approved_balanced_50_50:
+        return False
+    first_last_ratio = float(_clamp_ratio(creative_config.get("first_last_ratio"), 0.0))
+    first_last_forbidden = bool(creative_config.get("forbid_first_last")) or first_last_ratio <= 0.0
+    return first_last_forbidden
+
+
+def _preferred_validated_route_locks(
+    scene_plan: dict[str, Any],
+    requested_route_locks: dict[str, str],
+    *,
+    force_requested: bool = False,
+) -> tuple[dict[str, str], str]:
+    if force_requested and requested_route_locks:
+        return dict(requested_route_locks), "backend_hard_route_map"
     rows = _scene_plan_rows_for_validation(scene_plan)
     if not rows:
         return dict(requested_route_locks), ""
@@ -5256,7 +5287,68 @@ def _repair_scene_plan_final_semantics(
     primary_role_filled = 0
     rows_updated = 0
     route_lock_updates: dict[str, str] = {}
+    hard_ia2v_rows_repaired_to_performance_segments: list[str] = []
+    hard_i2v_rows_cleaned_lipsync_segments: list[str] = []
     world_modes = {"world_observation", "world_pressure", "threshold", "social_texture", "aftermath", "release", "transition"}
+    hard_route_map = {
+        str(segment_id).strip(): str(route).strip().lower()
+        for segment_id, route in _safe_dict(_safe_dict(package.get("diagnostics")).get("scene_plan_hard_route_map_by_segment")).items()
+        if str(segment_id).strip() and str(route).strip().lower() in {"i2v", "ia2v", "first_last"}
+    }
+    strict_hard_contract = _is_strict_hard_route_contract(package, hard_route_map)
+
+    def _repair_row_to_hard_ia2v_performance(row: dict[str, Any], vocal_owner_role: str) -> bool:
+        normalized_role = _canonical_subject_id(vocal_owner_role) or "character_1"
+        changed_local = False
+        for key, value in (
+            ("route", "ia2v"),
+            ("primary_role", normalized_role),
+            ("visual_focus_role", normalized_role),
+            ("speaker_role", normalized_role),
+            ("vocal_owner_role", normalized_role),
+            ("lip_sync_allowed", True),
+            ("mouth_visible_required", True),
+            ("lip_sync_required", True),
+            ("singing_readiness_required", True),
+            ("lip_sync_priority", "high"),
+            ("director_required_world", "performance_world"),
+            ("renderMode", "lip_sync_music"),
+            ("resolvedWorkflowKey", "lip_sync_music"),
+            ("requiresAudioSensitiveVideo", True),
+        ):
+            if row.get(key) != value:
+                row[key] = value
+                changed_local = True
+        story_beat_type = str(row.get("story_beat_type") or "").strip().lower()
+        if not story_beat_type or story_beat_type in {"world_observation", "world_pressure", "threshold", "social_texture", "aftermath", "release", "transition", "physical_event", "physical"}:
+            row["story_beat_type"] = "vocal_emotion"
+            changed_local = True
+        route_visual_directive = _safe_dict(row.get("route_visual_directive"))
+        if str(route_visual_directive.get("mode") or "").strip().lower() != "performance_lipsync":
+            route_visual_directive["mode"] = "performance_lipsync"
+            row["route_visual_directive"] = route_visual_directive
+            changed_local = True
+        return changed_local
+
+    def _clean_i2v_lipsync_fields(row: dict[str, Any]) -> bool:
+        changed_local = False
+        for key, value in (
+            ("speaker_role", ""),
+            ("vocal_owner_role", ""),
+            ("spoken_line", ""),
+            ("lip_sync_allowed", False),
+            ("mouth_visible_required", False),
+            ("lip_sync_required", False),
+            ("singing_readiness_required", False),
+            ("lip_sync_priority", "none"),
+            ("renderMode", ""),
+            ("resolvedWorkflowKey", ""),
+            ("requiresAudioSensitiveVideo", False),
+        ):
+            if row.get(key) != value:
+                row[key] = value
+                changed_local = True
+        return changed_local
 
     def _upstream_primary_role(segment_id: str, row: dict[str, Any]) -> str:
         core_row = _safe_dict(core_rows_by_segment.get(segment_id))
@@ -5288,9 +5380,40 @@ def _repair_scene_plan_final_semantics(
             lip_sync_allowed = _scene_bool(row.get("lip_sync_allowed"))
             primary_role = _canonical_subject_id(row.get("primary_role"))
             resolved_primary = _upstream_primary_role(segment_id, row)
+            hard_locked_route = str(hard_route_map.get(segment_id) or "").strip().lower()
+            resolved_vocal_owner_role = (
+                _canonical_subject_id(row.get("vocal_owner_role"))
+                or _canonical_subject_id(row.get("speaker_role"))
+                or "character_1"
+            )
             changed = False
 
+            if strict_hard_contract and hard_locked_route == "ia2v":
+                if _repair_row_to_hard_ia2v_performance(row, resolved_vocal_owner_role):
+                    changed = True
+                route_lock_updates[segment_id] = "ia2v"
+                hard_ia2v_rows_repaired_to_performance_segments.append(segment_id)
+            elif strict_hard_contract and hard_locked_route == "i2v":
+                if route != "i2v":
+                    row["route"] = "i2v"
+                    changed = True
+                route_lock_updates[segment_id] = "i2v"
+                if _clean_i2v_lipsync_fields(row):
+                    changed = True
+                hard_i2v_rows_cleaned_lipsync_segments.append(segment_id)
+
             if resolved_primary == "world":
+                if strict_hard_contract and hard_locked_route == "ia2v":
+                    if _repair_row_to_hard_ia2v_performance(row, resolved_vocal_owner_role):
+                        changed = True
+                    route_lock_updates[segment_id] = "ia2v"
+                    hard_ia2v_rows_repaired_to_performance_segments.append(segment_id)
+                    if changed:
+                        world_rows_repaired += 1
+                    if changed:
+                        rows_updated += 1
+                    rewritten_rows.append(row)
+                    continue
                 if primary_role != "world":
                     row["primary_role"] = "world"
                     changed = True
@@ -5339,6 +5462,10 @@ def _repair_scene_plan_final_semantics(
         "rows_updated": rows_updated,
         "world_rows_repaired": world_rows_repaired,
         "primary_role_filled": primary_role_filled,
+        "hard_ia2v_rows_repaired_to_performance_count": len(set(hard_ia2v_rows_repaired_to_performance_segments)),
+        "hard_ia2v_rows_repaired_to_performance_segments": sorted(set(hard_ia2v_rows_repaired_to_performance_segments)),
+        "hard_i2v_rows_cleaned_lipsync_count": len(set(hard_i2v_rows_cleaned_lipsync_segments)),
+        "hard_i2v_rows_cleaned_lipsync_segments": sorted(set(hard_i2v_rows_cleaned_lipsync_segments)),
     }
 
 
@@ -5408,6 +5535,86 @@ def _rebalance_scene_plan_routes_after_validity_repairs(
 
     input_pkg = _safe_dict(package.get("input"))
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    hard_route_map = {
+        str(segment_id).strip(): str(route).strip().lower()
+        for segment_id, route in _safe_dict(diagnostics.get("scene_plan_hard_route_map_by_segment")).items()
+        if str(segment_id).strip() and str(route).strip().lower() in {"i2v", "ia2v", "first_last"}
+    }
+    strict_hard_contract = _is_strict_hard_route_contract(package, hard_route_map)
+    if strict_hard_contract and hard_route_map:
+        repaired_ia2v_segments: list[str] = []
+        cleaned_i2v_segments: list[str] = []
+        for field in ("scenes", "storyboard"):
+            rewritten: list[dict[str, Any]] = []
+            for idx, raw in enumerate(_safe_list(normalized.get(field)), start=1):
+                row = deepcopy(_safe_dict(raw))
+                segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx:02d}").strip()
+                hard_locked_route = str(hard_route_map.get(segment_id) or "").strip().lower()
+                vocal_owner_role = _canonical_subject_id(row.get("vocal_owner_role")) or _canonical_subject_id(row.get("speaker_role")) or "character_1"
+                if hard_locked_route == "ia2v":
+                    row["route"] = "ia2v"
+                    row["primary_role"] = vocal_owner_role
+                    row["visual_focus_role"] = vocal_owner_role
+                    row["speaker_role"] = vocal_owner_role
+                    row["vocal_owner_role"] = vocal_owner_role
+                    row["lip_sync_allowed"] = True
+                    row["mouth_visible_required"] = True
+                    row["lip_sync_required"] = True
+                    row["singing_readiness_required"] = True
+                    row["lip_sync_priority"] = "high"
+                    row["director_required_world"] = "performance_world"
+                    row["renderMode"] = "lip_sync_music"
+                    row["resolvedWorkflowKey"] = "lip_sync_music"
+                    row["requiresAudioSensitiveVideo"] = True
+                    story_beat_type = str(row.get("story_beat_type") or "").strip().lower()
+                    if not story_beat_type or story_beat_type in {"world_observation", "world_pressure", "threshold", "social_texture", "aftermath", "release", "transition", "physical_event", "physical"}:
+                        row["story_beat_type"] = "vocal_emotion"
+                    route_visual_directive = _safe_dict(row.get("route_visual_directive"))
+                    route_visual_directive["mode"] = "performance_lipsync"
+                    row["route_visual_directive"] = route_visual_directive
+                    repaired_ia2v_segments.append(segment_id)
+                elif hard_locked_route == "i2v":
+                    row["route"] = "i2v"
+                    row["speaker_role"] = ""
+                    row["vocal_owner_role"] = ""
+                    row["spoken_line"] = ""
+                    row["lip_sync_allowed"] = False
+                    row["mouth_visible_required"] = False
+                    row["lip_sync_required"] = False
+                    row["singing_readiness_required"] = False
+                    row["lip_sync_priority"] = "none"
+                    row["renderMode"] = ""
+                    row["resolvedWorkflowKey"] = ""
+                    row["requiresAudioSensitiveVideo"] = False
+                    cleaned_i2v_segments.append(segment_id)
+                rewritten.append(row)
+            if rewritten:
+                normalized[field] = rewritten
+        route_locks = {
+            str(segment_id).strip(): str(route).strip().lower()
+            for segment_id, route in _safe_dict(normalized.get("route_locks_by_segment")).items()
+            if str(segment_id).strip()
+        }
+        route_locks.update(hard_route_map)
+        normalized["route_locks_by_segment"] = route_locks
+        normalized["route_mix_summary"] = _scene_plan_route_counts(normalized)
+        actual_after = _scene_plan_route_counts(normalized)
+        return normalized, {
+            "attempted": True,
+            "upgraded": 0,
+            "missing_ia2v": 0,
+            "target": _scene_plan_route_counts({"storyboard": [{"route": route} for route in hard_route_map.values()]}),
+            "actual_before": _scene_plan_route_counts(scene_plan),
+            "actual_after": actual_after,
+            "upgraded_segment_ids": [],
+            "hard_route_contract_enforced_after_repairs": True,
+            "hard_route_contract_actual_after": actual_after,
+            "hard_ia2v_rows_repaired_to_performance_count": len(set(repaired_ia2v_segments)),
+            "hard_ia2v_rows_repaired_to_performance_segments": sorted(set(repaired_ia2v_segments)),
+            "hard_i2v_rows_cleaned_lipsync_count": len(set(cleaned_i2v_segments)),
+            "hard_i2v_rows_cleaned_lipsync_segments": sorted(set(cleaned_i2v_segments)),
+        }
     expected_scene_count = _expected_scene_count_from_package(package)
     target_budget = _compute_route_budget_for_total(expected_scene_count, creative_config)
     actual_before = _scene_plan_route_counts(normalized)
@@ -15159,6 +15366,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             preferred_route_locks, preferred_route_lock_source = _preferred_validated_route_locks(
                 scene_plan,
                 backend_hard_route_map,
+                force_requested=True,
             )
             route_locks_by_segment = dict(preferred_route_locks)
             route_lock_source = str(preferred_route_lock_source or "backend_strict_preset_no_first_last_50_50_0")
@@ -15173,7 +15381,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         scene_plan, locked_route_counts = _apply_scene_plan_route_locks(
             scene_plan,
             route_locks_by_segment,
-            overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill")),
+            overwrite_existing=True if backend_hard_route_map else (False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (route_lock_source != "fallback_backend_route_fill")),
         )
         route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(scene_plan)
         if route_semantic_mismatches and not effective_hard_route_map:
@@ -15195,6 +15403,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     preferred_route_locks, preferred_route_lock_source = _preferred_validated_route_locks(
                         retry_scene_plan,
                         backend_hard_route_map,
+                        force_requested=True,
                     )
                     route_locks_by_segment = dict(preferred_route_locks)
                     route_lock_source = str(preferred_route_lock_source or "backend_strict_preset_no_first_last_50_50_0")
@@ -15209,7 +15418,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 retry_scene_plan, locked_route_counts = _apply_scene_plan_route_locks(
                     retry_scene_plan,
                     route_locks_by_segment,
-                    overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill")),
+                    overwrite_existing=True if backend_hard_route_map else (False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (route_lock_source != "fallback_backend_route_fill")),
                 )
                 route_semantic_mismatches = _collect_scene_plan_route_semantic_mismatches(retry_scene_plan)
                 semantic_retry_result["scene_plan"] = retry_scene_plan
@@ -15278,6 +15487,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     preferred_route_locks, preferred_route_lock_source = _preferred_validated_route_locks(
                         retry_scene_plan,
                         backend_hard_route_map,
+                        force_requested=True,
                     )
                     route_locks_by_segment = dict(preferred_route_locks)
                     route_lock_source = str(preferred_route_lock_source or "backend_strict_preset_no_first_last_50_50_0")
@@ -15292,7 +15502,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 retry_scene_plan, retry_locked_route_counts = _apply_scene_plan_route_locks(
                     retry_scene_plan,
                     route_locks_by_segment,
-                    overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (True if backend_hard_route_map else (route_lock_source != "fallback_backend_route_fill")),
+                    overwrite_existing=True if backend_hard_route_map else (False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (route_lock_source != "fallback_backend_route_fill")),
                 )
                 retry_scene_plan, retry_final_semantic_repairs = _repair_scene_plan_final_semantics(
                     package=package,
