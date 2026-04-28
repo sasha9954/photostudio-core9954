@@ -2995,24 +2995,182 @@ _SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS = [
 
 
 def _scene_plan_safe_identity_constraints(package: dict[str, Any]) -> dict[str, Any]:
-    _ = package
-    return {
+    scene_pkg = _safe_dict(package)
+    input_pkg = _safe_dict(scene_pkg.get("input"))
+    director_contract = _safe_dict(
+        scene_pkg.get("director_contract")
+        or scene_pkg.get("director_package")
+        or input_pkg.get("director_contract")
+        or input_pkg.get("director_package")
+    )
+    character_contract = _safe_dict(director_contract.get("character_contract"))
+    refs_inventory = _safe_dict(scene_pkg.get("refs_inventory"))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    connected_refs = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
+    refs_present = _safe_dict(connected_summary.get("refsPresentByRole"))
+    roster_rows = _safe_list(_safe_dict(scene_pkg.get("role_plan")).get("roster"))
+
+    def _has_ref_for_role(role: str) -> bool:
+        if _has_real_ref(_safe_list(connected_refs.get(role))):
+            return True
+        if _has_real_ref(_safe_list(refs_present.get(role))):
+            return True
+        ref_item = _safe_dict(refs_inventory.get(f"ref_{role}"))
+        return any(
+            [
+                _has_real_ref(ref_item.get("refs")),
+                _has_real_ref(ref_item.get("value")),
+                _has_real_ref(ref_item.get("count")),
+            ]
+        )
+
+    def _roster_blob(role: str) -> str:
+        for row in roster_rows:
+            row_safe = _safe_dict(row)
+            role_id = str(row_safe.get("role_id") or row_safe.get("id") or row_safe.get("entity_id") or "").strip().lower()
+            if role_id == role:
+                return json.dumps(row_safe, ensure_ascii=False).lower()
+        return ""
+
+    char1_ref = _has_ref_for_role("character_1")
+    char2_ref = _has_ref_for_role("character_2")
+    char3_ref = _has_ref_for_role("character_3")
+    char2_blob = json.dumps(_safe_dict(character_contract.get("character_2")), ensure_ascii=False).lower() + " " + _roster_blob("character_2")
+    char2_past_self = any(
+        token in char2_blob
+        for token in ("young hero", "same hero in youth", "past self", "тот же герой в молодости", "young", "youth", "прошл")
+    )
+    constraints: dict[str, Any] = {
         "character_1": {
-            "role": "main",
+            "role": "main_adult_hero",
             "scene_safe_rule": (
-                "Keep character_1 visually consistent with the provided character reference in every scene. "
-                "Do not change her face, age impression, body proportions, hairstyle, clothing, silhouette, or overall look."
+                "Keep character_1 identity stable from connected character_1 references. "
+                "Character_1 is the main adult hero and is allowed as ia2v lip-sync performer in present timeline/performance beats."
             ),
             "forbidden_output_terms": list(_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS),
+            "has_connected_reference": bool(char1_ref),
         },
         "character_2": {
-            "role": "secondary_unreferenced",
+            "role": "young_hero_past_self_secondary",
             "scene_safe_rule": (
-                "The boyfriend is an unreferenced secondary person. Show him only partially, from behind, in silhouette, "
-                "as a shoulder/arm/back near the door. Do not make him the main subject."
+                "Keep character_2 identity stable from connected character_2 references. "
+                "Character_2 is young hero/past self, secondary but visually important, and allowed as i2v memory subject. "
+                "Do not rewrite as boyfriend, do not hide only from behind, and do not treat as antagonist when contract marks young hero/past self."
             ),
+            "forbidden_output_terms": list(_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS),
+            "has_connected_reference": bool(char2_ref),
+            "young_hero_past_self": bool(char2_past_self),
         },
     }
+    if not char3_ref:
+        constraints["character_3"] = {
+            "role": "episodic_text_only_if_required",
+            "scene_safe_rule": (
+                "If character_3 has no visual references and is contract-marked no-reference/episodic, "
+                "allow only text-only episodic one-scene romantic appearance in i2v memory context. No visual reference is required."
+            ),
+            "forbidden_output_terms": list(_SCENE_PLAN_TECHNICAL_FORBIDDEN_TERMS),
+            "has_connected_reference": False,
+        }
+    return constraints
+
+
+def _scene_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value == 1
+    token = str(value).strip().lower()
+    if token in {"true", "1", "yes", "required", "enabled"}:
+        return True
+    if token in {"false", "0", "no", "none", "", "null"}:
+        return False
+    return False
+
+
+def _scene_row_vocal_owner_role(row: dict[str, Any]) -> str:
+    row_safe = _safe_dict(row)
+    candidates = (
+        row_safe.get("vocal_owner_role"),
+        row_safe.get("speaker_role"),
+        _safe_dict(row_safe.get("audio_sensitivity")).get("vocal_owner_role"),
+        _safe_dict(row_safe.get("route_visual_directive")).get("vocal_owner_role"),
+        _safe_dict(row_safe.get("performance_contract")).get("vocal_owner_role"),
+        _safe_dict(row_safe.get("clip_contract")).get("vocal_owner_role"),
+    )
+    for value in candidates:
+        token = str(value or "").strip().lower()
+        if token:
+            return token
+    return ""
+
+
+def _extract_memory_beat_categories(mandatory_beats: list[str]) -> dict[str, list[str]]:
+    category_keywords: dict[str, tuple[str, ...]] = {
+        "theft": ("краж", "вор", "steal", "theft", "rob", "pickpocket"),
+        "fight": ("драк", "конфликт", "fight", "brawl", "clash", "violence"),
+        "escape": ("бегств", "милиц", "полици", "police", "chase", "escape", "run away"),
+        "romance_flowers": ("цвет", "девушк", "flowers", "flower", "girl", "romance", "romantic"),
+        "courtyard_old_city": ("двор", "арк", "подъезд", "улиц", "courtyard", "arch", "entrance", "street", "old city"),
+        "street_youth_tension": ("хулиган", "криминал", "улич", "tension", "street", "youth", "gang"),
+    }
+    extracted: dict[str, list[str]] = {}
+    for beat_raw in mandatory_beats:
+        beat = str(beat_raw or "").strip().lower()
+        if not beat:
+            continue
+        for category, keywords in category_keywords.items():
+            matches = [token for token in keywords if token and token in beat]
+            if matches:
+                extracted.setdefault(category, [])
+                for token in matches:
+                    if token not in extracted[category]:
+                        extracted[category].append(token)
+    return extracted
+
+
+def _scene_plan_character_3_text_only_episodic(package: dict[str, Any]) -> bool:
+    scene_pkg = _safe_dict(package)
+    input_pkg = _safe_dict(scene_pkg.get("input"))
+    director_contract = _safe_dict(
+        scene_pkg.get("director_contract")
+        or scene_pkg.get("director_package")
+        or input_pkg.get("director_contract")
+        or input_pkg.get("director_package")
+    )
+    refs_inventory = _safe_dict(scene_pkg.get("refs_inventory"))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    refs_present = _safe_list(_safe_dict(connected_summary.get("refsPresentByRole")).get("character_3"))
+    connected_refs_present = _safe_list(_safe_dict(connected_summary.get("connectedRefsPresentByRole")).get("character_3"))
+    ref_character_3 = _safe_dict(refs_inventory.get("ref_character_3"))
+    has_visual_ref = any(
+        [
+            _has_real_ref(refs_present),
+            _has_real_ref(connected_refs_present),
+            _has_real_ref(ref_character_3.get("refs")),
+            _has_real_ref(ref_character_3.get("value")),
+            _has_real_ref(ref_character_3.get("count")),
+        ]
+    )
+    if has_visual_ref:
+        return False
+    char_usage = str(
+        _safe_dict(_safe_dict(director_contract.get("reference_usage_contract")).get("character_usage")).get("character_3") or ""
+    ).strip().lower()
+    char3_contract = _safe_dict(_safe_dict(director_contract.get("character_contract")).get("character_3"))
+    char3_blob = json.dumps(char3_contract, ensure_ascii=False).lower()
+    char3_name = str(char3_contract.get("label") or char3_contract.get("name") or "").strip().lower()
+    return any(
+        [
+            char_usage == "no_reference_needed",
+            str(char3_contract.get("story_role") or "").strip().lower() == "episodic",
+            "отдельный референс не нужен" in char3_blob,
+            "no reference" in char3_blob,
+            "девушк" in char3_blob or "girl" in char3_blob or "девушк" in char3_name or "girl" in char3_name,
+        ]
+    )
 
 
 def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
@@ -3132,7 +3290,6 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     clip_contract = _safe_dict(director_contract.get("clip_contract"))
     character_contract = _safe_dict(director_contract.get("character_contract"))
     char2_contract = _safe_dict(character_contract.get("character_2"))
-    char3_contract = _safe_dict(character_contract.get("character_3"))
     route_balance = str(scene_distribution_contract.get("route_balance") or "").strip().lower()
     user_approved = bool(scene_distribution_contract.get("user_approved"))
     scene_candidate_windows = _safe_list(_safe_dict(scene_pkg.get("audio_map")).get("scene_candidate_windows"))
@@ -3210,12 +3367,16 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
             refs_inventory["ref_character_2"] = ref_character_2
             scene_pkg["refs_inventory"] = refs_inventory
 
-    char3_text_only_episodic = bool(
-        not _safe_dict(_safe_dict(scene_pkg.get("refs_inventory")).get("ref_character_3"))
-        and bool(char3_contract.get("no_reference_needed"))
-    )
+    char3_text_only_episodic = _scene_plan_character_3_text_only_episodic(scene_pkg)
     if char3_text_only_episodic:
         role_plan["scene_prompt_rules"]["character_3_usage"] = "text_only_episodic_one_scene_if_required"
+        role_plan["scene_prompt_rules"]["character_3_text_only_episodic"] = (
+            "character_3 may appear only as text-only episodic one-scene character; no visual reference required."
+        )
+
+    mandatory_memory_beat_categories = _extract_memory_beat_categories(mandatory_memory_beats)
+    if mandatory_memory_beat_categories:
+        role_plan["scene_prompt_rules"]["mandatory_memory_beat_categories"] = list(mandatory_memory_beat_categories.keys())
 
     diagnostics["scene_plan_hard_user_route_budget_applied"] = bool(hard_user_budget_applied)
     diagnostics["scene_plan_hard_user_route_budget_target"] = dict(hard_user_budget_target)
@@ -3223,6 +3384,8 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_vocal_owner_role_forced"] = "character_1" if route_semantics_injected else ""
     diagnostics["scene_plan_mandatory_memory_beats_present"] = bool(mandatory_memory_beats)
     diagnostics["scene_plan_mandatory_memory_beats"] = list(mandatory_memory_beats)
+    diagnostics["scene_plan_mandatory_memory_beat_categories"] = list(mandatory_memory_beat_categories.keys())
+    diagnostics["scene_plan_mandatory_memory_beat_missing_categories"] = []
     diagnostics["scene_plan_postcard_only_memory_blocked"] = bool(mandatory_memory_beats)
     diagnostics["scene_plan_character_2_antagonist_legacy_ignored"] = bool(char2_antagonist_legacy_ignored)
     diagnostics["scene_plan_character_3_text_only_episodic"] = bool(char3_text_only_episodic)
@@ -3282,24 +3445,58 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
         + _safe_list(_safe_dict(director_contract.get("clip_contract")).get("mandatory_scenes"))
         if str(item).strip()
     ]
+    mandatory_categories = _extract_memory_beat_categories(mandatory_beats)
     i2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"]
     ia2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"]
     i2v_blob = " ".join(
         json.dumps(row, ensure_ascii=False).lower()
         for row in i2v_rows
     )
-    for beat in mandatory_beats:
-        if beat and beat not in i2v_blob:
-            errors.append(f"mandatory_memory_beat_missing:{beat[:48]}")
+    covered_categories: set[str] = set()
+    for category, tokens in mandatory_categories.items():
+        if any(token in i2v_blob for token in tokens):
+            covered_categories.add(category)
+    missing_categories = [category for category in mandatory_categories.keys() if category not in covered_categories]
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_mandatory_memory_beat_categories"] = list(mandatory_categories.keys())
+    diagnostics["scene_plan_mandatory_memory_beat_missing_categories"] = list(missing_categories)
+    package["diagnostics"] = diagnostics
+    for category in missing_categories:
+        errors.append(f"mandatory_memory_beat_category_missing:{category}")
+
+    char3_text_only_episodic = _scene_plan_character_3_text_only_episodic(package)
+    if not char3_text_only_episodic:
+        has_character_3_ref = bool(_extract_ref_urls(_safe_dict(_safe_dict(package).get("refs_inventory")).get("ref_character_3")))
+        has_character_3_i2v_usage = any(
+            (
+                _canonical_subject_id(_safe_dict(row).get("primary_role")) == "character_3"
+                or _canonical_subject_id(_safe_dict(row).get("visual_focus_role")) == "character_3"
+            )
+            for row in i2v_rows
+        )
+        if has_character_3_i2v_usage and not has_character_3_ref:
+            errors.append("character_3_visual_reference_missing")
+
+    vocal_owner_normalized_count = 0
     for row in ia2v_rows:
-        vocal_owner = str(_safe_dict(row).get("vocal_owner_role") or _safe_dict(row).get("speaker_role") or "").strip().lower()
+        vocal_owner = _scene_row_vocal_owner_role(_safe_dict(row))
+        if not vocal_owner:
+            vocal_owner = "character_1"
+            vocal_owner_normalized_count += 1
+            _safe_dict(row)["vocal_owner_role"] = vocal_owner
         if vocal_owner != "character_1":
             errors.append("ia2v_vocal_owner_not_character_1")
             break
     for row in i2v_rows:
-        if bool(_safe_dict(row).get("lip_sync_allowed")) or bool(_safe_dict(row).get("mouth_visible_required")):
+        if _scene_bool(_safe_dict(row).get("lip_sync_allowed")) or _scene_bool(_safe_dict(row).get("mouth_visible_required")):
             errors.append("i2v_lipsync_forbidden")
             break
+        if _scene_bool(_safe_dict(row).get("lip_sync_required")) or _scene_bool(_safe_dict(row).get("singing_readiness_required")):
+            errors.append("i2v_lipsync_forbidden")
+            break
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_vocal_owner_role_normalized_count"] = int(vocal_owner_normalized_count)
+    package["diagnostics"] = diagnostics
     return not errors, errors
 
 
@@ -4693,7 +4890,7 @@ def _fallback_scene_plan_route_fill(scene_plan: dict[str, Any]) -> dict[str, str
         if route in {"i2v", "ia2v", "first_last"}:
             continue
         story_beat_type = str(route_row.get("story_beat_type") or "").strip().lower()
-        singing_required = bool(route_row.get("singing_readiness_required"))
+        singing_required = _scene_bool(route_row.get("singing_readiness_required"))
         if story_beat_type == "vocal_emotion" or singing_required:
             fallback_map[segment_id] = "ia2v"
         else:
@@ -4821,7 +5018,7 @@ def _repair_scene_plan_final_semantics(
             route = str(row.get("route") or "").strip().lower()
             visual_focus_role = _canonical_subject_id(row.get("visual_focus_role"))
             speaker_role = _canonical_subject_id(row.get("speaker_role"))
-            lip_sync_allowed = bool(row.get("lip_sync_allowed"))
+            lip_sync_allowed = _scene_bool(row.get("lip_sync_allowed"))
             primary_role = _canonical_subject_id(row.get("primary_role"))
             resolved_primary = _upstream_primary_role(segment_id, row)
             changed = False
@@ -4840,10 +5037,10 @@ def _repair_scene_plan_final_semantics(
                 if speaker_role:
                     row["speaker_role"] = ""
                     changed = True
-                if bool(row.get("lip_sync_allowed")):
+                if _scene_bool(row.get("lip_sync_allowed")):
                     row["lip_sync_allowed"] = False
                     changed = True
-                if bool(row.get("mouth_visible_required")):
+                if _scene_bool(row.get("mouth_visible_required")):
                     row["mouth_visible_required"] = False
                     changed = True
                 if changed:
@@ -4912,7 +5109,7 @@ def _collect_scene_plan_route_semantic_mismatches(scene_plan: dict[str, Any]) ->
         route = str(route_row.get("route") or "").strip().lower()
         story_beat_type = str(route_row.get("story_beat_type") or "").strip().lower()
         object_action_allowed = bool(route_row.get("object_action_allowed"))
-        singing_required = bool(route_row.get("singing_readiness_required"))
+        singing_required = _scene_bool(route_row.get("singing_readiness_required"))
         if route == "ia2v" and story_beat_type == "physical_event":
             mismatches.append(
                 {"segment_id": segment_id, "route": route, "story_beat_type": story_beat_type, "reason": "ia2v_for_physical_event"}
@@ -4989,9 +5186,9 @@ def _rebalance_scene_plan_routes_after_validity_repairs(
         primary_role = _canonical_subject_id(route_row.get("primary_role"))
         visual_focus_role = _canonical_subject_id(route_row.get("visual_focus_role"))
         speaker_role = _canonical_subject_id(route_row.get("speaker_role"))
-        singing_required = bool(route_row.get("singing_readiness_required"))
-        lip_sync_allowed = bool(route_row.get("lip_sync_allowed"))
-        mouth_visible_required = bool(route_row.get("mouth_visible_required"))
+        singing_required = _scene_bool(route_row.get("singing_readiness_required"))
+        lip_sync_allowed = _scene_bool(route_row.get("lip_sync_allowed"))
+        mouth_visible_required = _scene_bool(route_row.get("mouth_visible_required"))
         object_action_allowed = bool(route_row.get("object_action_allowed"))
 
         if working_routes[idx] != "i2v":
@@ -14595,6 +14792,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_postcard_only_memory_blocked"] = False
     diagnostics["scene_plan_character_2_antagonist_legacy_ignored"] = False
     diagnostics["scene_plan_character_3_text_only_episodic"] = False
+    diagnostics["scene_plan_mandatory_memory_beat_categories"] = []
+    diagnostics["scene_plan_mandatory_memory_beat_missing_categories"] = []
+    diagnostics["scene_plan_vocal_owner_role_normalized_count"] = 0
+    diagnostics["scene_plan_hard_route_map_uses_sanitized_package"] = False
     diagnostics["scene_plan_clip_contract_validation_ok"] = True
     diagnostics["scene_plan_clip_contract_validation_errors"] = []
     diagnostics["gemini_api_key_source"] = "missing"
@@ -14621,6 +14822,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         "scene_plan_postcard_only_memory_blocked",
         "scene_plan_character_2_antagonist_legacy_ignored",
         "scene_plan_character_3_text_only_episodic",
+        "scene_plan_mandatory_memory_beat_categories",
+        "scene_plan_mandatory_memory_beat_missing_categories",
     ):
         if key in scene_prompt_diag:
             diagnostics[key] = scene_prompt_diag.get(key)
@@ -14631,7 +14834,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     backend_hard_route_map: dict[str, str] = {}
     backend_hard_route_source = ""
     if strict_preset_name == "no_first_last_50_50_0":
-        backend_hard_route_map = build_no_first_last_50_50_hard_route_map(package)
+        backend_hard_route_map = build_no_first_last_50_50_hard_route_map(scene_plan_prompt_package)
+        diagnostics["scene_plan_hard_route_map_uses_sanitized_package"] = True
         if backend_hard_route_map:
             backend_hard_route_source = "backend_strict_preset_no_first_last_50_50_0"
             scene_prompt_creative_config["hard_route_assignments_by_segment"] = dict(backend_hard_route_map)
