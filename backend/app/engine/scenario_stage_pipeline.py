@@ -3564,7 +3564,7 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["vocal_owner_role_source"] = [resolved_vocal_owner_source]
     diagnostics["camera_energy_map_present"] = bool(camera_energy_map)
     diagnostics["camera_energy_segments_count"] = len(camera_energy_map)
-    diagnostics["camera_energy_applied_to_scene_count"] = len(camera_energy_map)
+    diagnostics["camera_energy_applied_to_scene_count"] = 0
     diagnostics["camera_energy_map_source"] = camera_energy_source
     diagnostics["camera_energy_affects_story_content"] = False
     scene_pkg["diagnostics"] = diagnostics
@@ -3657,15 +3657,25 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
 
     char3_unreferenced_episodic = _scene_plan_character_3_unreferenced_episodic_visual_extra(package)
     char3_usage_scene_count = 0
+    def _scene_row_role_token(value: Any) -> str:
+        if isinstance(value, dict):
+            value_safe = _safe_dict(value)
+            for key in ("role_id", "id", "role", "entity_id"):
+                token = _canonical_subject_id(value_safe.get(key))
+                if token:
+                    return token
+            return ""
+        return _canonical_subject_id(value)
+
     for row in scene_rows:
         row_safe = _safe_dict(row)
         role_tokens: list[str] = [
-            _canonical_subject_id(row_safe.get("primary_role")),
-            _canonical_subject_id(row_safe.get("visual_focus_role")),
+            _scene_row_role_token(row_safe.get("primary_role")),
+            _scene_row_role_token(row_safe.get("visual_focus_role")),
         ]
         for field in ("secondary_roles", "refsUsed", "active_roles", "sceneActiveRoles"):
             for item in _safe_list(row_safe.get(field)):
-                token = _canonical_subject_id(item)
+                token = _scene_row_role_token(item)
                 if token:
                     role_tokens.append(token)
         if "character_3" in role_tokens:
@@ -15208,7 +15218,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             scene_plan=scene_plan,
         )
         scene_plan, final_sync_meta = _sync_scene_plan_storyboard_mirror(scene_plan)
-        camera_energy_map = _safe_list(_safe_dict(_safe_dict(package.get("role_plan")).get("camera_energy_map")))
+        camera_energy_map = _safe_list(
+            _safe_dict(scene_plan_prompt_package.get("role_plan")).get("camera_energy_map")
+        )
         scene_plan, camera_energy_applied_count = _apply_camera_energy_map_to_scene_plan(scene_plan, camera_energy_map)
         diagnostics["scene_plan_final_semantic_repairs"] = dict(final_semantic_repairs)
         diagnostics["scene_plan_post_validity_route_rebalance"] = dict(post_validity_rebalance)
@@ -15282,7 +15294,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     scene_plan=retry_scene_plan,
                 )
                 retry_scene_plan, retry_sync_meta = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
-                camera_energy_map = _safe_list(_safe_dict(_safe_dict(package.get("role_plan")).get("camera_energy_map")))
+                camera_energy_map = _safe_list(
+                    _safe_dict(scene_plan_prompt_package.get("role_plan")).get("camera_energy_map")
+                )
                 retry_scene_plan, retry_camera_energy_applied_count = _apply_camera_energy_map_to_scene_plan(
                     retry_scene_plan,
                     camera_energy_map,
@@ -15362,7 +15376,9 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 scene_plan=retry_scene_plan,
             )
             retry_scene_plan, _ = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
-            camera_energy_map = _safe_list(_safe_dict(_safe_dict(package.get("role_plan")).get("camera_energy_map")))
+            camera_energy_map = _safe_list(
+                _safe_dict(scene_plan_prompt_package.get("role_plan")).get("camera_energy_map")
+            )
             retry_scene_plan, retry_camera_energy_applied_count = _apply_camera_energy_map_to_scene_plan(
                 retry_scene_plan,
                 camera_energy_map,
