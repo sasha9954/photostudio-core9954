@@ -108,7 +108,9 @@ export default function ComfyNarrativeNode({ id, data }) {
   }, [data?.contentType, data?.onFieldChange, id, safeContentType]);
 
   useEffect(() => {
-    if (prevDirectorInputSignatureRef.current === directorInputSignature) {
+    const signatureChanged = prevDirectorInputSignatureRef.current !== directorInputSignature;
+    const shouldInvalidatePersistedDirector = signatureChanged || !directorSignatureMatchesCurrent;
+    if (!shouldInvalidatePersistedDirector) {
       return;
     }
 

@@ -1880,7 +1880,9 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         director_package,
         payload,
     )
-    current_signature = str(payload.get("current_scenario_input_signature") or _compute_payload_scenario_input_signature(payload)).strip()
+    provided_current_signature = str(payload.get("current_scenario_input_signature") or "").strip()
+    current_signature = str(provided_current_signature or _compute_payload_scenario_input_signature(payload)).strip()
+    signature_source = "provided_current_scenario_input_signature" if provided_current_signature else "backend_computed_hash"
     diagnostics = {
         "director_v2": True,
         "gemini_questions_generated": bool(questions) or done,
@@ -1912,6 +1914,7 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_contract_v2_route_semantics_present": bool(director_v2_contract_diagnostics.get("director_contract_v2_route_semantics_present")),
         "director_contract_v2_missing_fields": _safe_list(director_v2_contract_diagnostics.get("director_contract_v2_missing_fields")),
         "current_scenario_input_signature": current_signature,
+        "signature_source": signature_source,
         "stored_director_signature": str(_director_artifact_signature(director_contract) or _director_artifact_signature(director_package)),
     }
     diagnostics["director_signature_matches_current"] = bool(
@@ -1956,10 +1959,12 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
 async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
     raw_payload = payload if isinstance(payload, dict) else {}
     if str(raw_payload.get("mode") or "").strip().lower() == "director_v2":
+        provided_current_signature = str(raw_payload.get("current_scenario_input_signature") or "").strip()
         current_signature = str(
-            raw_payload.get("current_scenario_input_signature")
+            provided_current_signature
             or _compute_payload_scenario_input_signature(raw_payload)
         ).strip()
+        signature_source = "provided_current_scenario_input_signature" if provided_current_signature else "backend_computed_hash"
         raw_payload["current_scenario_input_signature"] = current_signature
         incoming_contract = _safe_dict(raw_payload.get("director_contract"))
         incoming_package = _safe_dict(raw_payload.get("director_package"))
@@ -1980,6 +1985,7 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
         raw_payload["diagnostics"] = {
             **_safe_dict(raw_payload.get("diagnostics")),
             "current_scenario_input_signature": current_signature,
+            "signature_source": signature_source,
             "stored_director_signature": stored_signature,
             "director_signature_matches_current": bool(not stored_signature or stored_signature == current_signature),
             "director_stale_contract_ignored": stale_contract_ignored,
@@ -2054,6 +2060,7 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
         normalized_diag["director_stale_contract_ignored"] = bool(stale_contract_ignored)
         normalized_diag["stale_signature"] = stored_signature if stale_contract_ignored else ""
         normalized_diag["current_signature"] = current_signature
+        normalized_diag["signature_source"] = signature_source
         normalized_diag["persisted_director_result_reused"] = bool(
             not stale_contract_ignored and bool(incoming_contract or incoming_package or incoming_answers)
         )
