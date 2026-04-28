@@ -1318,6 +1318,7 @@ def _normalize_clip_contract_aliases(
 
     route_balance_alias_map = {
         "50_50": "balanced_50_50",
+        "50_50_0": "balanced_50_50",
         "equal_split": "balanced_50_50",
         "balanced": "balanced_50_50",
         "balanced_50_50": "balanced_50_50",
@@ -1346,7 +1347,7 @@ def _normalize_clip_contract_aliases(
         answers.get("route_balance_preference"),
         route_contract.get("route_balance_preference"),
     ).lower()
-    if route_balance_preference == "equal_split":
+    if route_balance_preference in {"equal_split", "50_50_0"}:
         mapped_route_balance = "balanced_50_50"
 
     user_approved_or_ai_decides = _first_non_empty_string(
@@ -1443,15 +1444,37 @@ def _normalize_clip_contract_aliases(
         normalized_aliases_used.extend(["scene_distribution_contract.ia2v_ratio", "scene_distribution_contract.i2v_ratio"])
 
     scene_distribution_decision = _first_non_empty_string(
-        answers.get("scene_distribution_decision"),
         scene_distribution.get("scene_distribution_decision"),
+        answers.get("scene_distribution_decision"),
+        scene_distribution.get("user_approved_or_ai_decides"),
+        answers.get("route_balance_preference"),
+        route_contract.get("route_balance_preference"),
+        scene_distribution.get("route_balance_preference"),
         package.get("scene_distribution_decision"),
     ).lower()
-    if scene_distribution_decision == "user_approved" or route_balance_preference == "equal_split":
+    user_approved_decisions = {
+        "user_approved",
+        "approved",
+        "confirmed",
+        "equal_split",
+        "balanced",
+        "balanced_50_50",
+        "50_50",
+        "50_50_0",
+    }
+    if scene_distribution_decision in user_approved_decisions:
         if not bool(scene_distribution.get("user_approved")):
             scene_distribution["user_approved"] = True
             alias_normalization_applied = True
             normalized_aliases_used.append("scene_distribution_contract.user_approved")
+        if bool(scene_distribution.get("ai_decides")):
+            scene_distribution["ai_decides"] = False
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.ai_decides")
+        if _first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")).lower() != "user_approved":
+            scene_distribution["user_approved_or_ai_decides"] = "user_approved"
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
     elif scene_distribution_decision == "ai_decides":
         if bool(scene_distribution.get("user_approved")):
             scene_distribution["user_approved"] = False
@@ -1461,6 +1484,31 @@ def _normalize_clip_contract_aliases(
             scene_distribution["ai_decides"] = True
             alias_normalization_applied = True
             normalized_aliases_used.append("scene_distribution_contract.ai_decides")
+        if _first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")).lower() != "ai_decides":
+            scene_distribution["user_approved_or_ai_decides"] = "ai_decides"
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
+
+    route_targets = _safe_dict(scene_distribution.get("route_targets") or route_contract.get("route_targets"))
+    has_explicit_route_targets = all(
+        _first_non_empty_string(route_targets.get(key)).lower() == expected
+        for key, expected in (("ia2v", "ia2v"), ("i2v", "i2v"), ("first_last", "first_last"))
+    )
+    ratios_explicit = scene_distribution.get("ia2v_ratio") is not None and scene_distribution.get("i2v_ratio") is not None
+    first_last_disabled = bool(scene_distribution.get("first_last_allowed")) is False
+    has_decision = bool(_first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")))
+    if has_explicit_route_targets and ratios_explicit and first_last_disabled and not has_decision:
+        scene_distribution["user_approved_or_ai_decides"] = "ai_decides"
+        scene_distribution["ai_decides"] = True
+        scene_distribution["user_approved"] = False
+        alias_normalization_applied = True
+        normalized_aliases_used.extend(
+            [
+                "scene_distribution_contract.user_approved_or_ai_decides",
+                "scene_distribution_contract.ai_decides",
+                "scene_distribution_contract.user_approved",
+            ]
+        )
 
     ia2v_meaning = _first_non_empty_string(
         scene_distribution.get("ia2v_meaning"),
