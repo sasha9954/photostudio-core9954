@@ -7499,6 +7499,71 @@ def _repair_generic_core_segments_with_atoms(
     director_contract: dict[str, Any],
     director_package: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def _is_negative_or_safety_instruction(text: str) -> bool:
+        low = str(text or "").strip().lower()
+        if not low:
+            return False
+        banned_patterns = (
+            r"\bdo not\b",
+            r"не\s+переносить",
+            r"\bбез\b",
+            r"\bno\b",
+            r"\bavoid\b",
+            r"\bforbid\w*\b",
+            r"\bnegative\b",
+            r"\breference\s+only\b",
+            r"\bidentity\s+only\b",
+        )
+        return any(re.search(pattern, low) for pattern in banned_patterns)
+
+    def _clean_repair_clause(text: str) -> str:
+        cleaned = re.sub(r"\s+", " ", str(text or "")).strip(" \n\t,.;:!?")
+        if not cleaned:
+            return ""
+        cleaned = re.sub(r"(?i)\b(route|prompt|contract|schema|atom|validator)s?\b", "", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:!?")
+        return cleaned[:220]
+
+    def _is_human_readable_clause(text: str) -> bool:
+        candidate = _clean_repair_clause(text)
+        if len(candidate) < 6:
+            return False
+        return bool(re.search(r"[a-zа-яё]", candidate, flags=re.IGNORECASE))
+
+    def _resolve_subject_label(subject_hint: str) -> str:
+        key = str(subject_hint or "").strip().lower()
+        package_character_contract = _safe_dict(director_package.get("character_contract"))
+        director_character_contract = _safe_dict(director_contract.get("character_contract"))
+        if key in {"character_1", "character_2"}:
+            row = _safe_dict(package_character_contract.get(key) or director_character_contract.get(key))
+            return str(row.get("identity_label") or row.get("role_name") or "").strip()
+        if key == "episodic_text_character":
+            episodic_rows = _safe_list(director_package.get("episodic_text_characters")) or _safe_list(
+                director_contract.get("episodic_text_characters")
+            )
+            if not episodic_rows:
+                episodic_rows = _extract_episodic_text_characters(
+                    {"director_contract": director_contract, "director_package": director_package}
+                )
+            for episodic in episodic_rows:
+                label = str(_safe_dict(episodic).get("identity_label") or "").strip()
+                if label:
+                    return label
+            return ""
+        return key
+
+    def _replace_role_ids_with_labels(text: str) -> str:
+        replaced = str(text or "")
+        replacement_map = {
+            "character_1": _resolve_subject_label("character_1"),
+            "character_2": _resolve_subject_label("character_2"),
+            "episodic_text_character": _resolve_subject_label("episodic_text_character"),
+        }
+        for role_id, label in replacement_map.items():
+            safe_label = str(label or "").strip() or "the character"
+            replaced = re.sub(rf"(?i)\b{re.escape(role_id)}\b", safe_label, replaced)
+        return replaced
+
     generic_ids = _detect_generic_narrative_segments(
         narrative_segments,
         concrete_tokens=set(),
@@ -7511,6 +7576,9 @@ def _repair_generic_core_segments_with_atoms(
             "core_generic_segment_repaired_ids": [],
             "core_generic_segment_unrepaired_ids": generic_ids,
             "core_generic_segment_repair_atom_sources": [],
+            "core_generic_segment_repair_used_raw_text_count": 0,
+            "core_generic_segment_repair_used_template_count": 0,
+            "core_generic_segment_repair_skipped_negative_atom_count": 0,
         }
     atoms_by_timeline = {
         "present": [a for a in atoms if str(_safe_dict(a).get("timeline")) == "present"],
@@ -7520,6 +7588,9 @@ def _repair_generic_core_segments_with_atoms(
     repaired_ids: list[str] = []
     unrepaired_ids: list[str] = []
     atom_sources: list[str] = []
+    used_raw_text_count = 0
+    used_template_count = 0
+    skipped_negative_atom_count = 0
     used_episodic = False
     last_atom_id = ""
     output: list[dict[str, Any]] = []
@@ -7554,24 +7625,43 @@ def _repair_generic_core_segments_with_atoms(
             output.append(seg)
             unrepaired_ids.append(segment_id)
             continue
-        subject = str(chosen.get("subject_hint") or "the scene")
+        raw_text = str(chosen.get("raw_text") or "").strip()
+        raw_text = _replace_role_ids_with_labels(raw_text)
+        cleaned_raw_text = _clean_repair_clause(raw_text) if _is_human_readable_clause(raw_text) else ""
+        raw_text_usable = bool(cleaned_raw_text) and not _is_negative_or_safety_instruction(raw_text)
+        if not raw_text_usable and raw_text and _is_negative_or_safety_instruction(raw_text):
+            skipped_negative_atom_count += 1
+        subject = _resolve_subject_label(str(chosen.get("subject_hint") or "")) or "the scene"
+        if subject in {"character_1", "character_2", "episodic_text_character"}:
+            subject = "the scene"
         action = str(chosen.get("action_hint") or "").strip()
+        if not action and raw_text_usable:
+            action = cleaned_raw_text
         place = str(chosen.get("place_hint") or "").strip()
         obj = str(chosen.get("object_hint") or "").strip()
         emotion = str(chosen.get("emotion_hint") or "").strip()
-        fragments = [subject]
-        if action:
-            fragments.append(action)
-        if place:
-            fragments.append(f"in {place}")
-        if obj:
-            fragments.append(obj)
-        beat_line = re.sub(r"\s+", " ", " ".join([frag for frag in fragments if frag])).strip(" ,")
-        if beat_line:
-            beat_line = beat_line[0].upper() + beat_line[1:]
-        emotional_line = emotion or str(chosen.get("raw_text") or "").strip()[:120] or str(seg.get("emotional_key") or "").strip()
+        beat_line = ""
+        if raw_text_usable:
+            beat_line = cleaned_raw_text
+            used_raw_text_count += 1
+        else:
+            fragments = [subject]
+            if action:
+                fragments.append(action)
+            if place:
+                fragments.append(f"in {place}")
+            if obj:
+                fragments.append(obj)
+            beat_line = _clean_repair_clause(" ".join([frag for frag in fragments if frag]))
+            if beat_line:
+                used_template_count += 1
+        if not beat_line:
+            output.append(seg)
+            unrepaired_ids.append(segment_id)
+            continue
+        emotional_line = emotion or (cleaned_raw_text[:120] if raw_text_usable else "") or str(seg.get("emotional_key") or "").strip()
         repaired = dict(seg)
-        repaired["beat_purpose"] = f"{beat_line}, carrying the moment forward through visible consequence."
+        repaired["beat_purpose"] = beat_line
         repaired["emotional_key"] = emotional_line
         output.append(repaired)
         repaired_ids.append(segment_id)
@@ -7585,6 +7675,9 @@ def _repair_generic_core_segments_with_atoms(
         "core_generic_segment_repaired_ids": repaired_ids,
         "core_generic_segment_unrepaired_ids": unrepaired_ids,
         "core_generic_segment_repair_atom_sources": list(dict.fromkeys(atom_sources)),
+        "core_generic_segment_repair_used_raw_text_count": used_raw_text_count,
+        "core_generic_segment_repair_used_template_count": used_template_count,
+        "core_generic_segment_repair_skipped_negative_atom_count": skipped_negative_atom_count,
     }
 
 
@@ -10422,6 +10515,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["core_generic_segment_repaired_ids"] = []
     diagnostics["core_generic_segment_unrepaired_ids"] = []
     diagnostics["core_generic_segment_repair_atom_sources"] = []
+    diagnostics["core_generic_segment_repair_used_raw_text_count"] = 0
+    diagnostics["core_generic_segment_repair_used_template_count"] = 0
+    diagnostics["core_generic_segment_repair_skipped_negative_atom_count"] = 0
     diagnostics["core_forbidden_drift_sanitized"] = False
     diagnostics["core_forbidden_drift_removed_tokens"] = []
     diagnostics["core_memory_beat_inventory_count"] = 0
@@ -10870,6 +10966,15 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     )
                     diagnostics["core_generic_segment_repair_atom_sources"] = _safe_list(
                         repair_diag.get("core_generic_segment_repair_atom_sources")
+                    )
+                    diagnostics["core_generic_segment_repair_used_raw_text_count"] = int(
+                        repair_diag.get("core_generic_segment_repair_used_raw_text_count") or 0
+                    )
+                    diagnostics["core_generic_segment_repair_used_template_count"] = int(
+                        repair_diag.get("core_generic_segment_repair_used_template_count") or 0
+                    )
+                    diagnostics["core_generic_segment_repair_skipped_negative_atom_count"] = int(
+                        repair_diag.get("core_generic_segment_repair_skipped_negative_atom_count") or 0
                     )
                     story_core = {
                         "core_version": "1.1",
