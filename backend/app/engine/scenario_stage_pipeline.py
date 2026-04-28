@@ -1127,6 +1127,7 @@ def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
         input_pkg.get("current_scenario_input_signature")
         or source_pkg.get("current_scenario_input_signature")
         or director_controls.get("current_scenario_input_signature")
+        or _safe_dict(input_pkg.get("input")).get("current_scenario_input_signature")
         or pkg.get("current_scenario_input_signature")
         or diagnostics.get("current_scenario_input_signature")
         or ""
