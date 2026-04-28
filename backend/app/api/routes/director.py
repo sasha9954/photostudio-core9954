@@ -651,7 +651,7 @@ def _is_clip_music_video_payload(payload: dict[str, Any]) -> bool:
         source.get("content_type"),
         source.get("contentType"),
     ).lower()
-    return mode_candidate == "clip" and content_type_candidate == "music_video"
+    return mode_candidate == "clip" or content_type_candidate == "music_video"
 
 
 def _ensure_clip_mode_contracts(
@@ -715,11 +715,8 @@ def _ensure_clip_mode_contracts(
         i2v_ratio = _safe_float(distribution.get("i2v_ratio") or answers.get("i2v_ratio"), 0.5)
         ia2v_ratio = _safe_float(distribution.get("ia2v_ratio") or answers.get("ia2v_ratio"), 0.5)
 
-    for key in ("route_balance", "clip_route_balance", "scene_distribution", "distribution_approved"):
-        if key in answers:
-            break
     user_approved = bool(distribution.get("user_approved")) or any(
-        key in answers for key in ("route_balance", "clip_route_balance", "scene_distribution", "distribution_approved")
+        key in answers for key in ("route_balance", "clip_route_balance", "scene_distribution")
     )
 
     distribution["user_approved"] = bool(user_approved)
@@ -750,23 +747,15 @@ def _ensure_clip_mode_contracts(
     prompt_policy["ia2v_prompt_focus"] = "performer, readable mouth, emotional eyes, subtle hands/shoulders, controlled camera"
     prompt_policy["i2v_prompt_focus"] = "story action, world, atmosphere, continuity"
 
-    clip_required_questions = {
-        "route balance",
-        "what ia2v means in this clip",
-        "what i2v means in this clip",
-        "where performance/lip-sync happens",
-        "what appears between performance scenes",
-        "intro plan",
-        "outro/final plan",
-        "required scenes",
-        "how connected refs should be used",
-    }
-    asked_texts = {
-        str(_safe_dict(question).get("label") or _safe_dict(question).get("text") or "").strip().lower()
-        for question in questions
-        if isinstance(question, dict)
-    }
-    asked_required = any(item in text for text in asked_texts for item in clip_required_questions)
+    package_distribution = _safe_dict(package.get("scene_distribution_contract"))
+    contract_distribution = _safe_dict(contract.get("scene_distribution_contract"))
+    asked_required = bool(
+        answers.get("route_balance")
+        or answers.get("clip_route_balance")
+        or answers.get("scene_distribution")
+        or package_distribution.get("user_approved")
+        or contract_distribution.get("user_approved")
+    )
 
     contract["mode_contract"] = mode_contract
     contract["clip_contract"] = clip_contract
@@ -782,6 +771,29 @@ def _ensure_clip_mode_contracts(
 
 
 def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
+    clip_mode_block = ""
+    if _is_clip_music_video_payload(payload):
+        clip_mode_block = """
+CLIP MODE (ОБЯЗАТЕЛЬНО):
+8) Режим клипа зафиксирован: mode=clip. Нельзя менять mode без явного подтверждения пользователя.
+9) Маршрут first_last запрещён. Разрешены только ia2v и i2v.
+10) ia2v = lip-sync/перформанс, у певца должен быть видим читаемый рот.
+11) i2v = сюжетные перебивки/воспоминания/действия/мир/атмосфера между перформансами.
+12) До done=true обязательно согласуй баланс маршрутов (route balance), если пользователь ещё не ответил.
+13) Обязательно задать (или подтвердить из ответов) клип-специфичные вопросы:
+    - баланс маршрутов (route balance),
+    - где происходит перформанс,
+    - что показывает i2v между перформансами,
+    - обязательные сцены,
+    - интро,
+    - аутро/финал,
+    - как использовать референсы.
+14) В director_package и director_contract обязательно включить:
+    - mode_contract,
+    - clip_contract,
+    - scene_distribution_contract,
+    - prompt_policy.
+""".strip()
     return f"""
 Ты AI Director V2 для видео-сториборда.
 
@@ -793,6 +805,7 @@ def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
 5) Если данных достаточно: phase=done и собери полный director_package/director_config/director_contract.
 6) Не переписывай narrative пользователя, не выдумывай несвязанных персонажей.
 7) Не добавляй LTX negative правила.
+{clip_mode_block}
 
 Схема phase=questions:
 {{
@@ -866,6 +879,25 @@ def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
 """.strip()
 
 
+def _clip_route_balance_question() -> dict[str, Any]:
+    return {
+        "id": "clip_route_balance",
+        "label": "Баланс сцен клипа",
+        "text": "Какой баланс сцен нужен для клипа?",
+        "type": "single_choice",
+        "options": [
+            {"value": "balanced_50_50", "label": "50/50: lip-sync и сюжетные i2v примерно поровну"},
+            {"value": "performance_heavy_70_30", "label": "Больше lip-sync/performance"},
+            {"value": "story_heavy_30_70", "label": "Больше истории/воспоминаний/i2v"},
+            {"value": "all_lipsync", "label": "Почти весь клип lip-sync"},
+            {"value": "ai_decides", "label": "AI сам решает по аудио и сюжету"},
+            {"value": "custom_counts", "label": "Задать вручную"},
+        ],
+        "required": True,
+        "applies_to": ["scenes", "audio", "final_video_prompt"],
+    }
+
+
 def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     phase = str(parsed.get("phase") or "questions").strip().lower()
     done = bool(parsed.get("done")) or phase == "done"
@@ -906,9 +938,29 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
 
     scene_distribution_contract = _safe_dict(director_package.get("scene_distribution_contract") or director_contract.get("scene_distribution_contract"))
     clip_distribution_present = bool(scene_distribution_contract)
+    clip_route_balance_approved = bool(
+        answers.get("route_balance")
+        or answers.get("clip_route_balance")
+        or answers.get("scene_distribution")
+        or _safe_dict(director_package.get("scene_distribution_contract")).get("user_approved")
+        or _safe_dict(director_contract.get("scene_distribution_contract")).get("user_approved")
+    )
     if is_clip_music_video and not bool(scene_distribution_contract.get("user_approved")) and not clip_questions_satisfied:
         done = False
         phase = "questions"
+    if is_clip_music_video and not clip_route_balance_approved:
+        done = False
+        phase = "questions"
+        has_balance_question = any(
+            str(_safe_dict(q).get("id") or "").strip() == "clip_route_balance"
+            for q in questions
+            if isinstance(q, dict)
+        )
+        if not has_balance_question:
+            questions = [_clip_route_balance_question(), *questions]
+
+    if not done and not questions:
+        questions = [_clip_route_balance_question()] if is_clip_music_video else questions
 
     diagnostics = {
         "director_v2": True,
