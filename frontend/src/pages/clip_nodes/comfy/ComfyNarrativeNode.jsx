@@ -636,10 +636,10 @@ export default function ComfyNarrativeNode({ id, data }) {
                   ? "Ошибка AI режиссёра"
                   : directorChatDone && directorSignatureMatchesCurrent
                     ? "Режиссура собрана"
-                    : (staleDirectorState || !directorSignatureMatchesCurrent)
-                      ? "Режиссура устарела"
-                      : normalizedQuestions.length > 0
-                        ? "Нужно ответить на вопросы"
+                    : normalizedQuestions.length > 0
+                      ? "Нужно ответить на вопросы"
+                      : (staleDirectorState || !directorSignatureMatchesCurrent)
+                        ? "Режиссура устарела"
                         : "Ожидание данных"}
               </div>
               {assistantMessage ? <div className="ai-director-message">{assistantMessage}</div> : null}
@@ -661,7 +661,9 @@ export default function ComfyNarrativeNode({ id, data }) {
                           <div className="ai-director-option-list">
                             {options.map((option, optionIndex) => {
                               const optionValue = String(option?.value ?? "").trim();
-                              const optionLabel = String(option?.label || optionValue || `Вариант ${optionIndex + 1}`).trim();
+                              const optionLabel = String(
+                                option?.label || option?.text || option?.title || optionValue || `Вариант ${optionIndex + 1}`
+                              ).trim();
                               const isActive = Array.isArray(qValue) ? qValue.includes(optionValue) : String(qValue || "") === optionValue;
                               return (
                                 <button
