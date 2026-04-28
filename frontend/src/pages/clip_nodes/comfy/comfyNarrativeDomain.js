@@ -1109,6 +1109,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const directorContract = state?.director_contract && typeof state.director_contract === "object"
     ? state.director_contract
     : (state?.directorContract && typeof state.directorContract === "object" ? state.directorContract : {});
+  const directorPackage = state?.director_package && typeof state.director_package === "object"
+    ? state.director_package
+    : (state?.directorPackage && typeof state.directorPackage === "object" ? state.directorPackage : {});
 
 
   const markStaleFrom = String(state?.markStaleFrom || "").trim();
@@ -1153,6 +1156,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     narrative_note: normalizeText(state?.aiNarrative) || narrativeDirective.directorNote,
     director_config: directorConfig,
     director_contract: directorContract,
+    director_package: directorPackage,
     director_controls: {
       contentType: safeContentType,
       format,
@@ -1188,6 +1192,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       creative_config: creativeConfig,
       director_config: directorConfig,
       director_contract: directorContract,
+      director_package: directorPackage,
     },
   };
 
@@ -1288,6 +1293,11 @@ export function buildScenarioStageManualPayload({
     : (source?.directorContract && typeof source.directorContract === "object"
       ? source.directorContract
       : (basePayload?.director_contract && typeof basePayload.director_contract === "object" ? basePayload.director_contract : {}));
+  const directorPackage = source?.director_package && typeof source.director_package === "object"
+    ? source.director_package
+    : (source?.directorPackage && typeof source.directorPackage === "object"
+      ? source.directorPackage
+      : (basePayload?.director_package && typeof basePayload.director_package === "object" ? basePayload.director_package : {}));
 
   const safeInput =
     stageStoryboardPackage?.input && typeof stageStoryboardPackage.input === "object"
@@ -1310,6 +1320,7 @@ export function buildScenarioStageManualPayload({
       : fallbackSource,
     ...(Object.keys(directorConfig || {}).length ? { director_config: directorConfig } : {}),
     ...(Object.keys(directorContract || {}).length ? { director_contract: directorContract } : {}),
+    ...(Object.keys(directorPackage || {}).length ? { director_package: directorPackage } : {}),
   };
 
   if (Object.keys(directorConfig || {}).length) {
@@ -1317,6 +1328,9 @@ export function buildScenarioStageManualPayload({
   }
   if (Object.keys(directorContract || {}).length) {
     stageStoryboardPackage.director_contract = directorContract;
+  }
+  if (Object.keys(directorPackage || {}).length) {
+    stageStoryboardPackage.director_package = directorPackage;
   }
 
   console.debug("[SCENARIO MANUAL DIRECTOR CONTRACT]", {
@@ -1374,6 +1388,7 @@ export function buildScenarioStageManualPayload({
     connected_context_summary: connectedContextSummary,
     director_config: directorConfig,
     director_contract: directorContract,
+    director_package: directorPackage,
     director_controls: {
       ...(basePayload?.director_controls && typeof basePayload.director_controls === "object" ? basePayload.director_controls : {}),
       ...(source?.director_controls && typeof source.director_controls === "object" ? source.director_controls : {}),
