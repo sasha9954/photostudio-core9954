@@ -958,6 +958,52 @@ export function resolveNarrativeSource(state = {}) {
   };
 }
 
+export function buildScenarioInputSignatureFromState(state = {}) {
+  const resolvedSource = resolveNarrativeSource(state);
+  const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
+  const connectedContextSummary = summarizeNarrativeConnectedContext({ ...state, resolvedSource });
+  const narrativeDirective = resolveNarrativeDirectiveFields(state);
+  const audioContextRaw = resolveScenarioAudioContext(connectedInputs, resolvedSource);
+  const persistedAudioDurationSec = resolveAudioDurationFallback(state);
+  const effectiveAudioDurationSec = toAudioDurationSec(audioContextRaw.audioDurationSec || persistedAudioDurationSec);
+  const safeContentType = getSafeNarrativeContentType(state?.contentType, "music_video");
+  const directorMode = resolveDirectorMode(safeContentType, "clip");
+  const format = NARRATIVE_FORMAT_OPTIONS.includes(String(state?.format || "").trim())
+    ? String(state.format).trim()
+    : "9:16";
+  const routeStrategyMode = String(state?.routeStrategyMode || "auto").trim().toLowerCase();
+  const safeRouteStrategyMode = ["auto", "preset", "custom_counts"].includes(routeStrategyMode) ? routeStrategyMode : "auto";
+  const routePreset = String(state?.routeStrategyPreset || "").trim();
+  const sourceRouteTargets = state?.routeTargetsPerBlock && typeof state.routeTargetsPerBlock === "object"
+    ? state.routeTargetsPerBlock
+    : {};
+  const presetTargets = ROUTE_STRATEGY_PRESET_MAP[routePreset] || ROUTE_STRATEGY_PRESET_MAP.balanced_50_25_25;
+  const routeTargetsPerBlock = safeRouteStrategyMode === "auto"
+    ? {}
+    : {
+      i2v: Math.max(0, Number(sourceRouteTargets?.i2v ?? presetTargets.i2v) || 0),
+      ia2v: Math.max(0, Number(sourceRouteTargets?.ia2v ?? presetTargets.ia2v) || 0),
+      first_last: Math.max(0, Number(sourceRouteTargets?.first_last ?? presetTargets.first_last) || 0),
+    };
+  return JSON.stringify({
+    note: narrativeDirective.directorNote || narrativeDirective.note || narrativeDirective.storyText || narrativeDirective.text || "",
+    activeSourceMode: resolvedSource?.mode || null,
+    audioUrl: normalizeText(audioContextRaw?.url || resolvedSource?.value),
+    audioDurationSec: effectiveAudioDurationSec,
+    refsByRole: connectedContextSummary?.refsPresentByRole || {},
+    connectedRefsByRole: connectedContextSummary?.connectedRefsPresentByRole || {},
+    refsPresentByRole: connectedContextSummary?.refsPresentByRole || {},
+    directorMode: directorMode || "clip",
+    contentType: safeContentType,
+    format,
+    routeStrategy: {
+      mode: safeRouteStrategyMode,
+      preset: routePreset,
+      targets: routeTargetsPerBlock,
+    },
+  });
+}
+
 export function buildScenarioDirectorRequestPayload(state = {}) {
   const resolvedSource = resolveNarrativeSource(state);
   const sourceValue = normalizeText(resolvedSource.value);
@@ -1138,6 +1184,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
 
   const markStaleFrom = String(state?.markStaleFrom || "").trim();
   const staleReason = String(state?.staleReason || "").trim();
+  const currentScenarioInputSignature = buildScenarioInputSignatureFromState(state);
+
   const payload = {
     mode: isMusicVideo ? "clip_pipeline" : "oneshot",
     director_mode: directorMode,
@@ -1152,7 +1200,8 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       audioDurationSec: audioContext.audioDurationSec,
       mimeType: audioContext.mimeType,
       fileName: audioContext.fileName,
-      metadata: {
+      current_scenario_input_signature: currentScenarioInputSignature,
+    metadata: {
         origin: normalizeText(resolvedSource.origin) || "connected",
         label: normalizeText(resolvedSource.label),
         connectedHandle: Object.entries(connectedInputs).find(([, value]) => value && normalizeText(value.value) === sourceValue)?.[0] || "",
@@ -1184,6 +1233,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       format,
       preferAudioOverText,
       creative_config: creativeConfig,
+      current_scenario_input_signature: currentScenarioInputSignature,
     },
     creative_config: creativeConfig,
     connected_context_summary: connectedContextSummary,
