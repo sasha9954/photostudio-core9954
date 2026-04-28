@@ -32,6 +32,25 @@ const ROUTE_STRATEGY_PRESETS = [
 ];
 const DIRECTOR_ANSWER_LABELS = {};
 
+function normalizeDirectorQuestion(raw, index = 0) {
+  const q = raw && typeof raw === "object" ? raw : {};
+  const id = String(q.id || q.question_id || q.key || `question_${index + 1}`).trim();
+  const label = String(q.label || q.question_text || q.text || q.prompt || "").trim();
+  const type = String(q.type || q.question_type || "free_text").trim();
+  const options = Array.isArray(q.options) ? q.options : [];
+  return {
+    ...q,
+    id,
+    label,
+    type,
+    options,
+    required: q.required !== false,
+    expected_answer_type: q.expected_answer_type || q.expectedAnswerType || "",
+    min_value: q.min_value ?? q.minValue ?? null,
+    max_value: q.max_value ?? q.maxValue ?? null,
+  };
+}
+
 function stripDirectorDiagnostics(diagnostics) {
   if (!diagnostics || typeof diagnostics !== "object") return {};
   return Object.fromEntries(
@@ -127,6 +146,26 @@ export default function ComfyNarrativeNode({ id, data }) {
         : "Подключён внешний видеофайл"
     : "Подключите один source-of-truth: аудио, видеофайл или ссылку на видео.";
   const baseDiagnostics = useMemo(() => stripDirectorDiagnostics(data?.diagnostics), [data?.diagnostics]);
+  const normalizedQuestions = useMemo(
+    () => (Array.isArray(dynamicQuestions) ? dynamicQuestions.map(normalizeDirectorQuestion) : []),
+    [dynamicQuestions]
+  );
+  const requiredQuestions = useMemo(
+    () => normalizedQuestions.filter((q) => q.required && q.id),
+    [normalizedQuestions]
+  );
+
+  const isQuestionAnswered = (question, candidateAnswers) => {
+    const q = question && typeof question === "object" ? question : {};
+    const type = String(q.type || "free_text").trim().toLowerCase();
+    const value = candidateAnswers?.[q.id];
+    if (type === "single_choice") return Boolean(String(value || "").trim());
+    if (type === "multiple_choice" || type === "multi_choice") return Array.isArray(value) && value.length > 0;
+    return typeof value === "string" ? Boolean(value.trim()) : Boolean(value);
+  };
+  const requiredAnsweredCount = requiredQuestions.filter((q) => isQuestionAnswered(q, answers)).length;
+  const unansweredRequiredQuestions = requiredQuestions.filter((q) => !isQuestionAnswered(q, answers));
+  const hasUnansweredRequiredQuestions = unansweredRequiredQuestions.length > 0;
 
   const buildDirectorResetPatch = ({ clearScenarioText = false } = {}) => ({
     assistantMessage: "",
@@ -317,6 +356,9 @@ export default function ComfyNarrativeNode({ id, data }) {
         ...(canReuseDirectorArtifacts && answers && typeof answers === "object" ? answers : {}),
         ...(answerPatch && typeof answerPatch === "object" ? answerPatch : {}),
       };
+      const submittedAnswers = Object.fromEntries(
+        Object.entries(nextAnswers || {}).filter(([key]) => Boolean(String(key || "").trim()))
+      );
       const body = {
         ...directorPayload,
         mode: "director_v2",
@@ -333,7 +375,7 @@ export default function ComfyNarrativeNode({ id, data }) {
         },
         routeTargetsPerBlock,
         refs_by_role: connectedContext?.refsByRole || {},
-        directorAnswers: isManualInit ? {} : nextAnswers,
+        directorAnswers: isManualInit ? {} : submittedAnswers,
         director_config: isManualInit ? {} : (data?.director_config && typeof data.director_config === "object" ? data.director_config : {}),
         director_contract: canReuseDirectorArtifacts && data?.director_contract && typeof data.director_contract === "object" ? data.director_contract : {},
         director_package: canReuseDirectorArtifacts && data?.director_package && typeof data.director_package === "object" ? data.director_package : {},
@@ -357,6 +399,14 @@ export default function ComfyNarrativeNode({ id, data }) {
         existingDirectorPackage: Boolean(body?.director_package && Object.keys(body.director_package).length),
         full_node_payload_sanitized: isManualInit,
       });
+      if (!isManualInit) {
+        console.debug("[AI DIRECTOR V2 ANSWERS]", {
+          normalized_questions: normalizedQuestions,
+          submitted_answers: submittedAnswers,
+          answer_keys: Object.keys(submittedAnswers),
+          unanswered_required_questions: unansweredRequiredQuestions,
+        });
+      }
       const json = await fetchJson("/api/director/chat", {
         method: "POST",
         body,
@@ -424,12 +474,17 @@ export default function ComfyNarrativeNode({ id, data }) {
         throw new Error("AI Director вернул пустой список вопросов.");
       }
     } catch (error) {
-      setAiError(String(error?.message || "AI Director failed"));
+      const geminiRequestFailed = String(error?.message || "").includes("gemini_request_failed");
+      setAiError(geminiRequestFailed ? "Gemini временно не ответил. Ответы не потеряны, можно повторить отправку." : String(error?.message || "AI Director failed"));
       if (allowFallback) {
-        setAssistantMessage("AI Director временно недоступен. Можно продолжить вручную.");
-        setDynamicQuestions([
-          { id: "fallback_director_note", label: "Опишите ключевые режиссёрские решения в свободной форме.", type: "free_text", required: true },
-        ]);
+        if (geminiRequestFailed && phase === "answer") {
+          setAssistantMessage("Gemini временно не ответил. Ответы не потеряны, можно повторить отправку.");
+        } else {
+          setAssistantMessage("AI Director временно недоступен. Можно продолжить вручную.");
+          setDynamicQuestions([
+            { id: "fallback_director_note", label: "Опишите ключевые режиссёрские решения в свободной форме.", type: "free_text", required: true },
+          ]);
+        }
       }
     } finally {
       setAiLoading(false);
@@ -574,70 +629,92 @@ export default function ComfyNarrativeNode({ id, data }) {
                 </button>
               </div>
             ) : null}
-            <section className="clipSB_narrativeSection">
+            <section className="clipSB_narrativeSection ai-director-panel">
               <div className="clipSB_brainLabel">AI режиссёр</div>
-              {assistantMessage ? <div className="clipSB_narrativeEmptyHint">{assistantMessage}</div> : null}
-              {(staleDirectorState || !directorSignatureMatchesCurrent) ? <div className="clipSB_narrativeEmptyHint">⚠️ Режиссура устарела — сформируйте заново.</div> : null}
-              {dynamicQuestions.length > 0 ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {dynamicQuestions.map((question) => {
-                    const type = String(question?.type || "free_text").trim();
+              <div className="ai-director-status">
+                {aiError
+                  ? "Ошибка AI режиссёра"
+                  : directorChatDone && directorSignatureMatchesCurrent
+                    ? "Режиссура собрана"
+                    : (staleDirectorState || !directorSignatureMatchesCurrent)
+                      ? "Режиссура устарела"
+                      : normalizedQuestions.length > 0
+                        ? "Нужно ответить на вопросы"
+                        : "Ожидание данных"}
+              </div>
+              {assistantMessage ? <div className="ai-director-message">{assistantMessage}</div> : null}
+              {normalizedQuestions.length > 0 ? (
+                <div className="ai-director-questions">
+                  {normalizedQuestions.map((question, index) => {
+                    const type = String(question?.type || "free_text").trim().toLowerCase();
                     const qid = String(question?.id || "").trim();
-                    const qValue = answers?.[qid];
+                    const qValue = qid ? answers?.[qid] : undefined;
                     const options = Array.isArray(question?.options) ? question.options : [];
+                    const questionLabel = String(question?.label || "").trim();
+                    if (!questionLabel) console.warn("[AI DIRECTOR] Missing question label/text", question);
+                    if (!qid) return null;
                     return (
-                      <div key={qid || question?.label} className="director-question">
-                        <div className="question-title">{String(question?.label || qid || "Вопрос AI режиссёра")}</div>
-                        {type === "free_text" ? (
-                          <textarea
-                            className="clipSB_textarea clipSB_narrativeTextarea clipSB_narrativeTextarea--compact"
-                            value={typeof qValue === "string" ? qValue : ""}
-                            onChange={(e) => setAnswers((prev) => ({ ...(prev || {}), [qid]: e.target.value }))}
-                            rows={2}
-                            disabled={aiLoading || directorChatDone}
-                          />
-                        ) : (
-                          <div className="clipSB_narrativeContextChips">
-                            {options.map((option) => {
-                              const optionValue = String(option?.value || "").trim();
+                      <div key={`${qid}-${index}`} className="ai-director-question-card">
+                        <div className="ai-director-question-meta">Вопрос {index + 1} из {normalizedQuestions.length}{question?.required ? " • обязательно" : ""}</div>
+                        <div className="ai-director-question-label">{questionLabel || "Вопрос без текста. Проверьте формат question_text/label."}</div>
+                        {(type === "single_choice" || type === "multiple_choice" || type === "multi_choice") ? (
+                          <div className="ai-director-option-list">
+                            {options.map((option, optionIndex) => {
+                              const optionValue = String(option?.value ?? "").trim();
+                              const optionLabel = String(option?.label || optionValue || `Вариант ${optionIndex + 1}`).trim();
                               const isActive = Array.isArray(qValue) ? qValue.includes(optionValue) : String(qValue || "") === optionValue;
                               return (
                                 <button
-                                  key={`${qid}-${optionValue}`}
+                                  key={`${qid}-${optionValue}-${optionIndex}`}
                                   type="button"
-                                  className={`clipSB_narrativeContextChip ${isActive ? "isReady" : ""}`.trim()}
+                                  className={`ai-director-option-card ${isActive ? "is-selected" : ""}`.trim()}
                                   onClick={() => setAnswers((prev) => {
                                     const previous = prev && typeof prev === "object" ? prev : {};
-                                    if (type === "multi_choice") {
+                                    if (type === "multiple_choice" || type === "multi_choice") {
                                       const prevArr = Array.isArray(previous[qid]) ? previous[qid] : [];
-                                      return {
-                                        ...previous,
-                                        [qid]: prevArr.includes(optionValue) ? prevArr.filter((v) => v !== optionValue) : [...prevArr, optionValue],
-                                      };
+                                      return { ...previous, [qid]: prevArr.includes(optionValue) ? prevArr.filter((v) => v !== optionValue) : [...prevArr, optionValue] };
                                     }
                                     return { ...previous, [qid]: optionValue };
                                   })}
                                   disabled={aiLoading || directorChatDone}
                                 >
-                                  {String(option?.label || optionValue)}
+                                  {optionLabel}
                                 </button>
                               );
                             })}
                           </div>
+                        ) : (
+                          <>
+                            <textarea
+                              className="clipSB_textarea ai-director-textarea"
+                              value={typeof qValue === "string" ? qValue : ""}
+                              onChange={(e) => setAnswers((prev) => ({ ...(prev || {}), [qid]: e.target.value }))}
+                              rows={3}
+                              disabled={aiLoading || directorChatDone}
+                            />
+                            {String(question?.expected_answer_type || "").toLowerCase() === "integer" ? (
+                              <div className="clipSB_narrativeEmptyHint">
+                                Введите число{question?.min_value != null || question?.max_value != null ? ` от ${question?.min_value ?? "−∞"} до ${question?.max_value ?? "+∞"}` : ""}.
+                              </div>
+                            ) : null}
+                          </>
                         )}
                       </div>
                     );
                   })}
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button
-                      type="button"
-                      className="clipSB_btn clipSB_btnPrimary"
-                      onClick={() => runDirectorChat({ phase: "answer", answerPatch: answers })}
-                      disabled={aiLoading || directorChatDone}
-                    >
-                      Отправить ответы
-                    </button>
-                  </div>
+                </div>
+              ) : null}
+              {normalizedQuestions.length > 0 ? (
+                <div className="ai-director-submit-row">
+                  <button
+                    type="button"
+                    className="clipSB_btn clipSB_btnPrimary"
+                    onClick={() => runDirectorChat({ phase: "answer", answerPatch: answers })}
+                    disabled={aiLoading || hasUnansweredRequiredQuestions}
+                  >
+                    Отправить ответы
+                  </button>
+                  <div className="clipSB_narrativeEmptyHint">Заполнено {requiredAnsweredCount} из {requiredQuestions.length} обязательных вопросов</div>
                 </div>
               ) : null}
               {directorChatDone && directorSignatureMatchesCurrent ? (
