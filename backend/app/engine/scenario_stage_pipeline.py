@@ -3614,6 +3614,294 @@ def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _normalize_role_usage_contract(director_contract: dict[str, Any], package: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    contract = _safe_dict(director_contract)
+    package_safe = _safe_dict(package)
+    input_pkg = _safe_dict(package_safe.get("input"))
+    role_usage_source = _safe_dict(contract.get("role_usage_contract"))
+    character_contract = _safe_dict(contract.get("character_contract"))
+    ref_usage = _safe_dict(_safe_dict(contract.get("reference_usage_contract")).get("character_usage"))
+    refs_inventory = _safe_dict(package_safe.get("refs_inventory"))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    refs_present = _safe_dict(connected_summary.get("refsPresentByRole"))
+    connected_refs = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
+
+    role_ids: set[str] = set()
+    for source_map in (role_usage_source, character_contract, ref_usage, refs_present, connected_refs):
+        for key in _safe_dict(source_map).keys():
+            token = _canonical_subject_id(key)
+            if token and token.startswith("character_"):
+                role_ids.add(token)
+    for key in _safe_dict(refs_inventory).keys():
+        token = str(key or "").strip().lower()
+        if token.startswith("ref_character_"):
+            role_ids.add(token.replace("ref_", "", 1))
+
+    def _normalize_routes(value: Any) -> list[str]:
+        if isinstance(value, str):
+            value = [chunk.strip() for chunk in re.split(r"[,;/|]", value) if chunk.strip()]
+        routes: list[str] = []
+        for item in _safe_list(value):
+            route = _to_director_route(item)
+            if route and route not in routes:
+                routes.append(route)
+        return routes
+
+    def _read_nullable_bool(*values: Any) -> bool | None:
+        for value in values:
+            if isinstance(value, bool):
+                return value
+            token = str(value or "").strip().lower()
+            if token in {"true", "1", "yes", "required"}:
+                return True
+            if token in {"false", "0", "no", "none", "not_required"}:
+                return False
+        return None
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for role_id in sorted(role_ids):
+        role_row = _safe_dict(role_usage_source.get(role_id))
+        char_row = _safe_dict(character_contract.get(role_id))
+        function = str(role_row.get("function") or char_row.get("function") or char_row.get("story_role") or "").strip().lower()
+        routes = _normalize_routes(role_row.get("routes") or char_row.get("routes"))
+        preferred_route = _to_director_route(role_row.get("preferred_route") or char_row.get("preferred_route"))
+        if preferred_route and preferred_route not in routes:
+            routes.append(preferred_route)
+        ref_usage_token = str(ref_usage.get(role_id) or "").strip().lower()
+        reference_required = _read_nullable_bool(
+            role_row.get("reference_required"),
+            role_row.get("visual_reference_required"),
+            char_row.get("reference_required"),
+            char_row.get("visual_reference_required"),
+        )
+        if ref_usage_token == "no_reference_needed":
+            reference_required = False
+        if _scene_bool(role_row.get("no_reference_needed")) or _scene_bool(char_row.get("no_reference_needed")):
+            reference_required = False
+        if _scene_bool(role_row.get("reference_required")):
+            reference_required = True
+        identity_mode = str(role_row.get("identity_mode") or char_row.get("identity_mode") or "").strip().lower()
+        story_role = str(char_row.get("story_role") or role_row.get("story_role") or "").strip().lower()
+        if not identity_mode and story_role == "episodic":
+            identity_mode = "episodic"
+        max_scene_count_raw = role_row.get("max_scene_count")
+        if max_scene_count_raw in {None, ""}:
+            max_scene_count_raw = char_row.get("max_scene_count")
+        try:
+            max_scene_count = int(max_scene_count_raw) if max_scene_count_raw not in {None, ""} else None
+        except (TypeError, ValueError):
+            max_scene_count = None
+        if story_role == "episodic" and reference_required is False and max_scene_count is None:
+            max_scene_count = 1
+        has_reference_present = any(
+            (
+                _scene_has_real_ref(_safe_list(refs_present.get(role_id))),
+                _scene_has_real_ref(_safe_list(connected_refs.get(role_id))),
+                _scene_has_real_ref(_safe_dict(refs_inventory.get(f"ref_{role_id}")).get("refs")),
+                _scene_has_real_ref(_safe_dict(refs_inventory.get(f"ref_{role_id}")).get("value")),
+                _scene_has_real_ref(_safe_dict(refs_inventory.get(f"ref_{role_id}")).get("count")),
+            )
+        )
+        normalized[role_id] = {
+            "role_id": role_id,
+            "function": function,
+            "routes": routes,
+            "reference_required": reference_required,
+            "identity_mode": identity_mode if identity_mode in {"strict", "loose", "episodic"} else "",
+            "max_scene_count": max_scene_count,
+            "has_reference_present": bool(has_reference_present),
+        }
+    return normalized
+
+
+def _extract_scene_requirements_from_contract(director_contract: dict[str, Any], package: dict[str, Any]) -> list[dict[str, Any]]:
+    _ = package
+    contract = _safe_dict(director_contract)
+    requirement_sources = (
+        contract.get("scene_requirements"),
+        _safe_dict(contract.get("clip_contract")).get("scene_requirements"),
+        _safe_dict(contract.get("scene_contract")).get("scene_requirements"),
+    )
+    requirements_raw: list[Any] = []
+    for source in requirement_sources:
+        requirements_raw.extend(_safe_list(source))
+
+    def _normalize_expected_roles(value: Any) -> list[str]:
+        roles: list[str] = []
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if isinstance(item, dict):
+                item = _safe_dict(item).get("role_id") or _safe_dict(item).get("id") or _safe_dict(item).get("role")
+            role = _canonical_subject_id(item)
+            if role and role not in roles:
+                roles.append(role)
+        return roles
+
+    def _normalize_expected_role_functions(value: Any) -> list[str]:
+        functions: list[str] = []
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            token = str(item or "").strip().lower()
+            if token and token not in functions:
+                functions.append(token)
+        return functions
+
+    normalized: list[dict[str, Any]] = []
+    for idx, row in enumerate(requirements_raw, start=1):
+        row_safe = _safe_dict(row)
+        requirement_id = str(row_safe.get("id") or row_safe.get("requirement_id") or f"scene_requirement_{idx:02d}").strip()
+        expected_route = _to_director_route(
+            row_safe.get("expected_route") or row_safe.get("route") or row_safe.get("required_route")
+        )
+        expected_roles = _normalize_expected_roles(
+            row_safe.get("expected_roles") or row_safe.get("roles") or row_safe.get("required_roles")
+        )
+        expected_role_functions = _normalize_expected_role_functions(
+            row_safe.get("expected_role_functions") or row_safe.get("role_functions")
+        )
+        expected_world = str(
+            row_safe.get("expected_world") or row_safe.get("world") or row_safe.get("required_world") or ""
+        ).strip().lower()
+        strict = _scene_bool(row_safe.get("strict") or row_safe.get("required"))
+        source_text = str(row_safe.get("source_text") or row_safe.get("text") or row_safe.get("description") or "").strip()
+        has_structured_expectation = bool(expected_route or expected_roles or expected_role_functions or expected_world)
+        normalized.append(
+            {
+                "id": requirement_id,
+                "expected_route": expected_route,
+                "expected_roles": expected_roles,
+                "expected_role_functions": expected_role_functions,
+                "expected_world": expected_world,
+                "source_text": source_text,
+                "strict": strict,
+                "has_structured_expectation": has_structured_expectation,
+            }
+        )
+
+    if normalized:
+        return normalized
+
+    fallback_sources = (
+        _safe_dict(contract.get("memory_contract")).get("mandatory_scenes"),
+        _safe_dict(contract.get("clip_contract")).get("mandatory_scenes"),
+        _safe_dict(contract.get("scene_contract")).get("mandatory_scenes"),
+    )
+    fallback_rows: list[str] = []
+    for source in fallback_sources:
+        fallback_rows.extend(str(item).strip() for item in _safe_list(source) if str(item).strip())
+    deduped_rows = list(dict.fromkeys(fallback_rows))
+    fallback_requirements: list[dict[str, Any]] = []
+    for idx, source_text in enumerate(deduped_rows, start=1):
+        expected_route = ""
+        lowered = str(source_text).strip().lower()
+        if lowered.startswith("ia2v:"):
+            expected_route = "ia2v"
+        elif lowered.startswith("i2v:"):
+            expected_route = "i2v"
+        fallback_requirements.append(
+            {
+                "id": f"mandatory_scene_{idx:02d}",
+                "expected_route": expected_route,
+                "expected_roles": [],
+                "expected_role_functions": [],
+                "expected_world": "",
+                "source_text": source_text,
+                "strict": False,
+                "has_structured_expectation": bool(expected_route),
+            }
+        )
+    return fallback_requirements
+
+
+def _scene_satisfies_requirement(
+    scene_row: dict[str, Any],
+    requirement: dict[str, Any],
+    role_usage_contract: dict[str, dict[str, Any]],
+    route_semantics: dict[str, Any],
+) -> bool:
+    _ = route_semantics
+    row = _safe_dict(scene_row)
+    req = _safe_dict(requirement)
+    expected_route = _to_director_route(req.get("expected_route"))
+    expected_roles = [_canonical_subject_id(value) for value in _safe_list(req.get("expected_roles")) if _canonical_subject_id(value)]
+    expected_role_functions = [str(value or "").strip().lower() for value in _safe_list(req.get("expected_role_functions")) if str(value or "").strip()]
+    expected_world = str(req.get("expected_world") or "").strip().lower()
+    strict = _scene_bool(req.get("strict"))
+    has_structured_expectation = bool(req.get("has_structured_expectation") or expected_route or expected_roles or expected_role_functions or expected_world)
+
+    if not has_structured_expectation:
+        return not strict
+
+    route = _to_director_route(row.get("route"))
+    if expected_route and route != expected_route:
+        return False
+
+    role_tokens: set[str] = set()
+    for field in ("primary_role", "visual_focus_role", "speaker_role"):
+        token = _canonical_subject_id(row.get(field))
+        if token:
+            role_tokens.add(token)
+    for field in ("secondary_roles", "active_roles", "sceneActiveRoles", "refsUsed"):
+        for item in _safe_list(row.get(field)):
+            token = _canonical_subject_id(_safe_dict(item).get("role_id") if isinstance(item, dict) else item)
+            if token:
+                role_tokens.add(token)
+    if expected_roles and not all(role in role_tokens for role in expected_roles):
+        return False
+
+    if expected_role_functions:
+        scene_functions: set[str] = set()
+        for role in role_tokens:
+            role_row = _safe_dict(role_usage_contract.get(role))
+            token = str(role_row.get("function") or "").strip().lower()
+            if token:
+                scene_functions.add(token)
+        if not all(func in scene_functions for func in expected_role_functions):
+            return False
+
+    if expected_world:
+        world_candidates = [
+            str(row.get("director_required_world") or "").strip().lower(),
+            str(row.get("route_visual_directive") or "").strip().lower(),
+        ]
+        if isinstance(row.get("route_visual_directive"), dict):
+            world_candidates.append(str(_safe_dict(row.get("route_visual_directive")).get("world") or "").strip().lower())
+        if expected_world not in [candidate for candidate in world_candidates if candidate]:
+            return False
+    return True
+
+
+def _count_requirement_coverage(
+    scene_plan: dict[str, Any],
+    requirements: list[dict[str, Any]],
+    role_usage_contract: dict[str, dict[str, Any]],
+    route_semantics: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    scene_rows = _scene_plan_rows_for_validation(scene_plan)
+    coverage: dict[str, dict[str, Any]] = {}
+    for requirement in requirements:
+        req = _safe_dict(requirement)
+        req_id = str(req.get("id") or "").strip()
+        if not req_id:
+            continue
+        matching_scene_indexes: list[int] = []
+        for idx, row in enumerate(scene_rows, start=1):
+            if _scene_satisfies_requirement(_safe_dict(row), req, role_usage_contract, route_semantics):
+                matching_scene_indexes.append(idx)
+        coverage[req_id] = {
+            "covered": bool(matching_scene_indexes),
+            "matching_scene_indexes": matching_scene_indexes,
+            "match_count": len(matching_scene_indexes),
+            "strict": _scene_bool(req.get("strict")),
+            "has_structured_expectation": bool(req.get("has_structured_expectation")),
+            "expected_route": str(req.get("expected_route") or ""),
+            "expected_roles": _safe_list(req.get("expected_roles")),
+            "expected_role_functions": _safe_list(req.get("expected_role_functions")),
+            "source_text": str(req.get("source_text") or ""),
+        }
+    return coverage
+
+
 def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict[str, Any]) -> tuple[bool, list[str]]:
     if not _is_clip_mode_package(package):
         return True, []
@@ -3642,82 +3930,115 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
             if int(route_counts.get(route_name) or 0) != int(target_count):
                 errors.append(f"hard_budget_{route_name}:{int(route_counts.get(route_name) or 0)}!={int(target_count)}")
 
-    mandatory_beats = [
-        str(item).strip().lower()
-        for item in _safe_list(_safe_dict(director_contract.get("memory_contract")).get("mandatory_scenes"))
-        + _safe_list(_safe_dict(director_contract.get("clip_contract")).get("mandatory_scenes"))
-        if str(item).strip()
+    route_semantics = _safe_dict(director_contract.get("route_semantics"))
+    role_usage_contract = _normalize_role_usage_contract(director_contract, package)
+    requirements = _extract_scene_requirements_from_contract(director_contract, package)
+    requirement_coverage = _count_requirement_coverage(scene_plan, requirements, role_usage_contract, route_semantics)
+    missing_requirement_ids = [
+        str(req.get("id") or "").strip()
+        for req in requirements
+        if str(req.get("id") or "").strip()
+        and bool(req.get("has_structured_expectation"))
+        and (
+            _scene_bool(req.get("strict"))
+            or req.get("expected_route")
+            or _safe_list(req.get("expected_roles"))
+            or _safe_list(req.get("expected_role_functions"))
+            or str(req.get("expected_world") or "").strip()
+        )
+        and not bool(_safe_dict(requirement_coverage.get(str(req.get("id") or "").strip())).get("covered"))
     ]
-    mandatory_categories = _extract_memory_beat_categories(mandatory_beats)
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_plan_validation_mode"] = "contract_driven" if requirements else "legacy_category_keywords"
+    diagnostics["scene_plan_contract_requirements"] = requirements
+    diagnostics["scene_plan_contract_requirement_coverage"] = requirement_coverage
+    diagnostics["scene_plan_missing_requirement_ids"] = missing_requirement_ids
+    diagnostics["scene_plan_role_usage_contract"] = role_usage_contract
+    diagnostics["scene_plan_hardcoded_story_keyword_validation_disabled"] = bool(requirements)
+    package["diagnostics"] = diagnostics
+    for req_id in missing_requirement_ids:
+        errors.append(f"scene_requirement_missing:{req_id}")
+
+    if not requirements:
+        mandatory_beats = [
+            str(item).strip().lower()
+            for item in _safe_list(_safe_dict(director_contract.get("memory_contract")).get("mandatory_scenes"))
+            + _safe_list(_safe_dict(director_contract.get("clip_contract")).get("mandatory_scenes"))
+            if str(item).strip()
+        ]
+        mandatory_categories = _extract_memory_beat_categories(mandatory_beats)
+        i2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"]
+        ia2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"]
+        i2v_blob = " ".join(json.dumps(row, ensure_ascii=False).lower() for row in i2v_rows)
+        ia2v_blob = " ".join(json.dumps(row, ensure_ascii=False).lower() for row in ia2v_rows)
+        covered_categories: set[str] = set()
+        for category, tokens in mandatory_categories.items():
+            category_route_expectation = "route_neutral"
+            if category in {"present_performance"}:
+                category_route_expectation = "ia2v_preferred"
+            elif category in {
+                "past_self_memory",
+                "youth_or_childhood",
+                "home_city_memory",
+                "romantic_memory",
+                "object_or_symbol_memory",
+                "family_memory",
+                "loss_or_regret",
+            }:
+                category_route_expectation = "i2v_preferred"
+            candidate_blob = i2v_blob if category_route_expectation == "i2v_preferred" else ia2v_blob if category_route_expectation == "ia2v_preferred" else f"{i2v_blob} {ia2v_blob}"
+            if any(token in candidate_blob for token in tokens):
+                covered_categories.add(category)
+        missing_categories = [category for category in mandatory_categories.keys() if category not in covered_categories]
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["scene_plan_mandatory_memory_beat_categories"] = list(mandatory_categories.keys())
+        diagnostics["scene_plan_mandatory_memory_beat_missing_categories"] = list(missing_categories)
+        package["diagnostics"] = diagnostics
+        for category in missing_categories:
+            errors.append(f"mandatory_memory_beat_category_missing:{category}")
+
     i2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "i2v"]
     ia2v_rows = [row for row in scene_rows if str(_safe_dict(row).get("route") or "").strip().lower() == "ia2v"]
-    i2v_blob = " ".join(json.dumps(row, ensure_ascii=False).lower() for row in i2v_rows)
-    ia2v_blob = " ".join(json.dumps(row, ensure_ascii=False).lower() for row in ia2v_rows)
-    covered_categories: set[str] = set()
-    for category, tokens in mandatory_categories.items():
-        category_route_expectation = "route_neutral"
-        if category in {"present_performance"}:
-            category_route_expectation = "ia2v_preferred"
-        elif category in {
-            "past_self_memory",
-            "youth_or_childhood",
-            "home_city_memory",
-            "romantic_memory",
-            "object_or_symbol_memory",
-            "family_memory",
-            "loss_or_regret",
-        }:
-            category_route_expectation = "i2v_preferred"
-        candidate_blob = i2v_blob if category_route_expectation == "i2v_preferred" else ia2v_blob if category_route_expectation == "ia2v_preferred" else f"{i2v_blob} {ia2v_blob}"
-        if any(token in candidate_blob for token in tokens):
-            covered_categories.add(category)
-    missing_categories = [category for category in mandatory_categories.keys() if category not in covered_categories]
-    diagnostics = _safe_dict(package.get("diagnostics"))
-    diagnostics["scene_plan_mandatory_memory_beat_categories"] = list(mandatory_categories.keys())
-    diagnostics["scene_plan_mandatory_memory_beat_missing_categories"] = list(missing_categories)
-    package["diagnostics"] = diagnostics
-    for category in missing_categories:
-        errors.append(f"mandatory_memory_beat_category_missing:{category}")
-
-    char3_unreferenced_episodic = _scene_plan_character_3_unreferenced_episodic_visual_extra(package)
-    char3_usage_scene_count = 0
-    def _scene_row_role_token(value: Any) -> str:
+    role_usage_scene_count: dict[str, int] = {}
+    def _scene_row_role_tokens(value: Any) -> list[str]:
         if isinstance(value, dict):
             value_safe = _safe_dict(value)
-            for key in ("role_id", "id", "role", "entity_id"):
-                token = _canonical_subject_id(value_safe.get(key))
-                if token:
-                    return token
-            return ""
-        return _canonical_subject_id(value)
+            token = _canonical_subject_id(
+                value_safe.get("role_id") or value_safe.get("id") or value_safe.get("role") or value_safe.get("entity_id")
+            )
+            return [token] if token else []
+        if isinstance(value, list):
+            tokens: list[str] = []
+            for item in value:
+                for token in _scene_row_role_tokens(item):
+                    if token and token not in tokens:
+                        tokens.append(token)
+            return tokens
+        token = _canonical_subject_id(value)
+        return [token] if token else []
 
     for row in scene_rows:
         row_safe = _safe_dict(row)
-        role_tokens: list[str] = [
-            _scene_row_role_token(row_safe.get("primary_role")),
-            _scene_row_role_token(row_safe.get("visual_focus_role")),
-        ]
+        role_tokens: list[str] = []
+        role_tokens.extend(_scene_row_role_tokens(row_safe.get("primary_role")))
+        role_tokens.extend(_scene_row_role_tokens(row_safe.get("visual_focus_role")))
+        role_tokens.extend(_scene_row_role_tokens(row_safe.get("speaker_role")))
         for field in ("secondary_roles", "refsUsed", "active_roles", "sceneActiveRoles"):
-            for item in _safe_list(row_safe.get(field)):
-                token = _scene_row_role_token(item)
-                if token:
+            for token in _scene_row_role_tokens(row_safe.get(field)):
+                if token and token not in role_tokens:
                     role_tokens.append(token)
-        if "character_3" in role_tokens:
-            char3_usage_scene_count += 1
-    if char3_unreferenced_episodic and char3_usage_scene_count > 1:
-        errors.append("character_3_unreferenced_episodic_used_multiple_scenes")
-
-    if not char3_unreferenced_episodic:
-        has_character_3_ref = bool(_extract_ref_urls(_safe_dict(_safe_dict(package).get("refs_inventory")).get("ref_character_3")))
-        has_character_3_i2v_usage = any(
-            (
-                _canonical_subject_id(_safe_dict(row).get("primary_role")) == "character_3"
-                or _canonical_subject_id(_safe_dict(row).get("visual_focus_role")) == "character_3"
-            )
-            for row in i2v_rows
-        )
-        if has_character_3_i2v_usage and not has_character_3_ref:
-            errors.append("character_3_visual_reference_missing")
+        for role_token in list(dict.fromkeys(role_tokens)):
+            role_usage_scene_count[role_token] = int(role_usage_scene_count.get(role_token) or 0) + 1
+    unreferenced_episodic_roles: list[str] = []
+    for role_id, role_row in role_usage_contract.items():
+        row_safe = _safe_dict(role_row)
+        reference_required = row_safe.get("reference_required")
+        identity_mode = str(row_safe.get("identity_mode") or "").strip().lower()
+        max_scene_count = row_safe.get("max_scene_count")
+        if reference_required is False and identity_mode in {"loose", "episodic"} and isinstance(max_scene_count, int) and max_scene_count > 0:
+            unreferenced_episodic_roles.append(role_id)
+            if int(role_usage_scene_count.get(role_id) or 0) > int(max_scene_count):
+                errors.append(f"unreferenced_episodic_visual_extra_used_too_many_scenes:{role_id}")
 
     vocal_owner_normalized_count = 0
     vocal_owner_role_resolved: list[str] = []
@@ -3762,7 +4083,8 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["scene_plan_vocal_owner_role_normalized_count"] = int(vocal_owner_normalized_count)
     diagnostics["vocal_owner_role_resolved"] = vocal_owner_role_resolved
     diagnostics["vocal_owner_role_source"] = vocal_owner_role_source
-    diagnostics["scene_plan_character_3_usage_scene_count"] = int(char3_usage_scene_count)
+    diagnostics["scene_plan_unreferenced_episodic_visual_extras"] = sorted(unreferenced_episodic_roles)
+    diagnostics["scene_plan_unreferenced_episodic_usage_counts"] = dict(role_usage_scene_count)
     package["diagnostics"] = diagnostics
     return not errors, errors
 
@@ -3916,6 +4238,26 @@ def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, sce
             "Use environment/city/street/port/courtyard/people/atmosphere as visual subject when needed.\n"
             "Do not invent or remove segment_id.\n"
             "Do not return empty storyboard."
+        )
+    if ve.startswith("scene_requirement_missing:"):
+        requirement_id = validation_error.split(":", 1)[1].strip()
+        requirements = _safe_list(_safe_dict(scene_diag).get("scene_plan_contract_requirements"))
+        requirement = {}
+        for row in requirements:
+            row_safe = _safe_dict(row)
+            if str(row_safe.get("id") or "").strip() == requirement_id:
+                requirement = row_safe
+                break
+        expected_route = str(_safe_dict(requirement).get("expected_route") or "").strip() or "any"
+        expected_roles = ", ".join(_safe_list(_safe_dict(requirement).get("expected_roles"))) or "any"
+        expected_functions = ", ".join(_safe_list(_safe_dict(requirement).get("expected_role_functions"))) or "any"
+        source_text = str(_safe_dict(requirement).get("source_text") or "").strip()
+        return (
+            f"{base}\nAdd a scene satisfying requirement {requirement_id}. "
+            f"Expected route: {expected_route}. "
+            f"Expected roles: {expected_roles}. "
+            f"Expected role functions: {expected_functions}. "
+            f"Source: {source_text}."
         )
     return base
 
@@ -15582,12 +15924,22 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_clip_contract_validation_ok"] = False
         diagnostics["scene_plan_clip_contract_validation_errors"] = list(clip_contract_errors)
         package["diagnostics"] = diagnostics
+        contract_requirement_feedback = ""
+        for error in clip_contract_errors:
+            if str(error).startswith("scene_requirement_missing:"):
+                contract_requirement_feedback = _build_scene_plan_retry_feedback(
+                    str(error),
+                    "SCENES_CLIP_CONTRACT_VALIDATION_FAILED",
+                    _safe_dict(package.get("diagnostics")),
+                )
+                break
         clip_feedback = (
             "Clip contract mismatch. Keep scene count equal to audio windows, forbid first_last, keep balanced approved "
-            "route budget, enforce ia2v as character_1 present performance with lip-sync, enforce i2v as memory action "
-            "with no lip-sync, cover mandatory memory beats, and avoid postcard-only memory fillers. "
+            "route budget, and satisfy contract scene requirements. "
             f"Fix errors: {'; '.join(clip_contract_errors[:12])}."
         )
+        if contract_requirement_feedback:
+            clip_feedback = f"{clip_feedback}\n{contract_requirement_feedback}"
         retry_result = build_gemini_scene_plan(
             api_key=gemini_api_key,
             package=scene_plan_prompt_package,
