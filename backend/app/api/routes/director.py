@@ -639,6 +639,25 @@ def _ensure_director_v2_structured_contract_fields(
     role_usage_contract = _safe_dict(contract.get("role_usage_contract"))
     ref_usage_map = _safe_dict(_safe_dict(contract.get("reference_usage_contract")).get("character_usage"))
     clip_contract = _safe_dict(contract.get("clip_contract"))
+    performance_contract = _safe_dict(contract.get("performance_contract"))
+    memory_contract = _safe_dict(contract.get("memory_contract"))
+    payload_context_refs = _safe_dict(payload.get("context_refs"))
+    payload_refs_by_role = _safe_dict(payload.get("refs_by_role"))
+    connected_summary = _safe_dict(payload.get("connected_context_summary"))
+    summary_refs_by_role = _safe_dict(connected_summary.get("refsPresentByRole"))
+    summary_connected_refs_by_role = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
+    payload_selected_refs = _safe_list(payload.get("selected_refs"))
+
+    performance_roles = {
+        str(role_id or "").strip().lower()
+        for role_id in _safe_list(performance_contract.get("performance_roles"))
+        if str(role_id or "").strip()
+    }
+    memory_roles = {
+        str(role_id or "").strip().lower()
+        for role_id in _safe_list(memory_contract.get("memory_roles"))
+        if str(role_id or "").strip()
+    }
 
     def _normalize_routes(value: Any) -> list[str]:
         if isinstance(value, str):
@@ -660,6 +679,59 @@ def _ensure_director_v2_structured_contract_fields(
             return False
         return None
 
+    def _lookup_role_map_value(role_map: dict[str, Any], role_id: str) -> Any:
+        if role_id in role_map:
+            return role_map.get(role_id)
+        role_id_l = role_id.lower()
+        for key, value in role_map.items():
+            if str(key or "").strip().lower() == role_id_l:
+                return value
+        return None
+
+    def _has_visual_ref_value(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            token = value.strip().lower()
+            if not token:
+                return False
+            if token in {"false", "0", "none", "null", "no", "absent", "no_reference_needed", "no reference", "без рефа", "референс не нужен"}:
+                return False
+            return True
+        if isinstance(value, list):
+            return any(_has_visual_ref_value(item) for item in value)
+        if isinstance(value, dict):
+            for key in ("present", "has_refs", "connected", "count", "total"):
+                if key in value and _has_visual_ref_value(value.get(key)):
+                    return True
+            if any(_has_visual_ref_value(v) for v in value.values()):
+                return True
+            return len(value) > 0
+        return False
+
+    def _role_has_visual_refs(role_id: str) -> bool:
+        for role_map in (
+            payload_context_refs,
+            payload_refs_by_role,
+            summary_refs_by_role,
+            summary_connected_refs_by_role,
+        ):
+            if _has_visual_ref_value(_lookup_role_map_value(role_map, role_id)):
+                return True
+        for item in payload_selected_refs:
+            row = _safe_dict(item)
+            item_role = str(row.get("role_id") or row.get("role") or row.get("character_role") or "").strip().lower()
+            if item_role == role_id.lower():
+                return True
+            item_roles = [str(v or "").strip().lower() for v in _safe_list(row.get("role_ids")) if str(v or "").strip()]
+            if role_id.lower() in item_roles:
+                return True
+        return False
+
     def _infer_function(raw_function: str, routes: list[str], ref_usage_hint: str, role_row: dict[str, Any]) -> str:
         token = str(raw_function or "").strip().lower()
         if token in _DIRECTOR_ROLE_FUNCTIONS:
@@ -672,17 +744,49 @@ def _ensure_director_v2_structured_contract_fields(
                 ref_usage_hint,
             ]
         )
-        if any(x in token_blob for x in ("episodic", "extra", "background")):
+        if any(
+            x in token_blob
+            for x in (
+                "episodic",
+                "эпизод",
+                "эпизодический",
+                "одна сцена",
+                "один эпизод",
+                "без рефа",
+                "референс не нужен",
+                "no_reference_needed",
+                "no reference",
+                "extra",
+                "background",
+            )
+        ):
             return "episodic_visual_extra"
         if any(x in token_blob for x in ("support", "secondary")):
             return "support_subject"
-        if any(x in token_blob for x in ("memory", "past", "flashback")):
+        if any(x in token_blob for x in ("memory", "past", "flashback", "воспомин", "память", "прошл", "молодост")):
             return "memory_subject"
-        if any(x in token_blob for x in ("action", "movement", "event")):
+        if any(x in token_blob for x in ("action", "movement", "event", "действ", "событие", "движение")):
             return "action_subject"
         if any(x in token_blob for x in ("speaker", "talk", "dialog")):
             return "speaker"
-        if any(x in token_blob for x in ("singer", "vocal", "lip-sync", "lipsync")):
+        if any(
+            x in token_blob
+            for x in (
+                "singer",
+                "vocal",
+                "sing",
+                "поет",
+                "поёт",
+                "пение",
+                "вокал",
+                "поющий",
+                "певец",
+                "певица",
+                "липсинк",
+                "lip-sync",
+                "lipsync",
+            )
+        ):
             return "singer"
         if routes == ["ia2v"] or ("ia2v" in routes and "i2v" not in routes):
             return "performer"
@@ -698,34 +802,68 @@ def _ensure_director_v2_structured_contract_fields(
                 role_ids.add(role_id)
 
     normalized_role_usage: dict[str, dict[str, Any]] = {}
+    role_route_inference_sources: dict[str, list[str]] = {}
+    reference_detection_by_role: dict[str, dict[str, Any]] = {}
     for role_id in sorted(role_ids):
         char_row = _safe_dict(character_contract.get(role_id))
         role_row = _safe_dict(role_usage_contract.get(role_id))
         ref_usage_hint = str(ref_usage_map.get(role_id) or "").strip().lower()
+        route_inference_sources: list[str] = []
         routes = _normalize_routes(role_row.get("routes") or char_row.get("routes"))
+        if routes:
+            if _normalize_routes(role_row.get("routes")):
+                route_inference_sources.append("role_usage_contract.routes")
+            elif _normalize_routes(char_row.get("routes")):
+                route_inference_sources.append("character_contract.routes")
         preferred_route = str(role_row.get("preferred_route") or char_row.get("preferred_route") or "").strip().lower()
         if preferred_route in {"ia2v", "i2v"} and preferred_route not in routes:
             routes.append(preferred_route)
+            route_inference_sources.append("preferred_route")
         if not routes:
-            if "no_reference_needed" in ref_usage_hint:
+            episodic_hint_for_route = any(
+                hint in " ".join(
+                    [
+                        ref_usage_hint,
+                        str(char_row.get("story_role") or "").strip().lower(),
+                        str(role_row.get("story_role") or "").strip().lower(),
+                        str(char_row.get("description") or "").strip().lower(),
+                        str(role_row.get("description") or "").strip().lower(),
+                    ]
+                )
+                for hint in ("episodic", "эпизод", "одна сцена", "один эпизод", "no reference", "no_reference_needed")
+            )
+            if role_id in performance_roles:
+                routes = ["ia2v"]
+                route_inference_sources.append("performance_contract.performance_roles")
+            elif role_id in memory_roles:
                 routes = ["i2v"]
+                route_inference_sources.append("memory_contract.memory_roles")
+            elif "no_reference_needed" in ref_usage_hint and episodic_hint_for_route:
+                routes = ["i2v"]
+                route_inference_sources.append("reference_usage_contract.no_reference_needed+episodic")
             elif clip_mode and role_id == str(clip_contract.get("vocal_owner_role") or "").strip().lower():
                 routes = ["ia2v"]
-            else:
-                routes = ["i2v"] if clip_mode else []
+                route_inference_sources.append("clip_contract.vocal_owner_role")
 
         raw_function = str(role_row.get("function") or char_row.get("function") or char_row.get("story_role") or "").strip()
         function = _infer_function(raw_function, routes, ref_usage_hint, {**char_row, **role_row})
+        if not routes:
+            if function in {"performer", "speaker", "singer"}:
+                routes = ["ia2v"]
+                route_inference_sources.append("function_fallback:performer_or_singer")
+            elif function in {"memory_subject", "action_subject", "support_subject", "episodic_visual_extra", "environment_subject"}:
+                routes = ["i2v"]
+                route_inference_sources.append("function_fallback:narrative_or_episodic")
         reference_required = _to_bool_or_none(
             role_row.get("reference_required")
             if "reference_required" in role_row
             else char_row.get("reference_required")
         )
-        if reference_required is None:
-            if "no_reference_needed" in ref_usage_hint:
-                reference_required = False
-            elif ref_usage_hint:
-                reference_required = True
+        has_visual_refs = _role_has_visual_refs(role_id)
+        if "no_reference_needed" in ref_usage_hint:
+            reference_required = False
+        elif has_visual_refs:
+            reference_required = True
 
         identity_mode = str(role_row.get("identity_mode") or char_row.get("identity_mode") or "").strip().lower()
         episodic_hint = any(
@@ -746,6 +884,8 @@ def _ensure_director_v2_structured_contract_fields(
                 identity_mode = "episodic"
             else:
                 identity_mode = "loose"
+        if not str(role_row.get("identity_mode") or char_row.get("identity_mode") or "").strip() and has_visual_refs and "no_reference_needed" not in ref_usage_hint:
+            identity_mode = "strict"
 
         max_scene_count_raw = role_row.get("max_scene_count")
         if max_scene_count_raw in {None, ""}:
@@ -772,11 +912,17 @@ def _ensure_director_v2_structured_contract_fields(
 
         normalized_role_usage[role_id] = {
             "function": function if function in _DIRECTOR_ROLE_FUNCTIONS else "unknown",
-            "routes": routes if routes else (["i2v"] if clip_mode else []),
-            "reference_required": bool(reference_required) if reference_required is not None else False,
+            "routes": routes,
+            "reference_required": reference_required,
             "identity_mode": identity_mode,
             "max_scene_count": max_scene_count,
             "reason": reason,
+        }
+        role_route_inference_sources[role_id] = route_inference_sources
+        reference_detection_by_role[role_id] = {
+            "has_visual_refs": has_visual_refs,
+            "ref_usage_hint": ref_usage_hint,
+            "reference_required": reference_required,
         }
 
     route_semantics = _safe_dict(contract.get("route_semantics"))
@@ -826,13 +972,55 @@ def _ensure_director_v2_structured_contract_fields(
             }
         )
 
+    scene_requirements_source = "director_contract.scene_requirements"
     if clip_mode and not normalized_requirements:
+        mandatory_scene_rows: list[str] = []
+        scene_contract = _safe_dict(contract.get("scene_contract"))
+        for source in (
+            _safe_list(scene_contract.get("mandatory_scenes")),
+            _safe_list(clip_contract.get("mandatory_scenes")),
+            _safe_list(memory_contract.get("mandatory_scenes")),
+        ):
+            for row in source:
+                text = str(row or "").strip()
+                if text:
+                    mandatory_scene_rows.append(text)
+
         req_idx = 1
+        if mandatory_scene_rows:
+            scene_requirements_source = "mandatory_scenes_fallback"
+            for text in mandatory_scene_rows:
+                lowered = text.lower()
+                expected_route = ""
+                source_text = text
+                if lowered.startswith("ia2v:"):
+                    expected_route = "ia2v"
+                    source_text = text[5:].strip() or text
+                elif lowered.startswith("i2v:"):
+                    expected_route = "i2v"
+                    source_text = text[4:].strip() or text
+                normalized_requirements.append(
+                    {
+                        "id": f"req_{req_idx:02d}",
+                        "required": True,
+                        "expected_route": expected_route,
+                        "expected_roles": [],
+                        "expected_role_functions": [],
+                        "expected_world": "",
+                        "min_count": 1,
+                        "max_count": None,
+                        "source_text": text,
+                        "purpose": source_text[:160],
+                    }
+                )
+                req_idx += 1
+
+        role_fallback_rows: list[dict[str, Any]] = []
         for role_id, role_row in normalized_role_usage.items():
             function = str(role_row.get("function") or "").strip().lower()
             routes = _safe_list(role_row.get("routes"))
             if function in {"performer", "speaker", "singer"} and "ia2v" in routes:
-                normalized_requirements.append(
+                role_fallback_rows.append(
                     {
                         "id": f"req_{req_idx:02d}",
                         "required": True,
@@ -847,8 +1035,8 @@ def _ensure_director_v2_structured_contract_fields(
                     }
                 )
                 req_idx += 1
-            if function in {"memory_subject", "action_subject"} and "i2v" in routes:
-                normalized_requirements.append(
+            if function in {"memory_subject", "action_subject", "support_subject", "episodic_visual_extra", "environment_subject"} and "i2v" in routes:
+                role_fallback_rows.append(
                     {
                         "id": f"req_{req_idx:02d}",
                         "required": True,
@@ -857,28 +1045,18 @@ def _ensure_director_v2_structured_contract_fields(
                         "expected_role_functions": [function],
                         "expected_world": "memory_world",
                         "min_count": 1,
-                        "max_count": None,
+                        "max_count": int(role_row.get("max_scene_count")) if role_row.get("max_scene_count") not in {None, ""} else None,
                         "source_text": "Story/memory/action role inferred from director contract.",
                         "purpose": "ensure visual narrative beats are present",
                     }
                 )
                 req_idx += 1
-            if function == "episodic_visual_extra" and "i2v" in routes:
-                normalized_requirements.append(
-                    {
-                        "id": f"req_{req_idx:02d}",
-                        "required": True,
-                        "expected_route": "i2v",
-                        "expected_roles": [role_id],
-                        "expected_role_functions": [function],
-                        "expected_world": "memory_world",
-                        "min_count": 1,
-                        "max_count": int(role_row.get("max_scene_count")) if role_row.get("max_scene_count") not in {None, ""} else 1,
-                        "source_text": "Episodic visual role inferred from reference policy.",
-                        "purpose": "ensure episodic no-reference role appears in constrained count",
-                    }
-                )
-                req_idx += 1
+
+        if not mandatory_scene_rows:
+            scene_requirements_source = "role_usage_fallback"
+            normalized_requirements.extend(role_fallback_rows)
+        elif role_fallback_rows:
+            normalized_requirements.extend(role_fallback_rows[:2])
 
     if normalized_requirements:
         contract["scene_requirements"] = normalized_requirements
@@ -900,6 +1078,9 @@ def _ensure_director_v2_structured_contract_fields(
         "director_contract_v2_scene_requirements_count": len(_safe_list(contract.get("scene_requirements"))),
         "director_contract_v2_route_semantics_present": bool(_safe_dict(contract.get("route_semantics"))),
         "director_contract_v2_missing_fields": missing_fields,
+        "director_contract_v2_role_route_inference_sources": role_route_inference_sources,
+        "director_contract_v2_reference_detection_by_role": reference_detection_by_role,
+        "director_contract_v2_scene_requirements_source": scene_requirements_source,
     }
     return contract, diagnostics
 
