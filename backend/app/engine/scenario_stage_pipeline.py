@@ -7306,6 +7306,36 @@ _GENERIC_NON_CONCRETE_TOKENS = {
     "action", "story", "emotion", "visual", "concrete", "hero", "character", "progression", "tension", "response",
 }
 
+_ATOM_DISALLOWED_TYPES = {
+    "negative_rule",
+    "ref_rule",
+    "camera_rule",
+    "style_rule",
+    "summary",
+    "trigger_note",
+    "meta_contract",
+}
+
+_ATOM_SOURCE_PRIORITY = {
+    "episodic_text_characters": 100,
+    "contract_composed_scene": 95,
+    "director_package.scene_contract": 90,
+    "director_contract.scene_contract": 88,
+    "director_package.memory_contract": 85,
+    "director_contract.memory_contract": 83,
+    "director_package.performance_contract": 80,
+    "director_contract.performance_contract": 78,
+    "director_package.user_story": 76,
+    "director_package.director_note": 75,
+    "director_contract.director_note": 74,
+    "audio_transcript": 20,
+    "director_package.story_intent": 10,
+    "director_package.route_contract": 8,
+    "director_contract.route_contract": 7,
+    "director_package.reference_usage_contract": 5,
+    "director_contract.reference_usage_contract": 4,
+}
+
 
 def _split_text_clauses(value: str) -> list[str]:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
@@ -7320,6 +7350,127 @@ def _split_text_clauses(value: str) -> list[str]:
         chunks = [p.strip(" ,;:") for p in re.split(r",|\band\b|\bи\b", part) if p.strip(" ,;:")]
         out.extend(chunks or [part[:220]])
     return out
+
+
+def _is_camera_or_composition_rule(text: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    camera_patterns = (
+        r"\bcamera\b",
+        r"\bframing\b",
+        r"\bpush[-\s]?in\b",
+        r"\bshot\b",
+        r"\bangle\b",
+        r"\bplan\b",
+        r"\bкамер\w*\b",
+        r"\bкадр\w*\b",
+        r"\bприближен\w*\b",
+        r"\bв лицо\b",
+        r"оставить\s+живое\s+пространство",
+    )
+    return any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in camera_patterns)
+
+
+def _build_contract_composed_scene_atoms(
+    input_pkg: dict[str, Any],
+    core_input_context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    director_package = _safe_dict(input_pkg.get("director_package"))
+    director_contract = _safe_dict(input_pkg.get("director_contract"))
+    route_contract = _safe_dict(director_package.get("route_contract") or director_contract.get("route_contract"))
+    character_contract = _safe_dict(director_package.get("character_contract") or director_contract.get("character_contract"))
+    scene_contract = _safe_dict(director_package.get("scene_contract") or director_contract.get("scene_contract"))
+    performance_contract = _safe_dict(director_package.get("performance_contract") or director_contract.get("performance_contract"))
+    memory_contract = _safe_dict(director_package.get("memory_contract") or director_contract.get("memory_contract"))
+    world_roles = _safe_dict(director_contract.get("world_roles"))
+    perf_world = _safe_dict(world_roles.get("performance_world"))
+    mem_world = _safe_dict(world_roles.get("memory_world"))
+    present_places = _flatten_story_text_tokens(
+        [_safe_list(scene_contract.get("present_scenes_locations")), perf_world.get("label")]
+    )
+    memory_places = _flatten_story_text_tokens(
+        [_safe_list(scene_contract.get("past_scenes_locations")), mem_world.get("label")]
+    )
+    present_action_clauses = _split_text_clauses(
+        " ".join(_flatten_story_text_tokens([performance_contract, core_input_context.get("user_concept")]))
+    )
+    memory_action_clauses = _split_text_clauses(
+        " ".join(_flatten_story_text_tokens([memory_contract, performance_contract, core_input_context.get("user_concept")]))
+    )
+    performance_role = str(_safe_dict(route_contract.get("ia2v")).get("primary_role") or "").strip()
+    memory_role = str(_safe_dict(route_contract.get("i2v")).get("primary_role") or "").strip()
+    lip_sync_enabled = bool(
+        _safe_dict(_safe_dict(director_contract.get("audio_contract")).get("audio_visual_sync_rules")).get("lip_sync_required")
+    ) or bool(_safe_dict(route_contract.get("ia2v")).get("lip_sync_required"))
+    atoms: list[dict[str, Any]] = []
+
+    def _role_subject(role_id: str) -> str:
+        if not role_id:
+            return ""
+        role_row = _safe_dict(character_contract.get(role_id))
+        return str(role_row.get("identity_label") or role_row.get("role_name") or role_id).strip()
+
+    if performance_role and present_places:
+        for place in present_places[:4]:
+            action = "performs with visible emotion" if lip_sync_enabled else "acts with visible emotion"
+            for clause in present_action_clauses[:8]:
+                if _is_camera_or_composition_rule(clause):
+                    continue
+                if re.search(r"\b(feel|emotion|express|perform|sing|react)\w*\b", clause.lower()):
+                    action = clause
+                    break
+            raw_text = f"{_role_subject(performance_role) or performance_role} {action} in {place}".strip()
+            atoms.append(
+                {
+                    "id": f"contract_atom_{len(atoms) + 1:02d}",
+                    "source": "contract_composed_scene",
+                    "source_priority": _ATOM_SOURCE_PRIORITY.get("contract_composed_scene", 0),
+                    "timeline": "present",
+                    "atom_type": "performance_scene",
+                    "subject_hint": performance_role,
+                    "place_hint": str(place).strip()[:120],
+                    "action_hint": str(action).strip()[:120],
+                    "object_hint": "",
+                    "emotion_hint": "",
+                    "raw_text": raw_text[:220],
+                    "repair_eligible": True,
+                    "quality_score": 90,
+                    "reject_reason": "",
+                }
+            )
+    if memory_role and memory_places:
+        for place in memory_places[:4]:
+            action = ""
+            for clause in memory_action_clauses[:10]:
+                low = clause.lower()
+                if _is_camera_or_composition_rule(clause):
+                    continue
+                if re.search(r"\b(recall|remember|run|walk|find|hold|lose|meet|escape|return|react)\w*\b", low):
+                    action = clause
+                    break
+            if not action:
+                action = "moves through a concrete event"
+            raw_text = f"{_role_subject(memory_role) or memory_role} {action} in {place}".strip()
+            atoms.append(
+                {
+                    "id": f"contract_atom_{len(atoms) + 1:02d}",
+                    "source": "contract_composed_scene",
+                    "source_priority": _ATOM_SOURCE_PRIORITY.get("contract_composed_scene", 0),
+                    "timeline": "memory",
+                    "atom_type": "scene_event",
+                    "subject_hint": memory_role,
+                    "place_hint": str(place).strip()[:120],
+                    "action_hint": str(action).strip()[:120],
+                    "object_hint": "",
+                    "emotion_hint": "",
+                    "raw_text": raw_text[:220],
+                    "repair_eligible": True,
+                    "quality_score": 90,
+                    "reject_reason": "",
+                }
+            )
+    return atoms[:16]
 
 
 def _extract_concrete_beat_atoms(
@@ -7354,21 +7505,24 @@ def _extract_concrete_beat_atoms(
         if isinstance(seg, dict)
     ]
     source_specs: list[tuple[str, Any, str]] = [
-        ("director_package.memory_contract", director_package.get("memory_contract"), "memory"),
-        ("director_contract.memory_contract", director_contract.get("memory_contract"), "memory"),
+        ("episodic_text_characters", episodic_text_characters, "memory"),
         ("director_package.scene_contract", director_package.get("scene_contract"), "memory"),
         ("director_contract.scene_contract", director_contract.get("scene_contract"), "memory"),
+        ("director_package.memory_contract", director_package.get("memory_contract"), "memory"),
+        ("director_contract.memory_contract", director_contract.get("memory_contract"), "memory"),
         ("director_package.performance_contract", director_package.get("performance_contract"), "present"),
         ("director_contract.performance_contract", director_contract.get("performance_contract"), "present"),
-        ("director_package.reference_usage_contract", director_package.get("reference_usage_contract"), "memory"),
-        ("director_contract.reference_usage_contract", director_contract.get("reference_usage_contract"), "memory"),
+        ("director_package.user_story", director_package.get("user_story"), "unknown"),
+        ("director_package.director_note", director_package.get("director_note"), "unknown"),
+        ("director_contract.director_note", director_contract.get("director_note"), "unknown"),
+        ("audio_transcript", audio_sources, "present"),
         ("director_package.story_intent", director_package.get("story_intent"), "unknown"),
         ("director_package.route_contract", director_package.get("route_contract"), "present"),
         ("director_contract.route_contract", director_contract.get("route_contract"), "present"),
+        ("director_package.reference_usage_contract", director_package.get("reference_usage_contract"), "memory"),
+        ("director_contract.reference_usage_contract", director_contract.get("reference_usage_contract"), "memory"),
         ("director_package.character_contract", director_package.get("character_contract"), "unknown"),
         ("director_contract.character_contract", director_contract.get("character_contract"), "unknown"),
-        ("audio_transcript", audio_sources, "present"),
-        ("episodic_text_characters", episodic_text_characters, "memory"),
     ]
 
     def _extract_hint(clause: str, pattern: str) -> str:
@@ -7377,8 +7531,152 @@ def _extract_concrete_beat_atoms(
             return ""
         return re.sub(r"\s+", " ", match.group(0)).strip(" ,.:;!?")[:120]
 
-    atoms: list[dict[str, Any]] = []
+    atoms: list[dict[str, Any]] = _build_contract_composed_scene_atoms(input_pkg, core_input_context)
     seen: set[str] = set()
+    negative_patterns = (
+        r"(^|\s)не\s+\w+",
+        r"\bнельзя\b",
+        r"\bбез\b",
+        r"\bdo not\b",
+        r"\bdon't\b",
+        r"\bno\b",
+        r"\bavoid\b",
+        r"\bforbid\w*\b",
+        r"\bforbidden\b",
+        r"\bnegative\b",
+    )
+    ref_patterns = (
+        r"identity\s+only",
+        r"reference\s+only",
+        r"strict_identity",
+        r"visual_reference_mode",
+        r"только\s+как\s+identity",
+        r"не\s+переносить",
+    )
+    meta_patterns = (
+        r"\bcontract\b",
+        r"\bprompt\b",
+        r"\bschema\b",
+        r"\broute\b",
+        r"\bia2v\b",
+        r"\bi2v\b",
+        r"lip[-\s]?sync\s+использовать",
+        r"source[_\s]?url",
+        r"audio_source_url",
+        r"package_version",
+    )
+    summary_patterns = (
+        r"музыкальный\s+видеоклип",
+        r"story_intent",
+        r"\bsummary\b",
+        r"core_message",
+        r"key_themes",
+        r"global_style_rules",
+    )
+    trigger_patterns = (
+        r"\b(song|music|audio)\b.*\b(trigger|memory|recall)\b",
+        r"песня.*геро\w+",
+    )
+
+    def _classify_atom(
+        *,
+        source_name: str,
+        clause: str,
+        subject_hint: str,
+        place_hint: str,
+        action_hint: str,
+        object_hint: str,
+        emotion_hint: str,
+        timeline_hint: str,
+    ) -> dict[str, Any]:
+        low = clause.lower()
+        has_negative = any(re.search(p, low, flags=re.IGNORECASE) for p in negative_patterns)
+        has_ref = any(re.search(p, low, flags=re.IGNORECASE) for p in ref_patterns)
+        has_meta = any(re.search(p, low, flags=re.IGNORECASE) for p in meta_patterns)
+        has_summary = any(re.search(p, low, flags=re.IGNORECASE) for p in summary_patterns)
+        has_camera = _is_camera_or_composition_rule(low)
+        has_trigger = any(re.search(p, low, flags=re.IGNORECASE) for p in trigger_patterns)
+        has_action = bool(action_hint) or bool(re.search(r"\b\w+(ed|ing|ет|ит|етcя|ется|лся|лась|ли)\b", low))
+        has_place = bool(place_hint)
+        has_subject = bool(subject_hint) or "episodic" in low
+        abstract_ratio = 0.0
+        words = re.findall(r"[a-zа-яё]{3,}", low)
+        if words:
+            abstract_hits = sum(
+                1
+                for w in words
+                if w in {"intent", "context", "summary", "style", "theme", "message", "pressure", "consequence", "story"}
+            )
+            abstract_ratio = abstract_hits / max(1, len(words))
+        atom_type = "scene_event"
+        if has_negative:
+            atom_type = "negative_rule"
+        elif has_ref:
+            atom_type = "ref_rule"
+        elif has_camera:
+            atom_type = "camera_rule"
+        elif has_meta:
+            atom_type = "meta_contract"
+        elif has_summary:
+            atom_type = "summary"
+        elif has_trigger and not (has_action and has_place):
+            atom_type = "trigger_note"
+        elif "style" in low:
+            atom_type = "style_rule"
+        elif "episodic" in low or subject_hint == "episodic_text_character":
+            atom_type = "episodic_scene"
+        elif timeline_hint == "present" and ("perform" in low or "sing" in low):
+            atom_type = "performance_scene"
+        elif has_subject and has_action:
+            atom_type = "character_action"
+        elif has_place and has_action:
+            atom_type = "place_action"
+        elif has_place:
+            atom_type = "world_texture"
+        quality = 0
+        if has_place:
+            quality += 30
+        if has_action:
+            quality += 30
+        if has_subject:
+            quality += 20
+        if object_hint:
+            quality += 10
+        if emotion_hint:
+            quality += 10
+        if atom_type in _ATOM_DISALLOWED_TYPES:
+            quality -= 50
+        if abstract_ratio > 0.45:
+            quality -= 30
+        quality = max(0, min(100, quality))
+        eligible_shape = bool(
+            has_action
+            or (has_place and has_subject and (has_action or object_hint or emotion_hint))
+            or atom_type in {"episodic_scene", "performance_scene", "character_action", "place_action", "scene_event"}
+        )
+        repair_eligible = (
+            eligible_shape
+            and atom_type not in _ATOM_DISALLOWED_TYPES
+            and quality >= 40
+            and not (source_name == "audio_transcript" and not (has_place and has_subject and has_action))
+        )
+        reject_reason = ""
+        if not repair_eligible:
+            if atom_type in _ATOM_DISALLOWED_TYPES:
+                reject_reason = atom_type
+            elif quality < 40:
+                reject_reason = "low_quality_score"
+            elif source_name == "audio_transcript":
+                reject_reason = "audio_context_only"
+            else:
+                reject_reason = "not_concrete_enough"
+        return {
+            "atom_type": atom_type,
+            "repair_eligible": repair_eligible,
+            "quality_score": quality,
+            "reject_reason": reject_reason,
+        }
+
     for source_name, raw_value, timeline in source_specs:
         for token in _flatten_story_text_tokens(raw_value):
             for clause in _split_text_clauses(token):
@@ -7423,10 +7721,21 @@ def _extract_concrete_beat_atoms(
                 if key in seen:
                     continue
                 seen.add(key)
+                classification = _classify_atom(
+                    source_name=source_name,
+                    clause=clause,
+                    subject_hint=subject_hint,
+                    place_hint=place_hint,
+                    action_hint=action_hint,
+                    object_hint=object_hint,
+                    emotion_hint=emotion_hint,
+                    timeline_hint=timeline_hint if timeline_hint in {"present", "memory"} else "unknown",
+                )
                 atoms.append(
                     {
                         "id": f"atom_{len(atoms) + 1:02d}",
                         "source": source_name,
+                        "source_priority": int(_ATOM_SOURCE_PRIORITY.get(source_name, 30)),
                         "timeline": timeline_hint if timeline_hint in {"present", "memory"} else "unknown",
                         "subject_hint": subject_hint,
                         "place_hint": place_hint,
@@ -7434,9 +7743,18 @@ def _extract_concrete_beat_atoms(
                         "object_hint": object_hint,
                         "emotion_hint": emotion_hint,
                         "raw_text": clause[:220],
+                        **classification,
                     }
                 )
-    return atoms[:80]
+    atoms.sort(
+        key=lambda atom: (
+            int(_safe_dict(atom).get("source_priority") or 0),
+            int(_safe_dict(atom).get("quality_score") or 0),
+            str(_safe_dict(atom).get("id") or ""),
+        ),
+        reverse=True,
+    )
+    return atoms[:120]
 
 
 def _segment_has_concrete_atom(segment_text: str, atoms: list[dict[str, Any]]) -> bool:
@@ -7504,17 +7822,34 @@ def _repair_generic_core_segments_with_atoms(
         if not low:
             return False
         banned_patterns = (
-            r"\bdo not\b",
-            r"не\s+переносить",
+            r"(^|\s)не\s+\w+",
+            r"\bнельзя\b",
+            r"\bне\s+должен\b",
+            r"\bне\s+нужно\b",
+            r"\bне\s+агрессивн\w*\b",
+            r"\bне\s+переносить\b",
+            r"\bне\s+использовать\b",
             r"\bбез\b",
+            r"\bdo not\b",
+            r"\bdon't\b",
             r"\bno\b",
             r"\bavoid\b",
             r"\bforbid\w*\b",
+            r"\bforbidden\b",
             r"\bnegative\b",
             r"\breference\s+only\b",
             r"\bidentity\s+only\b",
+            r"\bstrict_identity\b",
+            r"\bvisual_reference_mode\b",
+            r"\bcontract\b",
+            r"\bprompt\b",
         )
-        return any(re.search(pattern, low) for pattern in banned_patterns)
+        if any(re.search(pattern, low, flags=re.IGNORECASE) for pattern in banned_patterns):
+            return True
+        if _is_camera_or_composition_rule(low):
+            has_action = bool(re.search(r"\b\w+(ed|ing|ет|ит|лся|лась|ется)\b", low))
+            return not has_action
+        return False
 
     def _clean_repair_clause(text: str) -> str:
         cleaned = re.sub(r"\s+", " ", str(text or "")).strip(" \n\t,.;:!?")
@@ -7569,6 +7904,21 @@ def _repair_generic_core_segments_with_atoms(
         concrete_tokens=set(),
         concrete_atoms=atoms,
     )
+    eligible_atoms = [
+        _safe_dict(atom)
+        for atom in atoms
+        if bool(_safe_dict(atom).get("repair_eligible"))
+        and int(_safe_dict(atom).get("quality_score") or 0) >= 40
+        and str(_safe_dict(atom).get("atom_type") or "scene_event") not in _ATOM_DISALLOWED_TYPES
+    ]
+    eligible_ids = {str(_safe_dict(atom).get("id") or "") for atom in eligible_atoms}
+    reject_summary: dict[str, int] = {}
+    for atom in atoms:
+        row = _safe_dict(atom)
+        if str(row.get("id") or "") in eligible_ids:
+            continue
+        reason = str(row.get("reject_reason") or row.get("atom_type") or "ineligible")
+        reject_summary[reason] = reject_summary.get(reason, 0) + 1
     if not generic_ids or not atoms:
         return narrative_segments, {
             "core_generic_segment_repair_applied": False,
@@ -7579,11 +7929,19 @@ def _repair_generic_core_segments_with_atoms(
             "core_generic_segment_repair_used_raw_text_count": 0,
             "core_generic_segment_repair_used_template_count": 0,
             "core_generic_segment_repair_skipped_negative_atom_count": 0,
+            "core_concrete_beat_atom_eligible_count": len(eligible_atoms),
+            "core_concrete_beat_atom_rejected_count": max(0, len(atoms) - len(eligible_atoms)),
+            "core_concrete_beat_atom_reject_reasons_summary": reject_summary,
+            "core_generic_segment_repair_skipped_ineligible_atom_count": len(generic_ids),
+            "core_generic_segment_repair_reused_atom_ids": [],
+            "core_generic_segment_repair_unique_atom_count": 0,
+            "core_generic_segment_post_repair_bad_ids": [],
+            "core_generic_segment_post_repair_reverted_ids": [],
         }
     atoms_by_timeline = {
-        "present": [a for a in atoms if str(_safe_dict(a).get("timeline")) == "present"],
-        "memory": [a for a in atoms if str(_safe_dict(a).get("timeline")) == "memory"],
-        "unknown": [a for a in atoms if str(_safe_dict(a).get("timeline")) == "unknown"],
+        "present": [a for a in eligible_atoms if str(_safe_dict(a).get("timeline")) == "present"],
+        "memory": [a for a in eligible_atoms if str(_safe_dict(a).get("timeline")) == "memory"],
+        "unknown": [a for a in eligible_atoms if str(_safe_dict(a).get("timeline")) == "unknown"],
     }
     repaired_ids: list[str] = []
     unrepaired_ids: list[str] = []
@@ -7591,12 +7949,16 @@ def _repair_generic_core_segments_with_atoms(
     used_raw_text_count = 0
     used_template_count = 0
     skipped_negative_atom_count = 0
+    skipped_ineligible_atom_count = 0
+    reused_atom_ids: list[str] = []
     used_episodic = False
-    last_atom_id = ""
+    atom_use_count: dict[str, int] = {}
     output: list[dict[str, Any]] = []
+    original_by_segment: dict[str, dict[str, Any]] = {}
     for idx, row in enumerate(narrative_segments):
         seg = _safe_dict(row)
         segment_id = str(seg.get("segment_id") or f"segment_{idx+1}")
+        original_by_segment[segment_id] = dict(seg)
         if segment_id not in generic_ids:
             output.append(seg)
             continue
@@ -7610,20 +7972,45 @@ def _repair_generic_core_segments_with_atoms(
                 preferred = "memory" if atoms_by_timeline["memory"] else preferred
         pools = [atoms_by_timeline.get(preferred, []), atoms_by_timeline["unknown"], atoms_by_timeline["present"], atoms_by_timeline["memory"]]
         chosen: dict[str, Any] = {}
+        performance_compatible = beat_mode in {"performance", "threshold"}
         for pool in pools:
-            for atom in pool:
+            ranked_pool = sorted(
+                pool,
+                key=lambda atom: (int(_safe_dict(atom).get("quality_score") or 0), int(_safe_dict(atom).get("source_priority") or 0)),
+                reverse=True,
+            )
+            for atom in ranked_pool:
                 atom_row = _safe_dict(atom)
-                if str(atom_row.get("id") or "") == last_atom_id:
-                    continue
+                atom_id = str(atom_row.get("id") or "")
                 if str(atom_row.get("subject_hint") or "") == "episodic_text_character" and used_episodic:
+                    continue
+                atom_type = str(atom_row.get("atom_type") or "")
+                if performance_compatible and atom_type not in {"performance_scene", "character_action", "place_action"}:
+                    continue
+                if not performance_compatible and atom_type == "performance_scene":
+                    continue
+                if atom_use_count.get(atom_id, 0) > 0:
                     continue
                 chosen = atom_row
                 break
             if chosen:
                 break
         if not chosen:
+            for pool in pools:
+                for atom in pool:
+                    atom_row = _safe_dict(atom)
+                    atom_id = str(atom_row.get("id") or "")
+                    if atom_use_count.get(atom_id, 0) > 0:
+                        reused_atom_ids.append(atom_id)
+                        continue
+                    chosen = atom_row
+                    break
+                if chosen:
+                    break
+        if not chosen:
             output.append(seg)
             unrepaired_ids.append(segment_id)
+            skipped_ineligible_atom_count += 1
             continue
         raw_text = str(chosen.get("raw_text") or "").strip()
         raw_text = _replace_role_ids_with_labels(raw_text)
@@ -7666,9 +8053,43 @@ def _repair_generic_core_segments_with_atoms(
         output.append(repaired)
         repaired_ids.append(segment_id)
         atom_sources.append(str(chosen.get("source") or ""))
-        last_atom_id = str(chosen.get("id") or "")
+        chosen_id = str(chosen.get("id") or "")
+        atom_use_count[chosen_id] = atom_use_count.get(chosen_id, 0) + 1
         if str(chosen.get("subject_hint") or "") == "episodic_text_character":
             used_episodic = True
+    post_bad_ids: list[str] = []
+    post_reverted_ids: list[str] = []
+    seen_lines: set[str] = set()
+    bad_post_patterns = (
+        "песня взрослого героя",
+        "музыкальный видеоклип",
+        "не агрессивное",
+        "не переносить",
+        "без ",
+        "camera",
+        "камера",
+        "contract",
+        "prompt",
+    )
+    for idx, seg in enumerate(output):
+        seg_row = _safe_dict(seg)
+        segment_id = str(seg_row.get("segment_id") or f"segment_{idx+1}")
+        if segment_id not in set(repaired_ids):
+            continue
+        line = str(seg_row.get("beat_purpose") or "").strip().lower()
+        has_bad = any(pattern in line for pattern in bad_post_patterns)
+        repeated = line in seen_lines
+        if line:
+            seen_lines.add(line)
+        if has_bad or repeated:
+            post_bad_ids.append(segment_id)
+            original = original_by_segment.get(segment_id)
+            if original:
+                output[idx] = original
+                post_reverted_ids.append(segment_id)
+            repaired_ids = [rid for rid in repaired_ids if rid != segment_id]
+            if segment_id not in unrepaired_ids:
+                unrepaired_ids.append(segment_id)
     return output, {
         "core_generic_segment_repair_applied": bool(repaired_ids),
         "core_generic_segment_repair_count": len(repaired_ids),
@@ -7678,6 +8099,14 @@ def _repair_generic_core_segments_with_atoms(
         "core_generic_segment_repair_used_raw_text_count": used_raw_text_count,
         "core_generic_segment_repair_used_template_count": used_template_count,
         "core_generic_segment_repair_skipped_negative_atom_count": skipped_negative_atom_count,
+        "core_concrete_beat_atom_eligible_count": len(eligible_atoms),
+        "core_concrete_beat_atom_rejected_count": max(0, len(atoms) - len(eligible_atoms)),
+        "core_concrete_beat_atom_reject_reasons_summary": reject_summary,
+        "core_generic_segment_repair_skipped_ineligible_atom_count": skipped_ineligible_atom_count,
+        "core_generic_segment_repair_reused_atom_ids": list(dict.fromkeys(reused_atom_ids)),
+        "core_generic_segment_repair_unique_atom_count": len([atom_id for atom_id, count in atom_use_count.items() if count == 1]),
+        "core_generic_segment_post_repair_bad_ids": post_bad_ids,
+        "core_generic_segment_post_repair_reverted_ids": post_reverted_ids,
     }
 
 
@@ -10595,6 +11024,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "subject_hint": str(_safe_dict(atom).get("subject_hint") or ""),
                 "place_hint": str(_safe_dict(atom).get("place_hint") or ""),
                 "action_hint": str(_safe_dict(atom).get("action_hint") or ""),
+                "atom_type": str(_safe_dict(atom).get("atom_type") or ""),
+                "repair_eligible": bool(_safe_dict(atom).get("repair_eligible")),
+                "quality_score": int(_safe_dict(atom).get("quality_score") or 0),
             }
             for atom in concrete_beat_atoms[:8]
         ]
@@ -10975,6 +11407,30 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     )
                     diagnostics["core_generic_segment_repair_skipped_negative_atom_count"] = int(
                         repair_diag.get("core_generic_segment_repair_skipped_negative_atom_count") or 0
+                    )
+                    diagnostics["core_concrete_beat_atom_eligible_count"] = int(
+                        repair_diag.get("core_concrete_beat_atom_eligible_count") or 0
+                    )
+                    diagnostics["core_concrete_beat_atom_rejected_count"] = int(
+                        repair_diag.get("core_concrete_beat_atom_rejected_count") or 0
+                    )
+                    diagnostics["core_concrete_beat_atom_reject_reasons_summary"] = _safe_dict(
+                        repair_diag.get("core_concrete_beat_atom_reject_reasons_summary")
+                    )
+                    diagnostics["core_generic_segment_repair_skipped_ineligible_atom_count"] = int(
+                        repair_diag.get("core_generic_segment_repair_skipped_ineligible_atom_count") or 0
+                    )
+                    diagnostics["core_generic_segment_repair_reused_atom_ids"] = _safe_list(
+                        repair_diag.get("core_generic_segment_repair_reused_atom_ids")
+                    )
+                    diagnostics["core_generic_segment_repair_unique_atom_count"] = int(
+                        repair_diag.get("core_generic_segment_repair_unique_atom_count") or 0
+                    )
+                    diagnostics["core_generic_segment_post_repair_bad_ids"] = _safe_list(
+                        repair_diag.get("core_generic_segment_post_repair_bad_ids")
+                    )
+                    diagnostics["core_generic_segment_post_repair_reverted_ids"] = _safe_list(
+                        repair_diag.get("core_generic_segment_post_repair_reverted_ids")
                     )
                     story_core = {
                         "core_version": "1.1",
