@@ -716,6 +716,165 @@ def _ensure_clip_mode_contracts(
     return contract, package, asked_required
 
 
+def _normalize_clip_contract_aliases(
+    director_contract: dict[str, Any],
+    director_package: dict[str, Any],
+    answers: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    contract = dict(_safe_dict(director_contract))
+    package = dict(_safe_dict(director_package))
+    normalized_aliases_used: list[str] = []
+    route_balance_alias_normalized = False
+    alias_normalization_applied = False
+
+    mode_contract = _safe_dict(package.get("mode_contract") or contract.get("mode_contract"))
+    if str(mode_contract.get("mode") or "").strip().lower() != "clip":
+        package["_clip_alias_normalization_diagnostics"] = {
+            "director_clip_alias_normalization_applied": False,
+            "director_clip_aliases_used": [],
+            "director_clip_route_balance_alias_normalized": False,
+        }
+        return contract, package
+
+    clip_contract = _safe_dict(package.get("clip_contract") or contract.get("clip_contract"))
+    route_contract = _safe_dict(package.get("route_contract") or contract.get("route_contract"))
+    scene_distribution = _safe_dict(package.get("scene_distribution_contract") or contract.get("scene_distribution_contract"))
+    prompt_policy = _safe_dict(package.get("prompt_policy") or contract.get("prompt_policy"))
+
+    performance_definition = _first_non_empty_string(
+        clip_contract.get("performance_definition"),
+        clip_contract.get("ia2v_definition"),
+        route_contract.get("ia2v_route_purpose"),
+        route_contract.get("ia2v_scenes"),
+        prompt_policy.get("ia2v_prompt_guidelines"),
+    )
+    if performance_definition and not _first_non_empty_string(clip_contract.get("performance_definition")):
+        clip_contract["performance_definition"] = performance_definition
+        alias_normalization_applied = True
+        normalized_aliases_used.append("clip_contract.performance_definition")
+
+    story_cutaway_definition = _first_non_empty_string(
+        clip_contract.get("story_cutaway_definition"),
+        clip_contract.get("i2v_definition"),
+        clip_contract.get("i2v_content_between_performances"),
+        route_contract.get("i2v_route_purpose"),
+        route_contract.get("i2v_scenes"),
+        prompt_policy.get("i2v_prompt_guidelines"),
+    )
+    if story_cutaway_definition and not _first_non_empty_string(clip_contract.get("story_cutaway_definition")):
+        clip_contract["story_cutaway_definition"] = story_cutaway_definition
+        alias_normalization_applied = True
+        normalized_aliases_used.append("clip_contract.story_cutaway_definition")
+
+    route_balance_alias_map = {
+        "50_50": "balanced_50_50",
+        "balanced": "balanced_50_50",
+        "more_ia2v": "performance_heavy_70_30",
+        "more_i2v": "story_heavy_30_70",
+        "all_lip_sync": "all_lipsync",
+        "all_lipsync": "all_lipsync",
+        "ai_decides": "ai_decides",
+    }
+    answer_route_balance_map = {
+        "50_50": "balanced_50_50",
+        "more_ia2v": "performance_heavy_70_30",
+        "more_i2v": "story_heavy_30_70",
+    }
+    original_route_balance = _first_non_empty_string(scene_distribution.get("route_balance")).lower()
+    mapped_route_balance = route_balance_alias_map.get(original_route_balance, original_route_balance)
+
+    route_balance_confirmation = _first_non_empty_string(_safe_dict(answers).get("route_balance_confirmation")).lower()
+    route_balance_from_user = answer_route_balance_map.get(route_balance_confirmation)
+    route_balance_used_user_confirmation = False
+    if route_balance_from_user:
+        mapped_route_balance = route_balance_from_user
+        route_balance_used_user_confirmation = True
+
+    if mapped_route_balance and mapped_route_balance != original_route_balance:
+        scene_distribution["route_balance"] = mapped_route_balance
+        alias_normalization_applied = True
+        route_balance_alias_normalized = True
+        normalized_aliases_used.append("scene_distribution_contract.route_balance")
+    elif mapped_route_balance and not _first_non_empty_string(scene_distribution.get("route_balance")):
+        scene_distribution["route_balance"] = mapped_route_balance
+        alias_normalization_applied = True
+        normalized_aliases_used.append("scene_distribution_contract.route_balance")
+
+    final_route_balance = _first_non_empty_string(scene_distribution.get("route_balance")).lower()
+    if final_route_balance == "balanced_50_50":
+        if scene_distribution.get("ia2v_ratio") is None:
+            scene_distribution["ia2v_ratio"] = 0.5
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.ia2v_ratio")
+        if scene_distribution.get("i2v_ratio") is None:
+            scene_distribution["i2v_ratio"] = 0.5
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.i2v_ratio")
+        if route_balance_used_user_confirmation:
+            scene_distribution["user_approved"] = True
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.user_approved")
+    elif final_route_balance == "performance_heavy_70_30":
+        scene_distribution["ia2v_ratio"] = 0.7
+        scene_distribution["i2v_ratio"] = 0.3
+        alias_normalization_applied = True
+        normalized_aliases_used.extend(["scene_distribution_contract.ia2v_ratio", "scene_distribution_contract.i2v_ratio"])
+    elif final_route_balance == "story_heavy_30_70":
+        scene_distribution["ia2v_ratio"] = 0.3
+        scene_distribution["i2v_ratio"] = 0.7
+        alias_normalization_applied = True
+        normalized_aliases_used.extend(["scene_distribution_contract.ia2v_ratio", "scene_distribution_contract.i2v_ratio"])
+    elif final_route_balance == "all_lipsync":
+        scene_distribution["ia2v_ratio"] = 1.0
+        scene_distribution["i2v_ratio"] = 0.0
+        alias_normalization_applied = True
+        normalized_aliases_used.extend(["scene_distribution_contract.ia2v_ratio", "scene_distribution_contract.i2v_ratio"])
+
+    ia2v_meaning = _first_non_empty_string(
+        scene_distribution.get("ia2v_meaning"),
+        clip_contract.get("performance_definition"),
+        clip_contract.get("ia2v_definition"),
+        route_contract.get("ia2v_route_purpose"),
+    )
+    if ia2v_meaning and not _first_non_empty_string(scene_distribution.get("ia2v_meaning")):
+        scene_distribution["ia2v_meaning"] = ia2v_meaning
+        alias_normalization_applied = True
+        normalized_aliases_used.append("scene_distribution_contract.ia2v_meaning")
+
+    i2v_meaning = _first_non_empty_string(
+        scene_distribution.get("i2v_meaning"),
+        clip_contract.get("story_cutaway_definition"),
+        clip_contract.get("i2v_definition"),
+        clip_contract.get("i2v_content_between_performances"),
+        route_contract.get("i2v_route_purpose"),
+    )
+    if i2v_meaning and not _first_non_empty_string(scene_distribution.get("i2v_meaning")):
+        scene_distribution["i2v_meaning"] = i2v_meaning
+        alias_normalization_applied = True
+        normalized_aliases_used.append("scene_distribution_contract.i2v_meaning")
+
+    if prompt_policy and not _first_non_empty_string(prompt_policy.get("ltx_positive_prompt_rule")):
+        prompt_policy["ltx_positive_prompt_rule"] = "Only describe what must be visible and moving."
+        alias_normalization_applied = True
+        normalized_aliases_used.append("prompt_policy.ltx_positive_prompt_rule")
+    prompt_policy["negative_rules_are_internal"] = True
+    prompt_policy["do_not_copy_negative_rules_into_ltx_positive_prompt"] = True
+
+    contract["clip_contract"] = clip_contract
+    contract["scene_distribution_contract"] = scene_distribution
+    contract["prompt_policy"] = prompt_policy
+    package["clip_contract"] = clip_contract
+    package["scene_distribution_contract"] = scene_distribution
+    package["prompt_policy"] = prompt_policy
+
+    package["_clip_alias_normalization_diagnostics"] = {
+        "director_clip_alias_normalization_applied": bool(alias_normalization_applied),
+        "director_clip_aliases_used": sorted(set(normalized_aliases_used)),
+        "director_clip_route_balance_alias_normalized": bool(route_balance_alias_normalized),
+    }
+    return contract, package
+
+
 def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
     clip_mode_block = ""
     if _is_clip_music_video_payload(payload):
@@ -1038,6 +1197,11 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
             questions,
             answers,
         )
+        director_contract, director_package = _normalize_clip_contract_aliases(
+            director_contract,
+            director_package,
+            answers,
+        )
 
     if done:
         for field in (
@@ -1056,6 +1220,7 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
 
     scene_distribution_contract = _safe_dict(director_package.get("scene_distribution_contract") or director_contract.get("scene_distribution_contract"))
     clip_distribution_present = bool(scene_distribution_contract)
+    clip_alias_normalization_diagnostics = _safe_dict(director_package.pop("_clip_alias_normalization_diagnostics", {}))
     clip_valid, clip_missing_fields, clip_schema_diagnostics = _validate_clip_director_contract(
         director_contract,
         director_package,
@@ -1083,6 +1248,9 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_clip_contract_valid": bool(clip_schema_diagnostics.get("clip_contract_valid")),
         "director_clip_contract_incomplete": bool(is_clip_music_video and not clip_valid),
         "director_clip_missing_fields": clip_missing_fields,
+        "director_clip_alias_normalization_applied": bool(clip_alias_normalization_diagnostics.get("director_clip_alias_normalization_applied")),
+        "director_clip_aliases_used": _safe_list(clip_alias_normalization_diagnostics.get("director_clip_aliases_used")),
+        "director_clip_route_balance_alias_normalized": bool(clip_alias_normalization_diagnostics.get("director_clip_route_balance_alias_normalized")),
     }
     assistant_message = str(parsed.get("assistant_message") or "").strip()
     if done and is_clip_music_video and clip_valid:
