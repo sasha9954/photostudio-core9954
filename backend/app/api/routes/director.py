@@ -1318,7 +1318,9 @@ def _normalize_clip_contract_aliases(
 
     route_balance_alias_map = {
         "50_50": "balanced_50_50",
+        "equal_split": "balanced_50_50",
         "balanced": "balanced_50_50",
+        "balanced_50_50": "balanced_50_50",
         "more_ia2v": "performance_heavy_70_30",
         "more_i2v": "story_heavy_30_70",
         "all_lip_sync": "all_lipsync",
@@ -1339,6 +1341,13 @@ def _normalize_clip_contract_aliases(
     if route_balance_from_user:
         mapped_route_balance = route_balance_from_user
         route_balance_used_user_confirmation = True
+    route_balance_preference = _first_non_empty_string(
+        scene_distribution.get("route_balance_preference"),
+        answers.get("route_balance_preference"),
+        route_contract.get("route_balance_preference"),
+    ).lower()
+    if route_balance_preference == "equal_split":
+        mapped_route_balance = "balanced_50_50"
 
     user_approved_or_ai_decides = _first_non_empty_string(
         scene_distribution.get("user_approved_or_ai_decides")
@@ -1433,6 +1442,26 @@ def _normalize_clip_contract_aliases(
         alias_normalization_applied = True
         normalized_aliases_used.extend(["scene_distribution_contract.ia2v_ratio", "scene_distribution_contract.i2v_ratio"])
 
+    scene_distribution_decision = _first_non_empty_string(
+        answers.get("scene_distribution_decision"),
+        scene_distribution.get("scene_distribution_decision"),
+        package.get("scene_distribution_decision"),
+    ).lower()
+    if scene_distribution_decision == "user_approved" or route_balance_preference == "equal_split":
+        if not bool(scene_distribution.get("user_approved")):
+            scene_distribution["user_approved"] = True
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.user_approved")
+    elif scene_distribution_decision == "ai_decides":
+        if bool(scene_distribution.get("user_approved")):
+            scene_distribution["user_approved"] = False
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.user_approved")
+        if not bool(scene_distribution.get("ai_decides")):
+            scene_distribution["ai_decides"] = True
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.ai_decides")
+
     ia2v_meaning = _first_non_empty_string(
         scene_distribution.get("ia2v_meaning"),
         clip_contract.get("performance_definition"),
@@ -1456,6 +1485,27 @@ def _normalize_clip_contract_aliases(
         alias_normalization_applied = True
         normalized_aliases_used.append("scene_distribution_contract.i2v_meaning")
 
+    if not _first_non_empty_string(clip_contract.get("performance_definition")):
+        performance_definition_alias = _first_non_empty_string(
+            clip_contract.get("ia2v_meaning"),
+            _safe_dict(contract.get("performance_contract")).get("ia2v_meaning"),
+            _safe_dict(contract.get("performance_contract")).get("performance_focus"),
+        )
+        if performance_definition_alias:
+            clip_contract["performance_definition"] = performance_definition_alias
+            alias_normalization_applied = True
+            normalized_aliases_used.append("clip_contract.performance_definition")
+    if not _first_non_empty_string(clip_contract.get("story_cutaway_definition")):
+        story_cutaway_alias = _first_non_empty_string(
+            clip_contract.get("i2v_meaning"),
+            _safe_dict(contract.get("memory_contract")).get("i2v_meaning"),
+            _safe_dict(contract.get("memory_contract")).get("memory_locations"),
+        )
+        if story_cutaway_alias:
+            clip_contract["story_cutaway_definition"] = story_cutaway_alias
+            alias_normalization_applied = True
+            normalized_aliases_used.append("clip_contract.story_cutaway_definition")
+
     if prompt_policy and not _first_non_empty_string(prompt_policy.get("ltx_positive_prompt_rule")):
         prompt_policy["ltx_positive_prompt_rule"] = "Only describe what must be visible and moving."
         alias_normalization_applied = True
@@ -1477,6 +1527,25 @@ def _normalize_clip_contract_aliases(
         "director_clip_route_balance_from_ratio_object": bool(route_balance_from_ratio_object),
     }
     return contract, package
+
+
+def _merge_director_contracts(base: dict[str, Any], nested: dict[str, Any]) -> dict[str, Any]:
+    def _deep_merge(base_obj: Any, nested_obj: Any) -> Any:
+        if isinstance(base_obj, dict) and isinstance(nested_obj, dict):
+            merged = {k: _deep_merge(v, nested_obj[k]) if k in nested_obj else v for k, v in base_obj.items()}
+            for key, value in nested_obj.items():
+                if key not in merged:
+                    merged[key] = value
+            return merged
+        if nested_obj is None:
+            return base_obj
+        if isinstance(nested_obj, str) and not nested_obj.strip():
+            return base_obj
+        if isinstance(nested_obj, (list, dict)) and not nested_obj:
+            return base_obj
+        return nested_obj
+
+    return _safe_dict(_deep_merge(dict(_safe_dict(base)), dict(_safe_dict(nested))))
 
 
 def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
@@ -1830,6 +1899,21 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         director_package = _safe_dict(parsed.get("director_package_preview"))
     if director_package:
         director_package["package_version"] = "director_package_v2"
+    nested_contract = _safe_dict(director_package.get("director_contract"))
+    if nested_contract:
+        director_contract = _merge_director_contracts(director_contract, nested_contract)
+        director_package["director_contract"] = director_contract
+        for expected_field in (
+            "mode_contract",
+            "clip_contract",
+            "scene_distribution_contract",
+            "route_semantics",
+            "role_usage_contract",
+            "scene_requirements",
+            "reference_usage_contract",
+        ):
+            if expected_field in director_contract and expected_field not in director_package:
+                director_package[expected_field] = director_contract.get(expected_field)
 
     is_clip_music_video = _is_clip_music_video_payload(payload)
     if is_clip_music_video:
