@@ -481,9 +481,214 @@ def _validate_question(
     return {"id": qid, "text": text, "options": valid_options}
 
 
+def _safe_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
+    return f"""
+Ты AI Director V2 для видео-сториборда.
+
+Правила:
+1) Отвечай СТРОГО JSON без markdown.
+2) Язык вопросов и assistant_message: русский.
+3) Не используй статические шаблоны вопросов; задавай только сюжетно-специфичные вопросы из входного payload.
+4) 3-8 вопросов обычно, максимум 15, если данных мало.
+5) Если данных достаточно: phase=done и собери полный director_package/director_config/director_contract.
+6) Не переписывай narrative пользователя, не выдумывай несвязанных персонажей.
+7) Не добавляй LTX negative правила.
+
+Схема phase=questions:
+{{
+  "phase":"questions",
+  "assistant_message":"...",
+  "story_understanding":{{
+    "summary":"...",
+    "detected_timelines":[],
+    "detected_roles":{{}},
+    "detected_conflicts_or_gaps":[]
+  }},
+  "questions":[
+    {{
+      "id":"snake_case",
+      "label":"...",
+      "type":"single_choice|multi_choice|free_text",
+      "options":[{{"value":"...","label":"..."}}],
+      "required":true,
+      "applies_to":["core","roles","scenes","prompts","audio","final_video_prompt"]
+    }}
+  ],
+  "answers":{{}},
+  "missing_fields":[],
+  "director_config_preview":{{}},
+  "director_contract_preview":{{}},
+  "director_package_preview":{{"package_version":"director_package_v2"}},
+  "done":false
+}}
+
+Схема phase=done:
+{{
+  "phase":"done",
+  "assistant_message":"Режиссура собрана. Можно запускать пайплайн.",
+  "answers":{{}},
+  "director_summary":"...",
+  "director_package":{{
+    "package_version":"director_package_v2",
+    "story_intent":{{}},
+    "timeline_contract":{{}},
+    "character_contract":{{}},
+    "reference_usage_contract":{{}},
+    "route_contract":{{}},
+    "performance_contract":{{}},
+    "memory_contract":{{}},
+    "audio_contract":{{}},
+    "scene_contract":{{}},
+    "prompt_contract":{{}},
+    "video_reference_contract":{{}}
+  }},
+  "director_config":{{}},
+  "director_contract":{{
+    "hard_location_binding": false,
+    "world_roles": {{}},
+    "route_location_rules": {{}},
+    "timeline_contract": {{}},
+    "character_contract": {{}},
+    "reference_usage_contract": {{}},
+    "route_contract": {{}},
+    "performance_contract": {{}},
+    "memory_contract": {{}},
+    "audio_contract": {{}},
+    "prompt_contract": {{}},
+    "video_reference_contract": {{}}
+  }},
+  "missing_fields":[],
+  "done":true
+}}
+
+Текущий payload:
+{json.dumps(payload, ensure_ascii=False)}
+""".strip()
+
+
+def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    phase = str(parsed.get("phase") or "questions").strip().lower()
+    done = bool(parsed.get("done")) or phase == "done"
+    answers = _safe_dict(parsed.get("answers"))
+    director_config = _safe_dict(parsed.get("director_config"))
+    director_contract = _safe_dict(parsed.get("director_contract"))
+    director_package = _safe_dict(parsed.get("director_package"))
+    if done and not director_package:
+        director_package = _safe_dict(parsed.get("director_package_preview"))
+    if director_package and not director_package.get("package_version"):
+        director_package["package_version"] = "director_package_v2"
+    if done:
+        for field in (
+            "timeline_contract", "character_contract", "reference_usage_contract", "route_contract",
+            "performance_contract", "memory_contract", "audio_contract", "prompt_contract", "video_reference_contract",
+        ):
+            if field not in director_contract and field in director_package:
+                director_contract[field] = director_package.get(field)
+    diagnostics = {
+        "director_v2": True,
+        "gemini_questions_generated": bool(_safe_list(parsed.get("questions"))) or done,
+        "static_fallback_used": False,
+        "input_has_audio": bool(_safe_dict(payload.get("metadata")).get("audio") or _safe_dict(payload.get("source")).get("source_mode") == "audio"),
+        "input_has_video": str(_safe_dict(payload.get("source")).get("source_mode") or "") in {"video_file", "video_link"},
+        "refs_roles_present": sorted(list(_safe_dict(payload.get("context_refs") or payload.get("refs_by_role")).keys())),
+    }
+    return {
+        "ok": True,
+        "phase": "done" if done else "questions",
+        "assistant_message": str(parsed.get("assistant_message") or "").strip(),
+        "questions": _safe_list(parsed.get("questions")),
+        "story_understanding": _safe_dict(parsed.get("story_understanding")),
+        "answers": answers,
+        "missing_fields": _safe_list(parsed.get("missing_fields")),
+        "director_summary": str(parsed.get("director_summary") or "").strip(),
+        "director_config": director_config,
+        "director_contract": director_contract,
+        "director_package": director_package,
+        "director_config_preview": _safe_dict(parsed.get("director_config_preview")),
+        "director_contract_preview": _safe_dict(parsed.get("director_contract_preview")),
+        "director_package_preview": _safe_dict(parsed.get("director_package_preview")),
+        "done": done,
+        "diagnostics": diagnostics,
+    }
+
+
 @router.post("/director/chat")
 async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
     raw_payload = payload if isinstance(payload, dict) else {}
+    if str(raw_payload.get("mode") or "").strip().lower() == "director_v2":
+        key_info = resolve_gemini_api_key()
+        if not key_info.get("valid"):
+            return {
+                "ok": False,
+                "error": f"gemini_key_invalid:{key_info.get('error') or 'missing'}",
+                "fallback_used": False,
+                "diagnostics": {
+                    "director_v2": True,
+                    "gemini_questions_generated": False,
+                    "static_fallback_used": False,
+                    "input_has_audio": False,
+                    "input_has_video": False,
+                    "refs_roles_present": [],
+                },
+            }
+        prompt = _build_director_v2_prompt(raw_payload)
+        gemini_body = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+                "topP": 0.9,
+                "responseMimeType": "application/json",
+            },
+        }
+        result = post_generate_content(
+            str(key_info.get("api_key") or ""),
+            DIRECTOR_QUESTIONS_MODEL,
+            gemini_body,
+            timeout=60,
+        )
+        if result.get("__http_error__"):
+            status = int(result.get("status") or 502)
+            raise HTTPException(status_code=status if status > 0 else 502, detail="gemini_request_failed")
+        parsed = _extract_json_object(_extract_text_from_gemini(result))
+        if not isinstance(parsed, dict):
+            retry_result = post_generate_content(
+                str(key_info.get("api_key") or ""),
+                DIRECTOR_QUESTIONS_MODEL,
+                {
+                    "contents": [{"parts": [{"text": f"{prompt}\n\nВерни valid JSON only. Без markdown."}]}],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "topP": 0.9,
+                        "responseMimeType": "application/json",
+                    },
+                },
+                timeout=60,
+            )
+            parsed = _extract_json_object(_extract_text_from_gemini(retry_result))
+            if not isinstance(parsed, dict):
+                return {
+                    "ok": False,
+                    "error": "gemini_invalid_json",
+                    "fallback_used": False,
+                    "diagnostics": {
+                        "director_v2": True,
+                        "gemini_questions_generated": False,
+                        "static_fallback_used": False,
+                        "input_has_audio": False,
+                        "input_has_video": False,
+                        "refs_roles_present": [],
+                    },
+                }
+        return _normalize_director_v2_output(parsed, raw_payload)
+
     context = raw_payload.get("context") if isinstance(raw_payload.get("context"), dict) else {}
     messages = raw_payload.get("messages") if isinstance(raw_payload.get("messages"), list) else []
     director_state = raw_payload.get("director_state") if isinstance(raw_payload.get("director_state"), dict) else {}
