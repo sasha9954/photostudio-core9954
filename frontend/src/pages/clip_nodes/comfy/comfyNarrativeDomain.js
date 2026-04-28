@@ -1202,7 +1202,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       mimeType: audioContext.mimeType,
       fileName: audioContext.fileName,
       current_scenario_input_signature: currentScenarioInputSignature,
-    metadata: {
+      metadata: {
         origin: normalizeText(resolvedSource.origin) || "connected",
         label: normalizeText(resolvedSource.label),
         connectedHandle: Object.entries(connectedInputs).find(([, value]) => value && normalizeText(value.value) === sourceValue)?.[0] || "",
