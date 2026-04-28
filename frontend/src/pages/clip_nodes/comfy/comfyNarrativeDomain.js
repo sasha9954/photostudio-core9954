@@ -1191,6 +1191,7 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     director_mode: directorMode,
     directGeminiStoryboardMode: true,
     direct_gemini_storyboard_mode: true,
+    current_scenario_input_signature: currentScenarioInputSignature,
     source: {
       source_mode: normalizeNarrativeSourceMode(resolvedSource.mode),
       source_value: sourceValue,
@@ -1233,6 +1234,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
       format,
       preferAudioOverText,
       creative_config: creativeConfig,
+      current_scenario_input_signature: currentScenarioInputSignature,
+    },
+    input: {
       current_scenario_input_signature: currentScenarioInputSignature,
     },
     creative_config: creativeConfig,

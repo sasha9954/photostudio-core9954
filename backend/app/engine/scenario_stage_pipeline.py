@@ -278,7 +278,9 @@ def _build_director_contract_from_config(config: dict[str, Any]) -> dict[str, An
 
 def _normalize_director_package_input(package: dict[str, Any]) -> None:
     input_pkg = _safe_dict(package.get("input"))
-    current_signature = str(_compute_input_signatures(package).get("scenario_input_signature") or "").strip()
+    signatures = _compute_input_signatures(package)
+    current_signature = str(signatures.get("scenario_input_signature") or "").strip()
+    signature_source = str(signatures.get("signature_source") or "backend_computed_hash").strip() or "backend_computed_hash"
     director_cfg = _safe_dict(input_pkg.get("director_config"))
     if not director_cfg:
         source_cfg = _safe_dict(package.get("director_config"))
@@ -325,6 +327,7 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
     package["input"] = input_pkg
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["current_scenario_input_signature"] = current_signature
+    diagnostics["signature_source"] = signature_source
     diagnostics["stored_director_signature"] = stored_signature
     diagnostics["director_signature_matches_current"] = bool(not stored_signature or stored_signature == current_signature)
     diagnostics["director_stale_contract_ignored"] = stale_contract_ignored
@@ -1117,6 +1120,17 @@ def _stable_hash_payload(value: Any) -> str:
 def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
     pkg = _safe_dict(package)
     input_pkg = _safe_dict(pkg.get("input"))
+    diagnostics = _safe_dict(pkg.get("diagnostics"))
+    source_pkg = _safe_dict(input_pkg.get("source"))
+    director_controls = _safe_dict(input_pkg.get("director_controls"))
+    provided_signature = str(
+        input_pkg.get("current_scenario_input_signature")
+        or source_pkg.get("current_scenario_input_signature")
+        or director_controls.get("current_scenario_input_signature")
+        or pkg.get("current_scenario_input_signature")
+        or diagnostics.get("current_scenario_input_signature")
+        or ""
+    ).strip()
     refs_inventory = _safe_dict(pkg.get("refs_inventory"))
     text_payload = {
         "text": str(input_pkg.get("text") or "").strip(),
@@ -1139,7 +1153,7 @@ def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
     audio_url_signature = _stable_hash_payload(audio_payload)
     refs_signature = _stable_hash_payload(refs_payload)
     creative_config_signature = _stable_hash_payload(creative_payload)
-    scenario_input_signature = _stable_hash_payload(
+    scenario_input_signature = provided_signature or _stable_hash_payload(
         {
             "text": text_payload,
             "audio": audio_payload,
@@ -1152,12 +1166,14 @@ def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
             "route_strategy_signature": _route_strategy_signature_from_input(input_pkg),
         }
     )
+    signature_source = "provided_current_scenario_input_signature" if provided_signature else "backend_computed_hash"
     return {
         "input_text_signature": input_text_signature,
         "audio_url_signature": audio_url_signature,
         "refs_signature": refs_signature,
         "creative_config_signature": creative_config_signature,
         "scenario_input_signature": scenario_input_signature,
+        "signature_source": signature_source,
     }
 
 
