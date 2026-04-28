@@ -529,6 +529,10 @@ function resolveAudioDurationFallback(state = {}) {
 
 function buildReferencePayload(input, fallbackLabel) {
   if (!input || typeof input !== "object") return null;
+  const normalizeRoleType = (value) => {
+    const normalized = normalizeText(value).toLowerCase();
+    return ["", "auto", "none", "neutral", "unknown", "unspecified"].includes(normalized) ? "" : normalized;
+  };
   const normalizeOwnershipRole = (value) => {
     const normalized = normalizeText(value).toLowerCase();
     return ["auto", "main", "support", "antagonist", "shared", "world"].includes(normalized) ? normalized : "auto";
@@ -585,7 +589,23 @@ function buildReferencePayload(input, fallbackLabel) {
       .filter(Boolean)
     : [];
   const refs = normalizedRefs.map((item) => item.url).filter(Boolean);
-  const roleType = normalizeText(input?.roleType || normalizedRefs.find((item) => !!item.roleType)?.roleType).toLowerCase();
+  const explicitRoleType = normalizeRoleType(input?.roleType);
+  const refsRoleType = normalizeRoleType(normalizedRefs.find((item) => !!item.roleType)?.roleType);
+  const metaRoleType = normalizeRoleType(input?.meta?.roleType);
+  const roleTypeMetaFlag = normalizeText(input?.meta?.roleTypeSource).toLowerCase();
+  const canUseMetaRoleType = roleTypeMetaFlag === "current_input" || roleTypeMetaFlag === "director_contract" || input?.meta?.roleTypeIsCurrent === true;
+  let roleType = "";
+  let roleTypeSource = "cleared_stale_meta";
+  if (explicitRoleType) {
+    roleType = explicitRoleType;
+    roleTypeSource = "current_input";
+  } else if (refsRoleType) {
+    roleType = refsRoleType;
+    roleTypeSource = "current_input";
+  } else if (canUseMetaRoleType && metaRoleType) {
+    roleType = metaRoleType;
+    roleTypeSource = roleTypeMetaFlag === "director_contract" ? "director_contract" : "current_input";
+  }
   const ownershipRole = normalizeOwnershipRole(input?.ownershipRole || input?.ownership_role || input?.meta?.ownershipRole || normalizedRefs.find((item) => !!item.ownershipRole)?.ownershipRole);
   const bindingType = normalizeBindingType(input?.bindingType || input?.binding_type || input?.meta?.bindingType || normalizedRefs.find((item) => !!item.bindingType)?.bindingType);
   const kind = normalizeText(input?.meta?.kind).toLowerCase();
@@ -626,6 +646,7 @@ function buildReferencePayload(input, fallbackLabel) {
   const meta = input?.meta && typeof input.meta === "object" ? { ...input.meta } : {};
   if (roleType) meta.roleType = roleType;
   else if (Object.prototype.hasOwnProperty.call(meta, "roleType")) delete meta.roleType;
+  meta.roleTypeSource = roleTypeSource;
   meta.ownershipRole = ownershipRole;
   meta.ownershipRoleMapped = ownershipRoleToPipelineRole(ownershipRole);
   meta.bindingType = bindingType;
