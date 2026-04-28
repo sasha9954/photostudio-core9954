@@ -93,13 +93,33 @@ def _build_prompt(
     dynamics_summary: dict[str, Any],
     role_identity_mapping: dict[str, Any],
     validation_feedback: str = "",
+    compact_mode: bool = False,
 ) -> str:
+    compact_dynamics = dynamics_summary if not compact_mode else {
+        "duration_sec": round(float(duration_sec or 0.0), 3),
+        "pause_points_count": int((dynamics_summary or {}).get("pause_points_count") or 0),
+        "phrase_points_count": int((dynamics_summary or {}).get("phrase_points_count") or 0),
+        "energy_peaks_count": int((dynamics_summary or {}).get("energy_peaks_count") or 0),
+    }
+    compact_role_mapping = role_identity_mapping if not compact_mode else {
+        role: {
+            "story_role": str(_safe.get("story_role") or "auto"),
+            "gender_hint": str(_safe.get("gender_hint") or "auto"),
+            "appearanceMode": str(_safe.get("appearanceMode") or _safe.get("screenPresenceMode") or "auto"),
+        }
+        for role, _safe in (
+            (k, v if isinstance(v, dict) else {})
+            for k, v in (role_identity_mapping or {}).items()
+            if str(k) in {"character_1", "character_2", "character_3"}
+        )
+    }
     evidence = {
         "audio_id": audio_id,
         "duration_sec": round(float(duration_sec or 0.0), 3),
-        "transcript_excerpt": str(transcript_text or "")[:3000],
-        "dynamics_summary": dynamics_summary,
-        "role_identity_mapping": role_identity_mapping,
+        "transcript_excerpt": str(transcript_text or "")[: (900 if compact_mode else 3000)],
+        "dynamics_summary": compact_dynamics,
+        "role_identity_mapping": compact_role_mapping,
+        "audio_stage_payload_mode": "compact" if compact_mode else "full",
     }
     feedback_block = ""
     if validation_feedback:
@@ -213,6 +233,8 @@ def build_gemini_audio_segmentation(
     dynamics_summary: dict[str, Any] | None = None,
     role_identity_mapping: dict[str, Any] | None = None,
     validation_feedback: str = "",
+    request_timeout_sec: int = 120,
+    compact_prompt: bool = False,
 ) -> dict[str, Any]:
     transport_meta: dict[str, Any] = {
         "audio_segmentation_source_mode": "none",
@@ -247,6 +269,7 @@ def build_gemini_audio_segmentation(
         dynamics_summary=dynamics_summary or {},
         role_identity_mapping=role_identity_mapping or {},
         validation_feedback=validation_feedback,
+        compact_mode=bool(compact_prompt),
     )
 
     parts: list[dict[str, Any]] = [{"text": prompt}]
@@ -282,7 +305,12 @@ def build_gemini_audio_segmentation(
             "topP": 0.9,
         },
     }
-    response = post_generate_content(api_key=api_key, model=GEMINI_SEGMENTATION_MODEL, body=body, timeout=120)
+    response = post_generate_content(
+        api_key=api_key,
+        model=GEMINI_SEGMENTATION_MODEL,
+        body=body,
+        timeout=max(1, int(request_timeout_sec or 120)),
+    )
     if isinstance(response, dict) and response.get("__http_error__"):
         return _fail(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
 

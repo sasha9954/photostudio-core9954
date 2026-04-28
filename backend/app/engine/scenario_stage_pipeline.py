@@ -2124,6 +2124,58 @@ def _normalize_refs_inventory(refs_inventory: dict[str, Any]) -> tuple[dict[str,
     return normalized, ownership_binding_inventory[:24]
 
 
+def _normalize_role_label(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"auto", "none", "neutral", "unspecified", "unknown"}:
+        return ""
+    return normalized
+
+
+def _sanitize_assigned_roles_and_refs(
+    refs_inventory: dict[str, Any],
+    assigned_roles_input: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    refs = deepcopy(_safe_dict(refs_inventory))
+    assigned_roles = _safe_dict(assigned_roles_input)
+    role_debug: dict[str, Any] = {}
+    for role in ("character_1", "character_2", "character_3"):
+        ref_key = _role_to_ref_key(role)
+        ref_row = _safe_dict(refs.get(ref_key))
+        ref_meta = _safe_dict(ref_row.get("meta"))
+        original_node_role = _normalize_role_label(assigned_roles_input.get(role))
+        original_node_relation = _normalize_role_label(ref_meta.get("story_role") or ref_meta.get("ownershipRole"))
+        refs_inventory_role = _normalize_role_label(ref_meta.get("roleType"))
+        role_was_stale_corrected = False
+        role_source = "current_node_payload"
+        if original_node_role:
+            serialized_role = original_node_role
+            ref_meta["roleType"] = serialized_role
+            assigned_roles[role] = serialized_role
+        else:
+            serialized_role = ""
+            if role in assigned_roles:
+                assigned_roles.pop(role, None)
+                role_was_stale_corrected = True
+            if refs_inventory_role:
+                ref_meta.pop("roleType", None)
+                role_was_stale_corrected = True
+            role_source = "current_node_payload_neutral"
+        ref_row["meta"] = ref_meta
+        refs[ref_key] = ref_row
+        role_debug[role] = {
+            "original_node_role": original_node_role,
+            "original_node_relation": original_node_relation,
+            "serialized_role": serialized_role,
+            "serialized_relation": original_node_relation,
+            "package_input_role": _normalize_role_label(assigned_roles.get(role)),
+            "refs_inventory_role": _normalize_role_label(_safe_dict(_safe_dict(refs.get(ref_key)).get("meta")).get("roleType")),
+            "assigned_role_after_normalization": _normalize_role_label(assigned_roles.get(role)),
+            "role_source": role_source,
+            "role_was_stale_corrected": bool(role_was_stale_corrected),
+        }
+    return assigned_roles, refs, role_debug
+
+
 def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
     audio_in = _safe_dict(refs_inventory.get("audio_in"))
     meta = _safe_dict(audio_in.get("meta"))
@@ -8391,6 +8443,10 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
     if not director_controls:
         director_controls = _safe_dict(req.get("directorControls"))
     refs_inventory, ownership_binding_inventory = _normalize_refs_inventory(_safe_dict(req.get("context_refs")))
+    assigned_roles_normalized, refs_inventory, role_normalization_debug = _sanitize_assigned_roles_and_refs(
+        refs_inventory,
+        _safe_dict(req.get("roleTypeByRole")),
+    )
     source = _safe_dict(req.get("source"))
     source_mode = str(source.get("source_mode") or source.get("sourceMode") or "").strip().lower()
     source_text = str(source.get("source_value") or source.get("sourceValue") or "").strip() if source_mode == "text" else ""
@@ -8445,7 +8501,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "updated_at": _utc_iso(),
         "input": normalized_input,
         "refs_inventory": refs_inventory,
-        "assigned_roles": _safe_dict(req.get("roleTypeByRole")),
+        "assigned_roles": assigned_roles_normalized,
         "story_core": {},
         "audio_map": {},
         "role_plan": {},
@@ -8469,6 +8525,17 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "story_core_ref_attachment_summary": {},
             "story_core_grounding_level": "standard",
             "input_creative_config_active": _safe_dict(normalized_input.get("creative_config")),
+            "role_source": "current_node_payload",
+            "role_normalization_debug": role_normalization_debug,
+            "character_2_role_source": _safe_dict(role_normalization_debug.get("character_2")).get("role_source"),
+            "character_2_role_was_stale_corrected": bool(_safe_dict(role_normalization_debug.get("character_2")).get("role_was_stale_corrected")),
+            "character_2_original_node_role": _safe_dict(role_normalization_debug.get("character_2")).get("original_node_role"),
+            "character_2_original_node_relation": _safe_dict(role_normalization_debug.get("character_2")).get("original_node_relation"),
+            "character_2_serialized_role": _safe_dict(role_normalization_debug.get("character_2")).get("serialized_role"),
+            "character_2_serialized_relation": _safe_dict(role_normalization_debug.get("character_2")).get("serialized_relation"),
+            "character_2_package_input_role": _safe_dict(role_normalization_debug.get("character_2")).get("package_input_role"),
+            "character_2_refs_inventory_role": _safe_dict(role_normalization_debug.get("character_2")).get("refs_inventory_role"),
+            "character_2_assigned_role_after_normalization": _safe_dict(role_normalization_debug.get("character_2")).get("assigned_role_after_normalization"),
         },
         "stage_statuses": stages,
         "contracts": {
@@ -12928,6 +12995,84 @@ def _build_legacy_compat_audio_payload_from_segments_v11(payload: dict[str, Any]
     }
 
 
+def _is_audio_segmentation_timeout_error(error: str) -> bool:
+    message = str(error or "").strip().lower()
+    if not message:
+        return False
+    timeout_tokens = ("request_timeout", "read timeout", "timed out", "timeout")
+    return any(token in message for token in timeout_tokens)
+
+
+def _build_audio_map_timeout_fallback(*, duration_sec: float, audio_id: str, analysis_mode: str) -> dict[str, Any]:
+    duration = round(max(0.0, _to_float(duration_sec, 0.0)), 3)
+    if duration <= 0:
+        duration = 0.001
+    target_window = 5.5
+    windows: list[dict[str, Any]] = []
+    cursor = 0.0
+    index = 1
+    while cursor < duration - 1e-6:
+        next_t1 = min(duration, round(cursor + target_window, 3))
+        windows.append(
+            {
+                "segment_id": f"seg_{index:02d}",
+                "t0": round(cursor, 3),
+                "t1": round(next_t1, 3),
+                "duration_sec": round(max(0.0, next_t1 - cursor), 3),
+                "transcript_slice": "",
+                "intensity": 0.45,
+                "is_lip_sync_candidate": False,
+                "rhythmic_anchor": "none",
+                "first_last_candidate": False,
+                "route_hints": {"i2v_fit": "ok", "lip_sync_fit": "too_short", "first_last_fit": "too_short"},
+                "local_energy_band": "medium",
+                "energy_delta_vs_prev": "hold" if index > 1 else "reset",
+                "delivery_mode": "observational",
+                "semantic_weight": "low",
+                "semantic_turn_candidate": False,
+                "release_candidate": False,
+                "finality_candidate": "none",
+                "visual_density_hint": "moderate",
+                "stillness_candidate": False,
+                "lyrical_density": "low",
+            }
+        )
+        cursor = next_t1
+        index += 1
+    if len(windows) > 1 and windows[-1]["duration_sec"] < 4.0:
+        windows.pop()
+        windows[-1]["t1"] = round(duration, 3)
+        windows[-1]["duration_sec"] = round(max(0.0, windows[-1]["t1"] - windows[-1]["t0"]), 3)
+        windows[-1]["finality_candidate"] = "closure"
+        windows[-1]["route_hints"] = {"i2v_fit": "good", "lip_sync_fit": "ok", "first_last_fit": "ok"}
+    elif windows:
+        windows[-1]["finality_candidate"] = "closure"
+        if windows[-1]["duration_sec"] >= 4.0:
+            windows[-1]["route_hints"] = {"i2v_fit": "good", "lip_sync_fit": "ok", "first_last_fit": "ok"}
+    for idx, row in enumerate(windows, start=1):
+        row["segment_id"] = f"seg_{idx:02d}"
+        row["first_last_candidate"] = bool(idx == len(windows) and row.get("duration_sec", 0.0) >= 4.0)
+    raw_payload = {
+        "audio_map_version": "1.1",
+        "audio_id": str(audio_id or "audio_source"),
+        "vocal_profile": {"vocal_gender": "unknown", "vocal_owner_role": "unknown", "confidence": 0.0, "reason": "fallback_timeout"},
+        "vocal_gender": "unknown",
+        "vocal_owner_role": "unknown",
+        "vocal_owner_confidence": 0.0,
+        "segments": windows,
+        "phrase_units": [],
+        "no_split_ranges": [],
+        "diagnostics": {
+            "total_segments_duration": duration,
+            "coverage_ok": True,
+            "transcript_used": False,
+            "dynamics_used": False,
+            "validation_notes": ["fallback_generated_from_duration_due_to_gemini_timeout"],
+        },
+    }
+    return _build_legacy_compat_audio_payload_from_segments_v11(raw_payload, duration_sec=duration, analysis_mode=analysis_mode)
+
+
 def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     story_core = _safe_dict(package.get("story_core"))
@@ -12955,9 +13100,19 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["audio_map_segmentation_payload_summary"] = {}
     diagnostics["audio_map_segmentation_normalized_summary"] = {}
     diagnostics["audio_map_segmentation_retry_used"] = False
+    diagnostics["audio_map_segmentation_retry_reason"] = ""
+    diagnostics["audio_map_segmentation_retry_timeout_sec"] = 0
     diagnostics["audio_map_segmentation_retry_feedback"] = ""
     diagnostics["audio_map_segmentation_last_error_code"] = ""
     diagnostics["audio_map_segmentation_last_errors"] = []
+    diagnostics["audio_map_timeout_count"] = 0
+    diagnostics["audio_map_timeout_attempts"] = 0
+    diagnostics["audio_map_final_error_code"] = ""
+    diagnostics["audio_map_request_timeout_sec"] = 180
+    diagnostics["audio_map_retry_timeout_sec"] = 240
+    diagnostics["audio_map_compact_prompt_used"] = False
+    diagnostics["audio_map_used_fallback"] = False
+    diagnostics["audio_map_segmentation_used_fallback"] = False
     diagnostics["audio_map_video_ready_validation"] = False
     diagnostics["audio_map_short_segments_found"] = []
     diagnostics["audio_map_validation_error"] = ""
@@ -13086,8 +13241,13 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     last_errors: list[str] = []
     validation_feedback = ""
     retry_used = False
+    timeout_count = 0
+    request_timeout_sec = 180
+    retry_timeout_sec = 240
+    compact_prompt_used = False
     try:
         for attempt in range(2):
+            attempt_timeout = request_timeout_sec if attempt == 0 else retry_timeout_sec
             gemini_result = build_gemini_audio_segmentation(
                 api_key=gemini_api_key,
                 audio_path=analysis_path,
@@ -13098,6 +13258,8 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
                 dynamics_summary=_safe_dict(raw_analysis.get("summary")),
                 role_identity_mapping=role_identity_mapping_payload,
                 validation_feedback=validation_feedback,
+                request_timeout_sec=attempt_timeout,
+                compact_prompt=bool(attempt > 0),
             )
             diagnostics["audio_map_segmentation_prompt_version"] = str(gemini_result.get("prompt_version") or "")
             diagnostics["audio_map_used_model"] = str(gemini_result.get("used_model") or diagnostics.get("audio_map_used_model") or "")
@@ -13110,10 +13272,24 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
             diagnostics["audio_segmentation_transport_error"] = str(transport_meta.get("audio_segmentation_transport_error") or "")
             diagnostics["audio_map_segmentation_raw_response"] = str(gemini_result.get("raw_text") or "")
             diagnostics["audio_map_segmentation_retry_used"] = retry_used
+            diagnostics["audio_map_request_timeout_sec"] = int(request_timeout_sec)
+            diagnostics["audio_map_retry_timeout_sec"] = int(retry_timeout_sec)
+            diagnostics["audio_map_compact_prompt_used"] = bool(attempt > 0)
 
             if not bool(gemini_result.get("ok")):
-                last_error_code = "AUDIO_SCHEMA_INVALID"
-                last_errors = [str(gemini_result.get("error") or "gemini_generation_failed")]
+                raw_error = str(gemini_result.get("error") or "gemini_generation_failed")
+                if _is_audio_segmentation_timeout_error(raw_error):
+                    timeout_count += 1
+                    last_error_code = "AUDIO_GEMINI_TIMEOUT"
+                    last_errors = [f"Gemini audio segmentation timed out after {int(attempt_timeout)} seconds", raw_error]
+                    diagnostics["audio_segmentation_transport_error"] = raw_error
+                    diagnostics["audio_map_segmentation_retry_reason"] = "timeout" if attempt == 0 else diagnostics.get("audio_map_segmentation_retry_reason")
+                    diagnostics["audio_map_segmentation_retry_timeout_sec"] = int(retry_timeout_sec) if attempt == 0 else int(
+                        diagnostics.get("audio_map_segmentation_retry_timeout_sec") or retry_timeout_sec
+                    )
+                else:
+                    last_error_code = "AUDIO_SCHEMA_INVALID"
+                    last_errors = [raw_error]
                 validation_feedback = _validation_feedback(last_error_code, last_errors)
                 diagnostics["audio_map_segmentation_last_error_code"] = last_error_code
                 diagnostics["audio_map_segmentation_last_errors"] = last_errors
@@ -13141,31 +13317,53 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
 
             if attempt == 0:
                 retry_used = True
+                compact_prompt_used = True
                 diagnostics["audio_map_segmentation_retry_used"] = True
                 _append_diag_event(package, f"audio_map strict validation failed, requesting one retry: {validation_feedback}", stage_id="audio_map")
                 continue
             break
 
         if not strict_result or not strict_result.ok:
+            diagnostics["audio_map_timeout_count"] = int(timeout_count)
+            diagnostics["audio_map_timeout_attempts"] = int(timeout_count)
+            diagnostics["audio_map_final_error_code"] = str(last_error_code or "")
             if last_error_code == "AUDIO_MAP_INVALID_SHORT_SEGMENT":
                 diagnostics["audio_map_validation_error"] = "AUDIO_MAP_INVALID_SHORT_SEGMENT"
-            raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
+            if last_error_code == "AUDIO_GEMINI_TIMEOUT" and timeout_count >= 2:
+                diagnostics["audio_map_used_fallback"] = True
+                diagnostics["audio_map_segmentation_used_fallback"] = True
+                diagnostics["audio_map_primary_fallback_reason"] = "gemini_timeout"
+                fallback_audio_map = _build_audio_map_timeout_fallback(
+                    duration_sec=duration_sec,
+                    audio_id=str(input_pkg.get("job_id") or input_pkg.get("id") or "audio_source"),
+                    analysis_mode="audio_map_v1_1_timeout_fallback",
+                )
+                strict_result = validate_audio_map_v11(fallback_audio_map, audio_duration_sec=duration_sec)
+                if not strict_result.ok:
+                    raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
+                audio_map = fallback_audio_map
+            else:
+                raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
 
-        packaged_audio_payload, packaging_diag = _apply_scene_packaging_policy_to_audio_segments(strict_result.normalized)
-        packaged_validation = validate_audio_map_v11(packaged_audio_payload, audio_duration_sec=duration_sec)
-        if packaged_validation.ok:
-            strict_result = packaged_validation
-        else:
-            packaging_diag["fallback_reason"] = "packaging_validation_failed_keep_original_segments"
-            packaging_diag["fallback_error_code"] = str(packaged_validation.error_code or "")
-            packaging_diag["fallback_errors"] = _safe_list(packaged_validation.errors)
+        if "audio_map" not in locals():
+            packaged_audio_payload, packaging_diag = _apply_scene_packaging_policy_to_audio_segments(strict_result.normalized)
+            packaged_validation = validate_audio_map_v11(packaged_audio_payload, audio_duration_sec=duration_sec)
+            if packaged_validation.ok:
+                strict_result = packaged_validation
+            else:
+                packaging_diag["fallback_reason"] = "packaging_validation_failed_keep_original_segments"
+                packaging_diag["fallback_error_code"] = str(packaged_validation.error_code or "")
+                packaging_diag["fallback_errors"] = _safe_list(packaged_validation.errors)
 
-        diagnostics["audio_map_scene_packaging_policy"] = packaging_diag
-        audio_map = _build_legacy_compat_audio_payload_from_segments_v11(
-            strict_result.normalized,
-            duration_sec=duration_sec,
-            analysis_mode="audio_map_v1_1_strict",
-        )
+            diagnostics["audio_map_scene_packaging_policy"] = packaging_diag
+            audio_map = _build_legacy_compat_audio_payload_from_segments_v11(
+                strict_result.normalized,
+                duration_sec=duration_sec,
+                analysis_mode="audio_map_v1_1_strict",
+            )
+        if strict_result and strict_result.ok and not bool(diagnostics.get("audio_map_used_fallback")):
+            last_error_code = ""
+            last_errors = []
     finally:
         if cleanup_path:
             try:
@@ -13260,11 +13458,16 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         "segments": _safe_list(audio_map.get("segments")),
     }
 
-    diagnostics["audio_map_analysis_mode"] = "audio_map_v1_1_strict"
-    diagnostics["audio_map_used_fallback"] = False
-    diagnostics["audio_map_primary_fallback_reason"] = ""
+    diagnostics["audio_map_analysis_mode"] = str(audio_map.get("analysis_mode") or "audio_map_v1_1_strict")
     diagnostics["audio_map_segmentation_backend"] = "gemini"
-    diagnostics["audio_map_segmentation_used_fallback"] = False
+    diagnostics["audio_map_timeout_count"] = int(timeout_count)
+    diagnostics["audio_map_timeout_attempts"] = int(timeout_count)
+    diagnostics["audio_map_final_error_code"] = str(last_error_code or "")
+    diagnostics["audio_map_compact_prompt_used"] = bool(compact_prompt_used)
+    if timeout_count and not diagnostics.get("audio_map_segmentation_retry_reason"):
+        diagnostics["audio_map_segmentation_retry_reason"] = "timeout"
+    if diagnostics.get("audio_map_segmentation_retry_reason") == "timeout":
+        diagnostics["audio_map_segmentation_retry_timeout_sec"] = int(retry_timeout_sec)
     diagnostics["audio_map_segmentation_error"] = str(diagnostics.get("audio_map_segmentation_error") or "")
     diagnostics["audio_map_segmentation_error_detail"] = str(diagnostics.get("audio_map_segmentation_error_detail") or "")
     diagnostics["audio_map_validation_flags"] = validation_flags
