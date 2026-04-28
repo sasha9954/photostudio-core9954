@@ -646,7 +646,7 @@ def _ensure_director_v2_structured_contract_fields(
     connected_summary = _safe_dict(payload.get("connected_context_summary"))
     summary_refs_by_role = _safe_dict(connected_summary.get("refsPresentByRole"))
     summary_connected_refs_by_role = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
-    payload_selected_refs = _safe_list(payload.get("selected_refs"))
+    payload_selected_refs = payload.get("selected_refs")
 
     performance_roles = {
         str(role_id or "").strip().lower()
@@ -699,9 +699,27 @@ def _ensure_director_v2_structured_contract_fields(
             token = value.strip().lower()
             if not token:
                 return False
-            if token in {"false", "0", "none", "null", "no", "absent", "no_reference_needed", "no reference", "без рефа", "референс не нужен"}:
+            if token in {
+                "auto",
+                "false",
+                "0",
+                "none",
+                "null",
+                "no",
+                "absent",
+                "no_reference_needed",
+                "no reference",
+                "без рефа",
+                "референс не нужен",
+            }:
                 return False
-            return True
+            if re.fullmatch(r"(character|role)_\d+", token):
+                return False
+            if token.startswith(("http://", "https://", "/static/", "data:image")):
+                return True
+            if re.search(r"\.(png|jpg|jpeg|webp|gif|bmp)(?:[?#].*)?$", token):
+                return True
+            return False
         if isinstance(value, list):
             return any(_has_visual_ref_value(item) for item in value)
         if isinstance(value, dict):
@@ -714,6 +732,12 @@ def _ensure_director_v2_structured_contract_fields(
         return False
 
     def _role_has_visual_refs(role_id: str) -> bool:
+        selected_refs_dict = _safe_dict(payload_selected_refs) if isinstance(payload_selected_refs, dict) else {}
+        if selected_refs_dict:
+            if _has_visual_ref_value(_lookup_role_map_value(selected_refs_dict, role_id)):
+                return True
+            if _has_visual_ref_value(_lookup_role_map_value(selected_refs_dict, f"ref_{role_id}")):
+                return True
         for role_map in (
             payload_context_refs,
             payload_refs_by_role,
@@ -722,13 +746,13 @@ def _ensure_director_v2_structured_contract_fields(
         ):
             if _has_visual_ref_value(_lookup_role_map_value(role_map, role_id)):
                 return True
-        for item in payload_selected_refs:
+        for item in _safe_list(payload_selected_refs):
             row = _safe_dict(item)
             item_role = str(row.get("role_id") or row.get("role") or row.get("character_role") or "").strip().lower()
-            if item_role == role_id.lower():
+            if item_role == role_id.lower() and _has_visual_ref_value(row):
                 return True
             item_roles = [str(v or "").strip().lower() for v in _safe_list(row.get("role_ids")) if str(v or "").strip()]
-            if role_id.lower() in item_roles:
+            if role_id.lower() in item_roles and _has_visual_ref_value(row):
                 return True
         return False
 
@@ -950,6 +974,7 @@ def _ensure_director_v2_structured_contract_fields(
     contract["role_usage_contract"] = normalized_role_usage
 
     existing_scene_requirements = _safe_list(contract.get("scene_requirements"))
+    scene_requirements_are_structured = bool(existing_scene_requirements)
     normalized_requirements: list[dict[str, Any]] = []
     for idx, row in enumerate(existing_scene_requirements, start=1):
         req = _safe_dict(row)
@@ -972,7 +997,9 @@ def _ensure_director_v2_structured_contract_fields(
             }
         )
 
-    scene_requirements_source = "director_contract.scene_requirements"
+    scene_requirements_source = ""
+    if scene_requirements_are_structured:
+        scene_requirements_source = "director_contract.scene_requirements"
     if clip_mode and not normalized_requirements:
         mandatory_scene_rows: list[str] = []
         scene_contract = _safe_dict(contract.get("scene_contract"))
@@ -1081,6 +1108,7 @@ def _ensure_director_v2_structured_contract_fields(
         "director_contract_v2_role_route_inference_sources": role_route_inference_sources,
         "director_contract_v2_reference_detection_by_role": reference_detection_by_role,
         "director_contract_v2_scene_requirements_source": scene_requirements_source,
+        "director_contract_v2_scene_requirements_are_structured": scene_requirements_are_structured,
     }
     return contract, diagnostics
 
