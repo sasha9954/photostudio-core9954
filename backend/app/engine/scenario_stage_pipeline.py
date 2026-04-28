@@ -5202,7 +5202,16 @@ def _is_strict_hard_route_contract(
     if not hard_map_present and not routes_are_hard_locked:
         return False
     strict_preset = str(creative_config.get("route_strategy_preset") or "").strip().lower() == "no_first_last_50_50_0"
-    scene_distribution_contract = _safe_dict(creative_config.get("scene_distribution_contract"))
+    director_contract = _safe_dict(package.get("director_contract"))
+    if not director_contract:
+        director_contract = _safe_dict(package.get("director_package"))
+    if not director_contract:
+        director_contract = _safe_dict(input_pkg.get("director_contract"))
+    if not director_contract:
+        director_contract = _safe_dict(input_pkg.get("director_package"))
+    scene_distribution_contract = _safe_dict(director_contract.get("scene_distribution_contract"))
+    if not scene_distribution_contract:
+        scene_distribution_contract = _safe_dict(creative_config.get("scene_distribution_contract"))
     approved_balanced_50_50 = bool(scene_distribution_contract.get("user_approved")) and (
         str(scene_distribution_contract.get("route_balance") or "").strip().lower() == "balanced_50_50"
     )
@@ -5350,6 +5359,10 @@ def _repair_scene_plan_final_semantics(
                 changed_local = True
         return changed_local
 
+    def _append_segment_once(bucket: list[str], segment_id: str) -> None:
+        if segment_id and segment_id not in bucket:
+            bucket.append(segment_id)
+
     def _upstream_primary_role(segment_id: str, row: dict[str, Any]) -> str:
         core_row = _safe_dict(core_rows_by_segment.get(segment_id))
         beat_primary_subject = _canonical_subject_id(core_row.get("beat_primary_subject"))
@@ -5392,28 +5405,25 @@ def _repair_scene_plan_final_semantics(
                 if _repair_row_to_hard_ia2v_performance(row, resolved_vocal_owner_role):
                     changed = True
                 route_lock_updates[segment_id] = "ia2v"
-                hard_ia2v_rows_repaired_to_performance_segments.append(segment_id)
-            elif strict_hard_contract and hard_locked_route == "i2v":
+                _append_segment_once(hard_ia2v_rows_repaired_to_performance_segments, segment_id)
+                if changed:
+                    rows_updated += 1
+                rewritten_rows.append(row)
+                continue
+            if strict_hard_contract and hard_locked_route == "i2v":
                 if route != "i2v":
                     row["route"] = "i2v"
                     changed = True
                 route_lock_updates[segment_id] = "i2v"
                 if _clean_i2v_lipsync_fields(row):
                     changed = True
-                hard_i2v_rows_cleaned_lipsync_segments.append(segment_id)
+                _append_segment_once(hard_i2v_rows_cleaned_lipsync_segments, segment_id)
+                if changed:
+                    rows_updated += 1
+                rewritten_rows.append(row)
+                continue
 
             if resolved_primary == "world":
-                if strict_hard_contract and hard_locked_route == "ia2v":
-                    if _repair_row_to_hard_ia2v_performance(row, resolved_vocal_owner_role):
-                        changed = True
-                    route_lock_updates[segment_id] = "ia2v"
-                    hard_ia2v_rows_repaired_to_performance_segments.append(segment_id)
-                    if changed:
-                        world_rows_repaired += 1
-                    if changed:
-                        rows_updated += 1
-                    rewritten_rows.append(row)
-                    continue
                 if primary_role != "world":
                     row["primary_role"] = "world"
                     changed = True
@@ -15323,6 +15333,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         "ia2v": sum(1 for route in backend_hard_route_map.values() if route == "ia2v"),
         "first_last": sum(1 for route in backend_hard_route_map.values() if route == "first_last"),
     }
+    diagnostics["scene_plan_hard_route_map_enabled"] = bool(backend_hard_route_map)
+    diagnostics["scene_plan_hard_route_map_source"] = str(backend_hard_route_source or "")
+    diagnostics["scene_plan_hard_route_map_by_segment"] = dict(backend_hard_route_map)
+    diagnostics["scene_plan_hard_route_map_target_counts"] = dict(backend_hard_route_target_counts)
+    package["diagnostics"] = diagnostics
 
     result = build_gemini_scene_plan(
         api_key=gemini_api_key,
