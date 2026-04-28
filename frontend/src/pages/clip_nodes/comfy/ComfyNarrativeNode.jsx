@@ -12,6 +12,7 @@ import {
   isNarrativeContentTypeEnabled,
   summarizeNarrativeConnectedContext,
   buildScenarioDirectorRequestPayload,
+  buildScenarioInputSignatureFromState,
 } from "./comfyNarrativeDomain";
 
 const NARRATIVE_HANDLE_TOP = 104;
@@ -65,14 +66,6 @@ function buildDirectorContractFromConfig(directorConfig) {
   };
 }
 
-function stableJson(value) {
-  try {
-    return JSON.stringify(value || {});
-  } catch {
-    return "{}";
-  }
-}
-
 export default function ComfyNarrativeNode({ id, data }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
@@ -81,12 +74,15 @@ export default function ComfyNarrativeNode({ id, data }) {
   const [directorChatDone, setDirectorChatDone] = useState(false);
   const [answers, setAnswers] = useState(data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {});
   const [staleDirectorState, setStaleDirectorState] = useState(Boolean(data?.directorStale));
-  const directorInputSignature = stableJson({
-    directorNote: data?.directorNote,
-    text: data?.text,
-    aiNarrative: data?.aiNarrative,
-    connected: data?.connectedInputs,
-  });
+  const directorInputSignature = buildScenarioInputSignatureFromState(data || {});
+  const storedDirectorSignature = String(
+    data?.director_created_for_signature
+    || data?.director_contract?.created_for_signature
+    || data?.director_package?.created_for_signature
+    || data?.storyboardPackage?.diagnostics?.director_created_for_signature
+    || ""
+  ).trim();
+  const directorSignatureMatchesCurrent = !storedDirectorSignature || storedDirectorSignature === directorInputSignature;
   const prevDirectorInputSignatureRef = useRef(directorInputSignature);
   const safeContentType = getSafeNarrativeContentType(data?.contentType, "music_video");
   const resolvedSource = data?.resolvedSource || {};
@@ -138,17 +134,30 @@ export default function ComfyNarrativeNode({ id, data }) {
     setDirectorChatDone(false);
     setStaleDirectorState(true);
 
-    if (hasPersistedAnswers || hasPersistedConfig) {
+    if (hasPersistedAnswers || hasPersistedConfig || !directorSignatureMatchesCurrent) {
       data?.onFieldChange?.(id, {
         directorStale: true,
+        director_signature_matches_current: false,
+        downstream_cleared_due_to_input_change: true,
+        director_stale_reason: "scenario_input_signature_mismatch",
         directorAnswers: {},
         director_config: {},
         director_contract: {},
         director_package: {},
+        directorOutput: null,
+        storyboardOut: null,
+        storyboardPackage: {},
+        stageStatuses: {},
+        diagnostics: {
+          current_scenario_input_signature: directorInputSignature,
+          stored_director_signature: storedDirectorSignature,
+          director_signature_matches_current: false,
+          downstream_cleared_due_to_input_change: true,
+        },
         director_summary: "",
       });
     }
-  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config, answers, dynamicQuestions]);
+  }, [directorInputSignature, id, data?.onFieldChange, data?.directorAnswers, data?.director_config, answers, dynamicQuestions, directorSignatureMatchesCurrent, storedDirectorSignature]);
 
   useEffect(() => {
     const persistedAnswers = data?.directorAnswers && typeof data.directorAnswers === "object" ? data.directorAnswers : {};
@@ -237,8 +246,9 @@ export default function ComfyNarrativeNode({ id, data }) {
     setAiLoading(true);
     try {
       const directorPayload = buildScenarioDirectorRequestPayload(data || {}) || {};
+      const canReuseDirectorArtifacts = directorSignatureMatchesCurrent;
       const nextAnswers = {
-        ...(answers && typeof answers === "object" ? answers : {}),
+        ...(canReuseDirectorArtifacts && answers && typeof answers === "object" ? answers : {}),
         ...(answerPatch && typeof answerPatch === "object" ? answerPatch : {}),
       };
       const body = {
@@ -259,8 +269,10 @@ export default function ComfyNarrativeNode({ id, data }) {
         refs_by_role: connectedContext?.refsByRole || {},
         directorAnswers: nextAnswers,
         director_config: data?.director_config && typeof data.director_config === "object" ? data.director_config : {},
-        director_contract: data?.director_contract && typeof data.director_contract === "object" ? data.director_contract : {},
-        director_package: data?.director_package && typeof data.director_package === "object" ? data.director_package : {},
+        director_contract: canReuseDirectorArtifacts && data?.director_contract && typeof data.director_contract === "object" ? data.director_contract : {},
+        director_package: canReuseDirectorArtifacts && data?.director_package && typeof data.director_package === "object" ? data.director_package : {},
+        current_scenario_input_signature: directorInputSignature,
+        force_regenerate: phase === "init",
         full_node_payload: data && typeof data === "object" ? data : {},
       };
       console.debug("[AI DIRECTOR V2 REQUEST]", {
@@ -288,13 +300,22 @@ export default function ComfyNarrativeNode({ id, data }) {
       };
 
       if (resolvedDone) {
+        const createdForSignature = String(
+          json?.current_scenario_input_signature
+          || json?.director_created_for_signature
+          || directorInputSignature
+        ).trim();
         const finalConfig = json?.director_config && typeof json.director_config === "object" ? json.director_config : {};
         const finalContract = json?.director_contract && typeof json.director_contract === "object"
           ? json.director_contract
           : buildDirectorContractFromConfig(finalConfig);
         const finalPackage = json?.director_package && typeof json.director_package === "object" ? json.director_package : {};
+        finalContract.created_for_signature = createdForSignature;
+        finalPackage.created_for_signature = createdForSignature;
         Object.assign(patch, {
           directorStale: false,
+          director_signature_matches_current: createdForSignature === directorInputSignature,
+          director_created_for_signature: createdForSignature,
           director_config: finalConfig,
           director_contract: finalContract,
           director_package: finalPackage,
@@ -307,6 +328,7 @@ export default function ComfyNarrativeNode({ id, data }) {
       } else {
         Object.assign(patch, {
           directorStale: true,
+          director_signature_matches_current: false,
           director_config_preview: json?.director_config_preview && typeof json.director_config_preview === "object" ? json.director_config_preview : {},
           director_contract_preview: json?.director_contract_preview && typeof json.director_contract_preview === "object" ? json.director_contract_preview : {},
           director_package_preview: json?.director_package_preview && typeof json.director_package_preview === "object" ? json.director_package_preview : {},
@@ -441,6 +463,10 @@ export default function ComfyNarrativeNode({ id, data }) {
                   director_config: {},
                   director_contract: {},
                   director_package: {},
+                  director_created_for_signature: "",
+                  directorOutput: null,
+                  storyboardOut: null,
+                  storyboardPackage: {},
                   directorStale: true,
                 })}
                 placeholder="Например: добавь экшена, сделай мрачнее, усиль конфликт"
@@ -459,7 +485,7 @@ export default function ComfyNarrativeNode({ id, data }) {
             <section className="clipSB_narrativeSection">
               <div className="clipSB_brainLabel">AI режиссёр</div>
               {assistantMessage ? <div className="clipSB_narrativeEmptyHint">{assistantMessage}</div> : null}
-              {staleDirectorState ? <div className="clipSB_narrativeEmptyHint">⚠️ Режиссура устарела — пересоберите через AI.</div> : null}
+              {(staleDirectorState || !directorSignatureMatchesCurrent) ? <div className="clipSB_narrativeEmptyHint">⚠️ Режиссура устарела — сформируйте заново.</div> : null}
               {dynamicQuestions.length > 0 ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {dynamicQuestions.map((question) => {
@@ -525,7 +551,7 @@ export default function ComfyNarrativeNode({ id, data }) {
                   </div>
                 </div>
               ) : null}
-              {directorChatDone ? (
+              {directorChatDone && directorSignatureMatchesCurrent ? (
                 <div className="director-question">
                   <div className="question-title">Режиссура собрана ✅ Можно запускать общий пайплайн.</div>
                   <div className="clipSB_narrativeContextChips">

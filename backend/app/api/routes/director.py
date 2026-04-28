@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from typing import Any
 
@@ -73,6 +74,56 @@ ALLOWED_DIRECTOR_VALUES: dict[str, set[str]] = {
         "dynamic_music",
     },
 }
+
+
+def _stable_hash_payload(value: Any) -> str:
+    try:
+        raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        raw = str(value or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _compute_payload_scenario_input_signature(payload: dict[str, Any]) -> str:
+    safe = payload if isinstance(payload, dict) else {}
+    source = _safe_dict(safe.get("source"))
+    metadata = _safe_dict(safe.get("metadata"))
+    metadata_audio = _safe_dict(metadata.get("audio"))
+    refs_by_role = _safe_dict(safe.get("refs_by_role") or safe.get("context_refs"))
+    connected_context = _safe_dict(safe.get("connected_context_summary"))
+    creative_config = _safe_dict(safe.get("creative_config") or _safe_dict(safe.get("director_controls")).get("creative_config"))
+    route_strategy = {
+        "mode": str(_safe_dict(safe.get("route_strategy")).get("mode") or creative_config.get("route_strategy_mode") or "").strip().lower(),
+        "preset": str(_safe_dict(safe.get("route_strategy")).get("preset") or creative_config.get("route_strategy_preset") or "").strip().lower(),
+        "targets": _safe_dict(safe.get("routeTargetsPerBlock") or creative_config.get("route_targets_per_block")),
+        "lipsync_ratio": creative_config.get("lipsync_ratio"),
+        "first_last_ratio": creative_config.get("first_last_ratio"),
+        "i2v_ratio": creative_config.get("i2v_ratio"),
+    }
+    signature_payload = {
+        "note": str(safe.get("narrative_note") or safe.get("director_note") or safe.get("story_text") or safe.get("text") or "").strip(),
+        "active_source_mode": str(source.get("source_mode") or metadata.get("activeSourceMode") or "").strip().lower(),
+        "audio_url": str(metadata_audio.get("url") or source.get("source_value") or safe.get("audioUrl") or "").strip(),
+        "audio_duration_sec": float(
+            safe.get("audioDurationSec")
+            or safe.get("audio_duration_sec")
+            or source.get("audioDurationSec")
+            or metadata_audio.get("durationSec")
+            or 0
+        ),
+        "refs_by_role": refs_by_role,
+        "refs_present_by_role": _safe_dict(connected_context.get("refsPresentByRole") or connected_context.get("refs_present_by_role")),
+        "connected_refs_by_role": _safe_dict(connected_context.get("connectedRefsPresentByRole") or connected_context.get("connected_refs_present_by_role")),
+        "director_mode": str(safe.get("director_mode") or metadata.get("director_mode") or "").strip().lower(),
+        "content_type": str(safe.get("content_type") or safe.get("contentType") or _safe_dict(safe.get("director_controls")).get("contentType") or "").strip().lower(),
+        "format": str(safe.get("format") or _safe_dict(safe.get("director_controls")).get("format") or "").strip(),
+        "route_strategy": route_strategy,
+    }
+    return _stable_hash_payload(signature_payload)
+
+
+def _director_artifact_signature(value: Any) -> str:
+    return str(_safe_dict(value).get("created_for_signature") or "").strip()
 
 
 def _world_mode_options(world_hint: str) -> list[dict[str, str]]:
@@ -1829,6 +1880,7 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         director_package,
         payload,
     )
+    current_signature = str(payload.get("current_scenario_input_signature") or _compute_payload_scenario_input_signature(payload)).strip()
     diagnostics = {
         "director_v2": True,
         "gemini_questions_generated": bool(questions) or done,
@@ -1859,7 +1911,18 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_contract_v2_scene_requirements_count": int(director_v2_contract_diagnostics.get("director_contract_v2_scene_requirements_count") or 0),
         "director_contract_v2_route_semantics_present": bool(director_v2_contract_diagnostics.get("director_contract_v2_route_semantics_present")),
         "director_contract_v2_missing_fields": _safe_list(director_v2_contract_diagnostics.get("director_contract_v2_missing_fields")),
+        "current_scenario_input_signature": current_signature,
+        "stored_director_signature": str(_director_artifact_signature(director_contract) or _director_artifact_signature(director_package)),
     }
+    diagnostics["director_signature_matches_current"] = bool(
+        not diagnostics["stored_director_signature"]
+        or diagnostics["stored_director_signature"] == current_signature
+    )
+    diagnostics.setdefault("director_stale_contract_ignored", False)
+    if done:
+        director_contract["created_for_signature"] = current_signature
+        director_package["created_for_signature"] = current_signature
+        diagnostics["director_created_for_signature"] = current_signature
     assistant_message = str(parsed.get("assistant_message") or "").strip()
     if done and is_clip_music_video and clip_valid:
         assistant_message = "Режиссура клипа собрана. Можно запускать пайплайн."
@@ -1879,6 +1942,8 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_config": director_config,
         "director_contract": director_contract,
         "director_package": director_package,
+        "director_created_for_signature": str(director_contract.get("created_for_signature") or director_package.get("created_for_signature") or current_signature),
+        "current_scenario_input_signature": current_signature,
         "director_config_preview": _safe_dict(parsed.get("director_config_preview")),
         "director_contract_preview": _safe_dict(parsed.get("director_contract_preview")),
         "director_package_preview": _safe_dict(parsed.get("director_package_preview")),
@@ -1891,6 +1956,36 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
 async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
     raw_payload = payload if isinstance(payload, dict) else {}
     if str(raw_payload.get("mode") or "").strip().lower() == "director_v2":
+        current_signature = str(
+            raw_payload.get("current_scenario_input_signature")
+            or _compute_payload_scenario_input_signature(raw_payload)
+        ).strip()
+        raw_payload["current_scenario_input_signature"] = current_signature
+        incoming_contract = _safe_dict(raw_payload.get("director_contract"))
+        incoming_package = _safe_dict(raw_payload.get("director_package"))
+        incoming_answers = _safe_dict(raw_payload.get("directorAnswers") or raw_payload.get("director_answers"))
+        stored_signature = str(
+            _director_artifact_signature(incoming_contract)
+            or _director_artifact_signature(incoming_package)
+            or raw_payload.get("director_created_for_signature")
+            or ""
+        ).strip()
+        stale_contract_ignored = bool(stored_signature and current_signature and stored_signature != current_signature)
+        if stale_contract_ignored:
+            raw_payload["director_contract"] = {}
+            raw_payload["director_package"] = {}
+            raw_payload["directorAnswers"] = {}
+            raw_payload["director_answers"] = {}
+        raw_payload.setdefault("diagnostics", {})
+        raw_payload["diagnostics"] = {
+            **_safe_dict(raw_payload.get("diagnostics")),
+            "current_scenario_input_signature": current_signature,
+            "stored_director_signature": stored_signature,
+            "director_signature_matches_current": bool(not stored_signature or stored_signature == current_signature),
+            "director_stale_contract_ignored": stale_contract_ignored,
+            "stale_signature": stored_signature if stale_contract_ignored else "",
+            "persisted_director_result_reused": bool(not stale_contract_ignored and bool(incoming_contract or incoming_package or incoming_answers)),
+        }
         key_info = resolve_gemini_api_key()
         if not key_info.get("valid"):
             return {
@@ -1955,6 +2050,14 @@ async def director_chat(payload: dict[str, Any]) -> dict[str, Any]:
                     },
                 }
         normalized = _normalize_director_v2_output(parsed, raw_payload)
+        normalized_diag = _safe_dict(normalized.get("diagnostics"))
+        normalized_diag["director_stale_contract_ignored"] = bool(stale_contract_ignored)
+        normalized_diag["stale_signature"] = stored_signature if stale_contract_ignored else ""
+        normalized_diag["current_signature"] = current_signature
+        normalized_diag["persisted_director_result_reused"] = bool(
+            not stale_contract_ignored and bool(incoming_contract or incoming_package or incoming_answers)
+        )
+        normalized["diagnostics"] = normalized_diag
         diagnostics = _safe_dict(normalized.get("diagnostics"))
         is_clip_mode = _is_clip_music_video_payload(raw_payload)
         clip_missing_fields = _safe_list(diagnostics.get("director_clip_missing_fields"))

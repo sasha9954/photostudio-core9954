@@ -278,6 +278,7 @@ def _build_director_contract_from_config(config: dict[str, Any]) -> dict[str, An
 
 def _normalize_director_package_input(package: dict[str, Any]) -> None:
     input_pkg = _safe_dict(package.get("input"))
+    current_signature = str(_compute_input_signatures(package).get("scenario_input_signature") or "").strip()
     director_cfg = _safe_dict(input_pkg.get("director_config"))
     if not director_cfg:
         source_cfg = _safe_dict(package.get("director_config"))
@@ -297,6 +298,24 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
                 if _to_contract_location(item)
             ]
     director_contract = _safe_dict(input_pkg.get("director_contract"))
+    director_package = _safe_dict(input_pkg.get("director_package") or package.get("director_package"))
+    stored_signature = str(
+        director_contract.get("created_for_signature")
+        or director_package.get("created_for_signature")
+        or ""
+    ).strip()
+    stale_contract_ignored = bool(stored_signature and current_signature and stored_signature != current_signature)
+    if stale_contract_ignored:
+        director_contract = {}
+        director_package = {}
+        input_pkg["director_contract"] = {}
+        input_pkg["director_package"] = {}
+        package["director_contract"] = {}
+        package["director_package"] = {}
+        cleared_package = _clear_downstream_stage_outputs(package, "input_package", "stale_director_contract")
+        package.clear()
+        package.update(cleared_package)
+        input_pkg = _safe_dict(package.get("input"))
     if not director_contract and director_cfg:
         director_contract = _build_director_contract_from_config(director_cfg)
     if director_cfg:
@@ -305,6 +324,12 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
         input_pkg["director_contract"] = director_contract
     package["input"] = input_pkg
     diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["current_scenario_input_signature"] = current_signature
+    diagnostics["stored_director_signature"] = stored_signature
+    diagnostics["director_signature_matches_current"] = bool(not stored_signature or stored_signature == current_signature)
+    diagnostics["director_stale_contract_ignored"] = stale_contract_ignored
+    diagnostics["stale_signature"] = stored_signature if stale_contract_ignored else ""
+    diagnostics["current_signature"] = current_signature
     diagnostics["director_config_present"] = bool(director_cfg)
     diagnostics["director_contract_present"] = bool(director_contract)
     applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
@@ -1101,6 +1126,7 @@ def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
     }
     audio_payload = {
         "audio_url": str(input_pkg.get("audio_url") or "").strip(),
+        "audio_duration_sec": float(input_pkg.get("audio_duration_sec") or input_pkg.get("audioDurationSec") or 0),
     }
     creative_payload = _safe_dict(input_pkg.get("creative_config"))
     refs_payload = {
@@ -1119,6 +1145,11 @@ def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
             "audio": audio_payload,
             "refs": refs_payload,
             "creative_config": creative_payload,
+            "active_source_mode": str(_safe_dict(input_pkg.get("source")).get("source_mode") or "").strip().lower(),
+            "director_mode": str(input_pkg.get("director_mode") or "").strip().lower(),
+            "content_type": str(input_pkg.get("content_type") or input_pkg.get("contentType") or "").strip().lower(),
+            "format": str(input_pkg.get("format") or "").strip(),
+            "route_strategy_signature": _route_strategy_signature_from_input(input_pkg),
         }
     )
     return {
@@ -16823,6 +16854,16 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
     _normalize_director_package_input(pkg)
+    stale_director_contract_ignored = bool(_safe_dict(pkg.get("diagnostics")).get("director_stale_contract_ignored"))
+    if stale_director_contract_ignored and stage_id in {"story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"}:
+        _set_stage_status(pkg, stage_id, "error", error="STALE_DIRECTOR_CONTRACT")
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["downstream_cleared_due_to_input_change"] = True
+        errors = _safe_list(diagnostics.get("errors"))
+        errors.append(f"{stage_id}: STALE_DIRECTOR_CONTRACT")
+        diagnostics["errors"] = errors[-80:]
+        pkg["diagnostics"] = diagnostics
+        return pkg
     _set_stage_status(pkg, stage_id, "running")
     pkg["updated_at"] = _utc_iso()
 
@@ -17006,6 +17047,18 @@ def run_manual_stage(
 
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
+    stale_director_contract_ignored = bool(_safe_dict(pkg.get("diagnostics")).get("director_stale_contract_ignored"))
+    if stale_director_contract_ignored and stage_id in {"story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"}:
+        _set_stage_status(pkg, stage_id, "error", error="STALE_DIRECTOR_CONTRACT")
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["downstream_cleared_due_to_input_change"] = True
+        errors = _safe_list(diagnostics.get("errors"))
+        errors.append(f"{stage_id}: STALE_DIRECTOR_CONTRACT")
+        diagnostics["errors"] = errors[-80:]
+        pkg["diagnostics"] = diagnostics
+        if return_executed_stage_ids:
+            return pkg, []
+        return pkg
 
     executed_stage_ids: list[str] = []
     if stage_id == "final_video_prompt":
