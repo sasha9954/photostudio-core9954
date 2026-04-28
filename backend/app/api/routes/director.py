@@ -489,6 +489,125 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _first_non_empty_string(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _safe_nonempty_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(x).strip() for x in value if str(x or "").strip()]
+
+
+def _ensure_director_v2_legacy_contract_fields(
+    director_contract: dict[str, Any],
+    director_config: dict[str, Any],
+    director_package: dict[str, Any],
+) -> dict[str, Any]:
+    contract = dict(_safe_dict(director_contract))
+    config = _safe_dict(director_config)
+    package = _safe_dict(director_package)
+
+    world_roles = _safe_dict(contract.get("world_roles"))
+    route_location_rules = _safe_dict(contract.get("route_location_rules"))
+
+    ia2v_locations = _safe_nonempty_list(config.get("ia2v_locations"))
+    i2v_locations = _safe_nonempty_list(config.get("i2v_locations"))
+
+    timeline_contract = _safe_dict(package.get("timeline_contract") or contract.get("timeline_contract"))
+    route_contract = _safe_dict(package.get("route_contract") or contract.get("route_contract"))
+
+    timelines = _safe_list(timeline_contract.get("timelines"))
+    for tl in timelines:
+        if not isinstance(tl, dict):
+            continue
+        world_role = str(tl.get("world_role") or "").strip()
+        label = str(tl.get("label") or tl.get("world") or tl.get("description") or "").strip()
+        allowed_routes = [str(x).strip().lower() for x in _safe_list(tl.get("allowed_routes"))]
+        if not ia2v_locations and ("ia2v" in allowed_routes or world_role == "performance_world") and label:
+            ia2v_locations = [label]
+        if not i2v_locations and ("i2v" in allowed_routes or world_role == "memory_world") and label:
+            i2v_locations = [label]
+
+    ia2v_contract = _safe_dict(route_contract.get("ia2v"))
+    i2v_contract = _safe_dict(route_contract.get("i2v"))
+    if not ia2v_locations:
+        ia2v_candidate = _first_non_empty_string(
+            ia2v_contract.get("required_world"),
+            ia2v_contract.get("world"),
+            ia2v_contract.get("setting"),
+            ia2v_contract.get("timeline"),
+        )
+        if ia2v_candidate:
+            ia2v_locations = [ia2v_candidate]
+    if not i2v_locations:
+        i2v_candidate = _first_non_empty_string(
+            i2v_contract.get("required_world"),
+            i2v_contract.get("world"),
+            i2v_contract.get("setting"),
+            i2v_contract.get("timeline"),
+        )
+        if i2v_candidate:
+            i2v_locations = [i2v_candidate]
+
+    performance_world = _safe_dict(world_roles.get("performance_world"))
+    memory_world = _safe_dict(world_roles.get("memory_world"))
+
+    if not _safe_nonempty_list(performance_world.get("allowed_zones")) and ia2v_locations:
+        performance_world["allowed_zones"] = ia2v_locations
+    if "label" not in performance_world:
+        performance_world["label"] = ""
+
+    if not _safe_nonempty_list(memory_world.get("allowed_zones")) and i2v_locations:
+        memory_world["allowed_zones"] = i2v_locations
+    if "label" not in memory_world:
+        memory_world["label"] = ""
+
+    world_roles["performance_world"] = performance_world
+    world_roles["memory_world"] = memory_world
+    contract["world_roles"] = world_roles
+
+    if "ia2v" not in route_location_rules:
+        route_location_rules["ia2v"] = {
+            "world_role": "performance_world",
+            "performer_visibility": "required",
+            "singer_visibility": "required",
+            "lip_sync_framing": "required",
+        }
+    else:
+        ia2v_rule = _safe_dict(route_location_rules.get("ia2v"))
+        ia2v_rule.setdefault("world_role", "performance_world")
+        ia2v_rule.setdefault("performer_visibility", "required")
+        ia2v_rule.setdefault("singer_visibility", "required")
+        ia2v_rule.setdefault("lip_sync_framing", "required")
+        route_location_rules["ia2v"] = ia2v_rule
+
+    if "i2v" not in route_location_rules:
+        route_location_rules["i2v"] = {
+            "world_role": "memory_world",
+            "performer_visibility": "optional_or_absent",
+            "singer_visibility": "offscreen_or_non_dominant",
+        }
+    else:
+        i2v_rule = _safe_dict(route_location_rules.get("i2v"))
+        i2v_rule.setdefault("world_role", "memory_world")
+        i2v_rule.setdefault("performer_visibility", "optional_or_absent")
+        i2v_rule.setdefault("singer_visibility", "offscreen_or_non_dominant")
+        route_location_rules["i2v"] = i2v_rule
+
+    contract["route_location_rules"] = route_location_rules
+    has_world_split = bool(
+        _safe_nonempty_list(performance_world.get("allowed_zones"))
+        or _safe_nonempty_list(memory_world.get("allowed_zones"))
+    )
+    contract["hard_location_binding"] = bool(contract.get("hard_location_binding") or has_world_split)
+    return contract
+
+
 def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
     return f"""
 Ты AI Director V2 для видео-сториборда.
@@ -583,7 +702,7 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
     director_package = _safe_dict(parsed.get("director_package"))
     if done and not director_package:
         director_package = _safe_dict(parsed.get("director_package_preview"))
-    if director_package and not director_package.get("package_version"):
+    if director_package:
         director_package["package_version"] = "director_package_v2"
     if done:
         for field in (
@@ -592,6 +711,13 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         ):
             if field not in director_contract and field in director_package:
                 director_contract[field] = director_package.get(field)
+        director_contract = _ensure_director_v2_legacy_contract_fields(
+            director_contract,
+            director_config,
+            director_package,
+        )
+        if not str(director_contract.get("source") or "").strip():
+            director_contract["source"] = "ai_director_v2"
     diagnostics = {
         "director_v2": True,
         "gemini_questions_generated": bool(_safe_list(parsed.get("questions"))) or done,
@@ -599,6 +725,10 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "input_has_audio": bool(_safe_dict(payload.get("metadata")).get("audio") or _safe_dict(payload.get("source")).get("source_mode") == "audio"),
         "input_has_video": str(_safe_dict(payload.get("source")).get("source_mode") or "") in {"video_file", "video_link"},
         "refs_roles_present": sorted(list(_safe_dict(payload.get("context_refs") or payload.get("refs_by_role")).keys())),
+        "legacy_contract_normalized": bool(done),
+        "legacy_world_roles_present": bool(_safe_dict(director_contract.get("world_roles"))),
+        "legacy_route_location_rules_present": bool(_safe_dict(director_contract.get("route_location_rules"))),
+        "legacy_hard_location_binding": bool(director_contract.get("hard_location_binding")),
     }
     return {
         "ok": True,

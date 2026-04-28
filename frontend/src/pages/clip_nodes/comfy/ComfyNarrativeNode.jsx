@@ -275,31 +275,47 @@ export default function ComfyNarrativeNode({ id, data }) {
         body,
       });
       const nextNormalizedAnswers = json?.answers && typeof json.answers === "object" ? json.answers : nextAnswers;
+      const hasQuestions = Array.isArray(json?.questions) && json.questions.length > 0;
       setAnswers(nextNormalizedAnswers);
       setAssistantMessage(String(json?.assistant_message || "").trim());
-      setDynamicQuestions(Array.isArray(json?.questions) ? json.questions : []);
+      setDynamicQuestions(hasQuestions ? json.questions : []);
       setDirectorChatDone(Boolean(json?.done));
       const resolvedDone = Boolean(json?.done);
-      const nextConfig = json?.director_config && typeof json.director_config === "object"
-        ? json.director_config
-        : (json?.director_config_preview && typeof json.director_config_preview === "object" ? json.director_config_preview : (data?.director_config || {}));
-      const nextContract = json?.director_contract && typeof json.director_contract === "object"
-        ? json.director_contract
-        : (json?.director_contract_preview && typeof json.director_contract_preview === "object" ? json.director_contract_preview : buildDirectorContractFromConfig(nextConfig));
-      const nextPackage = json?.director_package && typeof json.director_package === "object"
-        ? json.director_package
-        : (json?.director_package_preview && typeof json.director_package_preview === "object" ? json.director_package_preview : {});
-      data?.onFieldChange?.(id, {
-        directorStale: false,
+      const patch = {
         directorAnswers: nextNormalizedAnswers,
-        director_config: nextConfig,
-        director_contract: nextContract,
-        director_package: nextPackage,
-        director_summary: String(json?.director_summary || "").trim(),
-        directorSummary: String(json?.director_summary || "").trim(),
-      });
-      setStaleDirectorState(false);
-      if (!resolvedDone && !Array.isArray(json?.questions) && allowFallback) {
+        director_summary_preview: String(json?.director_summary || "").trim(),
+        director_story_understanding: json?.story_understanding && typeof json.story_understanding === "object" ? json.story_understanding : {},
+      };
+
+      if (resolvedDone) {
+        const finalConfig = json?.director_config && typeof json.director_config === "object" ? json.director_config : {};
+        const finalContract = json?.director_contract && typeof json.director_contract === "object"
+          ? json.director_contract
+          : buildDirectorContractFromConfig(finalConfig);
+        const finalPackage = json?.director_package && typeof json.director_package === "object" ? json.director_package : {};
+        Object.assign(patch, {
+          directorStale: false,
+          director_config: finalConfig,
+          director_contract: finalContract,
+          director_package: finalPackage,
+          director_summary: String(json?.director_summary || "").trim(),
+          directorSummary: String(json?.director_summary || "").trim(),
+          director_config_preview: {},
+          director_contract_preview: {},
+          director_package_preview: {},
+        });
+      } else {
+        Object.assign(patch, {
+          directorStale: true,
+          director_config_preview: json?.director_config_preview && typeof json.director_config_preview === "object" ? json.director_config_preview : {},
+          director_contract_preview: json?.director_contract_preview && typeof json.director_contract_preview === "object" ? json.director_contract_preview : {},
+          director_package_preview: json?.director_package_preview && typeof json.director_package_preview === "object" ? json.director_package_preview : {},
+        });
+      }
+
+      data?.onFieldChange?.(id, patch);
+      setStaleDirectorState(!resolvedDone);
+      if (!resolvedDone && !hasQuestions && allowFallback) {
         throw new Error("AI Director вернул пустой список вопросов.");
       }
     } catch (error) {
