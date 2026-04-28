@@ -844,6 +844,48 @@ def _extract_payload_refs(payload: dict[str, Any]) -> tuple[dict[str, Any], dict
     return normalized_roles, character_refs
 
 
+def _reference_usage_has_character_mapping(reference_usage_contract: dict[str, Any]) -> bool:
+    usage = _safe_dict(reference_usage_contract)
+    if not usage:
+        return False
+    if (
+        _first_non_empty_string(usage.get("character_roles"))
+        or _safe_dict(usage.get("roles"))
+        or _safe_list(usage.get("usage_rules"))
+        or _safe_dict(usage.get("character_usage"))
+    ):
+        return True
+
+    mapping_hints = ("character", "ref", "usage", "role", "hero", "girl", "person")
+
+    def _is_meaningful(value: Any) -> bool:
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, dict):
+            return len(value) > 0
+        if isinstance(value, list):
+            return len(value) > 0
+        return False
+
+    for key, value in usage.items():
+        key_l = str(key or "").strip().lower()
+        if not _is_meaningful(value):
+            continue
+        if any(hint in key_l for hint in mapping_hints):
+            return True
+        if isinstance(value, dict):
+            nested_keys = [str(k or "").strip().lower() for k in value.keys()]
+            if any(any(hint in nested for hint in mapping_hints) for nested in nested_keys):
+                return True
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    nested_keys = [str(k or "").strip().lower() for k in item.keys()]
+                    if any(any(hint in nested for hint in mapping_hints) for nested in nested_keys):
+                        return True
+    return False
+
+
 def _validate_clip_director_contract(
     director_contract: dict[str, Any],
     director_package: dict[str, Any],
@@ -867,13 +909,13 @@ def _validate_clip_director_contract(
     reference_usage_contract = _safe_dict(package.get("reference_usage_contract") or contract.get("reference_usage_contract"))
     prompt_policy = _safe_dict(package.get("prompt_policy") or contract.get("prompt_policy"))
 
-    allowed_routes = sorted(set(_safe_nonempty_list(mode_contract.get("allowed_routes"))))
+    allowed_route_set = set(_safe_nonempty_list(mode_contract.get("allowed_routes")))
     forbidden_routes = set(_safe_nonempty_list(mode_contract.get("forbidden_routes")))
     if str(mode_contract.get("mode") or "").strip().lower() != "clip":
         missing_fields.append("mode_contract.mode")
     if bool(mode_contract.get("mode_locked")) is not True:
         missing_fields.append("mode_contract.mode_locked")
-    if allowed_routes != ["ia2v", "i2v"]:
+    if allowed_route_set != {"ia2v", "i2v"}:
         missing_fields.append("mode_contract.allowed_routes")
     if "first_last" not in forbidden_routes:
         missing_fields.append("mode_contract.forbidden_routes")
@@ -924,12 +966,7 @@ def _validate_clip_director_contract(
         if not reference_usage_contract:
             missing_fields.append("reference_usage_contract")
         else:
-            if character_refs and not (
-                _first_non_empty_string(reference_usage_contract.get("character_roles"))
-                or _safe_dict(reference_usage_contract.get("roles"))
-                or _safe_list(reference_usage_contract.get("usage_rules"))
-                or _safe_dict(reference_usage_contract.get("character_usage"))
-            ):
+            if character_refs and not _reference_usage_has_character_mapping(reference_usage_contract):
                 missing_fields.append("reference_usage_contract.character_usage")
 
     if bool(prompt_policy.get("negative_rules_are_internal")) is not True:
@@ -993,9 +1030,8 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         director_package["package_version"] = "director_package_v2"
 
     is_clip_music_video = _is_clip_music_video_payload(payload)
-    clip_questions_satisfied = False
     if is_clip_music_video:
-        director_contract, director_package, clip_questions_satisfied = _ensure_clip_mode_contracts(
+        director_contract, director_package, _ = _ensure_clip_mode_contracts(
             director_contract,
             director_package,
             questions,
@@ -1024,10 +1060,6 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         director_package,
         payload,
     )
-    if is_clip_music_video and not bool(scene_distribution_contract.get("user_approved")) and not clip_questions_satisfied:
-        done = False
-        phase = "questions"
-
     diagnostics = {
         "director_v2": True,
         "gemini_questions_generated": bool(questions) or done,
