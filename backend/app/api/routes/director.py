@@ -503,6 +503,13 @@ def _safe_nonempty_list(value: Any) -> list[str]:
     return [str(x).strip() for x in value if str(x or "").strip()]
 
 
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _ensure_director_v2_legacy_contract_fields(
     director_contract: dict[str, Any],
     director_config: dict[str, Any],
@@ -608,6 +615,172 @@ def _ensure_director_v2_legacy_contract_fields(
     return contract
 
 
+
+
+CLIP_ROUTE_BALANCE_OPTIONS = {
+    "balanced_50_50",
+    "performance_heavy_70_30",
+    "story_heavy_30_70",
+    "all_lipsync",
+    "ai_decides",
+    "custom_counts",
+}
+
+
+def _is_clip_music_video_payload(payload: dict[str, Any]) -> bool:
+    source = _safe_dict(payload.get("source"))
+    metadata = _safe_dict(payload.get("metadata"))
+    controls = _safe_dict(payload.get("director_controls"))
+
+    mode_candidate = _first_non_empty_string(
+        payload.get("director_mode"),
+        payload.get("mode_selected"),
+        payload.get("mode_type"),
+        payload.get("mode"),
+        metadata.get("director_mode"),
+        metadata.get("mode"),
+        source.get("director_mode"),
+        source.get("mode"),
+    ).lower()
+    content_type_candidate = _first_non_empty_string(
+        payload.get("content_type"),
+        payload.get("contentType"),
+        controls.get("contentType"),
+        metadata.get("content_type"),
+        metadata.get("contentType"),
+        source.get("content_type"),
+        source.get("contentType"),
+    ).lower()
+    return mode_candidate == "clip" and content_type_candidate == "music_video"
+
+
+def _ensure_clip_mode_contracts(
+    director_contract: dict[str, Any],
+    director_package: dict[str, Any],
+    questions: list[Any],
+    answers: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    contract = dict(_safe_dict(director_contract))
+    package = dict(_safe_dict(director_package))
+
+    mode_source_raw = _first_non_empty_string(
+        contract.get("mode_source"),
+        package.get("mode_source"),
+        answers.get("mode_source"),
+    ).lower()
+    mode_source = "user_selected" if mode_source_raw == "user_selected" else "ai_confirmed"
+
+    mode_contract = {
+        "mode": "clip",
+        "mode_locked": True,
+        "mode_source": mode_source,
+        "allowed_routes": ["ia2v", "i2v"],
+        "forbidden_routes": ["first_last"],
+        "first_last_allowed": False,
+        "ai_must_not_change_mode_without_user_confirmation": True,
+    }
+
+    clip_contract = _safe_dict(package.get("clip_contract") or contract.get("clip_contract"))
+    clip_contract["clip_type"] = "music_video"
+    clip_contract["audio_is_primary_clock"] = True
+    clip_contract["performance_route"] = "ia2v"
+    clip_contract["story_route"] = "i2v"
+    clip_contract["first_last_allowed"] = False
+    clip_contract["performance_definition"] = _first_non_empty_string(
+        clip_contract.get("performance_definition"),
+        "ia2v сцены: lip-sync/перформанс с читаемым ртом, эмоциями и контролируемой камерой.",
+    )
+    clip_contract["story_cutaway_definition"] = _first_non_empty_string(
+        clip_contract.get("story_cutaway_definition"),
+        "i2v сцены: сюжетные перебивки, воспоминания, действия, локации и атмосфера мира между перформансами.",
+    )
+
+    distribution = _safe_dict(package.get("scene_distribution_contract") or contract.get("scene_distribution_contract"))
+    requested_balance = _first_non_empty_string(
+        distribution.get("route_balance"),
+        answers.get("route_balance"),
+        answers.get("clip_route_balance"),
+    )
+    route_balance = requested_balance if requested_balance in CLIP_ROUTE_BALANCE_OPTIONS else "ai_decides"
+
+    ratio_by_balance = {
+        "balanced_50_50": (0.5, 0.5),
+        "performance_heavy_70_30": (0.3, 0.7),
+        "story_heavy_30_70": (0.7, 0.3),
+        "all_lipsync": (0.0, 1.0),
+        "ai_decides": (0.5, 0.5),
+    }
+    i2v_ratio, ia2v_ratio = ratio_by_balance.get(route_balance, (0.5, 0.5))
+    if route_balance == "custom_counts":
+        i2v_ratio = _safe_float(distribution.get("i2v_ratio") or answers.get("i2v_ratio"), 0.5)
+        ia2v_ratio = _safe_float(distribution.get("ia2v_ratio") or answers.get("ia2v_ratio"), 0.5)
+
+    for key in ("route_balance", "clip_route_balance", "scene_distribution", "distribution_approved"):
+        if key in answers:
+            break
+    user_approved = bool(distribution.get("user_approved")) or any(
+        key in answers for key in ("route_balance", "clip_route_balance", "scene_distribution", "distribution_approved")
+    )
+
+    distribution["user_approved"] = bool(user_approved)
+    distribution["route_balance"] = route_balance
+    distribution["i2v_ratio"] = max(0.0, min(1.0, _safe_float(i2v_ratio, 0.5)))
+    distribution["ia2v_ratio"] = max(0.0, min(1.0, _safe_float(ia2v_ratio, 0.5)))
+    distribution["first_last_ratio"] = 0
+    distribution["first_last_allowed"] = False
+    distribution["mechanical_alternation"] = False
+    distribution["ai_can_adjust_for_audio"] = True
+    distribution["max_consecutive_ia2v"] = int(distribution.get("max_consecutive_ia2v") or 2)
+    distribution["ia2v_meaning"] = _first_non_empty_string(
+        distribution.get("ia2v_meaning"),
+        answers.get("ia2v_meaning"),
+        "Lip-sync/performance scenes with expressive close focus on performer readability.",
+    )
+    distribution["i2v_meaning"] = _first_non_empty_string(
+        distribution.get("i2v_meaning"),
+        answers.get("i2v_meaning"),
+        "Story cutaways and world actions that bridge performance scenes.",
+    )
+
+    prompt_policy = _safe_dict(package.get("prompt_policy") or contract.get("prompt_policy"))
+    prompt_policy["ltx_positive_prompt_rule"] = "Only describe what must be visible and moving."
+    prompt_policy["negative_rules_are_internal"] = True
+    prompt_policy["do_not_copy_negative_rules_into_ltx_positive_prompt"] = True
+    prompt_policy["do_not_copy_user_negative_phrases_into_ltx_positive_prompt"] = True
+    prompt_policy["ia2v_prompt_focus"] = "performer, readable mouth, emotional eyes, subtle hands/shoulders, controlled camera"
+    prompt_policy["i2v_prompt_focus"] = "story action, world, atmosphere, continuity"
+
+    clip_required_questions = {
+        "route balance",
+        "what ia2v means in this clip",
+        "what i2v means in this clip",
+        "where performance/lip-sync happens",
+        "what appears between performance scenes",
+        "intro plan",
+        "outro/final plan",
+        "required scenes",
+        "how connected refs should be used",
+    }
+    asked_texts = {
+        str(_safe_dict(question).get("label") or _safe_dict(question).get("text") or "").strip().lower()
+        for question in questions
+        if isinstance(question, dict)
+    }
+    asked_required = any(item in text for text in asked_texts for item in clip_required_questions)
+
+    contract["mode_contract"] = mode_contract
+    contract["clip_contract"] = clip_contract
+    contract["scene_distribution_contract"] = distribution
+    contract["prompt_policy"] = prompt_policy
+
+    package["mode_contract"] = mode_contract
+    package["clip_contract"] = clip_contract
+    package["scene_distribution_contract"] = distribution
+    package["prompt_policy"] = prompt_policy
+
+    return contract, package, asked_required
+
+
 def _build_director_v2_prompt(payload: dict[str, Any]) -> str:
     return f"""
 Ты AI Director V2 для видео-сториборда.
@@ -697,6 +870,7 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
     phase = str(parsed.get("phase") or "questions").strip().lower()
     done = bool(parsed.get("done")) or phase == "done"
     answers = _safe_dict(parsed.get("answers"))
+    questions = _safe_list(parsed.get("questions"))
     director_config = _safe_dict(parsed.get("director_config"))
     director_contract = _safe_dict(parsed.get("director_contract"))
     director_package = _safe_dict(parsed.get("director_package"))
@@ -704,6 +878,17 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         director_package = _safe_dict(parsed.get("director_package_preview"))
     if director_package:
         director_package["package_version"] = "director_package_v2"
+
+    is_clip_music_video = _is_clip_music_video_payload(payload)
+    clip_questions_satisfied = False
+    if is_clip_music_video:
+        director_contract, director_package, clip_questions_satisfied = _ensure_clip_mode_contracts(
+            director_contract,
+            director_package,
+            questions,
+            answers,
+        )
+
     if done:
         for field in (
             "timeline_contract", "character_contract", "reference_usage_contract", "route_contract",
@@ -718,9 +903,16 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         )
         if not str(director_contract.get("source") or "").strip():
             director_contract["source"] = "ai_director_v2"
+
+    scene_distribution_contract = _safe_dict(director_package.get("scene_distribution_contract") or director_contract.get("scene_distribution_contract"))
+    clip_distribution_present = bool(scene_distribution_contract)
+    if is_clip_music_video and not bool(scene_distribution_contract.get("user_approved")) and not clip_questions_satisfied:
+        done = False
+        phase = "questions"
+
     diagnostics = {
         "director_v2": True,
-        "gemini_questions_generated": bool(_safe_list(parsed.get("questions"))) or done,
+        "gemini_questions_generated": bool(questions) or done,
         "static_fallback_used": False,
         "input_has_audio": bool(_safe_dict(payload.get("metadata")).get("audio") or _safe_dict(payload.get("source")).get("source_mode") == "audio"),
         "input_has_video": str(_safe_dict(payload.get("source")).get("source_mode") or "") in {"video_file", "video_link"},
@@ -729,12 +921,16 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "legacy_world_roles_present": bool(_safe_dict(director_contract.get("world_roles"))),
         "legacy_route_location_rules_present": bool(_safe_dict(director_contract.get("route_location_rules"))),
         "legacy_hard_location_binding": bool(director_contract.get("hard_location_binding")),
+        "director_clip_mode_contract_applied": bool(is_clip_music_video),
+        "director_clip_first_last_forbidden": bool(is_clip_music_video),
+        "director_clip_allowed_routes": ["ia2v", "i2v"] if is_clip_music_video else [],
+        "director_clip_distribution_contract_present": bool(clip_distribution_present),
     }
     return {
         "ok": True,
         "phase": "done" if done else "questions",
         "assistant_message": str(parsed.get("assistant_message") or "").strip(),
-        "questions": _safe_list(parsed.get("questions")),
+        "questions": questions,
         "story_understanding": _safe_dict(parsed.get("story_understanding")),
         "answers": answers,
         "missing_fields": _safe_list(parsed.get("missing_fields")),
