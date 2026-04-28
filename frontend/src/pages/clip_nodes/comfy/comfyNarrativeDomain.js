@@ -625,6 +625,7 @@ function buildReferencePayload(input, fallbackLabel) {
   if (!value && !refs.length && !normalizeText(input.preview)) return null;
   const meta = input?.meta && typeof input.meta === "object" ? { ...input.meta } : {};
   if (roleType) meta.roleType = roleType;
+  else if (Object.prototype.hasOwnProperty.call(meta, "roleType")) delete meta.roleType;
   meta.ownershipRole = ownershipRole;
   meta.ownershipRoleMapped = ownershipRoleToPipelineRole(ownershipRole);
   meta.bindingType = bindingType;
