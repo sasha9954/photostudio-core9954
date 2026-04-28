@@ -2280,6 +2280,22 @@ def _sanitize_assigned_roles_and_refs(
     return assigned_roles, refs, role_debug
 
 
+def _apply_director_contract_role_normalization(package: dict[str, Any]) -> None:
+    input_pkg = _safe_dict(package.get("input"))
+    assigned_roles, normalized_refs, role_debug = _sanitize_assigned_roles_and_refs(
+        _safe_dict(package.get("refs_inventory")),
+        _safe_dict(package.get("assigned_roles")),
+        _safe_dict(input_pkg.get("director_contract") or package.get("director_contract")),
+        _safe_dict(package.get("director_package")),
+    )
+    package["assigned_roles"] = assigned_roles
+    package["refs_inventory"] = normalized_refs
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["role_type_alignment"] = role_debug
+    diagnostics["director_contract_role_normalization_applied"] = True
+    package["diagnostics"] = diagnostics
+
+
 def _extract_audio_url_from_refs(refs_inventory: dict[str, Any]) -> str:
     audio_in = _safe_dict(refs_inventory.get("audio_in"))
     meta = _safe_dict(audio_in.get("meta"))
@@ -9924,6 +9940,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
         retry_removed_terms: list[str] = []
         retry_sanitized_seed: dict[str, Any] = {}
         first_attempt_normalized_fingerprint = ""
+        last_normalized_core: dict[str, Any] = {}
         last_error_code = CORE_SCHEMA_INVALID
         last_errors: list[str] = []
         configured_timeout = get_scenario_stage_timeout("story_core")
@@ -9996,6 +10013,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     normalized_core = sanitized_normalized_core
                     retry_removed_terms = sorted({*retry_removed_terms, *sanitize_removed_terms})[:24]
                 normalized_fingerprint = json.dumps(normalized_core, ensure_ascii=False, sort_keys=True)
+                last_normalized_core = _safe_dict(normalized_core)
                 if attempt == 0:
                     first_attempt_normalized_fingerprint = normalized_fingerprint
                 diagnostics["story_core_normalized_payload"] = normalized_core
@@ -10288,6 +10306,60 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                 _append_diag_event(package, f"story_core strict validation failed, requesting one retry: {validation_feedback}", stage_id="story_core")
                 continue
             break
+        if (
+            last_error_code == CORE_QUALITY_GATES_FAILED
+            and "two_axis_duplicate_adjacent_pairs" in {str(item).strip() for item in last_errors}
+            and last_normalized_core
+        ):
+            story_core = {
+                "core_version": "1.1",
+                "story_summary": str(last_normalized_core.get("story_summary") or "").strip(),
+                "opening_anchor": str(last_normalized_core.get("opening_anchor") or "").strip(),
+                "ending_callback_rule": str(last_normalized_core.get("ending_callback_rule") or "").strip(),
+                "global_arc": _safe_dict(last_normalized_core.get("global_arc")),
+                "identity_doctrine": _safe_dict(last_normalized_core.get("identity_doctrine")),
+                "identity_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("hero_anchor") or "")},
+                "world_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("world_doctrine") or "")},
+                "style_lock": {"rule": str(_safe_dict(last_normalized_core.get("identity_doctrine")).get("style_doctrine") or "")},
+                "story_guidance": {
+                    **_default_story_core_guidance(creative_config),
+                    "route_mix_doctrine_for_scenes": _safe_dict(last_normalized_core.get("route_mix_doctrine_for_scenes")),
+                },
+                "narrative_segments": _safe_list(last_normalized_core.get("narrative_segments")),
+            }
+            story_core_v1 = _build_story_core_v11(
+                input_pkg=input_pkg,
+                audio_map=audio_map,
+                refs_inventory=refs_inventory,
+                assigned_roles=assigned_roles,
+                parsed_story_core=story_core,
+                fallback_story_core=fallback,
+            )
+            story_core["story_core_v1"] = story_core_v1
+            package["story_core"] = story_core
+            package["story_core_v1"] = story_core_v1
+            package["story_core_stale"] = False
+            diagnostics = _safe_dict(package.get("diagnostics"))
+            diagnostics["story_core_hard_fail"] = False
+            diagnostics["story_core_failed_payload_rejected"] = False
+            diagnostics["story_core_quality_gate_degraded_to_warning"] = True
+            diagnostics["story_core_quality_gate_degraded_reason"] = "two_axis_duplicate_adjacent_pairs_after_retry"
+            warnings = _safe_list(diagnostics.get("warnings"))
+            warnings.append(
+                {
+                    "stage_id": "story_core",
+                    "message": "quality_gate_degraded:two_axis_duplicate_adjacent_pairs_after_retry",
+                }
+            )
+            diagnostics["warnings"] = warnings[-80:]
+            package["diagnostics"] = diagnostics
+            _apply_director_contract_story_core(package)
+            _append_diag_event(
+                package,
+                "story_core quality gate downgraded to warning for two_axis_duplicate_adjacent_pairs after retry",
+                stage_id="story_core",
+            )
+            return package
         raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
     except Exception as exc:  # noqa: BLE001
         logger.exception("[scenario_stage_pipeline] story_core failed")
@@ -14991,6 +15063,7 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         raise ValueError(f"unknown_stage:{stage_id}")
     pkg = deepcopy(_safe_dict(package)) if package else create_storyboard_package(payload)
     _normalize_director_package_input(pkg)
+    _apply_director_contract_role_normalization(pkg)
     _set_stage_status(pkg, stage_id, "running")
     pkg["updated_at"] = _utc_iso()
 
@@ -15174,6 +15247,7 @@ def run_manual_stage(
 
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
+    _apply_director_contract_role_normalization(pkg)
 
     executed_stage_ids: list[str] = []
     if stage_id == "final_video_prompt":
