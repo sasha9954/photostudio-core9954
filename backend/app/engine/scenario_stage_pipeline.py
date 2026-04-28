@@ -7759,6 +7759,366 @@ def _is_music_video_clip_mode(content_type: str, director_mode: str) -> bool:
     return str(content_type or "").strip().lower() == "music_video" and str(director_mode or "").strip().lower() == "clip"
 
 
+def _is_clip_mode_package(package: dict[str, Any]) -> bool:
+    pkg = _safe_dict(package)
+    input_pkg = _safe_dict(pkg.get("input"))
+    if str(input_pkg.get("director_mode") or "").strip().lower() == "clip":
+        return True
+    if str(input_pkg.get("content_type") or "").strip().lower() == "music_video":
+        return True
+    for contract in (
+        _safe_dict(pkg.get("director_contract")),
+        _safe_dict(pkg.get("director_package")),
+        _safe_dict(input_pkg.get("director_contract")),
+        _safe_dict(input_pkg.get("director_package")),
+    ):
+        mode = str(_safe_dict(contract.get("mode_contract")).get("mode") or "").strip().lower()
+        if mode == "clip":
+            return True
+    return False
+
+
+def _sanitize_clip_routes_in_package(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    removed_count = 0
+    touched_paths: list[str] = []
+    if not _is_clip_mode_package(package):
+        diagnostics["clip_route_sanitizer_applied"] = False
+        diagnostics["clip_route_sanitizer_removed_first_last_count"] = 0
+        diagnostics["clip_route_sanitizer_paths"] = []
+        package["diagnostics"] = diagnostics
+        return package
+
+    def _clean_preferred_routes(owner: dict[str, Any], key: str, path: str) -> None:
+        nonlocal removed_count
+        routes = owner.get(key)
+        if not isinstance(routes, list):
+            return
+        filtered = [str(item).strip() for item in routes if str(item).strip().lower() != "first_last"]
+        removed_here = len(routes) - len(filtered)
+        if removed_here > 0:
+            removed_count += removed_here
+            touched_paths.append(path)
+            owner[key] = filtered
+
+    def _force_route_contract_fields(contract: dict[str, Any], path: str) -> None:
+        if not isinstance(contract, dict):
+            return
+        _clean_preferred_routes(contract, "preferred_routes", f"{path}.preferred_routes")
+        contract["first_last_ratio"] = 0
+        contract["first_last_allowed"] = False
+        if isinstance(contract.get("route_targets_per_block"), dict):
+            contract["route_targets_per_block"]["first_last"] = 0
+            touched_paths.append(f"{path}.route_targets_per_block.first_last")
+        if isinstance(contract.get("route_strategy_normalized_targets"), dict):
+            contract["route_strategy_normalized_targets"]["first_last"] = 0
+            touched_paths.append(f"{path}.route_strategy_normalized_targets.first_last")
+        if "allowed_routes" in contract:
+            contract["allowed_routes"] = ["ia2v", "i2v"]
+            touched_paths.append(f"{path}.allowed_routes")
+        forbidden_routes = _safe_list(contract.get("forbidden_routes"))
+        forbidden_norm = [str(item).strip() for item in forbidden_routes if str(item).strip()]
+        if "first_last" not in [item.lower() for item in forbidden_norm]:
+            forbidden_norm.append("first_last")
+        contract["forbidden_routes"] = forbidden_norm
+        touched_paths.append(f"{path}.forbidden_routes")
+
+    input_pkg = _safe_dict(package.get("input"))
+    for parent_key in ("creative_config", "director_config"):
+        cfg = _safe_dict(input_pkg.get(parent_key))
+        _clean_preferred_routes(cfg, "preferred_routes", f"input.{parent_key}.preferred_routes")
+        _force_route_contract_fields(cfg, f"input.{parent_key}")
+        if cfg:
+            input_pkg[parent_key] = cfg
+    for contract_key in ("director_contract", "director_package"):
+        cfg = _safe_dict(input_pkg.get(contract_key))
+        _force_route_contract_fields(_safe_dict(cfg.get("route_contract")), f"input.{contract_key}.route_contract")
+        _force_route_contract_fields(_safe_dict(cfg.get("mode_contract")), f"input.{contract_key}.mode_contract")
+        if cfg:
+            input_pkg[contract_key] = cfg
+    package["input"] = input_pkg
+
+    for contract_key in ("director_contract", "director_package"):
+        cfg = _safe_dict(package.get(contract_key))
+        _force_route_contract_fields(_safe_dict(cfg.get("route_contract")), f"{contract_key}.route_contract")
+        _force_route_contract_fields(_safe_dict(cfg.get("mode_contract")), f"{contract_key}.mode_contract")
+        if cfg:
+            package[contract_key] = cfg
+
+    story_core = _safe_dict(package.get("story_core"))
+    story_guidance = _safe_dict(story_core.get("story_guidance"))
+    _force_route_contract_fields(
+        _safe_dict(story_guidance.get("route_mix_doctrine_for_scenes")),
+        "story_core.story_guidance.route_mix_doctrine_for_scenes",
+    )
+    if story_guidance:
+        story_core["story_guidance"] = story_guidance
+    if story_core:
+        package["story_core"] = story_core
+
+    story_core_v1 = _safe_dict(package.get("story_core_v1"))
+    semantic_arc = _safe_dict(story_core_v1.get("semantic_arc"))
+    _force_route_contract_fields(
+        _safe_dict(semantic_arc.get("route_mix_doctrine_for_scenes")),
+        "story_core_v1.semantic_arc.route_mix_doctrine_for_scenes",
+    )
+    _force_route_contract_fields(_safe_dict(story_core_v1.get("story_guidance")), "story_core_v1.story_guidance")
+    if semantic_arc:
+        story_core_v1["semantic_arc"] = semantic_arc
+    if story_core_v1:
+        package["story_core_v1"] = story_core_v1
+
+    for diag_key in ("input_creative_config_active", "story_core_creative_config_active"):
+        diag_cfg = _safe_dict(diagnostics.get(diag_key))
+        _clean_preferred_routes(diag_cfg, "preferred_routes", f"diagnostics.{diag_key}.preferred_routes")
+        _force_route_contract_fields(diag_cfg, f"diagnostics.{diag_key}")
+        if diag_cfg:
+            diagnostics[diag_key] = diag_cfg
+
+    diagnostics["clip_route_sanitizer_applied"] = True
+    diagnostics["clip_route_sanitizer_removed_first_last_count"] = int(removed_count)
+    diagnostics["clip_route_sanitizer_paths"] = sorted(set(touched_paths))[:200]
+    package["diagnostics"] = diagnostics
+    return package
+
+
+def _sanitize_empty_character3_in_package(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    removed_paths: list[str] = []
+    moved_to_episodic = False
+
+    def _has_real_ref(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value > 0
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            return any(_has_real_ref(item) for item in value)
+        if isinstance(value, dict):
+            if isinstance(value.get("count"), (int, float)) and value.get("count", 0) > 0:
+                return True
+            return any(_has_real_ref(value.get(key)) for key in ("refs", "value", "url", "urls"))
+        return False
+
+    input_pkg = _safe_dict(package.get("input"))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    refs_inventory = _safe_dict(package.get("refs_inventory"))
+    refs_by_role = _safe_dict(package.get("refs_by_role"))
+    ref_character_3 = _safe_dict(refs_inventory.get("ref_character_3"))
+    has_character_3_ref = any(
+        (
+            _has_real_ref(_safe_dict(connected_summary.get("refsPresentByRole")).get("character_3")),
+            _has_real_ref(_safe_dict(connected_summary.get("connectedRefsPresentByRole")).get("character_3")),
+            _has_real_ref(ref_character_3.get("refs")),
+            _has_real_ref(ref_character_3.get("value")),
+            _has_real_ref(ref_character_3.get("count")),
+            _has_real_ref(refs_by_role.get("character_3")),
+        )
+    )
+    if has_character_3_ref:
+        diagnostics["empty_character_3_sanitized"] = False
+        diagnostics["empty_character_3_moved_to_episodic_text_character"] = False
+        diagnostics["empty_character_3_removed_paths"] = []
+        package["diagnostics"] = diagnostics
+        return package
+
+    def _promote_character_3(contract_holder: dict[str, Any], path: str) -> None:
+        nonlocal moved_to_episodic
+        if not isinstance(contract_holder, dict):
+            return
+        character_contract = _safe_dict(contract_holder.get("character_contract"))
+        character_3 = _safe_dict(character_contract.get("character_3"))
+        if not character_3:
+            return
+        token_blob = json.dumps(character_3, ensure_ascii=False).lower()
+        is_text_only = bool(character_3.get("no_reference_needed")) or "episodic" in token_blob or "text_description_only" in token_blob
+        if not is_text_only:
+            return
+        episodic_text_characters = _safe_dict(contract_holder.get("episodic_text_characters"))
+        target_key = "episodic_girl" if "episodic_girl" not in episodic_text_characters else "character_3"
+        episodic_payload = {
+            **character_3,
+            "role_id": "episodic_girl",
+            "source_role_id": "character_3",
+            "usage": "one_scene_only",
+            "visual_reference_mode": "text_description_only",
+            "no_reference_needed": True,
+        }
+        episodic_text_characters[target_key] = episodic_payload
+        contract_holder["episodic_text_characters"] = episodic_text_characters
+        character_contract.pop("character_3", None)
+        contract_holder["character_contract"] = character_contract
+        moved_to_episodic = True
+        removed_paths.append(f"{path}.character_contract.character_3")
+
+    def _remove_role_from_list(owner: dict[str, Any], field: str, role: str, path: str) -> None:
+        raw = owner.get(field)
+        if not isinstance(raw, list):
+            return
+        filtered = [item for item in raw if str(item).strip() != role]
+        if len(filtered) != len(raw):
+            owner[field] = filtered
+            removed_paths.append(path)
+
+    def _remove_role_mapping(owner: dict[str, Any], field: str, role: str, path: str) -> None:
+        raw = owner.get(field)
+        if isinstance(raw, dict) and role in raw:
+            raw.pop(role, None)
+            owner[field] = raw
+            removed_paths.append(f"{path}.{role}")
+        elif isinstance(raw, list):
+            filtered = [item for item in raw if str(item).strip() != role and _safe_dict(item).get("role") != role]
+            if len(filtered) != len(raw):
+                owner[field] = filtered
+                removed_paths.append(path)
+
+    for holder_key in ("director_contract", "director_package"):
+        _promote_character_3(_safe_dict(package.get(holder_key)), holder_key)
+        _promote_character_3(_safe_dict(input_pkg.get(holder_key)), f"input.{holder_key}")
+
+    connected = _safe_dict(input_pkg.get("connected_context_summary"))
+    _remove_role_from_list(connected, "presentCastRoles", "character_3", "input.connected_context_summary.presentCastRoles")
+    refs_present = _safe_dict(connected.get("refsPresentByRole"))
+    if "character_3" in refs_present:
+        refs_present["character_3"] = False
+        connected["refsPresentByRole"] = refs_present
+        removed_paths.append("input.connected_context_summary.refsPresentByRole.character_3")
+    connected_present = _safe_dict(connected.get("connectedRefsPresentByRole"))
+    if "character_3" in connected_present:
+        connected_present["character_3"] = False
+        connected["connectedRefsPresentByRole"] = connected_present
+        removed_paths.append("input.connected_context_summary.connectedRefsPresentByRole.character_3")
+    input_pkg["connected_context_summary"] = connected
+    package["input"] = input_pkg
+
+    for owner_key in ("director_contract", "director_package"):
+        owner = _safe_dict(package.get(owner_key))
+        narrative_backbone = _safe_dict(owner.get("narrative_backbone"))
+        _remove_role_from_list(
+            narrative_backbone,
+            "secondary_subjects",
+            "character_3",
+            f"{owner_key}.narrative_backbone.secondary_subjects",
+        )
+        if narrative_backbone:
+            owner["narrative_backbone"] = narrative_backbone
+        _remove_role_mapping(owner, "role_identity_mapping", "character_3", f"{owner_key}.role_identity_mapping")
+        _remove_role_mapping(owner, "character_usage", "character_3", f"{owner_key}.character_usage")
+        package[owner_key] = owner
+
+    _remove_role_mapping(package, "role_identity_mapping", "character_3", "role_identity_mapping")
+    _remove_role_mapping(package, "character_usage", "character_3", "character_usage")
+
+    diagnostics["empty_character_3_sanitized"] = True
+    diagnostics["empty_character_3_moved_to_episodic_text_character"] = bool(moved_to_episodic)
+    diagnostics["empty_character_3_removed_paths"] = sorted(set(removed_paths))[:200]
+    package["diagnostics"] = diagnostics
+    return package
+
+
+def _sanitize_forbidden_drift_in_package(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    removed_tokens: list[str] = []
+    internal_rules: list[str] = []
+    sanitized = False
+
+    def _classify_forbidden_token(token: str) -> tuple[bool, str]:
+        normalized = str(token or "").strip()
+        lower = normalized.lower()
+        body = lower.replace("forbid:", "")
+        if not body:
+            return True, ""
+        if len(body) <= 6:
+            return True, ""
+        if "как_эпизодический_персонаж" in body:
+            return True, ""
+        if "переносить_с_рефа" in body or "с_рефа_фон" in body:
+            return True, "Do not transfer background/pose/objects from reference media."
+        if "кровавой_жестокости" in body or "без_героизации" in body or "героизац" in body:
+            return True, "Keep non-graphic and non-glorified safety framing."
+        return False, ""
+
+    def _clean_field(owner: dict[str, Any], key: str) -> None:
+        nonlocal sanitized
+        values = owner.get(key)
+        if not isinstance(values, list):
+            return
+        out: list[str] = []
+        for item in values:
+            token = str(item or "").strip()
+            if not token:
+                continue
+            should_remove, internal_rule = _classify_forbidden_token(token)
+            if should_remove:
+                removed_tokens.append(token)
+                if internal_rule:
+                    internal_rules.append(internal_rule)
+                sanitized = True
+                continue
+            if token not in out:
+                out.append(token)
+        owner[key] = out
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key in list(node.keys()):
+                if key in {"forbidden_drift", "forbidden_style_drift"}:
+                    _clean_field(node, key)
+                else:
+                    _walk(node.get(key))
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(package)
+    if internal_rules:
+        prompt_policy = _safe_dict(package.get("prompt_policy"))
+        existing = _safe_list(prompt_policy.get("internal_negative_rules"))
+        merged: list[str] = []
+        for item in [*existing, *internal_rules]:
+            token = str(item or "").strip()
+            if token and token not in merged:
+                merged.append(token)
+        prompt_policy["internal_negative_rules"] = merged[:80]
+        package["prompt_policy"] = prompt_policy
+
+    diagnostics["forbidden_drift_sanitized"] = bool(sanitized)
+    diagnostics["forbidden_drift_removed_tokens"] = sorted(set(removed_tokens))[:80]
+    diagnostics["forbidden_drift_moved_to_internal_rules"] = sorted(set(internal_rules))[:80]
+    package["diagnostics"] = diagnostics
+    return package
+
+
+def _sanitize_prompt_policy_guard(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+
+    def _apply_policy(owner: dict[str, Any]) -> None:
+        if not isinstance(owner, dict):
+            return
+        prompt_policy = _safe_dict(owner.get("prompt_policy"))
+        prompt_policy["negative_rules_are_internal"] = True
+        prompt_policy["do_not_copy_negative_rules_into_ltx_positive_prompt"] = True
+        prompt_policy["ltx_positive_prompt_rule"] = "Only describe what must be visible and moving."
+        owner["prompt_policy"] = prompt_policy
+
+    _apply_policy(package)
+    _apply_policy(_safe_dict(package.get("director_contract")))
+    _apply_policy(_safe_dict(package.get("director_package")))
+    diagnostics["prompt_policy_sanitized"] = True
+    package["diagnostics"] = diagnostics
+    return package
+
+
+def _sanitize_clip_package_before_downstream(package: dict[str, Any]) -> dict[str, Any]:
+    package = _sanitize_clip_routes_in_package(package)
+    package = _sanitize_empty_character3_in_package(package)
+    package = _sanitize_forbidden_drift_in_package(package)
+    package = _sanitize_prompt_policy_guard(package)
+    return package
+
+
 def _extract_story_core_anchor_phrases(text: str) -> list[str]:
     lowered = str(text or "").strip().lower()
     if not lowered:
@@ -10287,6 +10647,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
                     package["diagnostics"] = diagnostics
                     _apply_director_contract_story_core(package)
+                    package = _sanitize_clip_package_before_downstream(package)
                     _append_diag_event(package, "story_core generated", stage_id="story_core")
                     return package
                 last_error_code = error_code or CORE_SCHEMA_INVALID
@@ -10381,6 +10742,7 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             diagnostics["warnings"] = warnings[-80:]
             package["diagnostics"] = diagnostics
             _apply_director_contract_story_core(package)
+            package = _sanitize_clip_package_before_downstream(package)
             _append_diag_event(package, "story_core quality gates downgraded to warning after retry", stage_id="story_core")
             return package
         raise RuntimeError(f"{last_error_code}:{'; '.join(last_errors[:3])}")
