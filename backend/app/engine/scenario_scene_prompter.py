@@ -2127,12 +2127,50 @@ def _build_i2v_memory_beat_directive(
             "No lip-sync framing, no singer-first framing, no mouth-readable performance language.",
         ],
     )
+    role_contracts = _safe_dict(_safe_dict(global_contract.get("role_usage_contract")).get("roles"))
+    secondary_roles = [
+        str(x).strip()
+        for x in (_safe_list(scene_plan_row.get("secondary_roles")) + _safe_list(role_row.get("secondary_roles")))
+        if str(x).strip()
+    ]
+    all_roles = list(dict.fromkeys([*active_roles, *secondary_roles]))
+    role_contract_functions = [
+        str(_safe_dict(role_contracts.get(role)).get("function") or "").strip()
+        for role in all_roles
+    ]
+    has_episodic_role_function = "episodic_visual_extra" in role_function_values
+    has_episodic_role_presence = ("character_3" in all_roles) or any(
+        func == "episodic_visual_extra" for func in role_contract_functions
+    )
+    episodic_markers_present = any(
+        ("эпизод" in str(p).lower()) or ("романтический эпизод" in str(p).lower())
+        for p in requirement_parts
+    )
+    covered_requirement_has_episodic_expected_function = False
+    for req_id in requirement_ids:
+        req_row = _safe_dict(scene_requirements.get(req_id))
+        expected_functions = [
+            str(x).strip()
+            for x in _safe_list(req_row.get("expected_role_functions"))
+            if str(x).strip()
+        ]
+        if "episodic_visual_extra" in expected_functions:
+            covered_requirement_has_episodic_expected_function = True
+            break
+
     return {
         "directive": directive.strip(),
         "generic_memory_text": generic_memory_text,
         "focus_selected": focus_selected,
         "requirement_used": bool(requirement_clause),
-        "episodic_requirement_prompted": any("episodic" in str(p).lower() for p in requirement_parts),
+        "episodic_requirement_prompted": any(
+            [
+                has_episodic_role_function,
+                has_episodic_role_presence,
+                covered_requirement_has_episodic_expected_function,
+                episodic_markers_present,
+            ]
+        ),
         "source_labels": [label for label, value in [
             ("covered_requirement_ids", bool(requirement_ids)),
             ("global_contract.scene_requirements", bool(scene_requirements)),
@@ -2166,22 +2204,32 @@ def _postprocess_prompts_v11_route_aware(
     scene_by_segment_id: dict[str, dict[str, Any]] = {}
     for row_raw in [*_safe_list(scene_plan.get("storyboard")), *_safe_list(scene_plan.get("scenes"))]:
         row = _safe_dict(row_raw)
-        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
-        if segment_id:
-            scene_by_segment_id[segment_id] = row
+        for key in (
+            str(row.get("segment_id") or "").strip(),
+            str(row.get("scene_id") or "").strip(),
+        ):
+            if key:
+                scene_by_segment_id[key] = row
 
     role_by_segment_id: dict[str, dict[str, Any]] = {}
     for row_raw in _safe_list(role_plan.get("scene_casting")):
         row = _safe_dict(row_raw)
-        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
-        if segment_id:
-            role_by_segment_id[segment_id] = row
+        for key in (
+            str(row.get("segment_id") or "").strip(),
+            str(row.get("scene_id") or "").strip(),
+        ):
+            if key:
+                role_by_segment_id[key] = row
 
-    prompt_row_by_segment_id = {
-        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
-        for row in prompt_rows
-        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
-    }
+    prompt_row_by_segment_id: dict[str, dict[str, Any]] = {}
+    for row_raw in prompt_rows:
+        row = _safe_dict(row_raw)
+        for key in (
+            str(row.get("segment_id") or "").strip(),
+            str(row.get("scene_id") or "").strip(),
+        ):
+            if key:
+                prompt_row_by_segment_id[key] = row
 
     compiled_contract = _safe_dict(_safe_dict(role_plan.get("compiled_contract")).get("global_contract"))
     global_contract: dict[str, Any] = {
@@ -2209,8 +2257,9 @@ def _postprocess_prompts_v11_route_aware(
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or "").strip()
         if not segment_id:
             continue
-        route = str(segment.get("route") or "").strip().lower()
         scene_row = _safe_dict(scene_by_segment_id.get(segment_id) or prompt_row_by_segment_id.get(segment_id))
+        prompt_row = _safe_dict(prompt_row_by_segment_id.get(segment_id))
+        route = str(segment.get("route") or scene_row.get("route") or prompt_row.get("route") or "").strip().lower()
         role_row = _safe_dict(role_by_segment_id.get(segment_id))
         if route == "i2v":
             diag["scene_prompts_route_aware_final_postprocess_i2v_count"] += 1
