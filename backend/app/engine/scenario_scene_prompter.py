@@ -2136,9 +2136,10 @@ def _build_i2v_memory_beat_directive(
     candidate_core = _trim_sentence("; ".join([x for x in [scene_goal, narrative_function, ltx_video_goal] if x]), max_len=220)
     route_incompatible_i2v_text_detected = _is_i2v_route_incompatible_memory_text(candidate_core)
     use_candidate_core = bool(candidate_core) and not generic_memory_text and not route_incompatible_i2v_text_detected
-    beat_core = candidate_core if use_candidate_core else ""
-    if not beat_core:
-        beat_core = requirement_clause or ""
+
+    beat_core = requirement_clause or ""
+    if not beat_core and use_candidate_core:
+        beat_core = candidate_core
     if not beat_core:
         beat_core = _trim_sentence(focus_selected or "a contract-aligned remembered action beat", max_len=180)
     directive = _append_compact_clauses(
