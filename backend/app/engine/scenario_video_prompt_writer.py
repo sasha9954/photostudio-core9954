@@ -175,6 +175,40 @@ def _build_world_guard_block(route: str) -> str:
     )
 
 
+def _build_i2v_memory_beat_block(scene_row: dict[str, Any], package: dict[str, Any]) -> tuple[str, str]:
+    row = _safe_dict(scene_row)
+    direct_source = " ".join(
+        part for part in [str(row.get("requirement_source_text") or "").strip(), str(row.get("requirement_purpose") or "").strip()] if part
+    ).strip()
+    if direct_source:
+        return (
+            f"Memory beat directive: {direct_source}. Show the specific remembered event in this requirement, not only atmosphere.",
+            "requirement_source_text+requirement_purpose",
+        )
+    fallback_source = " ".join(
+        part
+        for part in [
+            str(row.get("scene_goal") or "").strip(),
+            str(row.get("narrative_function") or "").strip(),
+            str(row.get("ltx_video_goal") or "").strip(),
+        ]
+        if part
+    ).strip()
+    if fallback_source:
+        return (
+            f"Memory beat directive: {fallback_source}. Make the event readable via body posture, spatial relation, and visible consequences.",
+            "scene_goal+narrative_function+ltx_video_goal",
+        )
+    focus_elements = _safe_list(_safe_dict(_safe_dict(package.get("memory_contract")).get("memory_focus_elements")))
+    focus_beat = str(next((v for v in focus_elements if str(v or "").strip()), "")).strip()
+    if focus_beat:
+        return (
+            f"Memory beat directive: {focus_beat}. Keep one clear remembered action or emotional event, not a generic cutaway.",
+            "memory_contract.memory_focus_elements",
+        )
+    return ("", "")
+
+
 _FORBIDDEN_VENUE_TERMS = ("nightclub", "night club", "club", "bar", "dance floor", "dancefloor", "stage", "crowd")
 _ACTION_CONFLICT_WORDS = (
     "pour",
@@ -1570,6 +1604,7 @@ def _sanitize_segment(
     raw_row: Any,
     fallback_row: dict[str, Any],
     identity_ctx: dict[str, Any],
+    package: dict[str, Any],
     *,
     previous_i2v_variants: list[str],
 ) -> dict[str, Any]:
@@ -1700,7 +1735,12 @@ def _sanitize_segment(
         positive_before_cleanup = positive_prompt
         positive_prompt = _strip_positive_contract_blocks(positive_prompt)
         positive_contract_duplicates_removed = positive_prompt != positive_before_cleanup
-        positive_prompt = _append_clause(positive_prompt, GLOBAL_HERO_IDENTITY_LOCK)
+        identity_lock_clause = (
+            "Preserve identity of the active referenced role from its connected reference."
+            if route == "i2v"
+            else GLOBAL_HERO_IDENTITY_LOCK
+        )
+        positive_prompt = _append_clause(positive_prompt, identity_lock_clause)
         positive_prompt = _append_clause(positive_prompt, BODY_CONTINUITY_LOCK)
         positive_prompt = _append_clause(positive_prompt, WARDROBE_CONTINUITY_LOCK)
         if confirmed_look_used:
@@ -1717,6 +1757,10 @@ def _sanitize_segment(
         str(plan_row.get("emotional_intent") or "").strip(),
     ]
     scene_specific_payload = ". ".join(part for part in scene_specific_parts if part).strip()
+    memory_beat_block = ""
+    memory_beat_source = ""
+    if route == "i2v":
+        memory_beat_block, memory_beat_source = _build_i2v_memory_beat_block(plan_row, package)
     if route == "ia2v":
         ia2v_scene_specific_parts = [
             str(plan_row.get("emotional_intent") or "").strip(),
@@ -1733,6 +1777,9 @@ def _sanitize_segment(
             positive_prompt = positive_prompt_seed
     elif scene_specific_payload:
         positive_prompt = ". ".join(part for part in [scene_specific_payload, positive_prompt] if part).strip(". ")
+    if route == "i2v" and memory_beat_block:
+        positive_prompt = ". ".join(part for part in [memory_beat_block, positive_prompt] if part).strip(". ")
+        fallback_photo_prompt = ". ".join(part for part in [memory_beat_block, fallback_photo_prompt] if part).strip(". ")
     elif positive_prompt_seed:
         positive_prompt = positive_prompt_seed
 
@@ -2161,6 +2208,8 @@ def _sanitize_segment(
         referenced_role_required=referenced_role_required,
         has_human_subject=has_human_subject,
     )
+    if route == "i2v" and has_human_subject and referenced_role_required:
+        identity_lock_block = "Preserve identity of the active referenced role from its connected reference."
     world_guard_block = _build_world_guard_block(route)
     ia2v_photo_canon_applied = route == "ia2v"
     ia2v_video_canon_applied = route == "ia2v"
@@ -2335,7 +2384,7 @@ def _sanitize_segment(
         "audio_behavior_hints": str(row.get("audio_behavior_hints") or "").strip(),
         "photo_prompt_route_profile": "ia2v_lipsync_performer_first" if route == "ia2v" else "i2v_visual_story_world_first",
         "video_prompt_route_profile": "ia2v_lipsync_motion" if route == "ia2v" else "i2v_visual_story_motion",
-        "identity_lock_applied": bool(identity_lock_block),
+        "prompt_identity_lock_block_applied": bool(identity_lock_block),
         "world_guard_applied": True,
         "prompt_validation_mode": "route_aware_hardening",
         "prompts_route_aware_hardening_applied": True,
@@ -2345,6 +2394,16 @@ def _sanitize_segment(
         "prompts_ia2v_video_canon_applied_count": 1 if ia2v_video_canon_applied else 0,
         "prompts_i2v_photo_canon_applied_count": 1 if i2v_photo_canon_applied else 0,
         "prompts_i2v_video_canon_applied_count": 1 if i2v_video_canon_applied else 0,
+        "prompts_i2v_memory_beat_concretization_applied_count": 1 if bool(route == "i2v" and memory_beat_block) else 0,
+        "prompts_i2v_memory_beat_sources_by_segment": memory_beat_source or "",
+        "prompts_i2v_eventful_prompt_count": 1 if bool(route == "i2v" and memory_beat_block) else 0,
+        "prompts_i2v_generic_cutaway_warning_segments": [segment_id] if bool(route == "i2v" and not memory_beat_block) else [],
+        "prompts_requirement_source_text_used_count": 1 if memory_beat_source == "requirement_source_text+requirement_purpose" else 0,
+        "prompts_req_coverage_propagated_to_prompts": bool(route == "i2v" and memory_beat_source),
+        "prompts_episodic_requirement_prompted_count": 1
+        if bool(route == "i2v" and str(plan_row.get("requirement_source_text") or "").strip() and "character_3" in must_appear)
+        else 0,
+        "prompts_i2v_role_specific_identity_lock_applied_count": 1 if bool(route == "i2v" and identity_lock_block) else 0,
         "prompts_camera_energy_applied_count": 1 if bool(i2v_camera_clause or camera_energy) else 0,
         "prompts_route_world_guard_failures": route_world_guard_failures,
         "prompts_route_prompt_summary": {
@@ -2489,6 +2548,7 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
             by_segment_id.get(segment_id),
             fallback_row,
             identity_ctx,
+            package,
             previous_i2v_variants=previous_i2v_variants,
         )
         if normalized:
@@ -2784,12 +2844,31 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     final_gender_terms_removed: list[str] = []
     final_gender_conflict_segments: list[str] = []
     rebuilt_after_cleanup_count = 0
+    i2v_memory_beat_count = 0
+    i2v_eventful_count = 0
+    i2v_cutaway_warning_segments: list[str] = []
+    i2v_memory_beat_sources_by_segment: dict[str, str] = {}
+    req_source_text_used_count = 0
+    req_coverage_propagated_count = 0
+    episodic_requirement_prompted_count = 0
+    i2v_role_specific_identity_lock_applied_count = 0
     for seg in _safe_list(normalized_payload.get("segments")):
         row = _safe_dict(seg)
         final_gender_terms_removed.extend(_safe_list(row.get("identity_gender_conflict_terms_removed")))
         if bool(row.get("identity_gender_conflict_detected")):
             final_gender_conflict_segments.append(str(row.get("segment_id") or "").strip())
         rebuilt_after_cleanup_count += int(row.get("final_video_prompt_prompt_rebuilt_after_bad_cleanup_count") or 0)
+        i2v_memory_beat_count += int(row.get("prompts_i2v_memory_beat_concretization_applied_count") or 0)
+        i2v_eventful_count += int(row.get("prompts_i2v_eventful_prompt_count") or 0)
+        req_source_text_used_count += int(row.get("prompts_requirement_source_text_used_count") or 0)
+        req_coverage_propagated_count += 1 if bool(row.get("prompts_req_coverage_propagated_to_prompts")) else 0
+        episodic_requirement_prompted_count += int(row.get("prompts_episodic_requirement_prompted_count") or 0)
+        i2v_role_specific_identity_lock_applied_count += int(row.get("prompts_i2v_role_specific_identity_lock_applied_count") or 0)
+        seg_id = str(row.get("segment_id") or "").strip()
+        src = str(row.get("prompts_i2v_memory_beat_sources_by_segment") or "").strip()
+        if seg_id and src:
+            i2v_memory_beat_sources_by_segment[seg_id] = src
+        i2v_cutaway_warning_segments.extend(_safe_list(row.get("prompts_i2v_generic_cutaway_warning_segments")))
     return {
         "ok": ok,
         "final_video_prompt": normalized_payload if ok else {"delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION, "segments": [], "scenes": []},
@@ -2823,6 +2902,14 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                 dict.fromkeys([seg for seg in final_gender_conflict_segments if seg])
             ),
             "final_video_prompt_prompt_rebuilt_after_bad_cleanup_count": rebuilt_after_cleanup_count if ok else 0,
+            "prompts_i2v_memory_beat_concretization_applied_count": i2v_memory_beat_count if ok else 0,
+            "prompts_i2v_memory_beat_sources_by_segment": i2v_memory_beat_sources_by_segment if ok else {},
+            "prompts_i2v_eventful_prompt_count": i2v_eventful_count if ok else 0,
+            "prompts_i2v_generic_cutaway_warning_segments": list(dict.fromkeys([s for s in i2v_cutaway_warning_segments if s])) if ok else [],
+            "prompts_req_coverage_propagated_to_prompts": req_coverage_propagated_count if ok else 0,
+            "prompts_requirement_source_text_used_count": req_source_text_used_count if ok else 0,
+            "prompts_episodic_requirement_prompted_count": episodic_requirement_prompted_count if ok else 0,
+            "prompts_i2v_role_specific_identity_lock_applied_count": i2v_role_specific_identity_lock_applied_count if ok else 0,
             "final_video_prompt_validation_checked_after_sanitizer": bool(
                 validation_diag.get("final_video_prompt_validation_checked_after_sanitizer")
             ),
