@@ -1154,6 +1154,13 @@ def _classify_signature_format(value: Any) -> str:
     return "json" if isinstance(parsed, (dict, list)) else "raw"
 
 
+def _sha256_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _hash_signature_text(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -1183,18 +1190,32 @@ def _director_signature_matches_current(
     if stored and current and stored == current:
         diagnostics["director_signature_match_mode"] = "direct"
         return True, diagnostics
-    if stored_fmt == "json" and current_fmt == "sha256" and _hash_signature_text(stored) == current.lower():
-        diagnostics["director_signature_match_mode"] = "stored_json_hash_matches_current"
-        return True, diagnostics
-    if current_fmt == "json" and stored_fmt == "sha256" and _hash_signature_text(current) == stored.lower():
-        diagnostics["director_signature_match_mode"] = "current_json_hash_matches_stored"
-        return True, diagnostics
+    if stored_fmt == "json" and current_fmt == "sha256":
+        current_lower = current.lower()
+        if _hash_signature_text(stored) == current_lower:
+            diagnostics["director_signature_match_mode"] = "stored_json_hash_matches_current"
+            return True, diagnostics
+        if _sha256_text(stored) == current_lower:
+            diagnostics["director_signature_match_mode"] = "stored_raw_text_hash_matches_current"
+            return True, diagnostics
+    if current_fmt == "json" and stored_fmt == "sha256":
+        stored_lower = stored.lower()
+        if _hash_signature_text(current) == stored_lower:
+            diagnostics["director_signature_match_mode"] = "current_json_hash_matches_stored"
+            return True, diagnostics
+        if _sha256_text(current) == stored_lower:
+            diagnostics["director_signature_match_mode"] = "current_raw_text_hash_matches_stored"
+            return True, diagnostics
     if provided and ((stored and stored == provided) or (current and current == provided)):
         diagnostics["director_signature_match_mode"] = "provided_signature"
         return True, diagnostics
-    provided_hash = _hash_signature_text(provided) if provided else ""
-    if provided_hash and ((current and provided_hash == current.lower()) or (stored and provided_hash == stored.lower())):
-        diagnostics["director_signature_match_mode"] = "provided_signature_hash"
+    provided_hash_canonical = _hash_signature_text(provided) if provided else ""
+    provided_hash_raw = _sha256_text(provided) if provided else ""
+    if (
+        (provided_hash_canonical and ((current and provided_hash_canonical == current.lower()) or (stored and provided_hash_canonical == stored.lower())))
+        or (provided_hash_raw and ((current and provided_hash_raw == current.lower()) or (stored and provided_hash_raw == stored.lower())))
+    ):
+        diagnostics["director_signature_match_mode"] = "provided_signature_hash" if provided_hash_canonical and ((current and provided_hash_canonical == current.lower()) or (stored and provided_hash_canonical == stored.lower())) else "provided_raw_text_hash"
         return True, diagnostics
     return False, diagnostics
 
