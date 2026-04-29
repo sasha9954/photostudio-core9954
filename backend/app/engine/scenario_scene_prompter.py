@@ -330,6 +330,33 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _get_contract_section(scene: dict[str, Any], global_contract: dict[str, Any], section_name: str) -> dict[str, Any]:
+    scene_section = _safe_dict(scene.get(section_name))
+    if scene_section:
+        return scene_section
+    global_section = _safe_dict(global_contract.get(section_name))
+    if global_section:
+        return global_section
+    director_contract = _safe_dict(global_contract.get("director_contract"))
+    director_contract_section = _safe_dict(director_contract.get(section_name))
+    if director_contract_section:
+        return director_contract_section
+    director_config = _safe_dict(global_contract.get("director_config"))
+    director_config_section = _safe_dict(director_config.get(section_name))
+    return director_config_section
+
+
+def _strip_ia2v_contamination_clauses(text: str) -> str:
+    clauses = [part.strip() for part in re.split(r"[.;]\s*", str(text or "").strip()) if part.strip()]
+    clean_clauses: list[str] = []
+    for clause in clauses:
+        lowered = clause.lower()
+        if any(token in lowered for token in _IA2V_WORLD_CONTAMINATION_TOKENS):
+            continue
+        clean_clauses.append(clause)
+    return ". ".join(clean_clauses).strip()
+
+
 def _append_prompt_clause(base: str, clause: str) -> str:
     text = str(base or "").strip()
     part = str(clause or "").strip()
@@ -2994,13 +3021,13 @@ def _normalize_scene_prompts(
             photo_prompt = _append_compact_clauses(photo_prompt, still_clauses)
             video_prompt = _append_compact_clauses(video_prompt, motion_clauses)
             positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), motion_clauses)
-            performance_contract = _safe_dict(scene.get("performance_contract"))
+            performance_contract = _get_contract_section(scene, global_contract, "performance_contract")
             ia2v_meaning = str(performance_contract.get("ia2v_meaning") or "").strip()
             performance_location = str(performance_contract.get("performance_location") or "").strip()
             performance_focus_elements = ", ".join(
                 str(x).strip() for x in _safe_list(performance_contract.get("performance_focus_elements")) if str(x).strip()
             )
-            route_location_rules = _safe_dict(scene.get("route_location_rules"))
+            route_location_rules = _get_contract_section(scene, global_contract, "route_location_rules")
             ia2v_location_rules = _safe_dict(route_location_rules.get("ia2v"))
             ia2v_default_world = str(ia2v_location_rules.get("default_world") or "").strip()
             ia2v_allowed_worlds = ", ".join(
@@ -3008,29 +3035,29 @@ def _normalize_scene_prompts(
             )
             speaker_role_value = str(scene.get("speaker_role") or scene.get("vocal_owner_role") or "").strip() or "character_1"
             emotional_tone = str(scene.get("emotional_intent") or "").strip() or "raw emotional release"
-            photo_prompt = _append_compact_clauses(
-                "",
-                [
-                    f"Performer-first singing-ready frame of {speaker_role_value} with {emotional_tone}.",
-                    f"Performance meaning: {ia2v_meaning}" if ia2v_meaning else "",
-                    f"Performance location anchor: {performance_location}" if performance_location else "",
-                    f"Performance focus elements: {performance_focus_elements}" if performance_focus_elements else "",
-                    f"Route default world anchor: {ia2v_default_world}" if ia2v_default_world else "",
-                    f"Allowed world anchors: {ia2v_allowed_worlds}" if ia2v_allowed_worlds else "",
-                    "Mouth open or slightly open in a natural singing shape; emotion-readable, performer-first, and face-forward clarity.",
-                ],
+            ia2v_core_clauses = [
+                f"Performance meaning: {ia2v_meaning}" if ia2v_meaning else "",
+                f"Performance location anchor: {performance_location}" if performance_location else "",
+                f"Performance focus elements: {performance_focus_elements}" if performance_focus_elements else "",
+                f"Route default world anchor: {ia2v_default_world}" if ia2v_default_world else "",
+                f"Allowed world anchors: {ia2v_allowed_worlds}" if ia2v_allowed_worlds else "",
+            ]
+            performer_canon = (
+                f"Performer-first frame of {speaker_role_value}; vocal owner is on-camera and dominant. "
+                "Mouth open or slightly open in a natural singing shape; readable face, mouth, and eyes with emotional singing delivery. "
+                "Controlled shoulders, hands, and upper-body motion that supports performance, never action choreography or cutaway storytelling."
             )
-            video_prompt = _append_compact_clauses(
-                _IA2V_VIDEO_PROMPT_CANON,
-                [
-                    f"Performance meaning: {ia2v_meaning}" if ia2v_meaning else "",
-                    f"Performance location anchor: {performance_location}" if performance_location else "",
-                    f"Performance focus elements: {performance_focus_elements}" if performance_focus_elements else "",
-                    f"Route default world anchor: {ia2v_default_world}" if ia2v_default_world else "",
-                    f"Allowed world anchors: {ia2v_allowed_worlds}" if ia2v_allowed_worlds else "",
-                ],
-            )
-            positive_video_prompt = video_prompt
+            if contamination_detected:
+                photo_prompt = _append_compact_clauses("", [performer_canon, *ia2v_core_clauses])
+                video_prompt = _append_compact_clauses(_IA2V_VIDEO_PROMPT_CANON, [performer_canon, *ia2v_core_clauses])
+                positive_video_prompt = video_prompt
+                photo_prompt = _strip_ia2v_contamination_clauses(photo_prompt)
+                video_prompt = _strip_ia2v_contamination_clauses(video_prompt)
+                positive_video_prompt = _strip_ia2v_contamination_clauses(positive_video_prompt)
+            else:
+                photo_prompt = _append_compact_clauses(photo_prompt, [performer_canon, *ia2v_core_clauses])
+                video_prompt = _append_compact_clauses(video_prompt, [performer_canon, *ia2v_core_clauses])
+                positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), [performer_canon, *ia2v_core_clauses])
             tone_clause = _trim_sentence(
                 f"Tone accent: {emotional_tone}; keep it in vocal facial performance only, not action choreography.",
                 max_len=170,
@@ -3057,7 +3084,7 @@ def _normalize_scene_prompts(
             negative_video_prompt = _clean_ia2v_negative_prompt(negative_video_prompt or negative_prompt)
             negative_prompt = negative_video_prompt
             post_ia2v_blob = " ".join([photo_prompt, video_prompt, positive_video_prompt]).lower()
-            if scene_id in scene_prompts_ia2v_world_contamination_segments and not any(
+            if contamination_detected and not any(
                 token in post_ia2v_blob for token in _IA2V_WORLD_CONTAMINATION_TOKENS
             ):
                 scene_prompts_ia2v_world_contamination_fixed_count += 1
