@@ -3998,7 +3998,13 @@ def _build_merged_director_contract_for_scene_validation(package: dict[str, Any]
             merged = _merge_director_contracts(merged, source)
     return merged
 
-def _build_scene_requirement_context(package: dict[str, Any], scene_plan: dict[str, Any], role_usage_contract: dict[str, dict[str, Any]], route_semantics: dict[str, Any]) -> dict[str, Any]:
+def _build_scene_requirement_context(
+    package: dict[str, Any],
+    scene_plan: dict[str, Any],
+    role_usage_contract: dict[str, dict[str, Any]],
+    route_semantics: dict[str, Any],
+    requirements: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     _ = scene_plan
     pkg = _safe_dict(package)
     input_pkg = _safe_dict(pkg.get("input"))
@@ -4099,6 +4105,7 @@ def _build_scene_requirement_context(package: dict[str, Any], scene_plan: dict[s
             add_world_alias(role, world_token)
 
     return {
+        "requirements": _safe_list(requirements),
         "role_alias_map": {k: sorted(v) for k, v in role_alias_map.items()},
         "world_alias_map": {k: sorted(v) for k, v in world_alias_map.items()},
         "role_function_map": {k: sorted(v) for k, v in role_function_map.items()},
@@ -4367,7 +4374,13 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
             if int(route_counts.get(route_name) or 0) != int(target_count):
                 errors.append(f"hard_budget_{route_name}:{int(route_counts.get(route_name) or 0)}!={int(target_count)}")
 
-    requirement_context = _build_scene_requirement_context(package, scene_plan, role_usage_contract, route_semantics)
+    requirement_context = _build_scene_requirement_context(
+        package,
+        scene_plan,
+        role_usage_contract,
+        route_semantics,
+        requirements,
+    )
     requirement_coverage = _count_requirement_coverage(scene_plan, requirements, role_usage_contract, route_semantics, requirement_context)
     missing_requirement_ids = [
         str(req.get("id") or "").strip()
@@ -4566,15 +4579,15 @@ def _seed_missing_scene_requirements_from_contract(
     package: dict[str, Any],
     scene_plan: dict[str, Any],
     missing_requirement_ids: list[str],
+    requirements: list[dict[str, Any]],
     requirement_context: dict[str, Any],
     role_usage_contract: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     _ = package
     _ = role_usage_contract
-    requirements = _safe_list(_safe_dict(requirement_context).get("requirements"))
     requirement_map = {
         str(_safe_dict(req).get("id") or "").strip(): _safe_dict(req)
-        for req in requirements
+        for req in _safe_list(requirements)
         if str(_safe_dict(req).get("id") or "").strip()
     }
     route_location_rules = _safe_dict(_safe_dict(requirement_context).get("route_location_rules"))
@@ -4627,6 +4640,14 @@ def _seed_missing_scene_requirements_from_contract(
             requirement_ids_row.append(requirement_id)
             row["requirement_ids"] = requirement_ids_row
             changed.add("requirement_ids")
+        source_text = str(req.get("source_text") or "").strip()
+        if source_text and str(row.get("requirement_source_text") or "").strip() != source_text:
+            row["requirement_source_text"] = source_text
+            changed.add("requirement_source_text")
+        purpose = str(req.get("purpose") or "").strip()
+        if purpose and str(row.get("requirement_purpose") or "").strip() != purpose:
+            row["requirement_purpose"] = purpose
+            changed.add("requirement_purpose")
         active_roles = [_canonical_subject_id(v) for v in _safe_list(row.get("active_roles")) if _canonical_subject_id(v)]
         for role in expected_roles:
             if role not in active_roles:
@@ -4634,7 +4655,7 @@ def _seed_missing_scene_requirements_from_contract(
                 changed.add("active_roles")
         row["active_roles"] = active_roles
         primary_role = _canonical_subject_id(row.get("primary_role"))
-        if expected_roles and (not primary_role or primary_role not in set(active_roles)):
+        if expected_roles and not primary_role:
             row["primary_role"] = expected_roles[0]
             changed.add("primary_role")
         primary_role = _canonical_subject_id(row.get("primary_role"))
@@ -16892,25 +16913,31 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 clip_contract_errors = []
             else:
                 missing_retry_requirement_ids = [str(e).split(":", 1)[1].strip() for e in clip_retry_errors if str(e).startswith("scene_requirement_missing:")]
+                merged_director_contract = _build_merged_director_contract_for_scene_validation(package)
                 role_usage_contract = _normalize_role_usage_contract(
-                    _build_merged_director_contract_for_scene_validation(package),
+                    merged_director_contract,
                     package,
                 )
+                seed_requirements = _extract_scene_requirements_from_contract(merged_director_contract, package)
                 requirement_context = _build_scene_requirement_context(
                     package,
                     retry_scene_plan,
                     role_usage_contract,
-                    _safe_dict(_build_merged_director_contract_for_scene_validation(package).get("route_semantics")),
+                    _safe_dict(merged_director_contract.get("route_semantics")),
+                    seed_requirements,
                 )
                 seeded_scene_plan, seed_diag = _seed_missing_scene_requirements_from_contract(
                     package=package,
                     scene_plan=retry_scene_plan,
                     missing_requirement_ids=missing_retry_requirement_ids,
+                    requirements=seed_requirements,
                     requirement_context=requirement_context,
                     role_usage_contract=role_usage_contract,
                 )
+                seeded_scene_plan, seed_sync_meta = _sync_scene_plan_storyboard_mirror(seeded_scene_plan)
                 diagnostics = _safe_dict(package.get("diagnostics"))
                 diagnostics.update(_safe_dict(seed_diag))
+                diagnostics["scene_plan_requirement_contract_seed_sync"] = _safe_dict(seed_sync_meta)
                 package["diagnostics"] = diagnostics
                 if _scene_bool(seed_diag.get("scene_plan_requirement_contract_seed_used")):
                     seed_ok, seed_errors = _validate_scene_plan_clip_contract(package, seeded_scene_plan)
