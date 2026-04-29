@@ -180,6 +180,15 @@ _GENERIC_MEMORY_BEAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bgrounded world continuity\b"),
     re.compile(r"(?i)\benvironment-first storytelling\b"),
 )
+_IA2V_WORLD_CONTAMINATION_TOKENS: tuple[str, ...] = (
+    "courtyard",
+    "street",
+    "memory/action beat:",
+    "memory beat",
+    "world cutaway",
+    "environment-first",
+    "visual story beat",
+)
 _STALE_IDENTITY_TERMS = {
     "same woman",
     "woman",
@@ -1927,16 +1936,11 @@ def _is_generic_memory_text(*values: str) -> bool:
     concrete_markers = (
         "character_",
         "req_",
-        "requirement",
-        "contract",
-        "scene",
-        "role",
-        "action",
-        "memory",
-        "world",
-        "location",
-        "purpose",
-        "source",
+        "covered_requirement",
+        "role_function",
+        "director_required_world",
+        "expected_world",
+        "expected_roles",
     )
     has_concrete_marker = any(marker in lowered for marker in concrete_markers)
     if has_concrete_marker and len(tokens) >= 6:
@@ -1946,9 +1950,13 @@ def _is_generic_memory_text(*values: str) -> bool:
     generic_token_set = {
         "memory", "beat", "atmospheric", "world", "environment", "cutaway",
         "visual", "story", "grounded", "continuity", "first", "storytelling",
+        "generic", "scene", "action", "location",
     }
     non_generic_tokens = [tok for tok in tokens if tok not in generic_token_set]
-    return len(non_generic_tokens) <= 2
+    if len(non_generic_tokens) <= 2:
+        return True
+    generic_ratio = (len(tokens) - len(non_generic_tokens)) / max(len(tokens), 1)
+    return generic_ratio >= 0.6
 
 
 def _build_i2v_memory_beat_directive(
@@ -2963,7 +2971,8 @@ def _normalize_scene_prompts(
             normalized_notes["scene_local_props_policy"] = "decor_restricted"
         if actual_route == "ia2v":
             pre_ia2v_blob = " ".join([photo_prompt, video_prompt, positive_video_prompt]).lower()
-            if any(token in pre_ia2v_blob for token in ("courtyard", "street", "memory/action beat:", "world cutaway", "environment-first")):
+            contamination_detected = any(token in pre_ia2v_blob for token in _IA2V_WORLD_CONTAMINATION_TOKENS)
+            if contamination_detected:
                 scene_prompts_ia2v_world_contamination_segments.append(scene_id)
                 scene_prompts_ia2v_world_contamination_detected_count += 1
             semantic_context = " ".join(
@@ -2985,15 +2994,43 @@ def _normalize_scene_prompts(
             photo_prompt = _append_compact_clauses(photo_prompt, still_clauses)
             video_prompt = _append_compact_clauses(video_prompt, motion_clauses)
             positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), motion_clauses)
-            speaker_role_value = str(scene.get("speaker_role") or "").strip() or "character_1"
-            emotional_tone = str(scene.get("emotional_intent") or "").strip() or "raw emotional release"
-            photo_prompt = (
-                f"Story-grounded singing-ready frame of the same performer ({speaker_role_value}) in the current scene world with {emotional_tone}. "
-                "Mouth open or slightly open in a natural singing shape; emotion and performance intent are clearly readable. "
-                "Face and mouth stay readable and important, with performer-first focus."
+            performance_contract = _safe_dict(scene.get("performance_contract"))
+            ia2v_meaning = str(performance_contract.get("ia2v_meaning") or "").strip()
+            performance_location = str(performance_contract.get("performance_location") or "").strip()
+            performance_focus_elements = ", ".join(
+                str(x).strip() for x in _safe_list(performance_contract.get("performance_focus_elements")) if str(x).strip()
             )
-            video_prompt = _IA2V_VIDEO_PROMPT_CANON
-            positive_video_prompt = _IA2V_VIDEO_PROMPT_CANON
+            route_location_rules = _safe_dict(scene.get("route_location_rules"))
+            ia2v_location_rules = _safe_dict(route_location_rules.get("ia2v"))
+            ia2v_default_world = str(ia2v_location_rules.get("default_world") or "").strip()
+            ia2v_allowed_worlds = ", ".join(
+                str(x).strip() for x in _safe_list(ia2v_location_rules.get("allowed_worlds")) if str(x).strip()
+            )
+            speaker_role_value = str(scene.get("speaker_role") or scene.get("vocal_owner_role") or "").strip() or "character_1"
+            emotional_tone = str(scene.get("emotional_intent") or "").strip() or "raw emotional release"
+            photo_prompt = _append_compact_clauses(
+                "",
+                [
+                    f"Performer-first singing-ready frame of {speaker_role_value} with {emotional_tone}.",
+                    f"Performance meaning: {ia2v_meaning}" if ia2v_meaning else "",
+                    f"Performance location anchor: {performance_location}" if performance_location else "",
+                    f"Performance focus elements: {performance_focus_elements}" if performance_focus_elements else "",
+                    f"Route default world anchor: {ia2v_default_world}" if ia2v_default_world else "",
+                    f"Allowed world anchors: {ia2v_allowed_worlds}" if ia2v_allowed_worlds else "",
+                    "Mouth open or slightly open in a natural singing shape; emotion-readable, performer-first, and face-forward clarity.",
+                ],
+            )
+            video_prompt = _append_compact_clauses(
+                _IA2V_VIDEO_PROMPT_CANON,
+                [
+                    f"Performance meaning: {ia2v_meaning}" if ia2v_meaning else "",
+                    f"Performance location anchor: {performance_location}" if performance_location else "",
+                    f"Performance focus elements: {performance_focus_elements}" if performance_focus_elements else "",
+                    f"Route default world anchor: {ia2v_default_world}" if ia2v_default_world else "",
+                    f"Allowed world anchors: {ia2v_allowed_worlds}" if ia2v_allowed_worlds else "",
+                ],
+            )
+            positive_video_prompt = video_prompt
             tone_clause = _trim_sentence(
                 f"Tone accent: {emotional_tone}; keep it in vocal facial performance only, not action choreography.",
                 max_len=170,
@@ -3021,7 +3058,7 @@ def _normalize_scene_prompts(
             negative_prompt = negative_video_prompt
             post_ia2v_blob = " ".join([photo_prompt, video_prompt, positive_video_prompt]).lower()
             if scene_id in scene_prompts_ia2v_world_contamination_segments and not any(
-                token in post_ia2v_blob for token in ("courtyard", "street", "memory/action beat:", "world cutaway", "environment-first")
+                token in post_ia2v_blob for token in _IA2V_WORLD_CONTAMINATION_TOKENS
             ):
                 scene_prompts_ia2v_world_contamination_fixed_count += 1
         if enforce_shared_space_rule:
