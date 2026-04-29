@@ -4152,6 +4152,9 @@ def _extract_world_tokens_from_scene_row(row: dict[str, Any]) -> set[str]:
         if token and "_world" in token:
             world_tokens.add(token)
     row_safe = _safe_dict(row)
+    route = _to_director_route(row_safe.get("route"))
+    if route:
+        world_tokens.add(route)
     for f in world_fields:
         _add(row_safe.get(f))
     for container in containers:
@@ -16681,7 +16684,13 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
     diagnostics["scene_plan_route_budget_odd_extra_policy"] = str(route_budget_meta.get("scene_plan_route_budget_odd_extra_policy") or "")
     diagnostics["scene_plan_route_budget_expected_from_extra_policy"] = _safe_dict(route_budget_meta.get("scene_plan_route_budget_expected_from_extra_policy"))
-    diagnostics["scene_plan_route_budget_mismatch"] = _safe_dict(diagnostics.get("scene_plan_route_budget_target")) != _safe_dict(diagnostics.get("scene_plan_route_budget_actual"))
+    route_budget_target = _safe_dict(diagnostics.get("scene_plan_route_budget_target"))
+    route_budget_actual = _safe_dict(diagnostics.get("scene_plan_route_budget_actual"))
+    route_budget_mismatch = route_budget_target != route_budget_actual
+    diagnostics["scene_plan_route_budget_mismatch"] = route_budget_mismatch
+    strict_route_budget_preset = str(diagnostics.get("route_budget_preset") or "").strip().lower() == "no_first_last_50_50_0"
+    if strict_route_budget_preset and route_budget_mismatch:
+        route_budget_ok = False
     diagnostics["scene_plan_enum_invalid_detected"] = bool(scene_diag.get("scene_plan_enum_invalid_detected"))
     diagnostics["scene_plan_enum_invalid_count"] = int(scene_diag.get("scene_plan_enum_invalid_count") or 0)
     diagnostics["scene_plan_enum_invalid_field"] = str(scene_diag.get("scene_plan_enum_invalid_field") or "")
