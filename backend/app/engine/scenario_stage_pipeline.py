@@ -3932,7 +3932,10 @@ def _extract_scene_requirements_from_contract(director_contract: dict[str, Any],
                 "expected_roles": expected_roles,
                 "expected_role_functions": expected_role_functions,
                 "expected_world": expected_world,
+                "min_count": row_safe.get("min_count"),
+                "max_count": row_safe.get("max_count"),
                 "source_text": source_text,
+                "purpose": str(row_safe.get("purpose") or row_safe.get("intent") or "").strip(),
                 "strict": strict,
                 "has_structured_expectation": has_structured_expectation,
             }
@@ -3965,7 +3968,10 @@ def _extract_scene_requirements_from_contract(director_contract: dict[str, Any],
                 "expected_roles": [],
                 "expected_role_functions": [],
                 "expected_world": "",
+                "min_count": 1,
+                "max_count": None,
                 "source_text": source_text,
+                "purpose": "",
                 "strict": False,
                 "has_structured_expectation": bool(expected_route),
             }
@@ -4201,6 +4207,20 @@ def _scene_satisfies_requirement(
     expected_world = str(req.get("expected_world") or "").strip().lower()
     strict = _scene_bool(req.get("strict"))
     has_structured_expectation = bool(req.get("has_structured_expectation") or expected_route or expected_roles or expected_role_functions or expected_world)
+    requirement_id = str(req.get("id") or "").strip()
+    explicit_requirement_ids: set[str] = set()
+    for field in ("requirement_ids", "covered_requirement_ids", "satisfies_requirements", "requirementIds", "coveredRequirementIds"):
+        value = row.get(field)
+        if isinstance(value, list):
+            for item in value:
+                token = str(item or "").strip()
+                if token:
+                    explicit_requirement_ids.add(token)
+        else:
+            token = str(value or "").strip()
+            if token:
+                explicit_requirement_ids.add(token)
+    explicitly_claimed = bool(requirement_id and requirement_id in explicit_requirement_ids)
 
     if not has_structured_expectation:
         return not strict
@@ -4237,7 +4257,32 @@ def _scene_satisfies_requirement(
             expanded_candidates.update(_safe_list(world_alias_map.get(candidate)))
         if not (expected_aliases & expanded_candidates):
             return False
+    if requirement_id and explicit_requirement_ids and not explicitly_claimed:
+        return False
     return True
+
+
+def _scene_requirement_goals(requirements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    goals: list[dict[str, Any]] = []
+    for req_raw in requirements:
+        req = _safe_dict(req_raw)
+        req_id = str(req.get("id") or "").strip()
+        if not req_id:
+            continue
+        goals.append(
+            {
+                "id": req_id,
+                "expected_route": str(req.get("expected_route") or "").strip(),
+                "expected_roles": _safe_list(req.get("expected_roles")),
+                "expected_role_functions": _safe_list(req.get("expected_role_functions")),
+                "expected_world": str(req.get("expected_world") or "").strip(),
+                "min_count": req.get("min_count") if req.get("min_count") not in {None, ""} else 1,
+                "max_count": req.get("max_count") if req.get("max_count") not in {"", } else None,
+                "source_text": str(req.get("source_text") or "").strip(),
+                "purpose": str(req.get("purpose") or "").strip(),
+            }
+        )
+    return goals
 
 
 def _count_requirement_coverage(
@@ -4343,6 +4388,8 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["scene_plan_contract_requirements"] = requirements
     diagnostics["scene_plan_contract_requirement_coverage"] = requirement_coverage
     diagnostics["scene_plan_missing_requirement_ids"] = missing_requirement_ids
+    diagnostics["scene_plan_missing_requirement_feedback"] = ""
+    diagnostics["scene_plan_requirement_retry_feedback_used"] = False
     diagnostics["scene_plan_role_usage_contract"] = role_usage_contract
     diagnostics["scene_plan_hardcoded_story_keyword_validation_disabled"] = bool(requirements)
     diagnostics["scene_plan_role_alias_map"] = _safe_dict(requirement_context.get("role_alias_map"))
@@ -4351,6 +4398,15 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["scene_plan_episdodic_aliases_used"] = diagnostics["scene_plan_episodic_aliases_used"]
     diagnostics["scene_plan_contract_requirement_coverage_match_reasons"] = {k: _safe_dict(v).get("match_reasons", []) for k, v in requirement_coverage.items()}
     diagnostics["scene_plan_contract_requirement_failure_reasons"] = {k: _safe_dict(v).get("failure_reasons", {}) for k, v in requirement_coverage.items() if not _scene_bool(_safe_dict(v).get("covered"))}
+    diagnostics["scene_plan_rows_with_covered_requirement_ids_count"] = sum(
+        1
+        for row in scene_rows
+        if any(
+            str(item or "").strip()
+            for field in ("covered_requirement_ids", "requirement_ids", "coveredRequirementIds", "requirementIds")
+            for item in (_safe_list(_safe_dict(row).get(field)) if isinstance(_safe_dict(row).get(field), list) else [ _safe_dict(row).get(field) ])
+        )
+    )
     if has_director_scene_requirements:
         diagnostics["scene_plan_contract_requirements_source"] = "director_contract.scene_requirements"
         diagnostics["scene_plan_contract_requirements_are_structured"] = True
@@ -4646,6 +4702,7 @@ def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, sce
     if ve.startswith("scene_requirement_missing:"):
         requirement_id = validation_error.split(":", 1)[1].strip()
         requirements = _safe_list(_safe_dict(scene_diag).get("scene_plan_contract_requirements"))
+        role_alias_map = _safe_dict(_safe_dict(scene_diag).get("scene_plan_role_alias_map"))
         requirement = {}
         for row in requirements:
             row_safe = _safe_dict(row)
@@ -4655,13 +4712,30 @@ def _build_scene_plan_retry_feedback(validation_error: str, error_code: str, sce
         expected_route = str(_safe_dict(requirement).get("expected_route") or "").strip() or "any"
         expected_roles = ", ".join(_safe_list(_safe_dict(requirement).get("expected_roles"))) or "any"
         expected_functions = ", ".join(_safe_list(_safe_dict(requirement).get("expected_role_functions"))) or "any"
+        expected_world = str(_safe_dict(requirement).get("expected_world") or "").strip() or "any"
+        purpose = str(_safe_dict(requirement).get("purpose") or "").strip() or "unspecified"
         source_text = str(_safe_dict(requirement).get("source_text") or "").strip()
+        alias_notes: list[str] = []
+        for role in _safe_list(_safe_dict(requirement).get("expected_roles")):
+            role_token = _canonical_subject_id(role)
+            if not role_token:
+                continue
+            aliases = [a for a in _safe_list(role_alias_map.get(role_token)) if a]
+            for alias in aliases:
+                alias_notes.append(
+                    f"role may be satisfied by {role_token} or its alias {alias} according to episodic_text_characters.source_role_id."
+                )
+        alias_note_text = ("\n" + "\n".join(sorted(set(alias_notes)))) if alias_notes else ""
         return (
-            f"{base}\nAdd a scene satisfying requirement {requirement_id}. "
-            f"Expected route: {expected_route}. "
-            f"Expected roles: {expected_roles}. "
-            f"Expected role functions: {expected_functions}. "
-            f"Source: {source_text}."
+            f"{base}\nRequirement {requirement_id} is missing. Add or modify one scene to satisfy it.\n"
+            f"Expected route: {expected_route}.\n"
+            f"Expected roles: {expected_roles}.\n"
+            f"Expected role functions: {expected_functions}.\n"
+            f"Expected world: {expected_world}.\n"
+            f"Purpose: {purpose}.\n"
+            f"Source: {source_text}.\n"
+            f"The scene row must include covered_requirement_ids: ['{requirement_id}'] and explicit active_roles."
+            f"{alias_note_text}"
         )
     return base
 
@@ -16205,6 +16279,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_hard_route_map_uses_sanitized_package"] = False
     diagnostics["scene_plan_clip_contract_validation_ok"] = True
     diagnostics["scene_plan_clip_contract_validation_errors"] = []
+    diagnostics["scene_plan_requirement_goals_injected"] = False
+    diagnostics["scene_plan_requirement_goals_count"] = 0
+    diagnostics["scene_plan_requirement_retry_feedback_used"] = False
+    diagnostics["scene_plan_missing_requirement_feedback"] = ""
+    diagnostics["scene_plan_rows_with_covered_requirement_ids_count"] = 0
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
@@ -16217,6 +16296,20 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["clip_sanitizer_reapplied_before_scene_plan"] = True
         package["diagnostics"] = diagnostics
     scene_plan_prompt_package = _build_scene_plan_prompt_package(package)
+    merged_director_contract = _build_merged_director_contract_for_scene_validation(scene_plan_prompt_package)
+    scene_requirement_goals = _scene_requirement_goals(
+        _extract_scene_requirements_from_contract(merged_director_contract, scene_plan_prompt_package)
+    )
+    scene_plan_prompt_package["scene_requirement_goals"] = scene_requirement_goals
+    role_plan_for_prompt = _safe_dict(scene_plan_prompt_package.get("role_plan"))
+    scene_prompt_rules = _safe_dict(role_plan_for_prompt.get("scene_prompt_rules"))
+    scene_prompt_rules["scene_requirement_coverage_rule"] = (
+        "Every required scene_requirement must be satisfied by at least one scene row. "
+        "For each satisfying row include covered_requirement_ids (or requirement_ids), explicit active_roles/primary_role/secondary_roles, "
+        "role_functions when available, and director_required_world/world_role when available."
+    )
+    role_plan_for_prompt["scene_prompt_rules"] = scene_prompt_rules
+    scene_plan_prompt_package["role_plan"] = role_plan_for_prompt
     scene_prompt_diag = _safe_dict(scene_plan_prompt_package.get("diagnostics"))
     diagnostics = _safe_dict(package.get("diagnostics"))
     for key in (
@@ -16240,6 +16333,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     ):
         if key in scene_prompt_diag:
             diagnostics[key] = scene_prompt_diag.get(key)
+    diagnostics["scene_plan_requirement_goals_injected"] = bool(scene_requirement_goals)
+    diagnostics["scene_plan_requirement_goals_count"] = len(scene_requirement_goals)
     package["diagnostics"] = diagnostics
     scene_prompt_input = _safe_dict(scene_plan_prompt_package.get("input"))
     scene_prompt_creative_config = deepcopy(_safe_dict(scene_prompt_input.get("creative_config")))
@@ -16283,6 +16378,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             initial_validation_error,
             validation_error_code,
             _safe_dict(result.get("diagnostics")),
+        )
+        diagnostics["scene_plan_requirement_retry_feedback_used"] = initial_validation_error.startswith("scene_requirement_missing:")
+        diagnostics["scene_plan_missing_requirement_feedback"] = (
+            validation_feedback if initial_validation_error.startswith("scene_requirement_missing:") else ""
         )
         _append_diag_event(package, f"scene_plan validation failed, retrying once: {validation_feedback}", stage_id="scene_plan")
         retry_result = build_gemini_scene_plan(
