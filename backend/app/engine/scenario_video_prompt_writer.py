@@ -1324,6 +1324,19 @@ def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def _first_non_empty_string(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, str):
+            text = value.strip()
+        elif value is None:
+            text = ""
+        else:
+            text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
 def _append_clause(base: str, clause: str) -> str:
     text = str(base or "").strip()
     part = str(clause or "").strip()
