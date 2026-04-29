@@ -1493,9 +1493,10 @@ def _normalize_clip_contract_aliases(
         normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
 
     route_targets = _safe_dict(scene_distribution.get("route_targets") or route_contract.get("route_targets"))
-    has_explicit_route_targets = all(
-        _first_non_empty_string(route_targets.get(key)).lower() == expected
-        for key, expected in (("ia2v", "ia2v"), ("i2v", "i2v"), ("first_last", "first_last"))
+    has_explicit_route_targets = (
+        _safe_float(route_targets.get("ia2v"), None) is not None
+        and _safe_float(route_targets.get("i2v"), None) is not None
+        and _safe_float(route_targets.get("first_last"), None) is not None
     )
     ratios_explicit = scene_distribution.get("ia2v_ratio") is not None and scene_distribution.get("i2v_ratio") is not None
     first_last_disabled = bool(scene_distribution.get("first_last_allowed")) is False
