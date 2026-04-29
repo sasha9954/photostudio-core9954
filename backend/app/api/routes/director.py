@@ -1471,10 +1471,6 @@ def _normalize_clip_contract_aliases(
             scene_distribution["ai_decides"] = False
             alias_normalization_applied = True
             normalized_aliases_used.append("scene_distribution_contract.ai_decides")
-        if _first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")).lower() != "user_approved":
-            scene_distribution["user_approved_or_ai_decides"] = "user_approved"
-            alias_normalization_applied = True
-            normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
     elif scene_distribution_decision == "ai_decides":
         if bool(scene_distribution.get("user_approved")):
             scene_distribution["user_approved"] = False
@@ -1484,10 +1480,17 @@ def _normalize_clip_contract_aliases(
             scene_distribution["ai_decides"] = True
             alias_normalization_applied = True
             normalized_aliases_used.append("scene_distribution_contract.ai_decides")
+
+    if bool(scene_distribution.get("user_approved")):
+        if _first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")).lower() != "user_approved":
+            scene_distribution["user_approved_or_ai_decides"] = "user_approved"
+            alias_normalization_applied = True
+        normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
+    if bool(scene_distribution.get("ai_decides")):
         if _first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")).lower() != "ai_decides":
             scene_distribution["user_approved_or_ai_decides"] = "ai_decides"
             alias_normalization_applied = True
-            normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
+        normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
 
     route_targets = _safe_dict(scene_distribution.get("route_targets") or route_contract.get("route_targets"))
     has_explicit_route_targets = all(
@@ -1879,11 +1882,17 @@ def _validate_clip_director_contract(
     if not route_balance:
         missing_fields.append("scene_distribution_contract.route_balance")
     user_approved = bool(scene_distribution.get("user_approved"))
-    user_approved_alias = _first_non_empty_string(
-        scene_distribution.get("user_approved_or_ai_decides")
-    ).lower()
-    user_approved_via_alias = user_approved_alias in {"user_approved", "approved", "confirmed"}
-    if not (user_approved or user_approved_via_alias or route_balance == "ai_decides"):
+    ai_decides = bool(scene_distribution.get("ai_decides"))
+    decision = _first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")).lower()
+    decision_satisfied = decision in {"user_approved", "ai_decides"} or user_approved or ai_decides
+    if not decision_satisfied:
+        ia2v_ratio_present = scene_distribution.get("ia2v_ratio") is not None
+        i2v_ratio_present = scene_distribution.get("i2v_ratio") is not None
+        route_balance_valid = route_balance in CLIP_ROUTE_BALANCE_PRESETS or bool(route_balance)
+        first_last_allowed_false = bool(scene_distribution.get("first_last_allowed")) is False
+        if route_balance_valid and ia2v_ratio_present and i2v_ratio_present and first_last_allowed_false and ai_decides:
+            decision_satisfied = True
+    if not decision_satisfied:
         missing_fields.append("scene_distribution_contract.user_approved_or_ai_decides")
     ia2v_ratio = scene_distribution.get("ia2v_ratio")
     i2v_ratio = scene_distribution.get("i2v_ratio")
