@@ -315,7 +315,13 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
         or director_package.get("created_for_signature")
         or ""
     ).strip()
-    stale_contract_ignored = bool(stored_signature and current_signature and stored_signature != current_signature)
+    provided_signature = str(signatures.get("provided_signature") or "").strip()
+    signature_match, signature_diag = _director_signature_matches_current(
+        stored_signature,
+        current_signature,
+        provided_signature=provided_signature,
+    )
+    stale_contract_ignored = bool(stored_signature and current_signature and not signature_match)
     if stale_contract_ignored:
         director_contract = {}
         director_package = {}
@@ -338,7 +344,11 @@ def _normalize_director_package_input(package: dict[str, Any]) -> None:
     diagnostics["current_scenario_input_signature"] = current_signature
     diagnostics["signature_source"] = signature_source
     diagnostics["stored_director_signature"] = stored_signature
-    diagnostics["director_signature_matches_current"] = bool(not stored_signature or stored_signature == current_signature)
+    diagnostics["director_signature_matches_current"] = bool(not stored_signature or signature_match)
+    diagnostics["director_signature_match_mode"] = str(signature_diag.get("director_signature_match_mode") or "mismatch")
+    diagnostics["stored_director_signature_format"] = str(signature_diag.get("stored_director_signature_format") or "empty")
+    diagnostics["current_signature_format"] = str(signature_diag.get("current_signature_format") or "empty")
+    diagnostics["director_signature_hash_equivalence_checked"] = True
     diagnostics["director_stale_contract_ignored"] = stale_contract_ignored
     diagnostics["stale_signature"] = stored_signature if stale_contract_ignored else ""
     diagnostics["current_signature"] = current_signature
@@ -1126,6 +1136,69 @@ def _stable_hash_payload(value: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _looks_like_sha256(value: str) -> bool:
+    token = str(value or "").strip().lower()
+    return bool(token) and bool(re.fullmatch(r"[0-9a-f]{64}", token))
+
+
+def _classify_signature_format(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "empty"
+    if _looks_like_sha256(text):
+        return "sha256"
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return "raw"
+    return "json" if isinstance(parsed, (dict, list)) else "raw"
+
+
+def _hash_signature_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return _stable_hash_payload(text)
+    return _stable_hash_payload(parsed)
+
+
+def _director_signature_matches_current(
+    stored_signature: Any,
+    current_signature: Any,
+    provided_signature: Any = "",
+) -> tuple[bool, dict[str, str]]:
+    stored = str(stored_signature or "").strip()
+    current = str(current_signature or "").strip()
+    provided = str(provided_signature or "").strip()
+    stored_fmt = _classify_signature_format(stored)
+    current_fmt = _classify_signature_format(current)
+    diagnostics = {
+        "director_signature_match_mode": "mismatch",
+        "stored_director_signature_format": stored_fmt,
+        "current_signature_format": current_fmt,
+    }
+    if stored and current and stored == current:
+        diagnostics["director_signature_match_mode"] = "direct"
+        return True, diagnostics
+    if stored_fmt == "json" and current_fmt == "sha256" and _hash_signature_text(stored) == current.lower():
+        diagnostics["director_signature_match_mode"] = "stored_json_hash_matches_current"
+        return True, diagnostics
+    if current_fmt == "json" and stored_fmt == "sha256" and _hash_signature_text(current) == stored.lower():
+        diagnostics["director_signature_match_mode"] = "current_json_hash_matches_stored"
+        return True, diagnostics
+    if provided and ((stored and stored == provided) or (current and current == provided)):
+        diagnostics["director_signature_match_mode"] = "provided_signature"
+        return True, diagnostics
+    provided_hash = _hash_signature_text(provided) if provided else ""
+    if provided_hash and ((current and provided_hash == current.lower()) or (stored and provided_hash == stored.lower())):
+        diagnostics["director_signature_match_mode"] = "provided_signature_hash"
+        return True, diagnostics
+    return False, diagnostics
+
+
 def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
     pkg = _safe_dict(package)
     input_pkg = _safe_dict(pkg.get("input"))
@@ -1184,6 +1257,7 @@ def _compute_input_signatures(package: dict[str, Any]) -> dict[str, str]:
         "creative_config_signature": creative_config_signature,
         "scenario_input_signature": scenario_input_signature,
         "signature_source": signature_source,
+        "provided_signature": provided_signature,
     }
 
 
