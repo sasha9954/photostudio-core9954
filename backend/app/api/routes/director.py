@@ -1286,10 +1286,22 @@ def _normalize_clip_contract_aliases(
         }
         return contract, package
 
-    clip_contract = _safe_dict(package.get("clip_contract") or contract.get("clip_contract"))
-    route_contract = _safe_dict(package.get("route_contract") or contract.get("route_contract"))
-    scene_distribution = _safe_dict(package.get("scene_distribution_contract") or contract.get("scene_distribution_contract"))
-    prompt_policy = _safe_dict(package.get("prompt_policy") or contract.get("prompt_policy"))
+    clip_contract = _merge_director_contracts(
+        _safe_dict(contract.get("clip_contract")),
+        _safe_dict(package.get("clip_contract")),
+    )
+    route_contract = _merge_director_contracts(
+        _safe_dict(contract.get("route_contract")),
+        _safe_dict(package.get("route_contract")),
+    )
+    scene_distribution = _merge_director_contracts(
+        _safe_dict(contract.get("scene_distribution_contract")),
+        _safe_dict(package.get("scene_distribution_contract")),
+    )
+    prompt_policy = _merge_director_contracts(
+        _safe_dict(contract.get("prompt_policy")),
+        _safe_dict(package.get("prompt_policy")),
+    )
 
     performance_definition = _first_non_empty_string(
         clip_contract.get("performance_definition"),
@@ -1320,6 +1332,10 @@ def _normalize_clip_contract_aliases(
         "50_50": "balanced_50_50",
         "50_50_0": "balanced_50_50",
         "equal_split": "balanced_50_50",
+        "balance_50_50": "balanced_50_50",
+        "keep_50_50": "balanced_50_50",
+        "keep_50_50_balance": "balanced_50_50",
+        "no_first_last_50_50_0": "balanced_50_50",
         "balanced": "balanced_50_50",
         "balanced_50_50": "balanced_50_50",
         "more_ia2v": "performance_heavy_70_30",
@@ -1330,6 +1346,9 @@ def _normalize_clip_contract_aliases(
     }
     answer_route_balance_map = {
         "50_50": "balanced_50_50",
+        "50_50_0": "balanced_50_50",
+        "keep_50_50": "balanced_50_50",
+        "balance_50_50": "balanced_50_50",
         "more_ia2v": "performance_heavy_70_30",
         "more_i2v": "story_heavy_30_70",
     }
@@ -1344,11 +1363,19 @@ def _normalize_clip_contract_aliases(
         route_balance_used_user_confirmation = True
     route_balance_preference = _first_non_empty_string(
         scene_distribution.get("route_balance_preference"),
+        clip_contract.get("route_balance_preference"),
         answers.get("route_balance_preference"),
+        answers.get("route_balance_confirmation"),
         route_contract.get("route_balance_preference"),
+        package.get("route_balance_preference"),
     ).lower()
-    if route_balance_preference in {"equal_split", "50_50_0"}:
+    mapped_preference_route_balance = route_balance_alias_map.get(route_balance_preference, route_balance_preference)
+    if mapped_preference_route_balance == "balanced_50_50":
         mapped_route_balance = "balanced_50_50"
+        if _first_non_empty_string(scene_distribution.get("route_balance")).lower() != "balanced_50_50":
+            scene_distribution["route_balance"] = "balanced_50_50"
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.route_balance")
 
     user_approved_or_ai_decides = _first_non_empty_string(
         scene_distribution.get("user_approved_or_ai_decides")
@@ -1412,6 +1439,36 @@ def _normalize_clip_contract_aliases(
         scene_distribution["route_balance"] = mapped_route_balance
         alias_normalization_applied = True
         normalized_aliases_used.append("scene_distribution_contract.route_balance")
+
+
+    if scene_distribution.get("ia2v_ratio") is None:
+        alias_ia2v_ratio = _first_non_empty_string(
+            scene_distribution.get("ia2v_ratio"),
+            scene_distribution.get("lipsync_ratio"),
+            route_contract.get("ia2v_ratio"),
+            route_contract.get("lipsync_ratio"),
+            clip_contract.get("ia2v_ratio"),
+            clip_contract.get("lipsync_ratio"),
+        )
+        parsed_ia2v_ratio = _safe_float(alias_ia2v_ratio, None)
+        if parsed_ia2v_ratio is not None:
+            scene_distribution["ia2v_ratio"] = parsed_ia2v_ratio
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.ia2v_ratio")
+
+    if scene_distribution.get("i2v_ratio") is None:
+        alias_i2v_ratio = _safe_float(
+            _first_non_empty_string(
+                scene_distribution.get("i2v_ratio"),
+                route_contract.get("i2v_ratio"),
+                clip_contract.get("i2v_ratio"),
+            ),
+            None,
+        )
+        if alias_i2v_ratio is not None:
+            scene_distribution["i2v_ratio"] = alias_i2v_ratio
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.i2v_ratio")
 
     final_route_balance = _first_non_empty_string(scene_distribution.get("route_balance")).lower()
     if final_route_balance == "balanced_50_50":
@@ -1492,15 +1549,66 @@ def _normalize_clip_contract_aliases(
             alias_normalization_applied = True
         normalized_aliases_used.append("scene_distribution_contract.user_approved_or_ai_decides")
 
-    route_targets = _safe_dict(scene_distribution.get("route_targets") or route_contract.get("route_targets"))
+    route_targets = _safe_dict(
+        scene_distribution.get("route_targets")
+        or scene_distribution.get("route_targets_per_block")
+        or route_contract.get("route_targets")
+        or route_contract.get("route_targets_per_block")
+    )
     has_explicit_route_targets = (
         _safe_float(route_targets.get("ia2v"), None) is not None
         and _safe_float(route_targets.get("i2v"), None) is not None
         and _safe_float(route_targets.get("first_last"), None) is not None
     )
+    if not _first_non_empty_string(scene_distribution.get("route_balance")) and has_explicit_route_targets:
+        ia2v_target = _safe_float(route_targets.get("ia2v"), None)
+        i2v_target = _safe_float(route_targets.get("i2v"), None)
+        first_last_target = _safe_float(route_targets.get("first_last"), None)
+        if first_last_target == 0 and ia2v_target is not None and ia2v_target == i2v_target:
+            scene_distribution["route_balance"] = "balanced_50_50"
+            if scene_distribution.get("ia2v_ratio") is None:
+                scene_distribution["ia2v_ratio"] = 0.5
+                normalized_aliases_used.append("scene_distribution_contract.ia2v_ratio")
+            if scene_distribution.get("i2v_ratio") is None:
+                scene_distribution["i2v_ratio"] = 0.5
+                normalized_aliases_used.append("scene_distribution_contract.i2v_ratio")
+            scene_distribution["first_last_ratio"] = 0
+            scene_distribution["first_last_allowed"] = False
+            alias_normalization_applied = True
+            normalized_aliases_used.append("scene_distribution_contract.route_balance")
+
     ratios_explicit = scene_distribution.get("ia2v_ratio") is not None and scene_distribution.get("i2v_ratio") is not None
     first_last_disabled = bool(scene_distribution.get("first_last_allowed")) is False
     has_decision = bool(_first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")))
+    explicit_user_balance_answer = _first_non_empty_string(
+        answers.get("route_balance_preference"),
+        answers.get("route_balance_confirmation"),
+    ).lower()
+    if (
+        _first_non_empty_string(scene_distribution.get("route_balance")).lower() == "balanced_50_50"
+        and scene_distribution.get("ia2v_ratio") is not None
+        and scene_distribution.get("i2v_ratio") is not None
+        and bool(scene_distribution.get("first_last_allowed")) is False
+    ):
+        if explicit_user_balance_answer in {"balance_50_50", "keep_50_50"}:
+            scene_distribution["user_approved_or_ai_decides"] = "user_approved"
+            scene_distribution["user_approved"] = True
+            scene_distribution["ai_decides"] = False
+            alias_normalization_applied = True
+            normalized_aliases_used.extend([
+                "scene_distribution_contract.user_approved_or_ai_decides",
+                "scene_distribution_contract.user_approved",
+            ])
+        elif has_explicit_route_targets:
+            scene_distribution["user_approved_or_ai_decides"] = "ai_decides"
+            scene_distribution["ai_decides"] = True
+            scene_distribution["user_approved"] = False
+            alias_normalization_applied = True
+            normalized_aliases_used.extend([
+                "scene_distribution_contract.user_approved_or_ai_decides",
+                "scene_distribution_contract.ai_decides",
+                "scene_distribution_contract.user_approved",
+            ])
     if has_explicit_route_targets and ratios_explicit and first_last_disabled and not has_decision:
         scene_distribution["user_approved_or_ai_decides"] = "ai_decides"
         scene_distribution["ai_decides"] = True
@@ -1591,9 +1699,11 @@ def _normalize_clip_contract_aliases(
     prompt_policy["do_not_copy_negative_rules_into_ltx_positive_prompt"] = True
 
     contract["clip_contract"] = clip_contract
+    contract["route_contract"] = route_contract
     contract["scene_distribution_contract"] = scene_distribution
     contract["prompt_policy"] = prompt_policy
     package["clip_contract"] = clip_contract
+    package["route_contract"] = route_contract
     package["scene_distribution_contract"] = scene_distribution
     package["prompt_policy"] = prompt_policy
 
@@ -1978,6 +2088,20 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
     director_config = _safe_dict(parsed.get("director_config"))
     director_contract = _safe_dict(parsed.get("director_contract"))
     director_package = _safe_dict(parsed.get("director_package"))
+    parsed_missing_fields = _safe_list(parsed.get("missing_fields"))
+    has_rich_clip_contract = bool(
+        _safe_dict(director_contract).get("clip_contract")
+        or _safe_dict(director_contract).get("scene_distribution_contract")
+        or _safe_dict(director_package).get("clip_contract")
+        or _safe_dict(director_package).get("scene_distribution_contract")
+        or _safe_dict(director_package).get("route_contract")
+    )
+    if not done and not questions and not parsed_missing_fields and has_rich_clip_contract:
+        done = True
+        phase = "done"
+        director_done_inferred_from_empty_questions = True
+    else:
+        director_done_inferred_from_empty_questions = False
     if done and not director_package:
         director_package = _safe_dict(parsed.get("director_package_preview"))
     if director_package:
@@ -2075,6 +2199,7 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_clip_alias_normalization_applied": bool(clip_alias_normalization_diagnostics.get("director_clip_alias_normalization_applied")),
         "director_clip_aliases_used": _safe_list(clip_alias_normalization_diagnostics.get("director_clip_aliases_used")),
         "director_clip_route_balance_alias_normalized": bool(clip_alias_normalization_diagnostics.get("director_clip_route_balance_alias_normalized")),
+        "director_done_inferred_from_empty_questions": bool(director_done_inferred_from_empty_questions),
         "director_contract_v2_present": bool(director_v2_contract_diagnostics.get("director_contract_v2_present")),
         "director_contract_v2_role_usage_count": int(director_v2_contract_diagnostics.get("director_contract_v2_role_usage_count") or 0),
         "director_contract_v2_scene_requirements_count": int(director_v2_contract_diagnostics.get("director_contract_v2_scene_requirements_count") or 0),
