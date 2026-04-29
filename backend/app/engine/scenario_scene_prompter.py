@@ -1916,23 +1916,67 @@ def _is_generic_memory_text(*values: str) -> bool:
     blob = " ".join(str(v or "").strip() for v in values if str(v or "").strip())
     if not blob:
         return True
-    return any(pattern.search(blob) for pattern in _GENERIC_MEMORY_BEAT_PATTERNS)
+    lowered = blob.lower()
+    stripped = re.sub(r"[^a-z0-9\s]", " ", lowered)
+    tokens = [tok for tok in stripped.split() if tok]
+    if not tokens:
+        return True
+    generic_hits = sum(1 for pattern in _GENERIC_MEMORY_BEAT_PATTERNS if pattern.search(lowered))
+    if generic_hits <= 0:
+        return False
+    concrete_markers = (
+        "character_",
+        "req_",
+        "requirement",
+        "contract",
+        "scene",
+        "role",
+        "action",
+        "memory",
+        "world",
+        "location",
+        "purpose",
+        "source",
+    )
+    has_concrete_marker = any(marker in lowered for marker in concrete_markers)
+    if has_concrete_marker and len(tokens) >= 6:
+        return False
+    if len(tokens) <= 5:
+        return True
+    generic_token_set = {
+        "memory", "beat", "atmospheric", "world", "environment", "cutaway",
+        "visual", "story", "grounded", "continuity", "first", "storytelling",
+    }
+    non_generic_tokens = [tok for tok in tokens if tok not in generic_token_set]
+    return len(non_generic_tokens) <= 2
 
 
 def _build_i2v_memory_beat_directive(
     scene_plan_row: dict[str, Any],
+    role_row: dict[str, Any],
     *,
     segment_index: int,
     global_contract: dict[str, Any],
 ) -> dict[str, Any]:
     requirement_hits: list[str] = []
     requirement_texts: list[str] = []
-    scene_requirements = _safe_list(scene_plan_row.get("scene_requirements"))
-    requirement_ids = [str(x).strip() for x in _safe_list(scene_plan_row.get("covered_requirement_ids")) if str(x).strip()]
+    scene_requirements = _safe_list(global_contract.get("scene_requirements"))
+    if not scene_requirements:
+        scene_contract = _safe_dict(global_contract.get("scene_contract"))
+        scene_requirements = _safe_list(scene_contract.get("mandatory_scenes"))
+    if not scene_requirements:
+        director_contract = _safe_dict(global_contract.get("director_contract"))
+        scene_requirements = _safe_list(director_contract.get("scene_requirements"))
+    requirements_by_id: dict[str, dict[str, Any]] = {}
     for req in scene_requirements:
         req_row = _safe_dict(req)
         req_id = str(req_row.get("requirement_id") or req_row.get("id") or "").strip()
-        if req_id and req_id in requirement_ids:
+        if req_id:
+            requirements_by_id[req_id] = req_row
+    requirement_ids = [str(x).strip() for x in _safe_list(scene_plan_row.get("covered_requirement_ids")) if str(x).strip()]
+    for req_id in requirement_ids:
+        req_row = _safe_dict(requirements_by_id.get(req_id))
+        if req_row:
             requirement_hits.append(req_id)
             requirement_texts.extend(
                 [
@@ -1947,8 +1991,33 @@ def _build_i2v_memory_beat_directive(
     requirement_parts = [p for p in (requirement_texts + direct_requirement_text) if p]
     requirement_clause = _trim_sentence("; ".join(dict.fromkeys(requirement_parts)), max_len=240) if requirement_parts else ""
     prompt_policy = str(scene_plan_row.get("prompt_policy") or "").strip()
-    role_bits = ", ".join([str(x).strip() for x in _safe_list(scene_plan_row.get("active_roles")) if str(x).strip()])
-    role_functions = ", ".join([str(x).strip() for x in _safe_list(scene_plan_row.get("role_functions")) if str(x).strip()])
+    if not prompt_policy:
+        prompt_policy = str(global_contract.get("prompt_policy") or "").strip()
+    if not prompt_policy:
+        prompt_policy = str(_safe_dict(global_contract.get("prompt_contract")).get("prompt_policy") or "").strip()
+    if not prompt_policy:
+        prompt_policy = str(_safe_dict(global_contract.get("director_contract")).get("prompt_policy") or "").strip()
+    active_roles = list(
+        dict.fromkeys(
+            [
+                str(x).strip()
+                for x in (_safe_list(scene_plan_row.get("active_roles")) + _safe_list(role_row.get("active_roles")))
+                if str(x).strip()
+            ]
+        )
+    )
+    role_function_values = list(
+        dict.fromkeys(
+            [
+                str(x).strip()
+                for x in (_safe_list(scene_plan_row.get("role_functions")) + _safe_list(role_row.get("role_functions")))
+                if str(x).strip()
+            ]
+        )
+    )
+    role_bits = ", ".join(active_roles)
+    role_functions = ", ".join(role_function_values)
+    primary_role = str(scene_plan_row.get("primary_role") or role_row.get("primary_role") or "").strip()
     world_bits = str(scene_plan_row.get("director_required_world") or "").strip()
     scene_goal = str(scene_plan_row.get("scene_goal") or "").strip()
     narrative_function = str(scene_plan_row.get("narrative_function") or "").strip()
@@ -1970,9 +2039,10 @@ def _build_i2v_memory_beat_directive(
         [
             f"Memory/action beat: {beat_core}" if beat_core else "",
             f"Active memory subject/roles: {role_bits}" if role_bits else "",
+            f"Primary role anchor: {primary_role}" if primary_role else "",
             f"Role function context: {role_functions}" if role_functions else "",
             f"World/location context: {world_bits}" if world_bits else "",
-            "Show concrete remembered event/action consequence with emotionally grounded aftermath; avoid glamorizing harm." if prompt_policy else "",
+            "Show consequence, tension, regret, or emotional aftermath; avoid glamorizing harmful action." if prompt_policy else "",
             "No lip-sync framing, no singer-first framing, no mouth-readable performance language.",
         ],
     )
@@ -1984,6 +2054,7 @@ def _build_i2v_memory_beat_directive(
         "episodic_requirement_prompted": any("episodic" in str(p).lower() for p in requirement_parts),
         "source_labels": [label for label, value in [
             ("covered_requirement_ids", bool(requirement_ids)),
+            ("global_contract.scene_requirements", bool(scene_requirements)),
             ("requirement_source_text", bool(direct_requirement_text[0])),
             ("requirement_purpose", bool(direct_requirement_text[1])),
             ("scene_goal", bool(scene_goal)),
@@ -1992,6 +2063,7 @@ def _build_i2v_memory_beat_directive(
             ("memory_contract.memory_focus_elements", bool(memory_focus)),
             ("prompt_policy", bool(prompt_policy)),
             ("active_roles", bool(role_bits)),
+            ("primary_role", bool(primary_role)),
             ("role_functions", bool(role_functions)),
             ("director_required_world", bool(world_bits)),
         ] if value],
@@ -2327,6 +2399,7 @@ def _normalize_scene_prompts(
     scene_prompts_requirement_source_text_used_count = 0
     scene_prompts_episodic_requirement_prompted_count = 0
     scene_prompts_i2v_generic_cutaway_warning_segments: list[str] = []
+    scene_prompts_ia2v_world_contamination_detected_count = 0
     scene_prompts_ia2v_world_contamination_fixed_count = 0
     scene_prompts_ia2v_world_contamination_segments: list[str] = []
     i2v_prompt_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
@@ -2655,7 +2728,12 @@ def _normalize_scene_prompts(
             positive_video_prompt = str(bundle.get("positive_video_prompt") or video_prompt)
             negative_video_prompt = str(bundle.get("negative_video_prompt") or negative_video_prompt or _GLOBAL_NEGATIVE_PROMPT)
             negative_prompt = str(bundle.get("negative_prompt") or negative_video_prompt or _GLOBAL_NEGATIVE_PROMPT)
-            i2v_memory = _build_i2v_memory_beat_directive(scene, segment_index=scene_idx, global_contract=global_contract)
+            i2v_memory = _build_i2v_memory_beat_directive(
+                scene,
+                role_row,
+                segment_index=scene_idx,
+                global_contract=global_contract,
+            )
             memory_directive = str(i2v_memory.get("directive") or "").strip()
             if memory_directive:
                 photo_prompt = _append_compact_clauses(photo_prompt, [memory_directive])
@@ -2887,6 +2965,7 @@ def _normalize_scene_prompts(
             pre_ia2v_blob = " ".join([photo_prompt, video_prompt, positive_video_prompt]).lower()
             if any(token in pre_ia2v_blob for token in ("courtyard", "street", "memory/action beat:", "world cutaway", "environment-first")):
                 scene_prompts_ia2v_world_contamination_segments.append(scene_id)
+                scene_prompts_ia2v_world_contamination_detected_count += 1
             semantic_context = " ".join(
                 [
                     str(scene.get("narrative_function") or ""),
@@ -3069,6 +3148,7 @@ def _normalize_scene_prompts(
         "scene_prompts_requirement_source_text_used_count": scene_prompts_requirement_source_text_used_count,
         "scene_prompts_episodic_requirement_prompted_count": scene_prompts_episodic_requirement_prompted_count,
         "scene_prompts_i2v_generic_cutaway_warning_segments": list(dict.fromkeys(scene_prompts_i2v_generic_cutaway_warning_segments)),
+        "scene_prompts_ia2v_world_contamination_detected_count": scene_prompts_ia2v_world_contamination_detected_count,
         "scene_prompts_ia2v_world_contamination_fixed_count": scene_prompts_ia2v_world_contamination_fixed_count,
         "scene_prompts_ia2v_world_contamination_segments": list(dict.fromkeys(scene_prompts_ia2v_world_contamination_segments)),
         "i2v_template_rebuilt_count": i2v_template_rebuilt_count,
