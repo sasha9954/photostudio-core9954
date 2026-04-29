@@ -160,6 +160,15 @@ STAGE_PACKAGE_FIELD_BY_STAGE: dict[str, str] = {
     "final_video_prompt": "final_video_prompt",
     "finalize": "final_storyboard",
 }
+_CLIP_SANITIZER_POST_STAGE_IDS = {
+    "audio_map",
+    "story_core",
+    "role_plan",
+    "scene_plan",
+    "scene_prompts",
+    "final_video_prompt",
+    "finalize",
+}
 _OWNERSHIP_ROLE_MAP = {
     "main": "character_1",
     "support": "character_2",
@@ -9456,7 +9465,7 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
 
     normalized_roles = False
     assigned_roles = _safe_dict(package.get("assigned_roles"))
-    role2 = _safe_dict(role_usage_contract.get("character_2"))
+    role2 = _safe_dict(role_usage_contract.get("character_2")) or _safe_dict(character_contract.get("character_2"))
     role2_fn = str(role2.get("function") or "").strip()
     if role2_fn:
         assigned_roles["character_2"] = role2_fn
@@ -9524,6 +9533,14 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
             if str(_safe_dict(role_row).get("function") or "").strip().lower() == "performer":
                 performer_role = str(role_id).strip()
                 performer_role_source = "role_usage_contract"
+                break
+    if not performer_role:
+        for role_id, role_row in character_contract.items():
+            if not isinstance(role_row, dict):
+                continue
+            if str(_safe_dict(role_row).get("function") or "").strip().lower() == "performer":
+                performer_role = str(role_id).strip()
+                performer_role_source = "character_contract"
                 break
     if not performer_role and role_usage_contract:
         performer_role = "character_1"
@@ -17138,6 +17155,11 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             pkg = _run_final_video_prompt_stage(pkg)
         elif stage_id == "finalize":
             pkg = _run_finalize_stage(pkg)
+        if stage_id in _CLIP_SANITIZER_POST_STAGE_IDS:
+            pkg = _sanitize_clip_pipeline_package_from_director_contract(pkg)
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            diagnostics["clip_sanitizer_post_stage_applied"] = True
+            pkg["diagnostics"] = diagnostics
         _set_stage_status(pkg, stage_id, "done")
         if stage_id == "final_video_prompt":
             diagnostics = _safe_dict(pkg.get("diagnostics"))
@@ -17714,6 +17736,11 @@ def run_manual_stage(
             _append_diag_event(pkg, "story_core audio_map mutation guard restored upstream audio_map", stage_id="story_core")
         # Always restore preserved upstream audio_map snapshot for manual story_core rerun.
         pkg["audio_map"] = preserved_audio_map_snapshot
+    if stage_id in _CLIP_SANITIZER_POST_STAGE_IDS:
+        pkg = _sanitize_clip_pipeline_package_from_director_contract(pkg)
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics["clip_sanitizer_post_stage_applied"] = True
+        pkg["diagnostics"] = diagnostics
     return (pkg, executed_stage_ids) if return_executed_stage_ids else pkg
 
 
