@@ -180,6 +180,23 @@ _GENERIC_MEMORY_BEAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bgrounded world continuity\b"),
     re.compile(r"(?i)\benvironment-first storytelling\b"),
 )
+_I2V_ROUTE_INCOMPATIBLE_MEMORY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\blip[- ]?sync\b"),
+    re.compile(r"(?i)\bvocal performance\b"),
+    re.compile(r"(?i)\bsinging performance\b"),
+    re.compile(r"(?i)\bvisible mouth\b"),
+    re.compile(r"(?i)\bmouth readable\b"),
+    re.compile(r"(?i)\breadable mouth\b"),
+    re.compile(r"(?i)\bsinger[- ]?first\b"),
+    re.compile(r"(?i)\bperformer[- ]?first\b"),
+    re.compile(r"(?i)\bforeground performance\b"),
+    re.compile(r"(?i)\bvocal owner\b"),
+    re.compile(r"(?i)\bspeaker_role\b"),
+    re.compile(r"(?i)\bcharacter_1\b.{0,40}\b(singer|performer)\b"),
+    re.compile(r"(?i)\bnatural singing performance\b"),
+    re.compile(r"(?i)\bvocal phrase\b"),
+    re.compile(r"(?i)\bmouth close[- ]?up\b"),
+)
 _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS: tuple[str, ...] = (
     "memory/action beat:",
     "memory beat",
@@ -2032,6 +2049,13 @@ def _is_generic_memory_text(*values: str) -> bool:
     return generic_ratio >= 0.6
 
 
+def _is_i2v_route_incompatible_memory_text(text: str) -> bool:
+    blob = str(text or "").strip()
+    if not blob:
+        return False
+    return any(pattern.search(blob) for pattern in _I2V_ROUTE_INCOMPATIBLE_MEMORY_PATTERNS)
+
+
 def _build_i2v_memory_beat_directive(
     scene_plan_row: dict[str, Any],
     role_row: dict[str, Any],
@@ -2109,12 +2133,14 @@ def _build_i2v_memory_beat_directive(
     if memory_focus:
         focus_selected = memory_focus[segment_index % len(memory_focus)]
     generic_memory_text = _is_generic_memory_text(scene_goal, narrative_function, ltx_video_goal)
-    beat_core = requirement_clause or ""
+    candidate_core = _trim_sentence("; ".join([x for x in [scene_goal, narrative_function, ltx_video_goal] if x]), max_len=220)
+    route_incompatible_i2v_text_detected = _is_i2v_route_incompatible_memory_text(candidate_core)
+    use_candidate_core = bool(candidate_core) and not generic_memory_text and not route_incompatible_i2v_text_detected
+    beat_core = candidate_core if use_candidate_core else ""
     if not beat_core:
-        if not generic_memory_text:
-            beat_core = _trim_sentence("; ".join([x for x in [scene_goal, narrative_function, ltx_video_goal] if x]), max_len=220)
-        else:
-            beat_core = _trim_sentence(focus_selected or "a contract-aligned remembered action beat", max_len=180)
+        beat_core = requirement_clause or ""
+    if not beat_core:
+        beat_core = _trim_sentence(focus_selected or "a contract-aligned remembered action beat", max_len=180)
     directive = _append_compact_clauses(
         "",
         [
@@ -2172,6 +2198,8 @@ def _build_i2v_memory_beat_directive(
                 episodic_markers_present,
             ]
         ),
+        "route_incompatible_i2v_text_detected": route_incompatible_i2v_text_detected,
+        "route_incompatible_i2v_text_preview": _trim_sentence(candidate_core, max_len=180) if route_incompatible_i2v_text_detected else "",
         "source_labels": [label for label, value in [
             ("covered_requirement_ids", bool(requirement_ids)),
             ("global_contract.scene_requirements", bool(scene_requirements)),
@@ -2252,6 +2280,8 @@ def _postprocess_prompts_v11_route_aware(
     }
 
     diag: dict[str, Any] = {"scene_prompts_route_aware_final_postprocess_applied": True, "scene_prompts_route_aware_final_postprocess_segment_count": len(segments), "scene_prompts_route_aware_final_postprocess_i2v_count": 0, "scene_prompts_route_aware_final_postprocess_ia2v_count": 0, "scene_prompts_i2v_memory_beat_concretization_applied_count": 0, "scene_prompts_i2v_memory_beat_sources_by_segment": {}, "scene_prompts_i2v_memory_focus_selected_by_segment": {}, "scene_prompts_i2v_memory_text_was_generic_segments": [], "scene_prompts_requirement_source_text_used_count": 0, "scene_prompts_episodic_requirement_prompted_count": 0, "scene_prompts_i2v_generic_cutaway_warning_segments": [], "scene_prompts_ia2v_world_contamination_detected_count": 0, "scene_prompts_ia2v_world_contamination_fixed_count": 0, "scene_prompts_ia2v_contamination_high_confidence_segments": [], "scene_prompts_ia2v_contamination_location_sensitive_segments": [], "scene_prompts_ia2v_location_sensitive_allowed_segments": [], "scene_prompts_ia2v_contamination_reason_by_segment": {}}
+    diag["scene_prompts_i2v_route_incompatible_memory_text_segments"] = []
+    diag["scene_prompts_i2v_route_incompatible_memory_text_count"] = 0
 
     for idx, segment_raw in enumerate(segments):
         segment = _safe_dict(segment_raw)
@@ -2282,6 +2312,14 @@ def _postprocess_prompts_v11_route_aware(
                 diag["scene_prompts_requirement_source_text_used_count"] += 1
             if bool(memory.get("episodic_requirement_prompted")):
                 diag["scene_prompts_episodic_requirement_prompted_count"] += 1
+            if bool(memory.get("route_incompatible_i2v_text_detected")):
+                diag["scene_prompts_i2v_route_incompatible_memory_text_count"] += 1
+                diag["scene_prompts_i2v_route_incompatible_memory_text_segments"].append(
+                    {
+                        "segment_id": segment_id,
+                        "preview": str(memory.get("route_incompatible_i2v_text_preview") or "").strip(),
+                    }
+                )
             if _is_generic_memory_text(str(segment.get("photo_prompt") or ""), str(segment.get("video_prompt") or "")):
                 diag["scene_prompts_i2v_generic_cutaway_warning_segments"].append(segment_id)
         elif route == "ia2v":
