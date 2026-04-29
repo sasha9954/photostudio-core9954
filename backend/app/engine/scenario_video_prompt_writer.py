@@ -64,6 +64,22 @@ IA2V_BASE_PROMPT_V1 = (
 IA2V_MINIMAL_NEGATIVE_PROMPT = (
     "hidden mouth, unreadable lips, mouth fully obscured for long, face fully turned away from readability, severe identity drift, duplicate main subject, severe facial deformation"
 )
+IA2V_PHOTO_LIPSYNC_CANON = (
+    "Singer-first start frame for LTX lip-sync: keep the performer clearly visible and emotionally active. "
+    "Keep face, eyes, and mouth readable with singing-ready mouth shape and expressive brows/eye focus. "
+    "Show natural cheek/jaw performance readiness with upper torso and shoulders readable; include controlled hands when composition allows. "
+    "Avoid mannequin-like stillness and neutral passport-photo energy. Keep framing in close-up, medium close-up, chest-up, or waist-up as scene fit."
+)
+IA2V_VIDEO_LIPSYNC_CANON = (
+    "Keep expressive lip-sync with natural jaw motion, subtle cheek/throat breath effort, and readable face-mouth performance throughout. "
+    "Use grounded controlled gestures in shoulders/torso/head/neck/hands; avoid chaotic dance motion unless scene explicitly requires it."
+)
+I2V_PHOTO_VISUAL_STORY_CANON = (
+    "Visual-story still frame: prioritize world/memory/action atmosphere from current scene contract; subject-if-present remains in story mode, not performance mode."
+)
+I2V_VIDEO_VISUAL_STORY_CANON = (
+    "Visual-story motion beat: reinforce environment/action/memory storytelling and world continuity without performance-first singing language."
+)
 IDENTITY_NEGATIVE_GUARD = "different person, different face, changed face, changed body type, changed silhouette, different outfit, hairstyle drift, age drift, body proportion drift"
 HERO_REF_PRIORITY_CLAUSE = (
     "Identity source priority: explicit hero role reference is canonical for face, body, outfit, and identity truth; previous scene image is continuity support only and must never override hero role reference."
@@ -135,6 +151,28 @@ ENVIRONMENT_CUTAWAY_COMPACT_CONTINUITY_CLAUSE = (
 ADJACENT_SCENE_DIFFERENTIATION_CLAUSE = (
     "Adjacent scene separation is mandatory: change at least primary subject presence, composition, zone, human density, and visual function so world-detail cutaways do not look like near-duplicate base plates of performer shots."
 )
+
+
+def _build_identity_lock_block(*, route: str, referenced_role_required: bool, has_human_subject: bool) -> str:
+    if not has_human_subject or not referenced_role_required:
+        return ""
+    lock = (
+        "Identity lock: preserve face structure, age impression, body proportions, hairstyle/hair texture, outfit silhouette, and recognizability; "
+        "prevent severe identity drift, duplication, age drift, or strong appearance mutation."
+    )
+    if route == "ia2v":
+        return lock
+    return ". ".join([lock, GLOBAL_HERO_IDENTITY_LOCK, BODY_CONTINUITY_LOCK, WARDROBE_CONTINUITY_LOCK]).strip()
+
+
+def _build_world_guard_block(route: str) -> str:
+    if route == "ia2v":
+        return (
+            "Route guard (ia2v): no environment-only cutaway logic, no offscreen-vocalist framing, and no memory-world leakage from other routes."
+        )
+    return (
+        "Route guard (i2v): keep visual-story/world-beat framing; do not convert into singer-first mouth-readability performance unless scene explicitly requires it."
+    )
 
 
 _FORBIDDEN_VENUE_TERMS = ("nightclub", "night club", "club", "bar", "dance floor", "dancefloor", "stage", "crowd")
@@ -2109,13 +2147,32 @@ def _sanitize_segment(
         lip_sync_allowed = True
     alias_audio_sync_mode = "phrase" if route == "ia2v" else "none"
     alias_frame_strategy = "first_last" if route == "first_last" else "single_image"
+    referenced_role_required = bool(
+        row.get("reference_required")
+        if "reference_required" in row
+        else (
+            fallback_prompt_row.get("reference_required")
+            if "reference_required" in fallback_prompt_row
+            else plan_row.get("reference_required")
+        )
+    ) or bool(explicit_hero_ref_present)
+    identity_lock_block = _build_identity_lock_block(
+        route=route,
+        referenced_role_required=referenced_role_required,
+        has_human_subject=has_human_subject,
+    )
+    world_guard_block = _build_world_guard_block(route)
+    ia2v_photo_canon_applied = route == "ia2v"
+    ia2v_video_canon_applied = route == "ia2v"
+    i2v_photo_canon_applied = route == "i2v"
+    i2v_video_canon_applied = route == "i2v"
     image_prompt = ". ".join(
         part
         for part in [
             fallback_photo_prompt,
-            GLOBAL_HERO_IDENTITY_LOCK if has_human_subject and route != "ia2v" else "",
-            BODY_CONTINUITY_LOCK if has_human_subject and route != "ia2v" else "",
-            WARDROBE_CONTINUITY_LOCK if has_human_subject and route != "ia2v" else "",
+            IA2V_PHOTO_LIPSYNC_CANON if ia2v_photo_canon_applied else I2V_PHOTO_VISUAL_STORY_CANON,
+            identity_lock_block,
+            world_guard_block,
         ]
         if str(part or "").strip()
     ).strip()
@@ -2129,6 +2186,11 @@ def _sanitize_segment(
     video_prompt_output, video_prompt_diag = _sanitize_prompt_text_for_current_identity(
         _strip_literal_quoted_dialogue(positive_prompt), identity_ctx, route, "route_payload.video_prompt"
     )
+    video_prompt_output = _append_clause(
+        video_prompt_output,
+        IA2V_VIDEO_LIPSYNC_CANON if ia2v_video_canon_applied else I2V_VIDEO_VISUAL_STORY_CANON,
+    )
+    video_prompt_output = _append_clause(video_prompt_output, world_guard_block)
     if route == "i2v":
         positive_prompt = _strip_ia2v_anchor_fragments(positive_prompt)
         image_prompt = _strip_ia2v_anchor_fragments(image_prompt)
@@ -2223,6 +2285,15 @@ def _sanitize_segment(
     continuity_fix_applied = bool(row.get("continuity_fix_applied") or hero_continuity_lock_applied)
 
     route_diag = _safe_dict(fallback_row.get("final_video_prompt_diagnostics"))
+    route_world_guard_failures: list[str] = []
+    if route == "ia2v":
+        lowered_image = image_prompt.lower()
+        if "offscreen voiceover only" in lowered_image or "no main performer visible" in lowered_image:
+            route_world_guard_failures.append("ia2v_offscreen_or_hidden_performer_conflict")
+    if route == "i2v":
+        lowered_image = image_prompt.lower()
+        if "singer-first" in lowered_image or "mouth readable" in lowered_image:
+            route_world_guard_failures.append("i2v_performance_framing_conflict")
     return {
         "segment_id": segment_id,
         "scene_id": scene_id,
@@ -2262,6 +2333,27 @@ def _sanitize_segment(
             "mouth_safety_rule": mouth_safety_rule or None,
         },
         "audio_behavior_hints": str(row.get("audio_behavior_hints") or "").strip(),
+        "photo_prompt_route_profile": "ia2v_lipsync_performer_first" if route == "ia2v" else "i2v_visual_story_world_first",
+        "video_prompt_route_profile": "ia2v_lipsync_motion" if route == "ia2v" else "i2v_visual_story_motion",
+        "identity_lock_applied": bool(identity_lock_block),
+        "world_guard_applied": True,
+        "prompt_validation_mode": "route_aware_hardening",
+        "prompts_route_aware_hardening_applied": True,
+        "prompts_identity_lock_strengthened": bool(identity_lock_block),
+        "prompts_world_contamination_guard_applied": True,
+        "prompts_ia2v_photo_canon_applied_count": 1 if ia2v_photo_canon_applied else 0,
+        "prompts_ia2v_video_canon_applied_count": 1 if ia2v_video_canon_applied else 0,
+        "prompts_i2v_photo_canon_applied_count": 1 if i2v_photo_canon_applied else 0,
+        "prompts_i2v_video_canon_applied_count": 1 if i2v_video_canon_applied else 0,
+        "prompts_camera_energy_applied_count": 1 if bool(i2v_camera_clause or camera_energy) else 0,
+        "prompts_route_world_guard_failures": route_world_guard_failures,
+        "prompts_route_prompt_summary": {
+            "route": route,
+            "photo_profile": "lipsync_performer_first" if route == "ia2v" else "visual_story",
+            "video_profile": "lipsync_motion" if route == "ia2v" else "visual_story_motion",
+            "camera_energy": camera_energy or None,
+        },
+        "prompts_used_vocal_owner_role_resolution": bool(vocal_owner_role),
         "speaker_role": speaker_role or None,
         "vocal_owner_role": vocal_owner_role or None,
         "lip_sync_shot_variant": lip_sync_shot_variant or None,
