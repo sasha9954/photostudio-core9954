@@ -2127,7 +2127,8 @@ def _build_i2v_memory_beat_directive(
             "No lip-sync framing, no singer-first framing, no mouth-readable performance language.",
         ],
     )
-    role_contracts = _safe_dict(_safe_dict(global_contract.get("role_usage_contract")).get("roles"))
+    role_usage_contract = _safe_dict(global_contract.get("role_usage_contract"))
+    role_contracts = _safe_dict(role_usage_contract.get("roles")) or role_usage_contract
     secondary_roles = [
         str(x).strip()
         for x in (_safe_list(scene_plan_row.get("secondary_roles")) + _safe_list(role_row.get("secondary_roles")))
@@ -2148,7 +2149,7 @@ def _build_i2v_memory_beat_directive(
     )
     covered_requirement_has_episodic_expected_function = False
     for req_id in requirement_ids:
-        req_row = _safe_dict(scene_requirements.get(req_id))
+        req_row = _safe_dict(requirements_by_id.get(req_id))
         expected_functions = [
             str(x).strip()
             for x in _safe_list(req_row.get("expected_role_functions"))
