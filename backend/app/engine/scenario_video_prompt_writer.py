@@ -1956,8 +1956,26 @@ def _sanitize_segment(
         confirmed_look_used = True
     i2v_camera_variant = ""
     i2v_camera_clause = ""
+    camera_energy = ""
     if route == "i2v":
         semantic_row = _safe_dict(row.get("semantic_tags"))
+        plan_semantic_row = _safe_dict(plan_row.get("semantic_tags"))
+        camera_energy = _first_non_empty_string(
+            row.get("camera_energy"),
+            row.get("camera_energy_band"),
+            row.get("local_energy_band"),
+            row.get("energy_band"),
+            plan_row.get("camera_energy"),
+            plan_row.get("camera_energy_band"),
+            plan_row.get("local_energy_band"),
+            plan_row.get("energy_band"),
+            semantic_row.get("camera_energy"),
+            semantic_row.get("local_energy_band"),
+            plan_semantic_row.get("camera_energy"),
+            plan_semantic_row.get("local_energy_band"),
+        )
+        if not camera_energy:
+            camera_energy = ""
         semantics = {
             "arc_role": str(plan_row.get("arc_role") or semantic_row.get("arc_role") or "").strip(),
             "beat_mode": str(plan_row.get("beat_mode") or semantic_row.get("beat_mode") or "").strip(),
@@ -2976,6 +2994,9 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     i2v_role_specific_identity_lock_applied_count = 0
     i2v_memory_focus_pool_count = 0
     i2v_memory_focus_selected_by_segment: dict[str, str] = {}
+    camera_energy_missing_count = 0
+    camera_energy_source_by_segment: dict[str, str] = {}
+    camera_energy_value_by_segment: dict[str, str] = {}
     for seg in _safe_list(normalized_payload.get("segments")):
         row = _safe_dict(seg)
         final_gender_terms_removed.extend(_safe_list(row.get("identity_gender_conflict_terms_removed")))
@@ -2997,6 +3018,15 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
         selected = str(row.get("prompts_i2v_memory_focus_selected_by_segment") or "").strip()
         if seg_id and selected:
             i2v_memory_focus_selected_by_segment[seg_id] = selected
+        if str(row.get("route") or "").strip().lower() == "i2v":
+            camera_energy_value = str(row.get("camera_energy") or "").strip()
+            if not camera_energy_value:
+                camera_energy_missing_count += 1
+            if seg_id:
+                camera_energy_value_by_segment[seg_id] = camera_energy_value
+                camera_energy_source_by_segment[seg_id] = (
+                    "segment_row_or_plan_row_or_semantic_tags" if camera_energy_value else "missing"
+                )
         i2v_cutaway_warning_segments.extend(_safe_list(row.get("prompts_i2v_generic_cutaway_warning_segments")))
     return {
         "ok": ok,
@@ -3044,6 +3074,9 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "prompts_i2v_role_specific_identity_lock_applied_count": i2v_role_specific_identity_lock_applied_count if ok else 0,
             "prompts_i2v_memory_focus_pool_count": i2v_memory_focus_pool_count if ok else 0,
             "prompts_i2v_memory_focus_selected_by_segment": i2v_memory_focus_selected_by_segment if ok else {},
+            "final_video_prompt_camera_energy_missing_count": camera_energy_missing_count if ok else 0,
+            "final_video_prompt_camera_energy_source_by_segment": camera_energy_source_by_segment if ok else {},
+            "final_video_prompt_camera_energy_value_by_segment": camera_energy_value_by_segment if ok else {},
             "final_video_prompt_validation_checked_after_sanitizer": bool(
                 validation_diag.get("final_video_prompt_validation_checked_after_sanitizer")
             ),
