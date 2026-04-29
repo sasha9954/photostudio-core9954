@@ -197,6 +197,28 @@ _I2V_ROUTE_INCOMPATIBLE_MEMORY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bvocal phrase\b"),
     re.compile(r"(?i)\bmouth close[- ]?up\b"),
 )
+
+_I2V_ROUTE_INCOMPATIBLE_POSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bvocal performance beat\b"),
+    re.compile(r"(?i)\bnatural singing performance\b"),
+    re.compile(r"(?i)\bvisible mouth\b"),
+    re.compile(r"(?i)\breadable mouth\b"),
+    re.compile(r"(?i)\bmouth-readable\b"),
+    re.compile(r"(?i)\bmouth close[- ]?up\b"),
+    re.compile(r"(?i)\blip[- ]?sync\b"),
+    re.compile(r"(?i)\bsinger[- ]?first\b"),
+    re.compile(r"(?i)\bperformer[- ]?first\b"),
+    re.compile(r"(?i)\bforeground performance\b"),
+    re.compile(r"(?i)\bvocal owner\b"),
+    re.compile(r"(?i)\bcharacter_1\b.{0,40}\b(singer|performer)\b"),
+)
+_I2V_ROUTE_INCOMPATIBLE_PROTECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bno\b"),
+    re.compile(r"(?i)\boffscreen\b"),
+    re.compile(r"(?i)\bnon[- ]?dominant\b"),
+    re.compile(r"(?i)\bavoid\b"),
+    re.compile(r"(?i)\bwithout\b"),
+)
 _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS: tuple[str, ...] = (
     "memory/action beat:",
     "memory beat",
@@ -2056,6 +2078,26 @@ def _is_i2v_route_incompatible_memory_text(text: str) -> bool:
     return any(pattern.search(blob) for pattern in _I2V_ROUTE_INCOMPATIBLE_MEMORY_PATTERNS)
 
 
+def _strip_i2v_route_incompatible_clauses(text: str) -> tuple[str, bool]:
+    blob = str(text or "").strip()
+    if not blob:
+        return "", False
+
+    parts = [part.strip() for part in re.split(r"(?<=[;.!?])\s+|\s*;\s*", blob) if part.strip()]
+    kept: list[str] = []
+    removed = False
+    for part in parts:
+        lowered = part.lower()
+        has_forbidden = any(pattern.search(part) for pattern in _I2V_ROUTE_INCOMPATIBLE_POSITIVE_PATTERNS)
+        is_protective = any(pattern.search(lowered) for pattern in _I2V_ROUTE_INCOMPATIBLE_PROTECTIVE_PATTERNS)
+        if has_forbidden and not is_protective:
+            removed = True
+            continue
+        kept.append(part)
+
+    cleaned = _append_compact_clauses("", kept)
+    return cleaned, removed
+
 def _build_i2v_memory_beat_directive(
     scene_plan_row: dict[str, Any],
     role_row: dict[str, Any],
@@ -2283,6 +2325,9 @@ def _postprocess_prompts_v11_route_aware(
     diag: dict[str, Any] = {"scene_prompts_route_aware_final_postprocess_applied": True, "scene_prompts_route_aware_final_postprocess_segment_count": len(segments), "scene_prompts_route_aware_final_postprocess_i2v_count": 0, "scene_prompts_route_aware_final_postprocess_ia2v_count": 0, "scene_prompts_i2v_memory_beat_concretization_applied_count": 0, "scene_prompts_i2v_memory_beat_sources_by_segment": {}, "scene_prompts_i2v_memory_focus_selected_by_segment": {}, "scene_prompts_i2v_memory_text_was_generic_segments": [], "scene_prompts_requirement_source_text_used_count": 0, "scene_prompts_episodic_requirement_prompted_count": 0, "scene_prompts_i2v_generic_cutaway_warning_segments": [], "scene_prompts_ia2v_world_contamination_detected_count": 0, "scene_prompts_ia2v_world_contamination_fixed_count": 0, "scene_prompts_ia2v_contamination_high_confidence_segments": [], "scene_prompts_ia2v_contamination_location_sensitive_segments": [], "scene_prompts_ia2v_location_sensitive_allowed_segments": [], "scene_prompts_ia2v_contamination_reason_by_segment": {}}
     diag["scene_prompts_i2v_route_incompatible_memory_text_segments"] = []
     diag["scene_prompts_i2v_route_incompatible_memory_text_count"] = 0
+    diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_count"] = 0
+    diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_segments"] = []
+    diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_fields"] = {}
 
     for idx, segment_raw in enumerate(segments):
         segment = _safe_dict(segment_raw)
@@ -2321,6 +2366,16 @@ def _postprocess_prompts_v11_route_aware(
                         "preview": str(memory.get("route_incompatible_i2v_text_preview") or "").strip(),
                     }
                 )
+            cleaned_fields: list[str] = []
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+                cleaned, changed = _strip_i2v_route_incompatible_clauses(str(segment.get(field) or ""))
+                if changed:
+                    segment[field] = cleaned
+                    cleaned_fields.append(field)
+            if cleaned_fields:
+                diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_count"] += 1
+                diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_segments"].append(segment_id)
+                diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_fields"][segment_id] = cleaned_fields
             if _is_generic_memory_text(str(segment.get("photo_prompt") or ""), str(segment.get("video_prompt") or "")):
                 diag["scene_prompts_i2v_generic_cutaway_warning_segments"].append(segment_id)
         elif route == "ia2v":
