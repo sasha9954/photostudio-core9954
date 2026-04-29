@@ -17255,6 +17255,10 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             diagnostics = _safe_dict(pkg.get("diagnostics"))
             diagnostics["clip_sanitizer_post_stage_applied"] = True
             pkg["diagnostics"] = diagnostics
+        diagnostics = _safe_dict(pkg.get("diagnostics"))
+        diagnostics.pop("requested_stage_not_executed", None)
+        diagnostics.pop("requested_stage_not_executed_reason", None)
+        pkg["diagnostics"] = diagnostics
         _set_stage_status(pkg, stage_id, "done")
         if stage_id == "final_video_prompt":
             diagnostics = _safe_dict(pkg.get("diagnostics"))
@@ -17754,6 +17758,11 @@ def run_manual_stage(
         pkg["diagnostics"] = diagnostics
     if stage_id not in dep_sequence:
         pkg = run_stage(stage_id, pkg, payload)
+        if str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
+            diagnostics = _safe_dict(pkg.get("diagnostics"))
+            diagnostics.pop("requested_stage_not_executed", None)
+            diagnostics.pop("requested_stage_not_executed_reason", None)
+            pkg["diagnostics"] = diagnostics
         executed_stage_ids.append(stage_id)
     if stage_id == "scene_plan" and str(_safe_dict(_safe_dict(pkg.get("stage_statuses")).get(stage_id)).get("status") or "").strip().lower() == "done":
         statuses = _safe_dict(pkg.get("stage_statuses"))
