@@ -1619,6 +1619,35 @@ def _build_director_control_prompt_block(context: dict[str, Any]) -> str:
 
 
 def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", prompt_mode: str = "default") -> str:
+    requirement_goals = _safe_list(context.get("scene_requirement_goals"))
+    requirement_goals_block = ""
+    if requirement_goals:
+        compact_requirement_goals = []
+        for goal_raw in requirement_goals:
+            goal = _safe_dict(goal_raw)
+            compact_requirement_goals.append(
+                {
+                    "id": str(goal.get("id") or "").strip(),
+                    "expected_route": str(goal.get("expected_route") or "").strip(),
+                    "expected_roles": _safe_list(goal.get("expected_roles")),
+                    "expected_role_functions": _safe_list(goal.get("expected_role_functions")),
+                    "expected_world": str(goal.get("expected_world") or "").strip(),
+                    "min_count": goal.get("min_count"),
+                    "max_count": goal.get("max_count"),
+                    "source_text": str(goal.get("source_text") or "").strip(),
+                    "purpose": str(goal.get("purpose") or "").strip(),
+                }
+            )
+        requirement_goals_block = (
+            "SCENE REQUIREMENT GOALS:\n"
+            "For every required scene_requirement, at least one scene row must satisfy it.\n"
+            "Each satisfying scene row must include:\n"
+            "- covered_requirement_ids or requirement_ids\n"
+            "- explicit primary_role / active_roles / secondary_roles\n"
+            "- role_functions when available\n"
+            "- director_required_world or world_role when available\n"
+            f"{json.dumps(compact_requirement_goals, ensure_ascii=False)}\n"
+        )
     feedback_block = ""
     if validation_feedback:
         feedback_block = (
@@ -1669,6 +1698,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             "- ia2v rows: character_1 is physical speaker; speaker_role=character_1; lip_sync_allowed=true; mouth_visible_required=true.\n"
             "- i2v rows: prefer non-primary character_1 framing, but character_1 MAY still appear as silhouette/walking/background presence.\n"
             "World beats must be truly world-driven (social texture, pressure, threshold, aftermath, instrumental release) with no fake singer-presence.\n"
+            f"{requirement_goals_block}"
             f"Fix exactly: {validation_feedback}\n"
             "Output contract:\n"
             "{\n"
@@ -1748,6 +1778,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "do not require mouth-visible lip-sync.\\n"
         "No first_last scenes allowed.\\n"
         "If any scene is classified as state_transition, convert it to i2v.\\n"
+        f"{requirement_goals_block}"
         f"{_build_director_control_prompt_block(context)}"
         f"{feedback_block}"
         "Output contract:\\n"

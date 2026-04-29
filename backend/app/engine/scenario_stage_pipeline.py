@@ -16609,6 +16609,8 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics = _safe_dict(package.get("diagnostics"))
         diagnostics["scene_plan_clip_contract_validation_ok"] = False
         diagnostics["scene_plan_clip_contract_validation_errors"] = list(clip_contract_errors)
+        diagnostics["scene_plan_requirement_retry_feedback_used"] = False
+        diagnostics["scene_plan_missing_requirement_feedback"] = ""
         package["diagnostics"] = diagnostics
         contract_requirement_feedback = ""
         for error in clip_contract_errors:
@@ -16618,6 +16620,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     "SCENES_CLIP_CONTRACT_VALIDATION_FAILED",
                     _safe_dict(package.get("diagnostics")),
                 )
+                diagnostics = _safe_dict(package.get("diagnostics"))
+                diagnostics["scene_plan_requirement_retry_feedback_used"] = True
+                diagnostics["scene_plan_missing_requirement_feedback"] = contract_requirement_feedback
+                package["diagnostics"] = diagnostics
                 break
         clip_feedback = (
             "Clip contract mismatch. Keep scene count equal to audio windows, forbid first_last, keep balanced approved "
