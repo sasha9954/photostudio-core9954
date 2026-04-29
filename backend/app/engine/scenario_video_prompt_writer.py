@@ -197,7 +197,34 @@ def _get_merged_director_contract(package: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
-def _build_i2v_memory_beat_block(scene_row: dict[str, Any], package: dict[str, Any]) -> tuple[str, str]:
+
+
+def _is_generic_i2v_memory_text(text: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(text or "").strip().lower()).strip()
+    if not normalized:
+        return True
+    generic_phrases = {
+        "memory beat",
+        "atmospheric world",
+        "environment cutaway",
+        "world cutaway",
+        "visual story beat",
+        "grounded world continuity",
+        "world memory beat",
+        "environment first storytelling",
+        "generic cutaway",
+        "memory world cutaway",
+    }
+    if normalized in generic_phrases:
+        return True
+    tokens = normalized.split()
+    if len(tokens) <= 3:
+        return True
+    generic_tokens = {"memory", "world", "atmospheric", "visual", "story", "beat", "environment", "cutaway", "continuity", "grounded", "first", "storytelling", "generic"}
+    return all(token in generic_tokens for token in tokens)
+
+
+def _build_i2v_memory_beat_block(scene_row: dict[str, Any], package: dict[str, Any]) -> tuple[str, str, bool, str, str]:
     row = _safe_dict(scene_row)
     merged_contract = _get_merged_director_contract(package)
     requirement_ids: list[str] = [
@@ -215,19 +242,17 @@ def _build_i2v_memory_beat_block(scene_row: dict[str, Any], package: dict[str, A
             part for part in [str(req.get("source_text") or "").strip(), str(req.get("purpose") or "").strip()] if part
         ).strip()
         if req_source:
-            return (
-                f"Memory beat directive: {req_source}. Show the specific remembered event in this requirement, not only atmosphere.",
-                "covered_requirement_ids.scene_requirements",
-            )
+            block = f"Memory beat directive: {req_source}. Show the specific remembered event in this requirement, not only atmosphere."
+            return (block, "covered_requirement_ids.scene_requirements", False, "", block)
+
     direct_source = " ".join(
         part for part in [str(row.get("requirement_source_text") or "").strip(), str(row.get("requirement_purpose") or "").strip()] if part
     ).strip()
     if direct_source:
-        return (
-            f"Memory beat directive: {direct_source}. Show the specific remembered event in this requirement, not only atmosphere.",
-            "requirement_source_text+requirement_purpose",
-        )
-    fallback_source = " ".join(
+        block = f"Memory beat directive: {direct_source}. Show the specific remembered event in this requirement, not only atmosphere."
+        return (block, "requirement_source_text+requirement_purpose", False, "", block)
+
+    row_text = " ".join(
         part
         for part in [
             str(row.get("scene_goal") or "").strip(),
@@ -236,11 +261,8 @@ def _build_i2v_memory_beat_block(scene_row: dict[str, Any], package: dict[str, A
         ]
         if part
     ).strip()
-    if fallback_source:
-        return (
-            f"Memory beat directive: {fallback_source}. Make the event readable via body posture, spatial relation, and visible consequences.",
-            "scene_goal+narrative_function+ltx_video_goal",
-        )
+    row_text_generic = _is_generic_i2v_memory_text(row_text)
+
     memory_contract = _safe_dict(merged_contract.get("memory_contract"))
     focus_elements = _safe_list(memory_contract.get("memory_focus_elements"))
     pool = [str(v).strip() for v in focus_elements if str(v).strip()]
@@ -251,12 +273,19 @@ def _build_i2v_memory_beat_block(scene_row: dict[str, Any], package: dict[str, A
             stable_key = json.dumps(row, ensure_ascii=False, sort_keys=True)
         digest = hashlib.sha256(stable_key.encode("utf-8")).hexdigest()
         focus_beat = pool[int(digest[:8], 16) % len(pool)]
+
+    if row_text and (not row_text_generic):
+        block = f"Memory beat directive: {row_text}. Make the event readable via body posture, spatial relation, and visible consequences."
+        if focus_beat:
+            block = f"Memory beat directive: {focus_beat}. Scene context: {row_text}."
+            return (block, "scene_goal+narrative_function+ltx_video_goal+memory_focus_elements", False, focus_beat, block)
+        return (block, "scene_goal+narrative_function+ltx_video_goal", False, "", block)
+
     if focus_beat:
-        return (
-            f"Memory beat directive: {focus_beat}. Keep one clear remembered action or emotional event, not a generic cutaway.",
-            "memory_contract.memory_focus_elements.distributed_by_segment",
-        )
-    return ("", "")
+        block = f"Memory beat directive: {focus_beat}. Keep one clear remembered action or emotional event, not a generic cutaway."
+        return (block, "memory_contract.memory_focus_elements.distributed_by_segment", bool(row_text), focus_beat, block)
+
+    return ("", "", bool(row_text), "", "")
 
 
 def _scene_has_episodic_requirement(scene_row: dict[str, Any], package: dict[str, Any]) -> bool:
@@ -1838,8 +1867,11 @@ def _sanitize_segment(
     scene_specific_payload = ". ".join(part for part in scene_specific_parts if part).strip()
     memory_beat_block = ""
     memory_beat_source = ""
+    memory_text_was_generic = False
+    memory_focus_selected_text = ""
+    memory_beat_preview = ""
     if route == "i2v":
-        memory_beat_block, memory_beat_source = _build_i2v_memory_beat_block(plan_row, package)
+        memory_beat_block, memory_beat_source, memory_text_was_generic, memory_focus_selected_text, memory_beat_preview = _build_i2v_memory_beat_block(plan_row, package)
     if route == "ia2v":
         ia2v_scene_specific_parts = [
             str(plan_row.get("emotional_intent") or "").strip(),
@@ -2484,9 +2516,10 @@ def _sanitize_segment(
         )
         if route == "i2v"
         else 0,
-        "prompts_i2v_memory_focus_selected_by_segment": memory_beat_source
-        if memory_beat_source == "memory_contract.memory_focus_elements.distributed_by_segment"
-        else "",
+        "prompts_i2v_memory_focus_selected_by_segment": memory_focus_selected_text or "",
+        "prompts_i2v_memory_text_was_generic": bool(route == "i2v" and memory_text_was_generic),
+        "prompts_i2v_memory_focus_selected_text": memory_focus_selected_text or "",
+        "prompts_i2v_memory_beat_final_text_preview": memory_beat_preview or "",
         "prompts_episodic_requirement_prompted_count": 1 if bool(route == "i2v" and _scene_has_episodic_requirement(plan_row, package)) else 0,
         "prompts_episodic_requirement_segments": [segment_id]
         if bool(route == "i2v" and _scene_has_episodic_requirement(plan_row, package))
