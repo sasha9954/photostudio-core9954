@@ -9389,6 +9389,109 @@ def _sanitize_clip_package_before_downstream(package: dict[str, Any]) -> dict[st
     return package
 
 
+def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    if not _is_clip_mode_package(package):
+        diagnostics["clip_sanitizer_applied"] = False
+        package["diagnostics"] = diagnostics
+        return package
+
+    package = _sanitize_clip_package_before_downstream(package)
+    input_pkg = _safe_dict(package.get("input"))
+    contract_sources = [
+        _safe_dict(input_pkg.get("director_contract")),
+        _safe_dict(input_pkg.get("director_config")),
+        _safe_dict(package.get("director_contract")),
+        _safe_dict(package.get("director_config")),
+    ]
+    contract = next((row for row in contract_sources if row), {})
+    audio_contract = _safe_dict(contract.get("audio_contract"))
+    clip_contract = _safe_dict(contract.get("clip_contract"))
+    role_usage_contract = _safe_dict(contract.get("role_usage_contract"))
+    character_contract = _safe_dict(contract.get("character_contract"))
+    route_contract = _safe_dict(contract.get("route_contract"))
+
+    normalized_roles = False
+    assigned_roles = _safe_dict(package.get("assigned_roles"))
+    role2 = _safe_dict(role_usage_contract.get("character_2"))
+    role2_fn = str(role2.get("function") or "").strip()
+    if role2_fn:
+        assigned_roles["character_2"] = role2_fn
+        normalized_roles = True
+    package["assigned_roles"] = assigned_roles
+
+    preferred_targets: list[tuple[dict[str, Any], str]] = []
+    creative_config = _safe_dict(input_pkg.get("creative_config"))
+    preferred_targets.append((creative_config, "preferred_routes"))
+    preferred_targets.append((_safe_dict(route_contract), "preferred_routes"))
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    preferred_targets.append((_safe_dict(scene_plan.get("route_contract")), "preferred_routes"))
+    removed_forbidden_routes: list[str] = []
+    for owner, key in preferred_targets:
+        routes = _safe_list(owner.get(key))
+        if not routes:
+            continue
+        cleaned = []
+        for route in routes:
+            norm = str(route or "").strip().lower()
+            if norm == "first_last":
+                removed_forbidden_routes.append("first_last")
+                continue
+            cleaned.append(norm)
+        owner[key] = cleaned
+    if creative_config:
+        input_pkg["creative_config"] = creative_config
+    package["input"] = input_pkg
+    if scene_plan:
+        package["scene_plan"] = scene_plan
+
+    audio_map = _safe_dict(package.get("audio_map"))
+    vocal_profile = _safe_dict(audio_map.get("vocal_profile"))
+    performer_role = ""
+    if any(
+        str(item or "").strip()
+        for item in (
+            audio_contract.get("vocal_owner_role"),
+            audio_contract.get("vocal_owner_role_id"),
+            clip_contract.get("vocal_owner_role"),
+        )
+    ):
+        performer_role = "character_1"
+    for role_id, role_row in role_usage_contract.items():
+        if not isinstance(role_row, dict):
+            continue
+        if str(_safe_dict(role_row).get("function") or "").strip().lower() == "performer":
+            performer_role = str(role_id).strip() or "character_1"
+            break
+    if performer_role:
+        audio_map["vocal_owner_role"] = performer_role
+        audio_map["vocal_owner_confidence"] = max(float(audio_map.get("vocal_owner_confidence") or 0.0), 0.95)
+        vocal_profile["vocal_owner_role"] = performer_role
+        vocal_profile["confidence"] = max(float(vocal_profile.get("confidence") or 0.0), 0.95)
+        vocal_profile["reason"] = "Resolved from Director Contract v2"
+        audio_map["vocal_profile"] = vocal_profile
+        package["audio_map"] = audio_map
+
+    windows = _safe_list(audio_map.get("scene_candidate_windows"))
+    window_count = len(windows)
+    expected_ia2v = window_count // 2
+    expected_i2v = window_count - expected_ia2v
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["clip_sanitizer_applied"] = True
+    diagnostics["clip_sanitizer_vocal_owner_role"] = performer_role or str(audio_map.get("vocal_owner_role") or "")
+    diagnostics["clip_sanitizer_removed_forbidden_routes"] = list(dict.fromkeys(removed_forbidden_routes))
+    diagnostics["clip_sanitizer_assigned_roles_normalized"] = normalized_roles
+    diagnostics["clip_sanitizer_audio_window_count"] = window_count
+    diagnostics["clip_sanitizer_expected_route_counts"] = {"ia2v": expected_ia2v, "i2v": expected_i2v, "first_last": 0}
+    diagnostics["clip_sanitizer_contract_keys"] = {
+        "role_usage_contract": bool(role_usage_contract),
+        "character_contract": bool(character_contract),
+        "route_contract": bool(route_contract),
+    }
+    package["diagnostics"] = diagnostics
+    return package
+
+
 def _extract_story_core_anchor_phrases(text: str) -> list[str]:
     lowered = str(text or "").strip().lower()
     if not lowered:
@@ -16881,6 +16984,8 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
         diagnostics["errors"] = errors[-80:]
         pkg["diagnostics"] = diagnostics
         return pkg
+    if stage_id in {"audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"}:
+        pkg = _sanitize_clip_pipeline_package_from_director_contract(pkg)
     _set_stage_status(pkg, stage_id, "running")
     pkg["updated_at"] = _utc_iso()
 
@@ -17076,6 +17181,8 @@ def run_manual_stage(
         if return_executed_stage_ids:
             return pkg, []
         return pkg
+    if stage_id in {"audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"}:
+        pkg = _sanitize_clip_pipeline_package_from_director_contract(pkg)
 
     executed_stage_ids: list[str] = []
     if stage_id == "final_video_prompt":
