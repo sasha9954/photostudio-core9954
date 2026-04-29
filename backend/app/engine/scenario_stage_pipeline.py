@@ -9408,6 +9408,9 @@ def _extract_contract_like_source(source: Any) -> dict[str, Any]:
     source_dict = _safe_dict(source)
     if not source_dict:
         return {}
+    nested_contract = _safe_dict(source_dict.get("director_contract"))
+    if nested_contract:
+        source_dict = _merge_director_contracts(source_dict, nested_contract)
     contract_keys = {
         "audio_contract",
         "clip_contract",
@@ -9419,7 +9422,6 @@ def _extract_contract_like_source(source: Any) -> dict[str, Any]:
     }
     if any(key in source_dict for key in contract_keys):
         return source_dict
-    nested_contract = _safe_dict(source_dict.get("director_contract"))
     return nested_contract
 
 
@@ -9523,8 +9525,9 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
                 performer_role = str(role_id).strip()
                 performer_role_source = "role_usage_contract"
                 break
-    if not performer_role:
+    if not performer_role and role_usage_contract:
         performer_role = "character_1"
+        performer_role_source = "fallback_character_1_from_role_contract"
     if performer_role:
         audio_map["vocal_owner_role"] = performer_role
         audio_map["vocal_owner_confidence"] = max(float(audio_map.get("vocal_owner_confidence") or 0.0), 0.95)
