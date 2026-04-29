@@ -180,14 +180,20 @@ _GENERIC_MEMORY_BEAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bgrounded world continuity\b"),
     re.compile(r"(?i)\benvironment-first storytelling\b"),
 )
-_IA2V_WORLD_CONTAMINATION_TOKENS: tuple[str, ...] = (
-    "courtyard",
-    "street",
+_IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS: tuple[str, ...] = (
     "memory/action beat:",
     "memory beat",
     "world cutaway",
     "environment-first",
     "visual story beat",
+)
+_IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS: tuple[str, ...] = ("street", "courtyard")
+_IA2V_PROTECTED_ANCHOR_PREFIXES: tuple[str, ...] = (
+    "performance location anchor:",
+    "route default world anchor:",
+    "allowed world anchors:",
+    "performance meaning:",
+    "performance focus elements:",
 )
 _STALE_IDENTITY_TERMS = {
     "same woman",
@@ -346,12 +352,52 @@ def _get_contract_section(scene: dict[str, Any], global_contract: dict[str, Any]
     return director_config_section
 
 
-def _strip_ia2v_contamination_clauses(text: str) -> str:
+def _build_ia2v_allowed_location_text(
+    performance_contract: dict[str, Any],
+    route_location_rules: dict[str, Any],
+    director_required_world: str,
+) -> str:
+    ia2v_location_rules = _safe_dict(route_location_rules.get("ia2v"))
+    parts: list[str] = [
+        str(performance_contract.get("performance_location") or ""),
+        str(performance_contract.get("ia2v_meaning") or ""),
+        str(ia2v_location_rules.get("default_world") or ""),
+        str(director_required_world or ""),
+    ]
+    for world in _safe_list(ia2v_location_rules.get("allowed_worlds")):
+        world_text = str(world).strip()
+        if world_text:
+            parts.append(world_text)
+    world_roles = _safe_dict(route_location_rules.get("world_roles"))
+    for world_name in _safe_list(ia2v_location_rules.get("allowed_worlds")):
+        world_role = _safe_dict(world_roles.get(str(world_name).strip()))
+        world_desc = str(world_role.get("description") or "")
+        if world_desc:
+            parts.append(world_desc)
+    return " ".join(parts).lower()
+
+
+def _is_memory_beat_contamination(clause_lower: str) -> bool:
+    return "memory beat" in clause_lower and not bool(re.search(r"\bperformance meaning:\s*.*\bmemory beat\b", clause_lower))
+
+
+def _strip_ia2v_contamination_clauses(text: str, allowed_location_text: str = "") -> str:
     clauses = [part.strip() for part in re.split(r"[.;]\s*", str(text or "").strip()) if part.strip()]
     clean_clauses: list[str] = []
+    allowed_location_lower = str(allowed_location_text or "").lower()
     for clause in clauses:
         lowered = clause.lower()
-        if any(token in lowered for token in _IA2V_WORLD_CONTAMINATION_TOKENS):
+        if any(anchor in lowered for anchor in _IA2V_PROTECTED_ANCHOR_PREFIXES):
+            clean_clauses.append(clause)
+            continue
+        high_confidence_hit = any(
+            token in lowered for token in _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS if token != "memory beat"
+        ) or _is_memory_beat_contamination(lowered)
+        disallowed_location_hit = any(
+            token in lowered and token not in allowed_location_lower
+            for token in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS
+        )
+        if high_confidence_hit or disallowed_location_hit:
             continue
         clean_clauses.append(clause)
     return ". ".join(clean_clauses).strip()
@@ -2437,6 +2483,10 @@ def _normalize_scene_prompts(
     scene_prompts_ia2v_world_contamination_detected_count = 0
     scene_prompts_ia2v_world_contamination_fixed_count = 0
     scene_prompts_ia2v_world_contamination_segments: list[str] = []
+    scene_prompts_ia2v_contamination_high_confidence_segments: list[str] = []
+    scene_prompts_ia2v_contamination_location_sensitive_segments: list[str] = []
+    scene_prompts_ia2v_location_sensitive_allowed_segments: list[str] = []
+    scene_prompts_ia2v_contamination_reason_by_segment: dict[str, list[str]] = {}
     i2v_prompt_family_counts = {family: 0 for family in sorted(I2V_MOTION_FAMILIES)}
     prompt_interface_contract = _resolve_prompt_interface_contract(story_core)
     must_be_visible_roles = [
@@ -2997,11 +3047,51 @@ def _normalize_scene_prompts(
         else:
             normalized_notes["scene_local_props_policy"] = "decor_restricted"
         if actual_route == "ia2v":
+            performance_contract = _get_contract_section(scene, global_contract, "performance_contract")
+            route_location_rules = _get_contract_section(scene, global_contract, "route_location_rules")
+            director_required_world = str(scene.get("director_required_world") or _safe_dict(global_contract.get("director_contract")).get("required_world") or "").strip()
+            allowed_location_text = _build_ia2v_allowed_location_text(
+                performance_contract=performance_contract,
+                route_location_rules=route_location_rules,
+                director_required_world=director_required_world,
+            )
             pre_ia2v_blob = " ".join([photo_prompt, video_prompt, positive_video_prompt]).lower()
-            contamination_detected = any(token in pre_ia2v_blob for token in _IA2V_WORLD_CONTAMINATION_TOKENS)
+            high_confidence_tokens_found = [
+                token
+                for token in _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS
+                if token != "memory beat" and token in pre_ia2v_blob
+            ]
+            if _is_memory_beat_contamination(pre_ia2v_blob):
+                high_confidence_tokens_found.append("memory beat")
+            disallowed_location_tokens_found = [
+                token
+                for token in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS
+                if token in pre_ia2v_blob and token not in allowed_location_text
+            ]
+            allowed_location_tokens_found = [
+                token
+                for token in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS
+                if token in pre_ia2v_blob and token in allowed_location_text
+            ]
+            contamination_detected = bool(high_confidence_tokens_found or disallowed_location_tokens_found)
             if contamination_detected:
                 scene_prompts_ia2v_world_contamination_segments.append(scene_id)
                 scene_prompts_ia2v_world_contamination_detected_count += 1
+            if high_confidence_tokens_found:
+                scene_prompts_ia2v_contamination_high_confidence_segments.append(scene_id)
+            if disallowed_location_tokens_found:
+                scene_prompts_ia2v_contamination_location_sensitive_segments.append(scene_id)
+            if allowed_location_tokens_found:
+                scene_prompts_ia2v_location_sensitive_allowed_segments.append(scene_id)
+            reasons: list[str] = []
+            if high_confidence_tokens_found:
+                reasons.append(f"high_confidence:{','.join(sorted(dict.fromkeys(high_confidence_tokens_found)))}")
+            if disallowed_location_tokens_found:
+                reasons.append(f"location_sensitive_disallowed:{','.join(sorted(dict.fromkeys(disallowed_location_tokens_found)))}")
+            if allowed_location_tokens_found:
+                reasons.append(f"location_sensitive_allowed:{','.join(sorted(dict.fromkeys(allowed_location_tokens_found)))}")
+            if reasons:
+                scene_prompts_ia2v_contamination_reason_by_segment[scene_id] = reasons
             semantic_context = " ".join(
                 [
                     str(scene.get("narrative_function") or ""),
@@ -3021,13 +3111,11 @@ def _normalize_scene_prompts(
             photo_prompt = _append_compact_clauses(photo_prompt, still_clauses)
             video_prompt = _append_compact_clauses(video_prompt, motion_clauses)
             positive_video_prompt = _append_compact_clauses((positive_video_prompt or video_prompt), motion_clauses)
-            performance_contract = _get_contract_section(scene, global_contract, "performance_contract")
             ia2v_meaning = str(performance_contract.get("ia2v_meaning") or "").strip()
             performance_location = str(performance_contract.get("performance_location") or "").strip()
             performance_focus_elements = ", ".join(
                 str(x).strip() for x in _safe_list(performance_contract.get("performance_focus_elements")) if str(x).strip()
             )
-            route_location_rules = _get_contract_section(scene, global_contract, "route_location_rules")
             ia2v_location_rules = _safe_dict(route_location_rules.get("ia2v"))
             ia2v_default_world = str(ia2v_location_rules.get("default_world") or "").strip()
             ia2v_allowed_worlds = ", ".join(
@@ -3047,13 +3135,17 @@ def _normalize_scene_prompts(
                 "Mouth open or slightly open in a natural singing shape; readable face, mouth, and eyes with emotional singing delivery. "
                 "Controlled shoulders, hands, and upper-body motion that supports performance, never action choreography or cutaway storytelling."
             )
-            if contamination_detected:
+            hard_rebuild_allowed = bool(high_confidence_tokens_found or disallowed_location_tokens_found)
+            if hard_rebuild_allowed:
                 photo_prompt = _append_compact_clauses("", [performer_canon, *ia2v_core_clauses])
                 video_prompt = _append_compact_clauses(_IA2V_VIDEO_PROMPT_CANON, [performer_canon, *ia2v_core_clauses])
                 positive_video_prompt = video_prompt
-                photo_prompt = _strip_ia2v_contamination_clauses(photo_prompt)
-                video_prompt = _strip_ia2v_contamination_clauses(video_prompt)
-                positive_video_prompt = _strip_ia2v_contamination_clauses(positive_video_prompt)
+                photo_prompt = _strip_ia2v_contamination_clauses(photo_prompt, allowed_location_text=allowed_location_text)
+                video_prompt = _strip_ia2v_contamination_clauses(video_prompt, allowed_location_text=allowed_location_text)
+                positive_video_prompt = _strip_ia2v_contamination_clauses(
+                    positive_video_prompt,
+                    allowed_location_text=allowed_location_text,
+                )
             else:
                 photo_prompt = _append_compact_clauses(photo_prompt, [performer_canon, *ia2v_core_clauses])
                 video_prompt = _append_compact_clauses(video_prompt, [performer_canon, *ia2v_core_clauses])
@@ -3084,9 +3176,14 @@ def _normalize_scene_prompts(
             negative_video_prompt = _clean_ia2v_negative_prompt(negative_video_prompt or negative_prompt)
             negative_prompt = negative_video_prompt
             post_ia2v_blob = " ".join([photo_prompt, video_prompt, positive_video_prompt]).lower()
-            if contamination_detected and not any(
-                token in post_ia2v_blob for token in _IA2V_WORLD_CONTAMINATION_TOKENS
-            ):
+            post_high_confidence_detected = any(
+                token in post_ia2v_blob for token in _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS if token != "memory beat"
+            ) or _is_memory_beat_contamination(post_ia2v_blob)
+            post_disallowed_location_detected = any(
+                token in post_ia2v_blob and token not in allowed_location_text
+                for token in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS
+            )
+            if contamination_detected and not (post_high_confidence_detected or post_disallowed_location_detected):
                 scene_prompts_ia2v_world_contamination_fixed_count += 1
         if enforce_shared_space_rule:
             missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
@@ -3215,6 +3312,16 @@ def _normalize_scene_prompts(
         "scene_prompts_ia2v_world_contamination_detected_count": scene_prompts_ia2v_world_contamination_detected_count,
         "scene_prompts_ia2v_world_contamination_fixed_count": scene_prompts_ia2v_world_contamination_fixed_count,
         "scene_prompts_ia2v_world_contamination_segments": list(dict.fromkeys(scene_prompts_ia2v_world_contamination_segments)),
+        "scene_prompts_ia2v_contamination_high_confidence_segments": list(
+            dict.fromkeys(scene_prompts_ia2v_contamination_high_confidence_segments)
+        ),
+        "scene_prompts_ia2v_contamination_location_sensitive_segments": list(
+            dict.fromkeys(scene_prompts_ia2v_contamination_location_sensitive_segments)
+        ),
+        "scene_prompts_ia2v_location_sensitive_allowed_segments": list(
+            dict.fromkeys(scene_prompts_ia2v_location_sensitive_allowed_segments)
+        ),
+        "scene_prompts_ia2v_contamination_reason_by_segment": scene_prompts_ia2v_contamination_reason_by_segment,
         "i2v_template_rebuilt_count": i2v_template_rebuilt_count,
         "i2v_unknown_family_fallback_count": i2v_unknown_family_fallback_count,
         "i2v_prompt_family_counts": i2v_prompt_family_counts,
