@@ -3973,12 +3973,31 @@ def _extract_scene_requirements_from_contract(director_contract: dict[str, Any],
     return fallback_requirements
 
 
+
+
+def _build_merged_director_contract_for_scene_validation(package: dict[str, Any]) -> dict[str, Any]:
+    pkg = _safe_dict(package)
+    input_pkg = _safe_dict(pkg.get("input"))
+    merged: dict[str, Any] = {}
+    contract_sources = (
+        _safe_dict(input_pkg.get("director_config")),
+        _safe_dict(input_pkg.get("director_contract")),
+        _extract_contract_like_source(input_pkg.get("director_package")),
+        _safe_dict(pkg.get("director_config")),
+        _safe_dict(pkg.get("director_contract")),
+        _extract_contract_like_source(pkg.get("director_package")),
+    )
+    for source in contract_sources:
+        if source:
+            merged = _merge_director_contracts(merged, source)
+    return merged
+
 def _build_scene_requirement_context(package: dict[str, Any], scene_plan: dict[str, Any], role_usage_contract: dict[str, dict[str, Any]], route_semantics: dict[str, Any]) -> dict[str, Any]:
     _ = scene_plan
     pkg = _safe_dict(package)
     input_pkg = _safe_dict(pkg.get("input"))
-    director_contract = _safe_dict(pkg.get("director_contract") or pkg.get("director_package") or input_pkg.get("director_contract") or input_pkg.get("director_package"))
-    director_config = _safe_dict(input_pkg.get("director_config"))
+    director_contract = _build_merged_director_contract_for_scene_validation(package)
+    director_config = _safe_dict(director_contract)
     timeline_contract = _safe_dict(director_contract.get("timeline_contract"))
     role_alias_map: dict[str, set[str]] = {}
     role_function_map: dict[str, set[str]] = {}
@@ -4030,16 +4049,48 @@ def _build_scene_requirement_context(package: dict[str, Any], scene_plan: dict[s
         world_alias_map.setdefault(wa, set()).add(wb)
         world_alias_map.setdefault(wb, set()).add(wa)
 
+    for src in (_safe_dict(director_contract.get("world_roles")), _safe_dict(director_config.get("world_roles"))):
+        for world_id, row in src.items():
+            rs = _safe_dict(row)
+            base_world_id = str(world_id or rs.get("id") or "").strip().lower()
+            world_token = rs.get("world") or rs.get("world_id") or rs.get("default_world")
+            add_world_alias(base_world_id, world_token)
+            add_world_alias(base_world_id, rs.get("id"))
+            add_world_alias(base_world_id, rs.get("world_role"))
+            add_world_alias(base_world_id, rs.get("default_world"))
+            for route in _safe_list(rs.get("associated_routes")):
+                add_world_alias(route, base_world_id)
+            add_world_alias(rs.get("route_binding"), base_world_id)
     for src in (_safe_list(director_contract.get("world_roles")), _safe_list(director_config.get("world_roles"))):
         for row in src:
-            rs = _safe_dict(row); add_world_alias(rs.get("world_role") or rs.get("role") or rs.get("id"), rs.get("world") or rs.get("world_id") or rs.get("default_world"))
+            rs = _safe_dict(row)
+            base_world_id = str(rs.get("id") or rs.get("world_role") or rs.get("default_world") or "").strip().lower()
+            world_token = rs.get("world") or rs.get("world_id") or rs.get("default_world")
+            add_world_alias(base_world_id, world_token)
+            add_world_alias(base_world_id, rs.get("id"))
+            add_world_alias(base_world_id, rs.get("world_role"))
+            add_world_alias(base_world_id, rs.get("default_world"))
+            for route in _safe_list(rs.get("associated_routes")):
+                add_world_alias(route, base_world_id)
+            add_world_alias(rs.get("route_binding"), base_world_id)
     for src in (_safe_dict(director_contract.get("route_location_rules")), _safe_dict(director_config.get("route_location_rules")), _safe_dict(route_semantics)):
         for route, row in src.items():
             rs = _safe_dict(row)
-            add_world_alias(rs.get("world_role") or route, rs.get("default_world") or rs.get("world") or rs.get("director_required_world"))
-    for row in _safe_list(timeline_contract.get("associated_routes")) + _safe_list(timeline_contract.get("associated_roles")):
-        rs = _safe_dict(row)
-        add_world_alias(rs.get("world_role") or rs.get("route"), rs.get("world") or rs.get("default_world"))
+            default_world = rs.get("default_world") or rs.get("world") or rs.get("director_required_world")
+            world_role = rs.get("world_role") or route
+            add_world_alias(route, default_world)
+            add_world_alias(world_role, default_world)
+            for allowed_world in _safe_list(rs.get("allowed_worlds")):
+                add_world_alias(route, allowed_world)
+                add_world_alias(world_role, allowed_world)
+                add_world_alias(default_world, allowed_world)
+    timeline_rows = [value for value in timeline_contract.values() if isinstance(value, dict)]
+    for rs in timeline_rows:
+        world_token = rs.get("world_role") or rs.get("world") or rs.get("default_world")
+        for route in _safe_list(rs.get("associated_routes")):
+            add_world_alias(route, world_token)
+        for role in _safe_list(rs.get("associated_roles")):
+            add_world_alias(role, world_token)
 
     return {
         "role_alias_map": {k: sorted(v) for k, v in role_alias_map.items()},
@@ -4086,17 +4137,35 @@ def _scene_satisfies_requirement(
         if token:
             role_tokens.add(token)
     for field in ("secondary_roles", "active_roles", "sceneActiveRoles", "refsUsed", "mustAppear"):
-        for item in _safe_list(row.get(field)):
+        field_value = row.get(field)
+        if field == "mustAppear" and isinstance(field_value, dict):
+            iterable = list(field_value.keys()) + [item for refs in field_value.values() for item in _safe_list(refs)]
+        else:
+            iterable = _safe_list(field_value)
+        for item in iterable:
             item_safe = _safe_dict(item)
             token = _canonical_subject_id(item_safe.get("role_id") if isinstance(item, dict) else item)
             if not token:
                 token = _canonical_subject_id(item_safe.get("id") or item_safe.get("role") or item_safe.get("entity_id"))
             if token:
                 role_tokens.add(token)
-    for item in _safe_list(row.get("refsUsedByRole")):
-        token = _canonical_subject_id(item)
-        if token:
-            role_tokens.add(token)
+    refs_used_by_role = row.get("refsUsedByRole")
+    if isinstance(refs_used_by_role, dict):
+        for role_key, refs in refs_used_by_role.items():
+            token = _canonical_subject_id(role_key)
+            if token:
+                role_tokens.add(token)
+            for item in _safe_list(refs):
+                token = _canonical_subject_id(_safe_dict(item).get("role_id") if isinstance(item, dict) else item)
+                if not token:
+                    token = _canonical_subject_id(_safe_dict(item).get("id") or _safe_dict(item).get("role"))
+                if token:
+                    role_tokens.add(token)
+    else:
+        for item in _safe_list(refs_used_by_role):
+            token = _canonical_subject_id(item)
+            if token:
+                role_tokens.add(token)
     route_visual_directive = _safe_dict(row.get("route_visual_directive"))
     for field in ("primary_role", "visual_focus_role", "speaker_role", "active_roles", "secondary_roles", "mustAppear", "refsUsed"):
         value = route_visual_directive.get(field)
@@ -4183,12 +4252,7 @@ def _count_requirement_coverage(
 def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict[str, Any]) -> tuple[bool, list[str]]:
     if not _is_clip_mode_package(package):
         return True, []
-    director_contract = _safe_dict(
-        _safe_dict(package).get("director_contract")
-        or _safe_dict(package).get("director_package")
-        or _safe_dict(_safe_dict(package).get("input")).get("director_contract")
-        or _safe_dict(_safe_dict(package).get("input")).get("director_package")
-    )
+    director_contract = _build_merged_director_contract_for_scene_validation(package)
     scene_distribution_contract = _safe_dict(director_contract.get("scene_distribution_contract"))
     route_semantics = _safe_dict(director_contract.get("route_semantics"))
     role_usage_contract = _normalize_role_usage_contract(director_contract, package)
@@ -4244,7 +4308,8 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["scene_plan_hardcoded_story_keyword_validation_disabled"] = bool(requirements)
     diagnostics["scene_plan_role_alias_map"] = _safe_dict(requirement_context.get("role_alias_map"))
     diagnostics["scene_plan_world_alias_map"] = _safe_dict(requirement_context.get("world_alias_map"))
-    diagnostics["scene_plan_episdodic_aliases_used"] = _safe_list(requirement_context.get("episodic_aliases_used"))
+    diagnostics["scene_plan_episodic_aliases_used"] = _safe_list(requirement_context.get("episodic_aliases_used"))
+    diagnostics["scene_plan_episdodic_aliases_used"] = diagnostics["scene_plan_episodic_aliases_used"]
     diagnostics["scene_plan_contract_requirement_coverage_match_reasons"] = {k: _safe_dict(v).get("match_reasons", []) for k, v in requirement_coverage.items()}
     if has_director_scene_requirements:
         diagnostics["scene_plan_contract_requirements_source"] = "director_contract.scene_requirements"
