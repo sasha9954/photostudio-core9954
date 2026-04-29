@@ -4100,6 +4100,81 @@ def _build_scene_requirement_context(package: dict[str, Any], scene_plan: dict[s
     }
 
 
+def _extract_role_tokens_from_scene_row(row: dict[str, Any]) -> set[str]:
+    role_tokens: set[str] = set()
+    role_hint_fields = {"role_id", "id", "role", "roleid", "character_id", "characterid", "entity_id", "entityid"}
+    field_names = {
+        "primary_role", "visual_focus_role", "speaker_role", "secondary_roles", "active_roles", "sceneactiveroles", "mustappear", "refsused", "refsusedbyrole",
+        "subject_role", "subject_roles", "character_roles", "cast_roles", "castroles", "roles", "participants", "characters", "main_character", "maincharacter",
+        "focus_character", "focuscharacter", "support_roles", "supporting_roles", "scene_casting", "casting", "role_casting", "composition", "visual_contract",
+        "continuity_contract", "route_visual_directive", "director_contract", "scene_contract",
+    }
+    def _walk(value: Any, *, parent: str = "") -> None:
+        if isinstance(value, dict):
+            for k, v in value.items():
+                key = str(k or "").strip()
+                key_l = key.lower()
+                key_token = _canonical_subject_id(key)
+                if key_token:
+                    role_tokens.add(key_token)
+                if key_l in role_hint_fields:
+                    val_token = _canonical_subject_id(v)
+                    if val_token:
+                        role_tokens.add(val_token)
+                if key_l in field_names or parent in field_names:
+                    val_token = _canonical_subject_id(v)
+                    if val_token:
+                        role_tokens.add(val_token)
+                _walk(v, parent=key_l)
+        elif isinstance(value, list):
+            for item in value:
+                _walk(item, parent=parent)
+        elif isinstance(value, str):
+            blob = value.lower()
+            for token in re.findall(r"\b[a-z]+_\d+\b|\b[a-z]+(?:_[a-z0-9]+)+\b", blob):
+                canonical = _canonical_subject_id(token)
+                if canonical:
+                    role_tokens.add(canonical)
+        else:
+            token = _canonical_subject_id(value)
+            if token:
+                role_tokens.add(token)
+    _walk(_safe_dict(row))
+    return role_tokens
+
+
+def _extract_world_tokens_from_scene_row(row: dict[str, Any]) -> set[str]:
+    world_tokens: set[str] = set()
+    world_fields = {"director_required_world", "scene_world", "expected_world", "world_role", "performance_world", "memory_world", "world", "required_world"}
+    containers = {"route_visual_directive", "scene_contract", "visual_contract", "composition", "location_contract"}
+    def _add(value: Any) -> None:
+        token = str(value or "").strip().lower()
+        if token and "_world" in token:
+            world_tokens.add(token)
+    row_safe = _safe_dict(row)
+    for f in world_fields:
+        _add(row_safe.get(f))
+    for container in containers:
+        c = _safe_dict(row_safe.get(container))
+        for f in world_fields:
+            _add(c.get(f))
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for k,v in value.items():
+                if str(k or "").strip().lower() in world_fields:
+                    _add(v)
+                _walk(v)
+        elif isinstance(value, list):
+            for i in value:
+                _walk(i)
+        elif isinstance(value, str):
+            for token in re.findall(r"\b[a-z]+(?:_[a-z0-9]+)+\b", value.lower()):
+                if token.endswith("_world"):
+                    world_tokens.add(token)
+    _walk(row_safe)
+    return world_tokens
+
+
 def _role_matches_expected(role_tokens: set[str], expected_role: str, role_alias_map: dict[str, list[str]]) -> bool:
     if expected_role in role_tokens:
         return True
@@ -4131,48 +4206,8 @@ def _scene_satisfies_requirement(
     if expected_route and route != expected_route:
         return False
 
-    role_tokens: set[str] = set()
-    for field in ("primary_role", "visual_focus_role", "speaker_role"):
-        token = _canonical_subject_id(row.get(field))
-        if token:
-            role_tokens.add(token)
-    for field in ("secondary_roles", "active_roles", "sceneActiveRoles", "refsUsed", "mustAppear"):
-        field_value = row.get(field)
-        if field == "mustAppear" and isinstance(field_value, dict):
-            iterable = list(field_value.keys()) + [item for refs in field_value.values() for item in _safe_list(refs)]
-        else:
-            iterable = _safe_list(field_value)
-        for item in iterable:
-            item_safe = _safe_dict(item)
-            token = _canonical_subject_id(item_safe.get("role_id") if isinstance(item, dict) else item)
-            if not token:
-                token = _canonical_subject_id(item_safe.get("id") or item_safe.get("role") or item_safe.get("entity_id"))
-            if token:
-                role_tokens.add(token)
-    refs_used_by_role = row.get("refsUsedByRole")
-    if isinstance(refs_used_by_role, dict):
-        for role_key, refs in refs_used_by_role.items():
-            token = _canonical_subject_id(role_key)
-            if token:
-                role_tokens.add(token)
-            for item in _safe_list(refs):
-                token = _canonical_subject_id(_safe_dict(item).get("role_id") if isinstance(item, dict) else item)
-                if not token:
-                    token = _canonical_subject_id(_safe_dict(item).get("id") or _safe_dict(item).get("role"))
-                if token:
-                    role_tokens.add(token)
-    else:
-        for item in _safe_list(refs_used_by_role):
-            token = _canonical_subject_id(item)
-            if token:
-                role_tokens.add(token)
+    role_tokens = _extract_role_tokens_from_scene_row(row)
     route_visual_directive = _safe_dict(row.get("route_visual_directive"))
-    for field in ("primary_role", "visual_focus_role", "speaker_role", "active_roles", "secondary_roles", "mustAppear", "refsUsed"):
-        value = route_visual_directive.get(field)
-        for item in _safe_list(value) if isinstance(value, list) else [value]:
-            token = _canonical_subject_id(_safe_dict(item).get("role_id") if isinstance(item, dict) else item)
-            if token:
-                role_tokens.add(token)
     role_alias_map = _safe_dict(ctx.get("role_alias_map"))
     if expected_roles and not all(_role_matches_expected(role_tokens, role, role_alias_map) for role in expected_roles):
         return False
@@ -4192,19 +4227,7 @@ def _scene_satisfies_requirement(
 
     if expected_world:
         world_alias_map = _safe_dict(ctx.get("world_alias_map"))
-        world_candidates = [
-            str(row.get("director_required_world") or "").strip().lower(),
-            str(row.get("performance_world") or "").strip().lower(),
-            str(row.get("memory_world") or "").strip().lower(),
-            str(row.get("world_role") or "").strip().lower(),
-            str(row.get("scene_world") or "").strip().lower(),
-            str(row.get("expected_world") or "").strip().lower(),
-            str(route_visual_directive.get("world") or "").strip().lower(),
-            str(route_visual_directive.get("world_role") or "").strip().lower(),
-            str(route_visual_directive.get("required_world") or "").strip().lower(),
-            str(route_visual_directive.get("director_required_world") or "").strip().lower(),
-        ]
-        world_candidates = [candidate for candidate in world_candidates if candidate]
+        world_candidates = list(_extract_world_tokens_from_scene_row(row))
         expected_aliases = {expected_world, *set(_safe_list(world_alias_map.get(expected_world)))}
         expanded_candidates: set[str] = set(world_candidates)
         for candidate in world_candidates:
@@ -4234,6 +4257,10 @@ def _count_requirement_coverage(
             if _scene_satisfies_requirement(_safe_dict(row), req, role_usage_contract, route_semantics, requirement_context):
                 matching_scene_indexes.append(idx)
                 match_reasons.append(f"scene_{idx}_matched")
+        expected_route = _to_director_route(req.get("expected_route"))
+        route_scene_indexes = [idx for idx, row in enumerate(scene_rows, start=1) if (not expected_route) or _to_director_route(_safe_dict(row).get("route")) == expected_route]
+        role_map = {str(idx): sorted(_extract_role_tokens_from_scene_row(_safe_dict(scene_rows[idx - 1]))) for idx in route_scene_indexes}
+        world_map = {str(idx): sorted(_extract_world_tokens_from_scene_row(_safe_dict(scene_rows[idx - 1]))) for idx in route_scene_indexes}
         coverage[req_id] = {
             "covered": bool(matching_scene_indexes),
             "matching_scene_indexes": matching_scene_indexes,
@@ -4245,6 +4272,15 @@ def _count_requirement_coverage(
             "expected_roles": _safe_list(req.get("expected_roles")),
             "expected_role_functions": _safe_list(req.get("expected_role_functions")),
             "source_text": str(req.get("source_text") or ""),
+            "failure_reasons": {
+                "expected_route": str(req.get("expected_route") or ""),
+                "matching_route_scene_indexes": route_scene_indexes,
+                "role_tokens_by_matching_route_scene": role_map,
+                "world_tokens_by_matching_route_scene": world_map,
+                "missing_roles": [r for r in _safe_list(req.get("expected_roles")) if r and not any(_role_matches_expected(set(v), _canonical_subject_id(r) or "", _safe_dict(_safe_dict(requirement_context).get("role_alias_map"))) for v in role_map.values())],
+                "missing_role_functions": [f for f in _safe_list(req.get("expected_role_functions")) if f],
+                "missing_world": bool(req.get("expected_world")) and not any(str(req.get("expected_world")).strip().lower() in set(v) for v in world_map.values()),
+            },
         }
     return coverage
 
@@ -4311,6 +4347,7 @@ def _validate_scene_plan_clip_contract(package: dict[str, Any], scene_plan: dict
     diagnostics["scene_plan_episodic_aliases_used"] = _safe_list(requirement_context.get("episodic_aliases_used"))
     diagnostics["scene_plan_episdodic_aliases_used"] = diagnostics["scene_plan_episodic_aliases_used"]
     diagnostics["scene_plan_contract_requirement_coverage_match_reasons"] = {k: _safe_dict(v).get("match_reasons", []) for k, v in requirement_coverage.items()}
+    diagnostics["scene_plan_contract_requirement_failure_reasons"] = {k: _safe_dict(v).get("failure_reasons", {}) for k, v in requirement_coverage.items() if not _scene_bool(_safe_dict(v).get("covered"))}
     if has_director_scene_requirements:
         diagnostics["scene_plan_contract_requirements_source"] = "director_contract.scene_requirements"
         diagnostics["scene_plan_contract_requirements_are_structured"] = True
@@ -5759,7 +5796,9 @@ def build_no_first_last_50_50_hard_route_map(package: dict[str, Any]) -> dict[st
     scene_count = len(segment_ids)
     if scene_count <= 0:
         return {}
-    ia2v_target = int(math.ceil(scene_count / 2))
+    creative_config = _normalize_creative_config(_safe_dict(_safe_dict(package.get("input")).get("creative_config")))
+    target_budget = compute_no_first_last_50_50_targets(scene_count, creative_config.get("extra_scene_policy"))
+    ia2v_target = max(0, int(target_budget.get("ia2v") or 0))
     max_consecutive_lipsync = 2
 
     candidate_scores: dict[str, float] = {}
@@ -16642,7 +16681,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_lipsync_streak_warning"] = str(route_budget_meta.get("lipsync_streak_warning") or "")
     diagnostics["scene_plan_route_budget_odd_extra_policy"] = str(route_budget_meta.get("scene_plan_route_budget_odd_extra_policy") or "")
     diagnostics["scene_plan_route_budget_expected_from_extra_policy"] = _safe_dict(route_budget_meta.get("scene_plan_route_budget_expected_from_extra_policy"))
-    diagnostics["scene_plan_route_budget_mismatch"] = not bool(route_budget_ok)
+    diagnostics["scene_plan_route_budget_mismatch"] = _safe_dict(diagnostics.get("scene_plan_route_budget_target")) != _safe_dict(diagnostics.get("scene_plan_route_budget_actual"))
     diagnostics["scene_plan_enum_invalid_detected"] = bool(scene_diag.get("scene_plan_enum_invalid_detected"))
     diagnostics["scene_plan_enum_invalid_count"] = int(scene_diag.get("scene_plan_enum_invalid_count") or 0)
     diagnostics["scene_plan_enum_invalid_field"] = str(scene_diag.get("scene_plan_enum_invalid_field") or "")
