@@ -2151,6 +2151,135 @@ def _build_i2v_memory_beat_directive(
     }
 
 
+
+def _postprocess_prompts_v11_route_aware(
+    raw_payload: dict[str, Any],
+    package: dict[str, Any],
+    prompt_rows: list[dict[str, Any]],
+    story_core: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    segments = _safe_list(raw_payload.get("segments"))
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    role_plan = _safe_dict(package.get("role_plan"))
+    package_input = _safe_dict(package.get("input"))
+
+    scene_by_segment_id: dict[str, dict[str, Any]] = {}
+    for row_raw in [*_safe_list(scene_plan.get("storyboard")), *_safe_list(scene_plan.get("scenes"))]:
+        row = _safe_dict(row_raw)
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        if segment_id:
+            scene_by_segment_id[segment_id] = row
+
+    role_by_segment_id: dict[str, dict[str, Any]] = {}
+    for row_raw in _safe_list(role_plan.get("scene_casting")):
+        row = _safe_dict(row_raw)
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or "").strip()
+        if segment_id:
+            role_by_segment_id[segment_id] = row
+
+    prompt_row_by_segment_id = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in prompt_rows
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+
+    compiled_contract = _safe_dict(_safe_dict(role_plan.get("compiled_contract")).get("global_contract"))
+    global_contract: dict[str, Any] = {
+        **_safe_dict(package.get("director_contract")),
+        **_safe_dict(package.get("director_config")),
+        **_safe_dict(package_input.get("director_contract")),
+        **_safe_dict(package_input.get("director_config")),
+        **compiled_contract,
+        "director_contract": {
+            **_safe_dict(package.get("director_contract")),
+            **_safe_dict(package_input.get("director_contract")),
+            **_safe_dict(compiled_contract.get("director_contract")),
+        },
+        "director_config": {
+            **_safe_dict(package.get("director_config")),
+            **_safe_dict(package_input.get("director_config")),
+            **_safe_dict(compiled_contract.get("director_config")),
+        },
+    }
+
+    diag: dict[str, Any] = {"scene_prompts_route_aware_final_postprocess_applied": True, "scene_prompts_route_aware_final_postprocess_segment_count": len(segments), "scene_prompts_route_aware_final_postprocess_i2v_count": 0, "scene_prompts_route_aware_final_postprocess_ia2v_count": 0, "scene_prompts_i2v_memory_beat_concretization_applied_count": 0, "scene_prompts_i2v_memory_beat_sources_by_segment": {}, "scene_prompts_i2v_memory_focus_selected_by_segment": {}, "scene_prompts_i2v_memory_text_was_generic_segments": [], "scene_prompts_requirement_source_text_used_count": 0, "scene_prompts_episodic_requirement_prompted_count": 0, "scene_prompts_i2v_generic_cutaway_warning_segments": [], "scene_prompts_ia2v_world_contamination_detected_count": 0, "scene_prompts_ia2v_world_contamination_fixed_count": 0, "scene_prompts_ia2v_contamination_high_confidence_segments": [], "scene_prompts_ia2v_contamination_location_sensitive_segments": [], "scene_prompts_ia2v_location_sensitive_allowed_segments": [], "scene_prompts_ia2v_contamination_reason_by_segment": {}}
+
+    for idx, segment_raw in enumerate(segments):
+        segment = _safe_dict(segment_raw)
+        segment_id = str(segment.get("segment_id") or segment.get("scene_id") or "").strip()
+        if not segment_id:
+            continue
+        route = str(segment.get("route") or "").strip().lower()
+        scene_row = _safe_dict(scene_by_segment_id.get(segment_id) or prompt_row_by_segment_id.get(segment_id))
+        role_row = _safe_dict(role_by_segment_id.get(segment_id))
+        if route == "i2v":
+            diag["scene_prompts_route_aware_final_postprocess_i2v_count"] += 1
+            memory = _build_i2v_memory_beat_directive(scene_row, role_row, segment_index=idx, global_contract=global_contract)
+            directive = str(memory.get("directive") or "").strip()
+            if directive:
+                for field in ("photo_prompt", "video_prompt"):
+                    segment[field] = _append_prompt_clause(str(segment.get(field) or ""), directive)
+                if str(segment.get("positive_video_prompt") or "").strip():
+                    segment["positive_video_prompt"] = _append_prompt_clause(str(segment.get("positive_video_prompt") or ""), directive)
+                diag["scene_prompts_i2v_memory_beat_concretization_applied_count"] += 1
+            if _safe_list(memory.get("source_labels")):
+                diag["scene_prompts_i2v_memory_beat_sources_by_segment"][segment_id] = _safe_list(memory.get("source_labels"))
+            if str(memory.get("focus_selected") or "").strip():
+                diag["scene_prompts_i2v_memory_focus_selected_by_segment"][segment_id] = str(memory.get("focus_selected") or "").strip()
+            if bool(memory.get("generic_memory_text")):
+                diag["scene_prompts_i2v_memory_text_was_generic_segments"].append(segment_id)
+            if bool(memory.get("requirement_used")):
+                diag["scene_prompts_requirement_source_text_used_count"] += 1
+            if bool(memory.get("episodic_requirement_prompted")):
+                diag["scene_prompts_episodic_requirement_prompted_count"] += 1
+            if _is_generic_memory_text(str(segment.get("photo_prompt") or ""), str(segment.get("video_prompt") or "")):
+                diag["scene_prompts_i2v_generic_cutaway_warning_segments"].append(segment_id)
+        elif route == "ia2v":
+            diag["scene_prompts_route_aware_final_postprocess_ia2v_count"] += 1
+            performance_contract = _get_contract_section(scene_row, global_contract, "performance_contract")
+            route_location_rules = _get_contract_section(scene_row, global_contract, "route_location_rules")
+            allowed_location_text = _build_ia2v_allowed_location_text(performance_contract=performance_contract, route_location_rules=route_location_rules, director_required_world=str(scene_row.get("director_required_world") or "").strip())
+            pre = " ".join([str(segment.get("photo_prompt") or ""), str(segment.get("video_prompt") or ""), str(segment.get("positive_video_prompt") or "")]).lower()
+            high=[t for t in _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS if t!="memory beat" and t in pre]
+            if _is_memory_beat_contamination(pre):
+                high.append("memory beat")
+            dis=[t for t in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS if t in pre and t not in allowed_location_text]
+            alw=[t for t in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS if t in pre and t in allowed_location_text]
+            contam=bool(high or dis)
+            if contam: diag["scene_prompts_ia2v_world_contamination_detected_count"] += 1
+            if high: diag["scene_prompts_ia2v_contamination_high_confidence_segments"].append(segment_id)
+            if dis: diag["scene_prompts_ia2v_contamination_location_sensitive_segments"].append(segment_id)
+            if alw: diag["scene_prompts_ia2v_location_sensitive_allowed_segments"].append(segment_id)
+            if high or dis or alw:
+                diag["scene_prompts_ia2v_contamination_reason_by_segment"][segment_id]=[]
+                if high: diag["scene_prompts_ia2v_contamination_reason_by_segment"][segment_id].append("high_confidence:"+",".join(sorted(dict.fromkeys(high))))
+                if dis: diag["scene_prompts_ia2v_contamination_reason_by_segment"][segment_id].append("location_sensitive_disallowed:"+",".join(sorted(dict.fromkeys(dis))))
+                if alw: diag["scene_prompts_ia2v_contamination_reason_by_segment"][segment_id].append("location_sensitive_allowed:"+",".join(sorted(dict.fromkeys(alw))))
+
+            speaker_role = str(scene_row.get("speaker_role") or scene_row.get("vocal_owner_role") or "character_1").strip()
+            performer_canon = f"Performer-first frame of {speaker_role}; vocal owner is on-camera and dominant. Mouth open or slightly open in a natural singing shape; readable face, mouth, and eyes with emotional singing delivery. Controlled shoulders, hands, and upper-body motion that supports performance, never action choreography or cutaway storytelling."
+            core = [
+                f"Performance meaning: {str(performance_contract.get('ia2v_meaning') or '').strip()}" if str(performance_contract.get('ia2v_meaning') or '').strip() else "",
+                f"Performance location anchor: {str(performance_contract.get('performance_location') or '').strip()}" if str(performance_contract.get('performance_location') or '').strip() else "",
+                f"Performance focus elements: {', '.join(str(x).strip() for x in _safe_list(performance_contract.get('performance_focus_elements')) if str(x).strip())}" if _safe_list(performance_contract.get('performance_focus_elements')) else "",
+            ]
+            if contam:
+                segment["photo_prompt"] = _append_compact_clauses("", [performer_canon, *core])
+                segment["video_prompt"] = _append_compact_clauses(_IA2V_VIDEO_PROMPT_CANON, [performer_canon, *core])
+                segment["positive_video_prompt"] = str(segment.get("video_prompt") or "")
+            else:
+                segment["photo_prompt"] = _append_compact_clauses(str(segment.get("photo_prompt") or ""), [performer_canon, *core])
+                segment["video_prompt"] = _append_compact_clauses(str(segment.get("video_prompt") or ""), [performer_canon, *core])
+                segment["positive_video_prompt"] = _append_compact_clauses(str(segment.get("positive_video_prompt") or segment.get("video_prompt") or ""), [performer_canon, *core])
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+                segment[field] = _strip_ia2v_contamination_clauses(str(segment.get(field) or ""), allowed_location_text=allowed_location_text)
+            post=(" ".join([str(segment.get("photo_prompt") or ""), str(segment.get("video_prompt") or ""), str(segment.get("positive_video_prompt") or "")])).lower()
+            post_bad = any(t in post for t in _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS if t != "memory beat") or _is_memory_beat_contamination(post) or any(t in post and t not in allowed_location_text for t in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS)
+            if contam and not post_bad:
+                diag["scene_prompts_ia2v_world_contamination_fixed_count"] += 1
+    raw_payload["segments"] = segments
+    return raw_payload, diag
+
 def _build_scenes_core_image_prompt(scene: dict[str, Any]) -> str:
     camera = _safe_dict(scene.get("camera"))
     prompt_parts: list[str] = []
@@ -5319,6 +5448,8 @@ def build_gemini_scene_prompts(
         story_core,
     )
     diagnostics.update(identity_sanitize_diag)
+    raw_payload, route_aware_diag = _postprocess_prompts_v11_route_aware(raw_payload, package, prompt_rows, story_core)
+    diagnostics.update(route_aware_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     if shared_space_validation_errors:
