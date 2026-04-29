@@ -6217,11 +6217,37 @@ def _repair_scene_plan_final_semantics(
             if not role_token:
                 continue
             row_safe = _safe_dict(role_row)
-            funcs = {str(v).strip().lower() for v in _safe_list(row_safe.get("functions")) if str(v).strip()}
+            funcs: set[str] = set()
+            single_fn = str(row_safe.get("function") or "").strip().lower()
+            if single_fn:
+                funcs.add(single_fn)
+            for value in _safe_list(row_safe.get("functions")):
+                fn_token = str(value).strip().lower()
+                if fn_token:
+                    funcs.add(fn_token)
             routes = {str(v).strip().lower() for v in _safe_list(row_safe.get("routes")) if str(v).strip()}
             if "memory_subject" in funcs and "i2v" in routes:
                 return role_token
         return ""
+
+    def _role_is_i2v_compatible(role_token: str) -> bool:
+        role_row = _safe_dict(role_usage_contract.get(role_token))
+        if not role_row:
+            return False
+        routes = {str(v).strip().lower() for v in _safe_list(role_row.get("routes")) if str(v).strip()}
+        if "i2v" not in routes:
+            return False
+        funcs: set[str] = set()
+        single_fn = str(role_row.get("function") or "").strip().lower()
+        if single_fn:
+            funcs.add(single_fn)
+        for value in _safe_list(role_row.get("functions")):
+            fn_token = str(value).strip().lower()
+            if fn_token:
+                funcs.add(fn_token)
+        if funcs.intersection({"performer", "singer", "speaker"}):
+            return False
+        return True
 
     def _upstream_primary_role(segment_id: str, row: dict[str, Any]) -> str:
         core_row = _safe_dict(core_rows_by_segment.get(segment_id))
@@ -6277,7 +6303,8 @@ def _repair_scene_plan_final_semantics(
                 route_lock_updates[segment_id] = "i2v"
                 if _clean_i2v_lipsync_fields(row):
                     changed = True
-                if not _canonical_subject_id(row.get("primary_role")):
+                current_primary_role = _canonical_subject_id(row.get("primary_role"))
+                if not _role_is_i2v_compatible(current_primary_role):
                     memory_role = _memory_subject_role_candidate()
                     if memory_role:
                         row["primary_role"] = memory_role
@@ -6285,6 +6312,11 @@ def _repair_scene_plan_final_semantics(
                         if memory_role not in row_roles:
                             row_roles.append(memory_role)
                         row["active_roles"] = row_roles
+                        role_functions = [str(v).strip() for v in _safe_list(row.get("role_functions")) if str(v).strip()]
+                        role_functions_lower = {v.lower() for v in role_functions}
+                        if "memory_subject" not in role_functions_lower:
+                            role_functions.append("memory_subject")
+                        row["role_functions"] = role_functions
                         i2v_rows_memory_subject_filled_count += 1
                         i2v_default_role_source = "role_usage_contract.memory_subject"
                         changed = True
@@ -16709,7 +16741,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 route_locks_by_segment,
                 overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else True,
             )
-            retry_scene_plan, _ = _repair_scene_plan_final_semantics(
+            retry_scene_plan, retry_final_semantic_repairs = _repair_scene_plan_final_semantics(
                 package=package,
                 scene_plan=retry_scene_plan,
             )
@@ -16727,6 +16759,10 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             )
             diagnostics = _safe_dict(package.get("diagnostics"))
             diagnostics["camera_energy_applied_to_scene_count"] = int(retry_camera_energy_applied_count)
+            diagnostics["scene_plan_final_semantic_repairs"] = dict(retry_final_semantic_repairs)
+            diagnostics["scene_plan_i2v_default_role_source"] = str(retry_final_semantic_repairs.get("i2v_default_role_source") or "")
+            diagnostics["scene_plan_i2v_rows_forced_to_vocal_owner_count"] = int(retry_final_semantic_repairs.get("i2v_rows_forced_to_vocal_owner_count") or 0)
+            diagnostics["scene_plan_i2v_rows_memory_subject_filled_count"] = int(retry_final_semantic_repairs.get("i2v_rows_memory_subject_filled_count") or 0)
             package["diagnostics"] = diagnostics
             retry_result["scene_plan"] = retry_scene_plan
             clip_retry_ok, clip_retry_errors = _validate_scene_plan_clip_contract(package, retry_scene_plan)
