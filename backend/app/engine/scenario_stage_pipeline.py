@@ -9389,6 +9389,40 @@ def _sanitize_clip_package_before_downstream(package: dict[str, Any]) -> dict[st
     return package
 
 
+def _merge_director_contracts(base: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = deepcopy(_safe_dict(base))
+    for key, incoming_value in _safe_dict(incoming).items():
+        existing_value = merged.get(key)
+        if isinstance(existing_value, dict) and isinstance(incoming_value, dict):
+            merged[key] = _merge_director_contracts(existing_value, incoming_value)
+            continue
+        if isinstance(existing_value, list) and isinstance(incoming_value, list) and not existing_value and incoming_value:
+            merged[key] = deepcopy(incoming_value)
+            continue
+        if incoming_value not in (None, "", [], {}):
+            merged[key] = deepcopy(incoming_value)
+    return merged
+
+
+def _extract_contract_like_source(source: Any) -> dict[str, Any]:
+    source_dict = _safe_dict(source)
+    if not source_dict:
+        return {}
+    contract_keys = {
+        "audio_contract",
+        "clip_contract",
+        "role_usage_contract",
+        "character_contract",
+        "route_contract",
+        "prompt_policy",
+        "world_roles",
+    }
+    if any(key in source_dict for key in contract_keys):
+        return source_dict
+    nested_contract = _safe_dict(source_dict.get("director_contract"))
+    return nested_contract
+
+
 def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics = _safe_dict(package.get("diagnostics"))
     if not _is_clip_mode_package(package):
@@ -9398,13 +9432,20 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
 
     package = _sanitize_clip_package_before_downstream(package)
     input_pkg = _safe_dict(package.get("input"))
-    contract_sources = [
-        _safe_dict(input_pkg.get("director_contract")),
-        _safe_dict(input_pkg.get("director_config")),
-        _safe_dict(package.get("director_contract")),
-        _safe_dict(package.get("director_config")),
+    contract_source_rows = [
+        ("input.director_contract", _safe_dict(input_pkg.get("director_contract"))),
+        ("input.director_config", _safe_dict(input_pkg.get("director_config"))),
+        ("input.director_package", _extract_contract_like_source(input_pkg.get("director_package"))),
+        ("package.director_contract", _safe_dict(package.get("director_contract"))),
+        ("package.director_config", _safe_dict(package.get("director_config"))),
+        ("package.director_package", _extract_contract_like_source(package.get("director_package"))),
     ]
-    contract = next((row for row in contract_sources if row), {})
+    contract: dict[str, Any] = {}
+    merged_source_keys: list[str] = []
+    for source_name, source_dict in contract_source_rows:
+        if source_dict:
+            contract = _merge_director_contracts(contract, source_dict)
+            merged_source_keys.append(source_name)
     audio_contract = _safe_dict(contract.get("audio_contract"))
     clip_contract = _safe_dict(contract.get("clip_contract"))
     role_usage_contract = _safe_dict(contract.get("role_usage_contract"))
@@ -9423,9 +9464,10 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
     preferred_targets: list[tuple[dict[str, Any], str]] = []
     creative_config = _safe_dict(input_pkg.get("creative_config"))
     preferred_targets.append((creative_config, "preferred_routes"))
-    preferred_targets.append((_safe_dict(route_contract), "preferred_routes"))
+    preferred_targets.append((route_contract, "preferred_routes"))
     scene_plan = _safe_dict(package.get("scene_plan"))
-    preferred_targets.append((_safe_dict(scene_plan.get("route_contract")), "preferred_routes"))
+    scene_route_contract = _safe_dict(scene_plan.get("route_contract"))
+    preferred_targets.append((scene_route_contract, "preferred_routes"))
     removed_forbidden_routes: list[str] = []
     for owner, key in preferred_targets:
         routes = _safe_list(owner.get(key))
@@ -9439,30 +9481,50 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
                 continue
             cleaned.append(norm)
         owner[key] = cleaned
+    contract["route_contract"] = route_contract
     if creative_config:
         input_pkg["creative_config"] = creative_config
+    input_director_config = _safe_dict(input_pkg.get("director_config"))
+    if input_director_config:
+        input_director_config["route_contract"] = route_contract
+        input_pkg["director_config"] = input_director_config
+    package_director_config = _safe_dict(package.get("director_config"))
+    if package_director_config:
+        package_director_config["route_contract"] = route_contract
+        package["director_config"] = package_director_config
     package["input"] = input_pkg
     if scene_plan:
+        scene_plan["route_contract"] = scene_route_contract
         package["scene_plan"] = scene_plan
 
     audio_map = _safe_dict(package.get("audio_map"))
     vocal_profile = _safe_dict(audio_map.get("vocal_profile"))
-    performer_role = ""
-    if any(
-        str(item or "").strip()
-        for item in (
-            audio_contract.get("vocal_owner_role"),
-            audio_contract.get("vocal_owner_role_id"),
-            clip_contract.get("vocal_owner_role"),
-        )
-    ):
+    def _first_non_empty_string(*values: Any) -> str:
+        for value in values:
+            token = str(value or "").strip()
+            if token:
+                return token
+        return ""
+
+    performer_role_source = ""
+    performer_role = _first_non_empty_string(
+        audio_contract.get("vocal_owner_role"),
+        audio_contract.get("vocal_owner_role_id"),
+        clip_contract.get("vocal_owner_role"),
+        clip_contract.get("vocal_owner_role_id"),
+    )
+    if performer_role:
+        performer_role_source = "audio_contract" if _first_non_empty_string(audio_contract.get("vocal_owner_role"), audio_contract.get("vocal_owner_role_id")) else "clip_contract"
+    if not performer_role:
+        for role_id, role_row in role_usage_contract.items():
+            if not isinstance(role_row, dict):
+                continue
+            if str(_safe_dict(role_row).get("function") or "").strip().lower() == "performer":
+                performer_role = str(role_id).strip()
+                performer_role_source = "role_usage_contract"
+                break
+    if not performer_role:
         performer_role = "character_1"
-    for role_id, role_row in role_usage_contract.items():
-        if not isinstance(role_row, dict):
-            continue
-        if str(_safe_dict(role_row).get("function") or "").strip().lower() == "performer":
-            performer_role = str(role_id).strip() or "character_1"
-            break
     if performer_role:
         audio_map["vocal_owner_role"] = performer_role
         audio_map["vocal_owner_confidence"] = max(float(audio_map.get("vocal_owner_confidence") or 0.0), 0.95)
@@ -9483,6 +9545,8 @@ def _sanitize_clip_pipeline_package_from_director_contract(package: dict[str, An
     diagnostics["clip_sanitizer_assigned_roles_normalized"] = normalized_roles
     diagnostics["clip_sanitizer_audio_window_count"] = window_count
     diagnostics["clip_sanitizer_expected_route_counts"] = {"ia2v": expected_ia2v, "i2v": expected_i2v, "first_last": 0}
+    diagnostics["clip_sanitizer_contract_source_keys"] = merged_source_keys
+    diagnostics["clip_sanitizer_performer_role_source"] = performer_role_source
     diagnostics["clip_sanitizer_contract_keys"] = {
         "role_usage_contract": bool(role_usage_contract),
         "character_contract": bool(character_contract),
