@@ -1609,7 +1609,8 @@ def _normalize_clip_contract_aliases(
                 "scene_distribution_contract.ai_decides",
                 "scene_distribution_contract.user_approved",
             ])
-    if has_explicit_route_targets and ratios_explicit and first_last_disabled and not has_decision:
+    current_has_decision = bool(_first_non_empty_string(scene_distribution.get("user_approved_or_ai_decides")))
+    if has_explicit_route_targets and ratios_explicit and first_last_disabled and not current_has_decision:
         scene_distribution["user_approved_or_ai_decides"] = "ai_decides"
         scene_distribution["ai_decides"] = True
         scene_distribution["user_approved"] = False
