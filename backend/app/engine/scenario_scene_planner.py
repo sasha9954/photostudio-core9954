@@ -1650,10 +1650,14 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         )
     feedback_block = ""
     if validation_feedback:
-        feedback_block = (
-            "PREVIOUS OUTPUT FAILED ROUTE-BUDGET VALIDATION.\n"
-            f"Fix exactly: {validation_feedback}\n"
-        )
+        lowered_feedback = str(validation_feedback).strip().lower()
+        if "scene_requirement_missing" in lowered_feedback or "requirement" in lowered_feedback:
+            feedback_title = "PREVIOUS OUTPUT FAILED SCENE REQUIREMENT COVERAGE VALIDATION."
+        elif "route_budget_mismatch" in lowered_feedback:
+            feedback_title = "PREVIOUS OUTPUT FAILED ROUTE-BUDGET VALIDATION."
+        else:
+            feedback_title = "PREVIOUS OUTPUT FAILED VALIDATION."
+        feedback_block = f"{feedback_title}\nFix exactly: {validation_feedback}\n"
     hard_route_map = _safe_dict(
         _safe_dict(_safe_dict(context.get("clip_scene_policy")).get("route_budget_contract")).get("hard_route_assignments_by_segment")
     )
@@ -1699,11 +1703,11 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
             "- i2v rows: prefer non-primary character_1 framing, but character_1 MAY still appear as silhouette/walking/background presence.\n"
             "World beats must be truly world-driven (social texture, pressure, threshold, aftermath, instrumental release) with no fake singer-presence.\n"
             f"{requirement_goals_block}"
-            f"Fix exactly: {validation_feedback}\n"
+            f"{feedback_block}"
             "Output contract:\n"
             "{\n"
             '  "scenes_version":"1.1",\n'
-            '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","story_beat_type":"physical_event|vocal_emotion|state_transition","photo_staging_goal":"","ltx_video_goal":"","background_story_evidence":"","foreground_performance_rule":"","object_action_allowed":true,"singing_readiness_required":false,"ia2v_photo_readability_notes":"","speaker_role":"","vocal_owner_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\n'
+            '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","story_beat_type":"physical_event|vocal_emotion|state_transition","photo_staging_goal":"","ltx_video_goal":"","background_story_evidence":"","foreground_performance_rule":"","object_action_allowed":true,"singing_readiness_required":false,"ia2v_photo_readability_notes":"","covered_requirement_ids":[],"requirement_ids":[],"primary_role":"","active_roles":[],"secondary_roles":[],"role_functions":[],"director_required_world":"","world_role":"","speaker_role":"","vocal_owner_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\n'
             "}\n\n"
             f"SCENE_PLANNING_CONTEXT:\n{json.dumps(_compact_prompt_payload(compact_context), ensure_ascii=False)}"
         )
@@ -1784,7 +1788,7 @@ def _build_prompt(context: dict[str, Any], *, validation_feedback: str = "", pro
         "Output contract:\\n"
         "{\\n"
         '  "scenes_version":"1.1",\\n'
-        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","story_beat_type":"physical_event|vocal_emotion|state_transition","photo_staging_goal":"","ltx_video_goal":"","background_story_evidence":"","foreground_performance_rule":"","object_action_allowed":true,"singing_readiness_required":false,"ia2v_photo_readability_notes":"","speaker_role":"","vocal_owner_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
+        '  "storyboard":[{"segment_id":"seg_01","route":"i2v","route_reason":"","route_selection_reason":"","scene_goal":"","narrative_function":"","story_beat_type":"physical_event|vocal_emotion|state_transition","photo_staging_goal":"","ltx_video_goal":"","background_story_evidence":"","foreground_performance_rule":"","object_action_allowed":true,"singing_readiness_required":false,"ia2v_photo_readability_notes":"","covered_requirement_ids":[],"requirement_ids":[],"primary_role":"","active_roles":[],"secondary_roles":[],"role_functions":[],"director_required_world":"","world_role":"","speaker_role":"","vocal_owner_role":"","spoken_line":"","speaker_confidence":0.0,"lip_sync_allowed":false,"lip_sync_priority":"none","mouth_visible_required":false,"listener_reaction_allowed":true,"reaction_role":"","visual_motion":{"subject_motion":"","camera_intent":"","pacing":"stable","energy_alignment":"match"},"composition":{"framing":"medium","subject_priority":"hero","layout":"centered","depth_strategy":"layered"},"audio_visual_sync":"","starts_from_previous_logic":"","ends_with_state":"","continuity_with_next":"","potential_contradiction":"","fix_if_needed":"","lip_sync_shot_variant":"","performance_pose":"","camera_angle":"","gesture":"","location_zone":"","mouth_readability":"","why_this_lip_sync_shot_is_different":""}]\\n'
         "}\\n\\n"
         f"SCENE_PLANNING_CONTEXT:\\n{json.dumps(_compact_prompt_payload(context), ensure_ascii=False)}"
     )
@@ -1797,11 +1801,19 @@ def _route_strategy_active(creative_config: dict[str, Any]) -> bool:
     return mode in {"preset", "custom_counts"} and total_target > 0
 
 
-def compute_no_first_last_50_50_targets(scene_count: int) -> dict[str, int]:
+def compute_no_first_last_50_50_targets(scene_count: int, *, extra_scene_policy: str = "add_i2v") -> dict[str, int]:
     n = max(0, int(scene_count or 0))
+    policy = str(extra_scene_policy or "add_i2v").strip().lower()
+    odd_extra_to_i2v = policy == "add_i2v"
+    if n % 2 == 0:
+        i2v = n // 2
+    elif odd_extra_to_i2v:
+        i2v = (n + 1) // 2
+    else:
+        i2v = n // 2
     return {
-        "i2v": n // 2,
-        "ia2v": (n + 1) // 2,
+        "i2v": i2v,
+        "ia2v": n - i2v,
         "first_last": 0,
     }
 
@@ -2035,7 +2047,8 @@ def _route_budget_target_for_plan(total_scenes: int, creative_config: dict[str, 
         return budget, True
     preset_name = str(creative_config.get("route_strategy_preset") or "").strip().lower()
     if preset_name == "no_first_last_50_50_0":
-        return compute_no_first_last_50_50_targets(total_scenes), True
+        extra_scene_policy = str(creative_config.get("extra_scene_policy") or "add_i2v").strip().lower()
+        return compute_no_first_last_50_50_targets(total_scenes, extra_scene_policy=extra_scene_policy), True
     if not _route_strategy_active(creative_config):
         return _target_route_budget(total_scenes), False
     base_scene_count = max(1, int(creative_config.get("base_scene_count") or 8))
