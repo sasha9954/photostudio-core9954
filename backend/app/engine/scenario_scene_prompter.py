@@ -213,11 +213,18 @@ _I2V_ROUTE_INCOMPATIBLE_POSITIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bcharacter_1\b.{0,40}\b(singer|performer)\b"),
 )
 _I2V_ROUTE_INCOMPATIBLE_PROTECTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"(?i)\bno\b"),
-    re.compile(r"(?i)\boffscreen\b"),
-    re.compile(r"(?i)\bnon[- ]?dominant\b"),
-    re.compile(r"(?i)\bavoid\b"),
-    re.compile(r"(?i)\bwithout\b"),
+    re.compile(r"(?i)\bno\s+lip[- ]?sync\b"),
+    re.compile(r"(?i)\bno\s+lipsync\b"),
+    re.compile(r"(?i)\bno\s+singer[- ]?first\b"),
+    re.compile(r"(?i)\bno\s+performer[- ]?first\b"),
+    re.compile(r"(?i)\bno\s+mouth[- ]?readable\b"),
+    re.compile(r"(?i)\bno\s+visible\s+vocal\s+performance\b"),
+    re.compile(r"(?i)\bwithout\s+lip[- ]?sync\b"),
+    re.compile(r"(?i)\bavoid\s+lip[- ]?sync\b"),
+    re.compile(r"(?i)\bavoid\s+singer[- ]?first\b"),
+    re.compile(r"(?i)\bsinger\s+remains\s+offscreen\b"),
+    re.compile(r"(?i)\bvocalist\s+offscreen\b"),
+    re.compile(r"(?i)\boffscreen\s+or\s+non[- ]?dominant\b"),
 )
 _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS: tuple[str, ...] = (
     "memory/action beat:",
@@ -2328,6 +2335,8 @@ def _postprocess_prompts_v11_route_aware(
     diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_count"] = 0
     diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_segments"] = []
     diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_fields"] = {}
+    diag["scene_prompts_i2v_route_incompatible_prompt_empty_after_cleanup_segments"] = []
+    diag["scene_prompts_i2v_route_incompatible_prompt_fallback_used_count"] = 0
 
     for idx, segment_raw in enumerate(segments):
         segment = _safe_dict(segment_raw)
@@ -2366,11 +2375,24 @@ def _postprocess_prompts_v11_route_aware(
                         "preview": str(memory.get("route_incompatible_i2v_text_preview") or "").strip(),
                     }
                 )
+            i2v_prompt_fallback = str(memory.get("directive") or "").strip() or (
+                "Visual memory/action scene grounded in the current contract. No lip-sync framing."
+            )
             cleaned_fields: list[str] = []
             for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
                 cleaned, changed = _strip_i2v_route_incompatible_clauses(str(segment.get(field) or ""))
                 if changed:
-                    segment[field] = cleaned
+                    if cleaned.strip():
+                        segment[field] = cleaned
+                    else:
+                        diag["scene_prompts_i2v_route_incompatible_prompt_empty_after_cleanup_segments"].append(
+                            {"segment_id": segment_id, "field": field}
+                        )
+                        if field in ("photo_prompt", "video_prompt"):
+                            segment[field] = i2v_prompt_fallback
+                        else:
+                            segment[field] = str(segment.get("video_prompt") or "").strip() or i2v_prompt_fallback
+                        diag["scene_prompts_i2v_route_incompatible_prompt_fallback_used_count"] += 1
                     cleaned_fields.append(field)
             if cleaned_fields:
                 diag["scene_prompts_i2v_route_incompatible_prompt_cleaned_count"] += 1
