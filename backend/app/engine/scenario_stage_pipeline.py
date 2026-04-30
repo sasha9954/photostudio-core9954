@@ -16156,6 +16156,23 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     )
     if director_mode == "clip" and str(audio_map.get("vocal_owner_role") or "unknown") == "unknown" and role_count >= 2:
         must_ask_user.append("Кто поёт?")
+    connected_input_observations = {
+        "characters_connected": [key for key in ("character_1", "character_2", "character_3") if _safe_list(refs_present.get(key))],
+        "animal_connected": bool(_safe_list(refs_present.get("animal"))),
+        "group_connected": bool(_safe_list(refs_present.get("group"))),
+        "location_connected": bool(_safe_list(refs_present.get("location"))),
+        "style_connected": bool(_safe_list(refs_present.get("style"))),
+        "props_connected": bool(_safe_list(refs_present.get("props"))),
+        "video_ref_connected": bool(_safe_list(refs_present.get("video_ref"))),
+    }
+    if connected_input_observations["animal_connected"]:
+        must_ask_user.append("Какую роль играет животное?")
+    if connected_input_observations["group_connected"]:
+        must_ask_user.append("Группа — это активные участники сцены или фон?")
+    if connected_input_observations["location_connected"]:
+        must_ask_user.append("Локация — основной мир всего ролика или только отдельные сцены?")
+    if connected_input_observations["video_ref_connected"]:
+        must_ask_user.append("Видео-референс использовать для камеры, движения, монтажа, атмосферы или поведения?")
     likely_min = max(1, len(scene_candidates) or max(1, len(segments) // 2))
     likely_max = max(likely_min, len(scene_candidates) or len(segments))
     audio_map["mode_audio_reading"] = {
@@ -16169,12 +16186,14 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
             "first_last_possible_windows": [str(_safe_dict(s).get("segment_id") or "") for s in segments if bool(_safe_dict(s).get("first_last_candidate"))][:4],
         },
         "warnings": warnings,
+        "connected_input_observations": connected_input_observations,
     }
     audio_map["director_audio_brief"] = {
         "summary": "Audio Map даёт анализ тайминга/фраз и подсказки для режиссёра, но не финальный сценарий.",
         "best_use_of_audio": "Использовать как source of truth по таймингу и переходам, а финальные сцены определить в Director V2 chat/draft.",
         "likely_scene_count_range": {"min": likely_min, "max": likely_max, "reason": "Оценка на базе segment/scenario candidates без авторинга финального плана."},
         "must_ask_user": must_ask_user,
+        "connected_input_observations": connected_input_observations,
     }
 
     diagnostics["audio_map_analysis_mode"] = str(audio_map.get("analysis_mode") or "audio_map_v1_1_strict")

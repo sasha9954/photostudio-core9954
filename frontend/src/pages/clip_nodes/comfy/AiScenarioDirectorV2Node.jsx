@@ -8,6 +8,8 @@ const INPUTS = [
   { id: "ref_character_1", label: "Персонаж 1", tone: "character", placeholder: "Референс главного персонажа" },
   { id: "ref_character_2", label: "Персонаж 2", tone: "character", placeholder: "Референс второго персонажа" },
   { id: "ref_character_3", label: "Персонаж 3", tone: "character", placeholder: "Референс третьего персонажа" },
+  { id: "ref_animal", label: "Животное", tone: "animal", placeholder: "Животное / существо / питомец" },
+  { id: "ref_group", label: "Группа", tone: "group", placeholder: "Группа / толпа / команда / массовка" },
   { id: "ref_location", label: "Локация", tone: "location", placeholder: "Референс локации" },
   { id: "ref_style", label: "Стиль", tone: "style", placeholder: "Визуальный стиль / настроение" },
   { id: "video_ref_in", label: "Видео-референс", tone: "video", placeholder: "Видео для ориентира" },
@@ -38,7 +40,7 @@ const DIRECTOR_MODE_OPTIONS = [
 ];
 const DIRECTOR_FORMAT_OPTIONS = ["9:16", "16:9", "1:1"];
 
-const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref-character)", location: "var(--family-ref-location)", style: "var(--family-ref-style)", video: "var(--family-video-ref)", props: "var(--family-ref-items)", text: "var(--family-text)" };
+const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref-character)", animal: "var(--family-ref-animal)", group: "var(--family-ref-group)", location: "var(--family-ref-location)", style: "var(--family-ref-style)", video: "var(--family-video-ref)", props: "var(--family-ref-items)", text: "var(--family-text)" };
 const fmt = (v) => Number(v || 0).toFixed(2);
 const isObject = (v) => !!v && typeof v === "object";
 const STAGE_ORDER = ["core", "roles", "scenes", "prompts", "final_video_prompt", "final"];
