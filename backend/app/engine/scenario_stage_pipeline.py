@@ -16146,34 +16146,52 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     connected_refs_present = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
     refs_inventory = _safe_dict(package.get("refs_inventory") or input_pkg.get("refs_inventory"))
 
+    def _connected_value_present(value: Any) -> bool:
+        if isinstance(value, list):
+            return len(value) > 0
+        if isinstance(value, dict):
+            return bool(value)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return bool(value.strip())
+        return bool(value)
+
     def _has_connected_ref(input_pkg_row: dict[str, Any], *keys: str) -> bool:
         connected_summary_row = _safe_dict(input_pkg_row.get("connected_context_summary"))
         refs_present_row = _safe_dict(connected_summary_row.get("refsPresentByRole"))
         connected_refs_present_row = _safe_dict(connected_summary_row.get("connectedRefsPresentByRole"))
         refs_inventory_row = _safe_dict(package.get("refs_inventory") or input_pkg_row.get("refs_inventory"))
+        aliases_by_key = {
+            "character_1": ["character_1", "ref_character_1"],
+            "character_2": ["character_2", "ref_character_2"],
+            "character_3": ["character_3", "ref_character_3"],
+            "animal": ["animal", "ref_animal"],
+            "group": ["group", "ref_group"],
+            "location": ["location", "ref_location"],
+            "style": ["style", "ref_style"],
+            "props": ["props", "ref_props", "ref_items"],
+            "video_ref": ["video_ref", "video_ref_in", "video_file_in", "video_link_in"],
+        }
         for raw_key in keys:
             key = str(raw_key or "").strip()
             if not key:
                 continue
-            if _safe_list(refs_present_row.get(key)) or _safe_list(connected_refs_present_row.get(key)):
-                return True
-            if refs_inventory_row.get(key) or refs_inventory_row.get(f"ref_{key}"):
-                return True
-            if key == "video_ref" and (
-                refs_inventory_row.get("video_ref_in")
-                or refs_inventory_row.get("video_file_in")
-                or refs_inventory_row.get("video_link_in")
-            ):
-                return True
-            if key == "animal" and refs_inventory_row.get("ref_animal"):
-                return True
-            if key == "group" and refs_inventory_row.get("ref_group"):
-                return True
+            aliases = aliases_by_key.get(key, [key])
+            for alias in aliases:
+                if _connected_value_present(refs_present_row.get(alias)):
+                    return True
+                if _connected_value_present(connected_refs_present_row.get(alias)):
+                    return True
+                if _connected_value_present(refs_inventory_row.get(alias)):
+                    return True
+                if not str(alias).startswith("ref_") and _connected_value_present(refs_inventory_row.get(f"ref_{alias}")):
+                    return True
         return False
 
     refs_character_count = sum(
         1 for key in ("character_1", "character_2", "character_3")
-        if _safe_list(refs_present.get(key)) or _safe_list(connected_refs_present.get(key)) or refs_inventory.get(f"ref_{key}")
+        if _has_connected_ref(input_pkg, key)
     )
     assigned_role_count = len(_safe_dict(input_pkg.get("assigned_roles")))
     role_count = max(
