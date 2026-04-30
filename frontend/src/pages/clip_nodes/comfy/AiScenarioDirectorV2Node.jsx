@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { NodeShell, handleStyle } from "./comfyNodeShared";
 import { resolveDirectorV2ContentType } from "./comfyNarrativeDomain";
@@ -159,6 +159,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const [chatInput, setChatInput] = useState("");
   const [copyFeedback, setCopyFeedback] = useState({});
   const [actionFeedback, setActionFeedback] = useState({});
+  const chatMessagesRef = useRef(null);
   const feedbackTimersRef = useRef({});
   const isApplied = data?.directorState === DIRECTOR_STATES.APPLIED;
   const connections = data?.connections || {};
@@ -190,6 +191,12 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     || hasDraft;
 
   const segments = useMemo(() => normalizeDirectorV2AudioSegments(audioMap), [audioMap]);
+
+  useEffect(() => {
+    const el = chatMessagesRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [chatMessages.length, data?.directorChatPending]);
 
   const patchData = (patch) => data?.onPatchNodeData?.(id, patch);
   const directorViewMode = data?.directorViewMode || "chat";
@@ -429,7 +436,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
               <strong>AI-чат / обсуждение клипа</strong>{data?.directorV2Package ? <button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "pipeline" })}>Открыть Pipeline Review</button> : null}
               <button className={`clipSB_btn ${copyFeedback.lastReply === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.lastReply ? "asdv2_copyOk" : "")}`} disabled={!lastAssistantMessage} onClick={() => copyText(lastAssistantMessage, "lastReply", "Ответ скопирован ✓")}>{copyFeedback.lastReply || "Скопировать последний ответ"}</button>
             </div>
-            <div className="asdv2_chatMessages">{chatMessages.map((m, i) => {
+            <div ref={chatMessagesRef} className="asdv2_chatMessages">{chatMessages.map((m, i) => {
               const isAssistant = m?.role === "assistant";
               const copyKey = `msg_${i}`;
               const copyLabel = copyFeedback[copyKey] || "Копировать";

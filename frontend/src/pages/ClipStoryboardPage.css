@@ -5618,15 +5618,16 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_mainGrid{display:grid;grid-template-columns:320px minmax(0,1fr) 340px;gap:12px;margin-top:10px;align-items:stretch}
 .asdv2_panel{padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.02);min-width:0}
 .asdv2_panelHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-.asdv2_contractPanel,.asdv2_audioMapPanel{min-height:460px;display:flex;flex-direction:column;gap:8px}
-.asdv2_contractList{display:flex;flex-direction:column;gap:8px;overflow:auto;padding-right:2px}
+.asdv2_contractPanel,.asdv2_chatPanel,.asdv2_audioMapPanel{height:560px;max-height:560px;min-height:560px;overflow:hidden}
+.asdv2_contractPanel,.asdv2_audioMapPanel{display:flex;flex-direction:column;gap:8px}
+.asdv2_contractList{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px}
 .asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:4px}
-.asdv2_copyRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:8px}
+.asdv2_copyRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:8px;flex:0 0 auto}
 .asdv2_copyOk{border-color:rgba(127,230,154,.7) !important;background:rgba(127,230,154,.14) !important;color:#d8ffe1 !important}
 .asdv2_copyError{border-color:rgba(255,120,120,.7) !important;background:rgba(255,120,120,.14) !important;color:#ffdede !important}
 .asdv2_hint{margin-top:4px;font-size:11px;opacity:.82}
-.asdv2_chatPanel{display:flex;flex-direction:column;gap:8px;min-height:460px}
-.asdv2_chatMessages{flex:1;min-height:300px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px;background:rgba(10,14,20,.45);display:flex;flex-direction:column;gap:10px}
+.asdv2_chatPanel{display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.asdv2_chatMessages{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:10px;background:rgba(10,14,20,.45);display:flex;flex-direction:column;gap:10px}
 .asdv2_chatMsg{font-size:12px;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:8px 10px;max-width:92%;box-shadow:0 8px 18px rgba(0,0,0,.18);user-select:text;-webkit-user-select:text;pointer-events:auto}
 .asdv2_chatMsg.isAssistant{align-self:flex-start;background:rgba(77,182,255,.1);border-left:3px solid rgba(77,182,255,.66)}
 .asdv2_chatMsg.isUser{align-self:flex-end;background:rgba(184,106,63,.14);border-right:3px solid rgba(184,106,63,.74)}
@@ -5640,12 +5641,13 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_chatMsgBody ul{margin:0;padding-left:18px}
 .asdv2_chatMsgBody li{margin:2px 0}
 .asdv2_chatMsgBody code{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:1px 5px;font-size:11px}
-.asdv2_chatComposer{display:flex;gap:8px;align-items:flex-start}
+.asdv2_chatComposer{display:flex;gap:8px;align-items:flex-start;flex:0 0 auto}
 .asdv2_chatInput{width:100%;min-height:96px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:8px 10px;line-height:1.45}
-.asdv2_audioSegments{max-height:320px;overflow:auto;border:1px solid rgba(255,255,255,.08);border-radius:8px}
+.asdv2_audioSegments{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;max-height:none;border:1px solid rgba(255,255,255,.08);border-radius:8px}
+.asdv2_audioMapPanel .asdv2_copyRow{flex:0 0 auto}
 .asdv2_audioSegment{font-size:11px;padding:7px;border-bottom:1px solid rgba(255,255,255,.08)}
-.asdv2_planPanel{margin-top:12px}
-.asdv2_plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:320px;overflow-y:auto;overflow-x:hidden;margin-top:8px}
+.asdv2_planPanel{margin-top:12px;max-height:360px;overflow:hidden}
+.asdv2_plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:300px;overflow-y:auto;overflow-x:hidden;margin-top:8px}
 .asdv2_scene{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:6px;min-width:0}
 .asdv2_scene p{margin:0}
 .asdv2_scenePhrase{font-size:12px;padding:6px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.12)}
@@ -5656,7 +5658,7 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_emptyState{font-size:12px;opacity:.86;padding:10px;border:1px dashed rgba(255,255,255,.2);border-radius:8px}
 .asdv2_draftActions{margin-top:8px;font-size:12px;color:#7fe69a}
 .asdv2_contractCard small{white-space:pre-wrap;overflow-wrap:anywhere}
-.asdv2_pipelineWindow{margin-top:10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.02)}
+.asdv2_pipelineWindow{margin-top:10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.02);max-height:720px;overflow:hidden;display:flex;flex-direction:column}
 .asdv2_pipelineTop{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
 .asdv2_pipelineTabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .asdv2_pipelineTab{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#24303b;color:#fff}
@@ -5665,7 +5667,8 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_pipelineTab.isConfirmed{background:#275b37}
 .asdv2_pipelineTab.isStale{background:#6a4a1f}
 .asdv2_pipelineTab.isError{background:#6b2626}
-.asdv2_stageReview{display:flex;flex-direction:column;gap:10px}
-.asdv2_stageEditor{min-height:180px;font-family:monospace}
+.asdv2_stageReview{display:flex;flex-direction:column;gap:10px;min-height:0;overflow:auto}
+.asdv2_stageReview pre{max-height:260px;overflow:auto}
+.asdv2_stageEditor{min-height:180px;max-height:260px;overflow:auto;font-family:monospace}
 .asdv2_stageActions{display:flex;gap:8px;flex-wrap:wrap}
 .asdv2_stageStatus{font-size:11px;opacity:.85}
