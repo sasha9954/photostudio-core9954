@@ -5631,3 +5631,16 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_emptyState{font-size:12px;opacity:.86;padding:10px;border:1px dashed rgba(255,255,255,.2);border-radius:8px}
 .asdv2_draftActions{margin-top:8px;font-size:12px;color:#7fe69a}
 .asdv2_contractCard small{white-space:pre-wrap;overflow-wrap:anywhere}
+.asdv2_pipelineWindow{margin-top:10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.02)}
+.asdv2_pipelineTop{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+.asdv2_pipelineTabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.asdv2_pipelineTab{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,.2);background:#24303b;color:#fff}
+.asdv2_pipelineTab.isActive{outline:2px solid #4db6ff}
+.asdv2_pipelineTab.isLocked{background:#3f4650;color:#b6bec8}
+.asdv2_pipelineTab.isConfirmed{background:#275b37}
+.asdv2_pipelineTab.isStale{background:#6a4a1f}
+.asdv2_pipelineTab.isError{background:#6b2626}
+.asdv2_stageReview{display:flex;flex-direction:column;gap:10px}
+.asdv2_stageEditor{min-height:180px;font-family:monospace}
+.asdv2_stageActions{display:flex;gap:8px;flex-wrap:wrap}
+.asdv2_stageStatus{font-size:11px;opacity:.85}

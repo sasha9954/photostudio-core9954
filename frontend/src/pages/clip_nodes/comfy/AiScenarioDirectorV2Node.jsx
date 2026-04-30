@@ -32,6 +32,9 @@ const DIRECTOR_STATES = {
 const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref-character)", location: "var(--family-ref-location)", style: "var(--family-ref-style)", video: "var(--family-video-ref)", props: "var(--family-ref-items)", text: "var(--family-text)" };
 const fmt = (v) => Number(v || 0).toFixed(2);
 const isObject = (v) => !!v && typeof v === "object";
+const STAGE_ORDER = ["core", "roles", "scenes", "prompts", "final_video_prompt", "final"];
+const STAGE_TO_BACKEND = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
+const STAGE_META = { core: { title: "CORE — смысловой позвоночник", description: "Базовая смысловая структура и опорные идеи ролика." }, roles: { title: "ROLES — роли и присутствие", description: "Распределение ролей, появлений и эмоционального фокуса." }, scenes: { title: "SCENES — план сцен", description: "Покомпонентный план сцен и переходов." }, prompts: { title: "PROMPTS — фото/видео промты", description: "Генерация промтов для визуальных и видео-сцен." }, final_video_prompt: { title: "FINAL VIDEO PROMPT — финальные видео-промты", description: "Финализация видео-промтов для рендера." }, final: { title: "FINAL — manifest сборки", description: "Финальный manifest/payload для передачи в storyboard." } };
 
 const CONTRACT_SECTIONS = [
   ["concept", "Замысел"],
@@ -106,6 +109,11 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const segments = useMemo(() => normalizeDirectorV2AudioSegments(audioMap), [audioMap]);
 
   const patchData = (patch) => data?.onPatchNodeData?.(id, patch);
+  const directorViewMode = data?.directorViewMode || "chat";
+  const activePipelineStage = data?.activePipelineStage || "core";
+  const pipelineStages = isObject(data?.pipelineStages) ? data.pipelineStages : {};
+  const ensureStage = (stageKey) => ({ status: "locked", confirmed: false, stale: false, output: null, editedOutput: null, error: "", ...(pipelineStages?.[stageKey] || {}) });
+  const buildInitialPipelineStages = () => ({ core: { status: "idle", confirmed: false, stale: false, output: null, editedOutput: null, error: "" }, roles: { status: "locked", confirmed: false, stale: false, output: null, editedOutput: null, error: "" }, scenes: { status: "locked", confirmed: false, stale: false, output: null, editedOutput: null, error: "" }, prompts: { status: "locked", confirmed: false, stale: false, output: null, editedOutput: null, error: "" }, final_video_prompt: { status: "locked", confirmed: false, stale: false, output: null, editedOutput: null, error: "" }, final: { status: "locked", confirmed: false, stale: false, output: null, editedOutput: null, error: "" } });
   const isChatLocked = isApplied
     || isAudioChangedAfterParse
     || !(directorState === DIRECTOR_STATES.AUDIO_PARSED || directorState === DIRECTOR_STATES.CHAT_ACTIVE || directorState === DIRECTOR_STATES.GENERATING_DRAFT || directorState === DIRECTOR_STATES.DRAFT_READY || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED || directorState === DIRECTOR_STATES.APPLYING || directorState === DIRECTOR_STATES.APPLIED);
@@ -192,6 +200,9 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     console.log("[AI SCENARIO DIRECTOR V2] apply", directorV2Package);
     patchData({
       directorState: DIRECTOR_STATES.APPLIED,
+      directorViewMode: "pipeline",
+      activePipelineStage: "core",
+      pipelineStages: buildInitialPipelineStages(),
       confirmed: true,
       applied: true,
       directorV2Package,
@@ -202,7 +213,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const onReset = () => patchData({
     directorState: hasAudio ? DIRECTOR_STATES.READY_TO_PARSE_AUDIO : DIRECTOR_STATES.WAIT_INPUTS,
     audioMap: null, chatMessages: [], draftContract: null, draftPlan: [], confirmed: false, applied: false,
-    directorV2Package: null, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {},
+    directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, stageReviewDraft: "", directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
     parsedAudioSourceNodeId: "", parsedAudioUrl: "",
     questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
   });
@@ -214,6 +225,31 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     } catch (copyError) {
       console.warn(`[AI Director V2] Не удалось скопировать ${label}`, copyError);
     }
+  };
+
+
+  const markDownstreamStale = (stageKey, sourceStages = pipelineStages) => {
+    const nextStages = { ...sourceStages };
+    const idx = STAGE_ORDER.indexOf(stageKey);
+    STAGE_ORDER.slice(idx + 1).forEach((key) => {
+      const prev = ensureStage(key);
+      nextStages[key] = { ...prev, confirmed: false, stale: true, status: prev.output ? "stale" : "locked" };
+    });
+    return nextStages;
+  };
+
+  const onRunPipelineStage = async (stageKey) => {
+    if (!data?.onRunDirectorV2PipelineStage) return;
+    const current = ensureStage(stageKey);
+    const next = { ...pipelineStages, [stageKey]: { ...current, status: "running", error: "" } };
+    patchData({ pipelineStages: next });
+    const result = await data.onRunDirectorV2PipelineStage(id, stageKey);
+    if (!result?.ok) {
+      patchData({ pipelineStages: { ...next, [stageKey]: { ...current, status: "error", error: String(result?.error || "Ошибка этапа") } } });
+      return;
+    }
+    const updated = ensureStage(stageKey);
+    patchData({ storyboardPackage: result.storyboardPackage || null, stageStatuses: result.stageStatuses || {}, pipelineStages: { ...next, [stageKey]: { ...updated, status: "ready", output: result.output || null, error: "", stale: false, confirmed: false } } });
   };
 
   const lastAssistantMessage = [...chatMessages].reverse().find((m) => m?.role === "assistant")?.text || "";
@@ -234,6 +270,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
           </div></div>
         <div className="asdv2_inputsBar">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
         {isAudioChangedAfterParse ? <div className="asdv2_emptyState">Подключённое аудио изменилось. Нажми «Сбросить» и разбери новое аудио.</div> : null}
+        {directorViewMode === "pipeline" ? <div className="asdv2_pipelineWindow"><div className="asdv2_pipelineTop"><strong>Pipeline Review</strong><div className="asdv2_actions"><button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "chat" })}>← Вернуться к чату</button></div></div><div className="asdv2_pipelineTabs">{STAGE_ORDER.map((key) => { const st = ensureStage(key); const title = key.toUpperCase().replaceAll("_", " "); return <button key={key} className={`asdv2_pipelineTab ${activePipelineStage === key ? "isActive" : ""} ${st.status === "locked" ? "isLocked" : ""} ${st.status === "confirmed" ? "isConfirmed" : ""} ${st.status === "stale" ? "isStale" : ""} ${st.status === "error" ? "isError" : ""}`} disabled={st.status === "locked"} onClick={() => patchData({ activePipelineStage: key })}>{title}<span className="asdv2_stageStatus">{st.status}</span></button>; })}</div><div className="asdv2_stageReview">{(() => { const st = ensureStage(activePipelineStage); const meta = STAGE_META[activePipelineStage] || { title: activePipelineStage, description: "" }; const editorValue = typeof data?.stageReviewDraft === "string" ? data.stageReviewDraft : JSON.stringify(st.editedOutput || st.output || {}, null, 2); return <><h4>{meta.title}</h4><p>{meta.description}</p><div className="asdv2_panel">{st.output ? <pre>{JSON.stringify(st.output, null, 2)}</pre> : <div className="asdv2_emptyState">Этап ещё не сгенерирован.</div>}</div><textarea className="asdv2_chatInput asdv2_stageEditor" value={editorValue} onChange={(e) => patchData({ stageReviewDraft: e.target.value })} /><div className="asdv2_stageActions"><button className="clipSB_btn" onClick={() => onRunPipelineStage(activePipelineStage)}>Сгенерировать этап</button><button className="clipSB_btn" onClick={() => onRunPipelineStage(activePipelineStage)}>Перегенерировать этап</button><button className="clipSB_btn" onClick={() => { try { const parsed = JSON.parse(String(data?.stageReviewDraft || "{}")); const current = ensureStage(activePipelineStage); const nextStages = markDownstreamStale(activePipelineStage, { ...pipelineStages, [activePipelineStage]: { ...current, editedOutput: parsed, confirmed: false, status: "ready", stale: false } }); patchData({ pipelineStages: nextStages }); } catch (_e) { patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...ensureStage(activePipelineStage), status: "error", error: "Невалидный JSON" } } }); } }}>Сохранить правки</button><button className="clipSB_btn" onClick={() => { const current = ensureStage(activePipelineStage); const nextStages = { ...pipelineStages, [activePipelineStage]: { ...current, status: "confirmed", confirmed: true, stale: false } }; const idx = STAGE_ORDER.indexOf(activePipelineStage); const nextKey = STAGE_ORDER[idx + 1]; if (nextKey) nextStages[nextKey] = { ...ensureStage(nextKey), status: "idle", stale: false }; patchData({ pipelineStages: nextStages }); }}>Подтвердить этап</button></div>{st.error ? <div className="asdv2_emptyState">Ошибка: {st.error}</div> : null}</>; })()}</div></div> : null}
         <div className="asdv2_mainGrid">
           <div className="asdv2_panel asdv2_contractPanel">
             <div className="asdv2_panelHead"><strong>Черновик контракта режиссёра</strong></div>
@@ -252,7 +289,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
 
           <div className={`asdv2_panel asdv2_chatPanel ${isChatLocked ? "asdv2_lockedPanel" : ""}`}>
             <div className="asdv2_panelHead">
-              <strong>AI-чат / обсуждение клипа</strong>
+              <strong>AI-чат / обсуждение клипа</strong>{data?.directorV2Package ? <button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "pipeline" })}>Открыть Pipeline Review</button> : null}
               <button className="clipSB_btn" disabled={!lastAssistantMessage} onClick={() => copyText(lastAssistantMessage, "последний ответ")}>Скопировать последний ответ</button>
             </div>
             <div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
