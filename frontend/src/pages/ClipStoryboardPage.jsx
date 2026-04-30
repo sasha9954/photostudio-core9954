@@ -6831,6 +6831,49 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
   }, {});
 }
 
+function buildDirectorV2ScenarioSourceState({
+  directorNode,
+  nodesById,
+  edges,
+} = {}) {
+  const baseData = directorNode?.data || {};
+  const connectedInputs = getNarrativeConnectedInputsSnapshot({
+    node: directorNode,
+    nodesById: nodesById instanceof Map ? nodesById : new Map(),
+    edges: Array.isArray(edges) ? edges : [],
+  });
+  const resolvedSource = resolveNarrativeSource({
+    ...baseData,
+    connectedInputs,
+  });
+  const audioInput = connectedInputs?.audio_in || null;
+  return {
+    ...baseData,
+    contentType: baseData?.contentType || "music_video",
+    format: baseData?.format || "9:16",
+    connectedInputs,
+    resolvedSource,
+    sourceOrigin: resolvedSource?.origin || "disconnected",
+    audioUrl: audioInput?.value || audioInput?.url || "",
+    masterAudioUrl: audioInput?.value || audioInput?.url || "",
+    audioDurationSec: Number(audioInput?.audioDurationSec || audioInput?.durationSec || 0) || 0,
+    source: resolvedSource,
+  };
+}
+
+function extractDirectorV2AudioMap(response = {}) {
+  const pkg = response?.storyboardPackage && typeof response.storyboardPackage === "object"
+    ? response.storyboardPackage
+    : {};
+  return (
+    (pkg?.audio_map && typeof pkg.audio_map === "object" ? pkg.audio_map : null)
+    || (pkg?.audioMap && typeof pkg.audioMap === "object" ? pkg.audioMap : null)
+    || (response?.audio_map && typeof response.audio_map === "object" ? response.audio_map : null)
+    || (response?.audioMap && typeof response.audioMap === "object" ? response.audioMap : null)
+    || null
+  );
+}
+
 function buildNarrativeConnectedContextFingerprint(connectedInputs = {}) {
   const entries = Object.entries(connectedInputs && typeof connectedInputs === "object" ? connectedInputs : {})
     .map(([handleId, value]) => {
@@ -23306,6 +23349,12 @@ onClipSec: (nodeId, value) => {
                   ? edgesRef.current
                   : [];
           const incoming = safeEdgesForConnections.filter((edge) => edge?.target === n.id);
+          const nodesById = new Map((Array.isArray(effectiveNodes) ? effectiveNodes : []).map((nodeItem) => [nodeItem.id, nodeItem]));
+          const narrativeConnectedInputs = getNarrativeConnectedInputsSnapshot({
+            node: n,
+            nodesById,
+            edges: safeEdgesForConnections,
+          });
           const connections = incoming.reduce((acc, edge) => {
             const targetHandle = String(edge?.targetHandle || "").trim();
             if (!targetHandle) return acc;
@@ -23317,6 +23366,7 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               connections,
+              connectedInputs: narrativeConnectedInputs,
               onPatchNodeData: (nodeId, patch = {}) => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => nodeItem.id === nodeId ? { ...nodeItem, data: { ...nodeItem.data, ...patch } } : nodeItem)));
               },
@@ -23324,12 +23374,25 @@ onClipSec: (nodeId, value) => {
                 try {
                   const activeNodes = nodesRef.current || [];
                   const nodeItem = activeNodes.find((x) => x.id === nodeId);
-                  const payload = buildScenarioStageManualPayload({ sourceState: nodeItem?.data || {}, targetState: nodeItem?.data || {}, stageId: "audio", autoRun: false, storyboardPackage: nodeItem?.data?.storyboardPackage || {}, requestSource: "ai_scenario_director_v2:audio" });
+                  if (!nodeItem) return { ok: false, error: "Нода режиссёра не найдена" };
+                  const edgesNow = edgesRef.current || [];
+                  const activeNodesById = new Map(activeNodes.map((x) => [x.id, x]));
+                  const sourceState = buildDirectorV2ScenarioSourceState({ directorNode: nodeItem, nodesById: activeNodesById, edges: edgesNow });
+                  if (!sourceState.audioUrl) return { ok: false, error: "Аудио не подключено" };
+                  if (!(Number(sourceState.audioDurationSec) > 0)) return { ok: false, error: "Длительность аудио не определена" };
+                  const payload = buildScenarioStageManualPayload({
+                    sourceState,
+                    targetState: nodeItem?.data || {},
+                    stageId: "audio_map",
+                    autoRun: false,
+                    storyboardPackage: nodeItem?.data?.storyboardPackage || {},
+                    requestSource: "ai_scenario_director_v2:audio_map",
+                  });
                   const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload });
                   const pkg = response?.storyboardPackage && typeof response.storyboardPackage === 'object' ? response.storyboardPackage : {};
-                  const audioMap = pkg?.audio_map && typeof pkg.audio_map === 'object' ? pkg.audio_map : null;
-                  if (!response?.ok || !audioMap) return { ok: false, error: response?.detail || 'AUDIO stage не вернул audio_map' };
-                  setNodes((prev) => bindHandlers(prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, storyboardPackage: pkg, stageStatuses: pkg?.stage_statuses || {}, audioMap } } : x)));
+                  const audioMap = extractDirectorV2AudioMap(response);
+                  if (!response?.ok || !audioMap) return { ok: false, error: response?.detail || "Стадия audio_map не вернула карту аудио" };
+                  setNodes((prev) => bindHandlers(prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, storyboardPackage: pkg, stageStatuses: pkg?.stage_statuses || {}, audioMap, directorState: "audio_parsed", directorError: "" } } : x)));
                   return { ok: true, audioMap };
                 } catch (error) { return { ok: false, error: String(error?.message || error || 'audio_stage_failed') }; }
               },
