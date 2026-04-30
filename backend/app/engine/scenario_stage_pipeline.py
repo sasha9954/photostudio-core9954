@@ -648,10 +648,25 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
         for seg_id in segment_ids:
             draft_intent_by_segment[seg_id] = intent_payload
 
+    connected_character_roles = {"character_1", "character_2", "character_3"}
+
+    def _role_identity_rule(role_id: str) -> str:
+        normalized_role = str(role_id or "").strip().lower()
+        if not normalized_role:
+            return ""
+        for entity in roster:
+            if str(entity.get("entity_id") or "").strip().lower() != normalized_role:
+                continue
+            return str(entity.get("identity_reference_rule") or "").strip()
+        return ""
+
     scene_rows = []
     overrides_applied = 0
     focus_rewritten_segments = 0
     notes_rewritten_segments = 0
+    secondary_connected_roles_removed_count = 0
+    secondary_connected_roles_removed_segments: list[str] = []
+    stale_identity_rule_rewritten_segments: list[str] = []
     blocking_mismatches: list[dict[str, Any]] = []
     overridden_mismatches: list[dict[str, Any]] = []
     for row in _safe_list(role_plan.get("scene_casting")):
@@ -711,6 +726,57 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
                 if secondary_roles:
                     cast["secondary_roles"] = secondary_roles
 
+        current_primary = str(cast.get("primary_role") or "").strip().lower()
+        secondary_roles = [
+            str(role or "").strip().lower()
+            for role in _safe_list(cast.get("secondary_roles"))
+            if str(role or "").strip()
+        ]
+        if secondary_roles and req_refs:
+            filtered_secondary: list[str] = []
+            removed_any = False
+            for role in secondary_roles:
+                if role in connected_character_roles and role != current_primary and role not in req_refs:
+                    removed_any = True
+                    continue
+                filtered_secondary.append(role)
+            if removed_any:
+                secondary_connected_roles_removed_count += 1
+                if segment_id and segment_id not in secondary_connected_roles_removed_segments:
+                    secondary_connected_roles_removed_segments.append(segment_id)
+                if filtered_secondary:
+                    cast["secondary_roles"] = filtered_secondary
+                elif "secondary_roles" in cast:
+                    cast["secondary_roles"] = []
+
+        identity_rule = str(cast.get("identity_rule") or "").strip()
+        identity_source = str(cast.get("identity_source") or "").strip()
+        notes = str(cast.get("notes") or "").strip()
+        stale_identity = any(
+            role != current_primary and role in identity_rule.lower()
+            for role in connected_character_roles
+        )
+        if stale_identity and current_primary in connected_character_roles:
+            forced_identity_rule = _role_identity_rule(current_primary)
+            if forced_identity_rule:
+                cast["identity_rule"] = forced_identity_rule
+                cast["identity_source"] = "connected_visual_reference"
+                cast["notes"] = (
+                    "visual reference is canonical; text appearance is auxiliary; "
+                    f"must match connected {current_primary} reference exactly"
+                )
+                if segment_id and segment_id not in stale_identity_rule_rewritten_segments:
+                    stale_identity_rule_rewritten_segments.append(segment_id)
+            else:
+                cast.pop("identity_rule", None)
+                cast.pop("identity_source", None)
+                cast.pop("notes", None)
+                if segment_id and segment_id not in stale_identity_rule_rewritten_segments:
+                    stale_identity_rule_rewritten_segments.append(segment_id)
+        elif not identity_rule and (identity_source or notes):
+            cast.pop("identity_source", None)
+            cast.pop("notes", None)
+
         intent = _safe_dict(draft_intent_by_segment.get(segment_id))
         if forced_primary or intent:
             existing_focus = str(cast.get("performance_focus") or "").strip()
@@ -762,6 +828,9 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
     diagnostics["director_role_forced_primary_segments"] = overridden_mismatches[:40]
     diagnostics["director_blocking_primary_mismatches"] = blocking_mismatches[:40]
     diagnostics["director_core_mismatches_overridden_by_draft"] = overridden_mismatches[:40]
+    diagnostics["director_secondary_connected_roles_removed_count"] = secondary_connected_roles_removed_count
+    diagnostics["director_secondary_connected_roles_removed_segments"] = secondary_connected_roles_removed_segments[:80]
+    diagnostics["director_stale_identity_rule_rewritten_segments"] = stale_identity_rule_rewritten_segments[:80]
     applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
     applied["roles"] = True
     diagnostics["director_contract_applied_stages"] = applied
