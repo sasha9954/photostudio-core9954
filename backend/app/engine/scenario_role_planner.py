@@ -134,6 +134,16 @@ _FIGHT_INTENT_TOKENS = (
     "bystanders",
     "зеваки",
     "fallen",
+    "стычка",
+    "дворовая",
+    "дворовой",
+    "лежачий",
+    "лежит",
+    "толпа",
+    "кругом",
+    "избитый",
+    "после драки",
+    "конфликт",
 )
 
 
@@ -1167,6 +1177,28 @@ def _extract_director_draft_role_intents(package: dict[str, Any]) -> dict[str, d
     return intents
 
 
+def _filter_primary_mismatches_for_director_intents(
+    *,
+    primary_mismatches: list[dict[str, str]],
+    director_intents: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    nonblocking: list[dict[str, str]] = []
+    blocking: list[dict[str, str]] = []
+    for mismatch in primary_mismatches:
+        row = _safe_dict(mismatch)
+        segment_id = str(row.get("segment_id") or "").strip()
+        got_role = str(row.get("got") or "").strip()
+        intent = _safe_dict(director_intents.get(segment_id))
+        required_refs = {str(item).strip() for item in _safe_list(intent.get("required_refs")) if str(item).strip()}
+        if intent and got_role and got_role in required_refs:
+            tagged = dict(row)
+            tagged["diagnostic"] = "core_overridden_by_director_intent"
+            nonblocking.append(tagged)
+            continue
+        blocking.append(dict(row))
+    return blocking, nonblocking
+
+
 def _ensure_director_text_only_roles_in_registry(
     package: dict[str, Any],
     allowed_registry: dict[str, dict[str, Any]],
@@ -1301,6 +1333,57 @@ def _apply_director_role_overrides(
     return payload
 
 
+def _collect_director_override_changes(
+    *,
+    before_payload: dict[str, Any],
+    after_payload: dict[str, Any],
+    director_intents: dict[str, dict[str, Any]],
+) -> tuple[list[str], dict[str, list[str]]]:
+    before_scene = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(before_payload).get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    after_scene = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(_safe_dict(after_payload).get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    before_roster_ids = {
+        str(_safe_dict(row).get("entity_id") or "").strip()
+        for row in _safe_list(_safe_dict(before_payload).get("roster"))
+        if str(_safe_dict(row).get("entity_id") or "").strip()
+    }
+    after_roster_ids = {
+        str(_safe_dict(row).get("entity_id") or "").strip()
+        for row in _safe_list(_safe_dict(after_payload).get("roster"))
+        if str(_safe_dict(row).get("entity_id") or "").strip()
+    }
+    added_roster_text_only = after_roster_ids - before_roster_ids
+
+    changes_by_segment: dict[str, list[str]] = {}
+    for segment_id in director_intents.keys():
+        before_row = _safe_dict(before_scene.get(segment_id))
+        after_row = _safe_dict(after_scene.get(segment_id))
+        if not after_row:
+            continue
+        changes: list[str] = []
+        if str(before_row.get("primary_role") or "").strip() != str(after_row.get("primary_role") or "").strip():
+            changes.append("primary_role_changed")
+        before_secondary = {str(item).strip() for item in _safe_list(before_row.get("secondary_roles")) if str(item).strip()}
+        after_secondary = {str(item).strip() for item in _safe_list(after_row.get("secondary_roles")) if str(item).strip()}
+        if after_secondary - before_secondary:
+            changes.append("secondary_roles_added")
+        if str(before_row.get("continuity_notes") or "").strip() != str(after_row.get("continuity_notes") or "").strip():
+            changes.append("continuity_notes_changed")
+        if any(role in added_roster_text_only for role in ("episodic_girl", "crowd_bystanders", "fallen_man", "opponent_text_only")):
+            if after_secondary & added_roster_text_only:
+                changes.append("roster_text_only_role_added")
+        if changes:
+            changes_by_segment[segment_id] = changes
+    return sorted(changes_by_segment.keys()), changes_by_segment
+
+
 def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     input_pkg = _safe_dict(package.get("input"))
     audio_map = _safe_dict(package.get("audio_map"))
@@ -1359,6 +1442,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "director_text_only_roles_added": director_text_only_roles_added,
         "director_role_override_segments": [],
         "director_primary_mismatches_after_override": [],
+        "director_core_mismatches_overridden_by_draft": [],
+        "director_blocking_primary_mismatches": [],
+        "director_role_override_segments_changed": [],
+        "director_role_override_changes_by_segment": {},
     }
 
     diagnostics.update(segment_row_diagnostics)
@@ -1468,6 +1555,10 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 core_subject_map=core_subject_map,
             )
             sanitized["scene_casting"] = normalized_scene_casting
+            pre_override_payload = {
+                "roster": deepcopy(_safe_list(sanitized.get("roster"))),
+                "scene_casting": deepcopy(_safe_list(sanitized.get("scene_casting"))),
+            }
             sanitized = _apply_director_role_overrides(
                 roles_payload=sanitized,
                 package=package,
@@ -1489,7 +1580,20 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                     for row in _safe_list(sanitized.get("scene_casting"))
                 )
             ]
-            diagnostics["director_role_overrides_applied_count"] = len(diagnostics["director_role_override_segments"])
+            blocking_primary_mismatches, overridden_mismatches = _filter_primary_mismatches_for_director_intents(
+                primary_mismatches=primary_mismatches,
+                director_intents=director_intents,
+            )
+            diagnostics["director_core_mismatches_overridden_by_draft"] = overridden_mismatches[:40]
+            diagnostics["director_blocking_primary_mismatches"] = blocking_primary_mismatches[:40]
+            changed_segments, changes_by_segment = _collect_director_override_changes(
+                before_payload=pre_override_payload,
+                after_payload=sanitized,
+                director_intents=director_intents,
+            )
+            diagnostics["director_role_override_segments_changed"] = changed_segments
+            diagnostics["director_role_override_changes_by_segment"] = changes_by_segment
+            diagnostics["director_role_overrides_applied_count"] = len(changed_segments)
             diagnostics["sanitized_payload_preview"] = _normalize_text(json.dumps(sanitized, ensure_ascii=False), max_len=500)
             seen_segment_ids = [
                 str(_safe_dict(row).get("segment_id") or "").strip()
@@ -1501,12 +1605,18 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
             diagnostics["coverage_seen_segment_ids"] = seen_segment_ids
             diagnostics["coverage_missing_segment_ids"] = sorted(list(expected_set - seen_set))
             diagnostics["coverage_extra_segment_ids"] = sorted(list(seen_set - expected_set))
-            if primary_mismatches and attempt < attempts - 1:
+            if blocking_primary_mismatches and attempt < attempts - 1:
                 last_error = ROLE_PRIMARY_MISMATCH
                 diagnostics["error_code"] = ROLE_PRIMARY_MISMATCH
+                retry_guidance = "Do not change primary_role/secondary_roles from CORE beat_map."
+                if director_intents:
+                    retry_guidance = (
+                        "Use director_v2 draft_plan.required_refs as primary authority for primary_role. "
+                        "Do not set world as primary when required_refs contains character_1/2/3."
+                    )
                 prompt = (
                     f"{prompt}\n\nPREVIOUS_VALIDATION_ERROR={ROLE_PRIMARY_MISMATCH}. "
-                    "Do not change primary_role/secondary_roles from CORE beat_map. "
+                    f"{retry_guidance} "
                     "Only refine presence_mode, presence_weight, performance_focus, continuity_notes."
                 )
                 continue
