@@ -5592,3 +5592,22 @@ body.ps_clip_fullscreen .mainCol {
   min-width: 110px;
   font-size: 11px;
 }
+
+/* AI Scenario Director V2 (scoped) */
+.asdv2_sub{opacity:.75;font-size:12px;margin-bottom:8px}
+.asdv2_row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.asdv2_select,.asdv2_inputLine{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:6px 8px}
+.asdv2_chip{padding:4px 8px;border-radius:999px;background:rgba(127,218,149,.2);border:1px solid rgba(127,218,149,.5);font-size:11px}
+.asdv2_strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+.asdv2_input{border:1px solid rgba(255,255,255,.16);border-left-width:4px;border-radius:8px;padding:7px;display:flex;flex-direction:column;gap:2px;background:rgba(255,255,255,.03)}
+.asdv2_grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.asdv2_panel{margin-top:10px;padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.02)}
+.asdv2_contract{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column}
+.asdv2_plan{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.asdv2_scene{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03)}
+.asdv2_tag{font-size:11px;padding:2px 6px;border-radius:999px;border:1px solid rgba(255,255,255,.25)}
+.asdv2_rail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:8px}
+.asdv2_stage{border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.02);color:#fff;border-radius:8px;padding:7px;text-align:left;display:flex;flex-direction:column;gap:2px}
+.asdv2_stage.isActive{border-color:var(--family-storyboard);box-shadow:0 0 0 1px var(--family-storyboard) inset}
+.asdv2_viewer{margin-top:8px;padding:10px;border-radius:8px;border:1px dashed rgba(255,255,255,.2)}
