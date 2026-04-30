@@ -5594,22 +5594,27 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 /* AI Scenario Director V2 (scoped) */
-.asdv2_body{max-height:760px;overflow:auto;padding-right:2px}
-.asdv2_toolbar{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center}
+.asdv2_shell{width:1160px !important;min-width:1160px !important;max-width:1160px !important}
+.react-flow__node-aiScenarioDirectorV2{width:1160px !important;min-width:1160px !important;max-width:1160px !important}
+.asdv2_body{width:100%;overflow:visible;padding-right:0}
+.asdv2_toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:10px;align-items:center}
 .asdv2_titleBlock{min-width:220px}
 .asdv2_sub{opacity:.82;font-size:12px}
-.asdv2_controls,.asdv2_actions,.asdv2_row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.asdv2_controls,.asdv2_actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap}
+.asdv2_row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.asdv2_actions{justify-content:flex-end}
+.asdv2_actions .clipSB_btn{white-space:nowrap;padding:5px 8px;font-size:11px}
 .asdv2_between{justify-content:space-between}
 .asdv2_select,.asdv2_inputLine{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:6px 8px}
 .asdv2_chip{padding:4px 8px;border-radius:999px;background:rgba(127,218,149,.2);border:1px solid rgba(127,218,149,.5);font-size:11px}
 .asdv2_inputsBar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-.asdv2_inputChip{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid rgba(255,255,255,.2);border-left-width:3px;border-radius:999px;background:rgba(255,255,255,.03);font-size:12px}
+.asdv2_inputChip{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid rgba(255,255,255,.2);border-left-width:3px;border-radius:999px;background:rgba(255,255,255,.03);font-size:12px;white-space:nowrap}
 .asdv2_inputChip b{font-size:11px;text-transform:lowercase}
 .asdv2_inputChip.isConnected b{color:#7fe69a}
 .asdv2_inputChip.isEmpty b{color:rgba(255,255,255,.72)}
-.asdv2_mainGrid{display:grid;grid-template-columns:minmax(260px,.9fr) minmax(360px,1.2fr) minmax(220px,.7fr);gap:10px;margin-top:10px}
-.asdv2_panel{padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.02)}
-.asdv2_panelCompact{max-height:300px;overflow:auto}
+.asdv2_mainGrid{display:grid;grid-template-columns:300px 1fr 280px;gap:10px;margin-top:10px;align-items:start}
+.asdv2_panel{padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.02);min-width:0}
+.asdv2_panelCompact{max-height:none;overflow:visible}
 .asdv2_contractGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
 .asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:4px}
 .asdv2_pipelineList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
@@ -5617,12 +5622,7 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_stage.isActive{border-color:var(--family-storyboard);box-shadow:0 0 0 1px var(--family-storyboard) inset}
 .asdv2_viewer{margin-top:8px;padding:10px;border-radius:8px;border:1px dashed rgba(255,255,255,.2)}
 .asdv2_planPanel{margin-top:10px}
-.asdv2_plan{display:grid;grid-template-columns:repeat(4,minmax(170px,1fr));gap:8px;max-height:300px;overflow:auto;margin-top:8px}
-.asdv2_scene{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:6px}
+.asdv2_plan{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;max-height:260px;overflow-y:auto;overflow-x:hidden;margin-top:8px}
+.asdv2_scene{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:6px;min-width:0}
+.asdv2_scene p{margin:0}
 .asdv2_tag{font-size:11px;padding:2px 6px;border-radius:999px;border:1px solid rgba(255,255,255,.25)}
-@media (max-width:1200px){
-  .asdv2_toolbar{grid-template-columns:1fr}
-  .asdv2_mainGrid{grid-template-columns:1fr}
-  .asdv2_panelCompact{max-height:260px}
-  .asdv2_plan{grid-template-columns:repeat(3,minmax(170px,1fr))}
-}
