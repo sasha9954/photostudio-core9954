@@ -23296,6 +23296,26 @@ onClipSec: (nodeId, value) => {
             },
           };
         }
+        if (n.type === "aiScenarioDirectorV2") {
+          const incoming = (effectiveEdges || []).filter((edge) => edge?.target === n.id);
+          const connections = incoming.reduce((acc, edge) => {
+            const targetHandle = String(edge?.targetHandle || "").trim();
+            if (!targetHandle) return acc;
+            acc[targetHandle] = {
+              source: String(edge?.source || ""),
+              sourceHandle: String(edge?.sourceHandle || ""),
+              edgeId: String(edge?.id || ""),
+            };
+            return acc;
+          }, {});
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              connections,
+            },
+          };
+        }
 return base;
       });
     },
@@ -24405,6 +24425,38 @@ const hydrate = useCallback((source = "unknown") => {
           const presentation = getEdgePresentation({ sourceHandle, targetHandle: h, sourceType: src.type, targetType: dst.type });
           nextEdges = addEdge({ ...params, className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:narrative");
+          return nextEdges;
+        }
+        if (dst.type === "aiScenarioDirectorV2") {
+          const h = params.targetHandle || "";
+          const srcKind = src?.data?.kind || "";
+          const ok =
+            (h === "audio_in" && src.type === "audioNode") ||
+            (h === "text_in" && src.type === "textNode") ||
+            (h === "video_ref_in" && src.type === "videoRefNode") ||
+            (h === "ref_character_1" && src.type === "refNode" && srcKind === "ref_character") ||
+            (h === "ref_location" && src.type === "refNode" && srcKind === "ref_location") ||
+            (h === "ref_style" && src.type === "refNode" && srcKind === "ref_style") ||
+            (h === "ref_props" && src.type === "refNode" && srcKind === "ref_items") ||
+            (h === "ref_character_2" && src.type === "refCharacter2") ||
+            (h === "ref_character_3" && src.type === "refCharacter3");
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === params.target && e.targetHandle === h));
+          const presentation = getEdgePresentation({
+            sourceHandle: params.sourceHandle || "",
+            targetHandle: h,
+            sourceType: src.type,
+            targetType: dst.type,
+          });
+          nextEdges = addEdge({
+            ...params,
+            type: "smoothstep",
+            className: presentation.className,
+            animated: presentation.animated,
+            style: presentation.style,
+            data: { kind: presentation.kind },
+          }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:ai-scenario-director-v2");
           return nextEdges;
         }
 
