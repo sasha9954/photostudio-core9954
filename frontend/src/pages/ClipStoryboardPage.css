@@ -5622,6 +5622,9 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_contractList{display:flex;flex-direction:column;gap:8px;overflow:auto;padding-right:2px}
 .asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:4px}
 .asdv2_copyRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:8px}
+.asdv2_copyOk{border-color:rgba(127,230,154,.7) !important;background:rgba(127,230,154,.14) !important;color:#d8ffe1 !important}
+.asdv2_copyError{border-color:rgba(255,120,120,.7) !important;background:rgba(255,120,120,.14) !important;color:#ffdede !important}
+.asdv2_hint{margin-top:4px;font-size:11px;opacity:.82}
 .asdv2_chatPanel{display:flex;flex-direction:column;gap:8px;min-height:460px}
 .asdv2_chatMessages{flex:1;min-height:300px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:8px}
 .asdv2_chatMsg{font-size:12px;margin-bottom:8px}
