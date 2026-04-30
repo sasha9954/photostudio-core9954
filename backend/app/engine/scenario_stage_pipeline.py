@@ -4135,6 +4135,7 @@ def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
 def _build_scene_plan_from_director_draft(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     safe_pkg = _safe_dict(package)
     input_pkg = _safe_dict(safe_pkg.get("input"))
+    audio_map = _safe_dict(safe_pkg.get("audio_map"))
     director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
     draft_plan = (
         _safe_list(input_pkg.get("draft_plan"))
@@ -4149,62 +4150,79 @@ def _build_scene_plan_from_director_draft(package: dict[str, Any]) -> tuple[dict
     }
     if not draft_plan:
         return {}, {"applied": False}
+    audio_map_segments_lookup: dict[str, dict[str, Any]] = {}
+    for seg_raw in _safe_list(audio_map.get("segments")):
+        seg_row = _safe_dict(seg_raw)
+        seg_id = str(seg_row.get("segment_id") or "").strip()
+        if seg_id:
+            audio_map_segments_lookup[seg_id] = seg_row
     scenes: list[dict[str, Any]] = []
+    original_scene_count = 0
+    expanded_segment_rows = False
     for idx, row_raw in enumerate(draft_plan, start=1):
+        original_scene_count += 1
         row = _safe_dict(row_raw)
-        segment_ids = [str(seg).strip() for seg in _safe_list(row.get("segment_ids")) if str(seg).strip()]
-        segment_id = str(row.get("segment_id") or row.get("scene_id") or (segment_ids[0] if segment_ids else f"seg_{idx:02d}")).strip()
-        if not segment_ids:
-            segment_ids = [segment_id]
-        cast = _safe_dict(cast_lookup.get(segment_id))
-        t0 = _safe_float(row.get("start_sec"), 0.0)
-        t1 = _safe_float(row.get("end_sec"), t0)
+        original_segment_ids = [str(seg).strip() for seg in _safe_list(row.get("segment_ids")) if str(seg).strip()]
+        primary_segment_id = str(row.get("segment_id") or row.get("scene_id") or (original_segment_ids[0] if original_segment_ids else f"seg_{idx:02d}")).strip()
+        if not original_segment_ids:
+            original_segment_ids = [primary_segment_id]
+        if len(original_segment_ids) > 1:
+            expanded_segment_rows = True
+        draft_scene_id = str(row.get("scene_id") or "").strip()
         route = _to_director_route(row.get("route")) or "i2v"
-        primary_role = str(cast.get("primary_role") or "").strip().lower() or "world"
         scene_goal = str(row.get("purpose") or row.get("user_visible_description") or "").strip()
         camera = {
             "framing": str(row.get("shot_size_intent") or "").strip(),
             "movement": str(row.get("camera_motion_intent") or "").strip(),
         }
-        scene = {
-            "scene_id": str(row.get("scene_id") or segment_id).strip(),
-            "segment_id": segment_id,
-            "segment_ids": segment_ids,
-            "t0": t0,
-            "t1": t1,
-            "duration": max(0.0, t1 - t0),
-            "route": route,
-            "timeline_role": str(row.get("timeline_role") or "").strip(),
-            "primary_role": primary_role,
-            "visual_focus_role": primary_role,
-            "secondary_roles": _safe_list(cast.get("secondary_roles")),
-            "scene_goal": scene_goal,
-            "action": str(row.get("user_visible_description") or "").strip(),
-            "spoken_line": str(row.get("audio_phrase") or "").strip(),
-            "audio_phrase": str(row.get("audio_phrase") or "").strip(),
-            "camera": camera,
-            "lighting": str(row.get("lighting_intent") or "").strip(),
-            "location": str(row.get("timeline_role") or row.get("user_visible_description") or "").strip(),
-            "routeLocked": True,
-            "route_lock_source": "director_v2_draft_plan",
-        }
-        if route == "ia2v" and primary_role == "character_1":
-            scene.update({
-                "lipSync": True,
-                "requiresAudioSensitiveVideo": True,
-                "speaker_role": "character_1",
-                "mouth_visible_required": True,
-                "singing_readiness_required": True,
-                "story_beat_type": "performance",
-            })
-        elif route == "i2v" and primary_role == "character_2":
-            scene.update({
-                "lipSync": False,
-                "requiresAudioSensitiveVideo": False,
-                "lip_sync_allowed": False,
-                "story_beat_type": "memory_action",
-            })
-        scenes.append(scene)
+        for seg_id in original_segment_ids:
+            cast = _safe_dict(cast_lookup.get(seg_id))
+            primary_role = str(cast.get("primary_role") or "").strip().lower() or "world"
+            audio_seg = _safe_dict(audio_map_segments_lookup.get(seg_id))
+            t0 = _safe_float(audio_seg.get("start_sec"), _safe_float(row.get("start_sec"), 0.0))
+            t1 = _safe_float(audio_seg.get("end_sec"), _safe_float(row.get("end_sec"), t0))
+            scene_id = f"{draft_scene_id or primary_segment_id}_{seg_id}" if len(original_segment_ids) > 1 else (draft_scene_id or seg_id)
+            scene = {
+                "scene_id": str(scene_id).strip(),
+                "segment_id": seg_id,
+                "segment_ids": [seg_id],
+                "director_draft_source_scene_id": draft_scene_id or primary_segment_id,
+                "director_draft_original_segment_ids": original_segment_ids,
+                "t0": t0,
+                "t1": t1,
+                "duration": max(0.0, t1 - t0),
+                "route": route,
+                "timeline_role": str(row.get("timeline_role") or "").strip(),
+                "primary_role": primary_role,
+                "visual_focus_role": primary_role,
+                "secondary_roles": _safe_list(cast.get("secondary_roles")),
+                "scene_goal": scene_goal,
+                "action": str(row.get("user_visible_description") or "").strip(),
+                "spoken_line": str(row.get("audio_phrase") or "").strip(),
+                "audio_phrase": str(row.get("audio_phrase") or "").strip(),
+                "camera": camera,
+                "lighting": str(row.get("lighting_intent") or "").strip(),
+                "location": str(row.get("timeline_role") or row.get("user_visible_description") or "").strip(),
+                "routeLocked": True,
+                "route_lock_source": "director_v2_draft_plan",
+            }
+            if route == "ia2v" and primary_role == "character_1":
+                scene.update({
+                    "lipSync": True,
+                    "requiresAudioSensitiveVideo": True,
+                    "speaker_role": "character_1",
+                    "mouth_visible_required": True,
+                    "singing_readiness_required": True,
+                    "story_beat_type": "performance",
+                })
+            elif route == "i2v" and primary_role == "character_2":
+                scene.update({
+                    "lipSync": False,
+                    "requiresAudioSensitiveVideo": False,
+                    "lip_sync_allowed": False,
+                    "story_beat_type": "memory_action",
+                })
+            scenes.append(scene)
     scene_plan = {
         "scenes_version": "v2",
         "source": "director_v2_draft_plan",
@@ -4212,7 +4230,13 @@ def _build_scene_plan_from_director_draft(package: dict[str, Any]) -> tuple[dict
         "storyboard": deepcopy(scenes),
         "route_mix_summary": _scene_plan_route_counts({"scenes": scenes}),
     }
-    return scene_plan, {"applied": True, "scene_count": len(scenes)}
+    return scene_plan, {
+        "applied": True,
+        "scene_count": len(scenes),
+        "scene_plan_director_draft_expanded_segment_rows": expanded_segment_rows,
+        "scene_plan_director_draft_original_scene_count": original_scene_count,
+        "scene_plan_director_draft_expanded_scene_count": len(scenes),
+    }
 
 
 def _normalize_role_usage_contract(director_contract: dict[str, Any], package: dict[str, Any]) -> dict[str, dict[str, Any]]:
