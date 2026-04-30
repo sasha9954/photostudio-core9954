@@ -60,6 +60,83 @@ def _safe_list(v: Any) -> list[Any]:
     return v if isinstance(v, list) else []
 
 
+def _compact_audio_segments(audio_map: dict[str, Any]) -> list[dict[str, Any]]:
+    segments = _safe_list(audio_map.get("segments"))
+    out = []
+    for row in segments:
+        seg = _safe_dict(row)
+        out.append(
+            {
+                "segment_id": seg.get("segment_id"),
+                "t0": seg.get("t0"),
+                "t1": seg.get("t1"),
+                "duration_sec": seg.get("duration_sec"),
+                "transcript_slice": seg.get("transcript_slice"),
+                "intensity": seg.get("intensity"),
+                "local_energy_band": seg.get("local_energy_band"),
+                "delivery_mode": seg.get("delivery_mode"),
+                "semantic_weight": seg.get("semantic_weight"),
+                "rhythmic_anchor": seg.get("rhythmic_anchor"),
+            }
+        )
+    return out
+
+
+def _compact_director_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": contract.get("mode"),
+        "format": contract.get("format"),
+        "content_type": contract.get("content_type"),
+        "story_goal": contract.get("story_goal"),
+        "emotional_arc": contract.get("emotional_arc"),
+        "visual_world": contract.get("visual_world"),
+        "performance_strategy": contract.get("performance_strategy"),
+        "route_mix": contract.get("route_mix"),
+        "lip_sync_policy": contract.get("lip_sync_policy"),
+        "memory_policy": contract.get("memory_policy"),
+        "visual_directing_rules": contract.get("visual_directing_rules"),
+        "must_keep": contract.get("must_keep"),
+        "must_avoid": contract.get("must_avoid"),
+        "continuity_rules": contract.get("continuity_rules"),
+    }
+
+
+def _compact_scene_rows(source_rows: list[Any]) -> list[dict[str, Any]]:
+    out = []
+    for row in source_rows:
+        scene = _safe_dict(row)
+        out.append(
+            {
+                "scene_id": scene.get("scene_id"),
+                "segment_id": scene.get("segment_id"),
+                "segment_ids": scene.get("segment_ids"),
+                "t0": scene.get("t0"),
+                "t1": scene.get("t1"),
+                "duration": scene.get("duration"),
+                "route": scene.get("route"),
+                "timeline_role": scene.get("timeline_role"),
+                "primary_role": scene.get("primary_role"),
+                "visual_focus_role": scene.get("visual_focus_role"),
+                "secondary_roles": scene.get("secondary_roles"),
+                "lipSync": scene.get("lipSync"),
+                "requiresAudioSensitiveVideo": scene.get("requiresAudioSensitiveVideo"),
+                "speaker_role": scene.get("speaker_role"),
+                "story_beat_type": scene.get("story_beat_type"),
+                "scene_goal": scene.get("scene_goal"),
+                "purpose": scene.get("purpose"),
+                "action": scene.get("action"),
+                "user_visible_description": scene.get("user_visible_description"),
+                "audio_phrase": scene.get("audio_phrase"),
+                "camera": scene.get("camera"),
+                "lighting": scene.get("lighting"),
+                "shot_size_intent": scene.get("shot_size_intent"),
+                "camera_motion_intent": scene.get("camera_motion_intent"),
+                "lighting_intent": scene.get("lighting_intent"),
+            }
+        )
+    return out
+
+
 def _default_detail_value(key: str) -> Any:
     if key == "camera":
         return {
@@ -188,12 +265,16 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
             "scene_detail": {"scene_detail_version": "v1", "source_stage": "scenes", "scenes": []},
         }
 
+    audio_map = _safe_dict(package.get("audio_map"))
+    director_contract = _safe_dict(package.get("director_contract"))
+    compact_rows = _compact_scene_rows(source_rows)
+    compact_audio = _compact_audio_segments(audio_map)
+    compact_contract = _compact_director_contract(director_contract)
+
     payload = {
-        "audio_map": _safe_dict(package.get("audio_map")),
-        "director_contract": _safe_dict(package.get("director_contract")),
-        "story_core": _safe_dict(package.get("story_core")),
-        "role_plan": _safe_dict(package.get("role_plan")),
-        "scene_plan": {"scenes": source_rows},
+        "audio_segments": compact_audio,
+        "director_contract": compact_contract,
+        "scene_plan": {"scenes": compact_rows},
     }
     instruction = (
         "Ты detail-expander уже утверждённых сцен. Не меняй structural fields: "
@@ -211,7 +292,9 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
 
     prompt_text = instruction + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False)
     diagnostics["scene_detail_prompt_chars"] = len(prompt_text)
-    diagnostics["scene_detail_payload_scene_count"] = len(source_rows)
+    diagnostics["scene_detail_compact_payload"] = True
+    diagnostics["scene_detail_compact_scene_count"] = len(compact_rows)
+    diagnostics["scene_detail_compact_audio_segments_count"] = len(compact_audio)
     try:
         configured_timeout = get_scenario_stage_timeout("scene_detail")
     except Exception:
