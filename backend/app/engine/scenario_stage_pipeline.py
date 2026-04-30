@@ -234,6 +234,36 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
+
+def _build_director_v2_primary_text(contract: dict[str, Any], draft_plan: list[Any]) -> str:
+    downstream = _safe_dict(contract.get("downstream_brief"))
+    route_mix = _safe_dict(contract.get("route_mix"))
+    primary_parts = [
+        str(contract.get("story_goal") or "").strip(),
+        str(contract.get("visual_world") or "").strip(),
+        str(contract.get("performance_strategy") or "").strip(),
+        str(contract.get("emotional_arc") or "").strip(),
+        str(downstream.get("core") or "").strip(),
+        str(downstream.get("scenes") or "").strip(),
+        json.dumps(route_mix, ensure_ascii=False) if route_mix else "",
+        str(contract.get("first_last_count") or "").strip(),
+    ]
+    draft_summary = []
+    for row in _safe_list(draft_plan)[:12]:
+        item = _safe_dict(row)
+        draft_summary.append(
+            " | ".join(
+                part for part in [
+                    str(item.get("segment_id") or "").strip(),
+                    str(item.get("route") or "").strip(),
+                    str(item.get("goal") or item.get("scene_goal") or "").strip(),
+                ] if part
+            )
+        )
+    if draft_summary:
+        primary_parts.append("draft_plan_summary: " + "; ".join([line for line in draft_summary if line]))
+    return "\n".join([part for part in primary_parts if part]).strip()
+
 def _audio_map_scene_candidates(audio_map: dict[str, Any]) -> list[Any]:
     safe_map = _safe_dict(audio_map)
     candidates = _safe_list(safe_map.get("scene_candidate_windows"))
@@ -419,6 +449,31 @@ def _director_world_role(route: str, contract: dict[str, Any]) -> tuple[str, dic
 def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
     input_pkg = _safe_dict(package.get("input"))
     contract = _safe_dict(input_pkg.get("director_contract"))
+    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package") or package.get("director_v2_package"))
+    draft_plan_present = bool(
+        _safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))
+    )
+    contract_present = bool(contract or _safe_dict(director_v2_pkg.get("director_contract")))
+    request_source = str(input_pkg.get("request_source") or "").strip().lower()
+    is_director_v2_source = bool(
+        "ai_scenario_director_v2" in request_source
+        or director_v2_pkg
+        or draft_plan_present
+        or _safe_dict(director_v2_pkg.get("director_contract"))
+        or str(contract.get("source") or "").strip().lower() == "ai_director_v2"
+        or str(director_v2_pkg.get("source") or "").strip().lower() == "ai_director_v2"
+    )
+    story_core = _safe_dict(package.get("story_core"))
+    story_core["source_trace"] = {
+        "is_director_v2_source": is_director_v2_source,
+        "has_director_contract": contract_present,
+        "has_draft_plan": draft_plan_present,
+        "director_contract_story_goal_preview": str(contract.get("story_goal") or "")[:220],
+        "director_contract_visual_world_preview": str(contract.get("visual_world") or "")[:220],
+        "draft_plan_count": len(_safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))),
+        "used_source_priority": "director_contract_primary" if contract_present else "default",
+    }
+    package["story_core"] = story_core
     if not contract:
         return
     _, performance_world = _director_world_role("ia2v", contract)
@@ -427,29 +482,12 @@ def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
     memory_label = str(memory_world.get("label") or "").strip()
     if not (performance_label or memory_label):
         return
-    story_core = _safe_dict(package.get("story_core"))
     world_lock = _safe_dict(story_core.get("world_lock"))
     if performance_label:
         world_lock["performance_world"] = performance_label
     if memory_label:
         world_lock["memory_world"] = memory_label
     story_core["world_lock"] = world_lock
-    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package") or package.get("director_v2_package"))
-    draft_plan_present = bool(_safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan")))
-    contract_present = bool(contract or _safe_dict(director_v2_pkg.get("director_contract")))
-    request_source = str(_safe_dict(package.get("input")).get("request_source") or "").strip().lower()
-    is_director_v2_source = bool(
-        "ai_scenario_director_v2" in request_source
-        or str(contract.get("source") or "").strip().lower() == "ai_director_v2"
-        or str(director_v2_pkg.get("source") or "").strip().lower() == "ai_director_v2"
-    )
-    story_core["source_trace"] = {
-        "is_director_v2_source": is_director_v2_source,
-        "has_director_contract": contract_present,
-        "has_draft_plan": draft_plan_present,
-        "used_source_priority": "director_contract_primary" if contract_present else "default",
-    }
-    package["story_core"] = story_core
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["core_director_contract_applied"] = True
     diagnostics["core_performance_world"] = performance_label
@@ -11013,6 +11051,35 @@ def _is_usable_story_core(story_core: dict[str, Any]) -> bool:
     )
 
 
+def _detect_director_v2_industrial_drift(input_pkg: dict[str, Any], story_core: dict[str, Any], story_core_v1: dict[str, Any]) -> bool:
+    contract = _safe_dict(input_pkg.get("director_contract"))
+    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    draft_plan_present = bool(_safe_list(input_pkg.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan")))
+    request_source = str(input_pkg.get("request_source") or "").strip().lower()
+    is_director_v2_source = bool(
+        "ai_scenario_director_v2" in request_source or director_v2_pkg or draft_plan_present or _safe_dict(director_v2_pkg.get("director_contract"))
+    )
+    contract_present = bool(contract or _safe_dict(director_v2_pkg.get("director_contract")))
+    if not (is_director_v2_source and contract_present):
+        return False
+    downstream = _safe_dict(contract.get("downstream_brief"))
+    source_text = " ".join([
+        str(contract.get("story_goal") or ""),
+        str(contract.get("visual_world") or ""),
+        str(downstream.get("core") or ""),
+    ]).lower()
+    world_definition = _safe_dict(story_core_v1.get("world_definition"))
+    generated_text = " ".join([
+        str(story_core.get("story_summary") or ""),
+        str(story_core.get("opening_anchor") or ""),
+        str(_safe_dict(story_core.get("world_lock")).get("rule") or ""),
+        str(_safe_dict(story_core.get("style_lock")).get("rule") or ""),
+        json.dumps(world_definition, ensure_ascii=False),
+    ]).lower()
+    banned = ("corrugated metal", "rusted industrial", "industrial perimeter", "decaying industrial")
+    return any(token in generated_text and token not in source_text for token in banned)
+
+
 def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str, Any]:
     req = _safe_dict(payload)
     metadata = _safe_dict(req.get("metadata"))
@@ -11033,6 +11100,17 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
     connected_text = str(text_in.get("value") or "").strip()
     local_text = str(req.get("directorNote") or req.get("director_note") or req.get("note") or "").strip()
     primary_narrative_text = connected_text or local_text or source_text
+    director_v2_pkg = _safe_dict(req.get("director_v2_package"))
+    director_contract = _safe_dict(req.get("director_contract")) or _safe_dict(director_v2_pkg.get("director_contract"))
+    draft_plan = _safe_list(req.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))
+    audio_map = _safe_dict(req.get("audio_map")) or _safe_dict(director_v2_pkg.get("audio_map"))
+    request_source = str(metadata.get("requestSource") or "").strip()
+    request_source_norm = request_source.lower()
+    is_director_v2_source = bool(
+        "ai_scenario_director_v2" in request_source_norm or director_v2_pkg or draft_plan or _safe_dict(director_v2_pkg.get("director_contract"))
+    )
+    director_v2_primary_text = _build_director_v2_primary_text(director_contract, draft_plan) if (is_director_v2_source and director_contract) else ""
+    should_override_text = bool(request_source_norm == "ai_scenario_director_v2")
     base_input = {
         "text": str(req.get("text") or "").strip() or primary_narrative_text,
         "story_text": str(req.get("storyText") or req.get("story_text") or "").strip() or primary_narrative_text,
@@ -11052,9 +11130,9 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "format": str(director_controls.get("format") or req.get("format") or "9:16"),
         "creative_config": _normalize_creative_config(_extract_request_creative_config(req, metadata)),
         "director_config": _safe_dict(req.get("director_config")),
-        "director_contract": _safe_dict(req.get("director_contract")),
-        "director_v2_package": _safe_dict(req.get("director_v2_package")),
-        "draft_plan": _safe_list(req.get("draft_plan")),
+        "director_contract": director_contract,
+        "director_v2_package": director_v2_pkg,
+        "draft_plan": draft_plan,
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
         "refs_by_role": _safe_dict(req.get("refsByRole")),
         "selected_refs": {
@@ -11064,8 +11142,12 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "props": [str(item).strip() for item in _safe_list(req.get("selectedPropsRefUrls")) if str(item).strip()],
         },
         "ownership_binding_inventory": ownership_binding_inventory,
-        "request_source": str(metadata.get("requestSource") or "").strip(),
+        "request_source": request_source,
     }
+    if director_v2_primary_text:
+        for field in ("text", "story_text", "note", "director_note"):
+            if should_override_text or not str(base_input.get(field) or "").strip():
+                base_input[field] = director_v2_primary_text
     normalized_input = _normalize_input_audio_source(base_input, refs_inventory)
     stages = {
         stage_id: {
@@ -11133,6 +11215,8 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             },
         },
     }
+    if audio_map:
+        package["audio_map"] = audio_map
     _normalize_director_package_input(package)
     _inject_route_strategy_diagnostics(package)
     return package
@@ -12744,6 +12828,18 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
                     )
                     diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
                     diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
+                    if _detect_director_v2_industrial_drift(input_pkg, story_core, story_core_v1):
+                        diagnostics["story_core_last_error_code"] = "CORE_DIRECTOR_DRIFT"
+                        diagnostics["story_core_validation_errors"] = [
+                            "CORE drifted from Director V2 contract. Preserve director story_goal/visual_world/downstream_brief. Do not invent industrial/rusted/corrugated world."
+                        ]
+                        package["diagnostics"] = diagnostics
+                        if attempt == 0:
+                            retry_used = True
+                            validation_feedback = diagnostics["story_core_validation_errors"][0]
+                            _append_diag_event(package, "story_core director_v2 drift guard triggered, requesting retry", stage_id="story_core")
+                            continue
+                        raise RuntimeError("CORE_DIRECTOR_DRIFT")
                     package["diagnostics"] = diagnostics
                     _apply_director_contract_story_core(package)
                     package = _sanitize_clip_package_before_downstream(package)
@@ -12831,6 +12927,8 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
             )
             diagnostics["visual_ref_identity_lock_applied"] = visual_ref_applied
             diagnostics["visual_ref_identity_lock_source"] = visual_ref_source
+            if _detect_director_v2_industrial_drift(input_pkg, story_core, story_core_v1):
+                raise RuntimeError("CORE_DIRECTOR_DRIFT")
             warnings = _safe_list(diagnostics.get("warnings"))
             warnings.append(
                 {
@@ -18123,10 +18221,10 @@ def run_manual_stage(
 
     input_pkg = _safe_dict(pkg.get("input"))
     incoming_director_config = _safe_dict(req.get("director_config"))
-    incoming_director_contract = _safe_dict(req.get("director_contract"))
     incoming_director_v2_package = _safe_dict(req.get("director_v2_package"))
-    incoming_draft_plan = _safe_list(req.get("draft_plan"))
-    incoming_audio_map = _safe_dict(req.get("audio_map"))
+    incoming_director_contract = _safe_dict(req.get("director_contract")) or _safe_dict(incoming_director_v2_package.get("director_contract"))
+    incoming_draft_plan = _safe_list(req.get("draft_plan")) or _safe_list(incoming_director_v2_package.get("draft_plan"))
+    incoming_audio_map = _safe_dict(req.get("audio_map")) or _safe_dict(incoming_director_v2_package.get("audio_map"))
 
     if incoming_director_config:
         input_pkg["director_config"] = incoming_director_config
@@ -18143,6 +18241,19 @@ def run_manual_stage(
         pkg["draft_plan"] = incoming_draft_plan
     if incoming_audio_map and stage_id == "story_core":
         pkg["audio_map"] = incoming_audio_map
+    request_source = str(input_pkg.get("request_source") or _safe_dict(req.get("metadata")).get("requestSource") or "").strip()
+    request_source_norm = request_source.lower()
+    is_director_v2_source = bool(
+        "ai_scenario_director_v2" in request_source_norm
+        or incoming_director_v2_package
+        or incoming_draft_plan
+        or _safe_dict(incoming_director_v2_package.get("director_contract"))
+    )
+    director_v2_primary_text = _build_director_v2_primary_text(incoming_director_contract, incoming_draft_plan) if (is_director_v2_source and incoming_director_contract) else ""
+    if director_v2_primary_text:
+        for field in ("text", "story_text", "note", "director_note"):
+            if request_source_norm == "ai_scenario_director_v2" or not str(input_pkg.get(field) or "").strip():
+                input_pkg[field] = director_v2_primary_text
 
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
@@ -18674,4 +18785,3 @@ def resolve_stage_sequence(
     for stage_id in stage_ids:
         _resolve_stage_with_dependencies(stage_id, ordered, visited)
     return ordered
-
