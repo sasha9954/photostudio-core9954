@@ -55,6 +55,46 @@ def _safe_list(v: Any) -> list[Any]:
     return v if isinstance(v, list) else []
 
 
+def _default_detail_value(key: str) -> Any:
+    if key == "camera":
+        return {
+            "framing": "",
+            "angle": "",
+            "movement": "",
+            "lens_feel": "",
+            "focus_priority": "",
+        }
+    if key == "performance":
+        return {
+            "facial_expression": "",
+            "body_language": "",
+            "energy": "",
+            "lip_sync_readability": "",
+        }
+    if key == "environment":
+        return {
+            "setting_detail": "",
+            "foreground": "",
+            "background": "",
+            "atmosphere": "",
+            "lighting": "",
+        }
+    if key == "continuity":
+        return {
+            "must_preserve": [],
+            "identity_lock_notes": "",
+            "world_lock_notes": "",
+        }
+    if key == "motion_constraints":
+        return {
+            "safe_motion": "",
+            "avoid": [],
+        }
+    if key in {"must_show", "must_avoid"}:
+        return []
+    return ""
+
+
 def _extract_json_payload(text: str) -> tuple[dict[str, Any] | None, str]:
     raw = str(text or "").strip()
     if not raw:
@@ -115,6 +155,13 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
         "scene_detail_locked_fields_repaired_count": 0,
         "scene_detail_json_parse_mode": "unknown",
     }
+    if not source_rows:
+        return {
+            "ok": False,
+            "error": "scene_detail_missing_scene_plan",
+            "diagnostics": diagnostics,
+            "scene_detail": {"scene_detail_version": "v1", "source_stage": "scenes", "scenes": []},
+        }
 
     payload = {
         "audio_map": _safe_dict(package.get("audio_map")),
@@ -129,7 +176,12 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
         "Верни JSON с ключами scene_detail_version, source_stage='scenes', scenes[]. "
         "Для каждой сцены сохрани locked fields и добавь scene_goal, visual_payoff, action_detail, blocking, "
         "camera{framing,angle,movement,lens_feel,focus_priority}, performance{facial_expression,body_language,energy,lip_sync_readability}, "
-        "environment{setting_detail,foreground,background,atmosphere,lighting}, continuity, motion_constraints, must_show, must_avoid, prompt_bridge_notes."
+        "environment{setting_detail,foreground,background,atmosphere,lighting}, continuity, motion_constraints, must_show, must_avoid, prompt_bridge_notes. "
+        "Сделай сцены кинематографичными, зрелищными, продуктивными для PROMPTS и LTX-safe. Не пересказывай сухо. "
+        "Для каждой сцены добавь visual payoff, читаемое действие, blocking, камеру, атмосферу, передний/задний план, эмоцию и безопасное движение. "
+        "Для ia2v сцен делай performer-first: readable face, mouth, emotional vocal delivery, subtle body movement, controlled camera. "
+        "Для i2v сцен делай action/world/beat-first: physical action, environment interaction, spatial storytelling, controlled readable motion. "
+        "Не добавляй хаотичные орбиты, невозможную акробатику, резкие скачки камеры, лишних персонажей или новые сюжетные события, которых нет в skeleton."
     )
 
     text, _ = post_generate_content(api_key=api_key, model=SCENE_DETAIL_MODEL, prompt=instruction + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False))
@@ -170,7 +222,7 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
             if key in model_scene:
                 merged[key] = deepcopy(model_scene.get(key))
             elif key not in merged:
-                merged[key] = [] if key in {"must_show", "must_avoid"} else ""
+                merged[key] = _default_detail_value(key)
 
         for key in LOCKED_FIELDS:
             if merged.get(key) != source_scene.get(key):
