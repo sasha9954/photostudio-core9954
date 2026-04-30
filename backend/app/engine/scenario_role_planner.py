@@ -1054,15 +1054,6 @@ def _validate_roles_payload(
             return {}, ROLES_SCHEMA_INVALID
         if str(row.get("presence_weight") or "") not in ALLOWED_PRESENCE_WEIGHTS:
             return {}, ROLES_SCHEMA_INVALID
-        performance_focus = str(row.get("performance_focus") or "").strip().lower()
-        if performance_focus:
-            young_markers = ("younger man", "young man", "young hero", "flashback", "past timeline")
-            adult_markers = ("older man", "adult hero", "train", "singing", "vocal")
-            if any(marker in performance_focus for marker in young_markers) and primary_role != "character_2":
-                return {}, ROLE_PRIMARY_MISMATCH
-            if any(marker in performance_focus for marker in adult_markers) and primary_role != "character_1":
-                return {}, ROLE_PRIMARY_MISMATCH
-
     if len(set(seen_segment_ids)) != len(seen_segment_ids):
         return {}, ROLES_DOCTRINE_DUPLICATION
 
@@ -1176,6 +1167,48 @@ def _extract_director_draft_role_intents(package: dict[str, Any]) -> dict[str, d
     return intents
 
 
+def _ensure_director_text_only_roles_in_registry(
+    package: dict[str, Any],
+    allowed_registry: dict[str, dict[str, Any]],
+) -> list[str]:
+    intents = _extract_director_draft_role_intents(package)
+    has_romance_intent = False
+    has_fight_intent = False
+    for intent in intents.values():
+        intent_text = " ".join(
+            [
+                str(_safe_dict(intent).get("user_visible_description") or ""),
+                str(_safe_dict(intent).get("purpose") or ""),
+                str(_safe_dict(intent).get("audio_phrase") or ""),
+            ]
+        ).lower()
+        has_romance_intent = has_romance_intent or any(token in intent_text for token in _ROMANCE_INTENT_TOKENS)
+        has_fight_intent = has_fight_intent or any(token in intent_text for token in _FIGHT_INTENT_TOKENS)
+    added_roles: list[str] = []
+    if has_romance_intent and "episodic_girl" not in allowed_registry:
+        allowed_registry["episodic_girl"] = {
+            "entity_id": "episodic_girl",
+            "role_name": "Episodic Girl",
+            "continuity_rules": ["role_type: text_only_ephemeral", "identity_lock: false"],
+        }
+        added_roles.append("episodic_girl")
+    if has_fight_intent:
+        for role_id, role_name, role_type in (
+            ("crowd_bystanders", "Crowd Bystanders", "text_only_group"),
+            ("fallen_man", "Fallen Man", "text_only_ephemeral"),
+            ("opponent_text_only", "Opponent", "text_only_ephemeral"),
+        ):
+            if role_id in allowed_registry:
+                continue
+            allowed_registry[role_id] = {
+                "entity_id": role_id,
+                "role_name": role_name,
+                "continuity_rules": [f"role_type: {role_type}", "identity_lock: false"],
+            }
+            added_roles.append(role_id)
+    return added_roles
+
+
 def _apply_director_role_overrides(
     *,
     roles_payload: dict[str, Any],
@@ -1275,6 +1308,8 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
 
     segment_rows, expected_segment_ids, segment_error, segment_row_diagnostics = _build_segment_rows(audio_map, story_core)
     allowed_registry = _collect_allowed_entity_registry(package)
+    director_text_only_roles_added = _ensure_director_text_only_roles_in_registry(package, allowed_registry)
+    director_intents = _extract_director_draft_role_intents(package)
     core_subject_map = _build_core_subject_map(story_core)
     connected_cast_roles = _collect_connected_cast_roles(package)
     single_cast_anchor = _resolve_single_cast_anchor_role(package)
@@ -1319,6 +1354,11 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "single_cast_anchor_role": single_cast_anchor,
         "single_cast_fallback_applied": False,
         "single_cast_fallback_reason": "",
+        "director_draft_intents_count": len(director_intents),
+        "director_role_overrides_applied_count": 0,
+        "director_text_only_roles_added": director_text_only_roles_added,
+        "director_role_override_segments": [],
+        "director_primary_mismatches_after_override": [],
     }
 
     diagnostics.update(segment_row_diagnostics)
@@ -1434,7 +1474,22 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 expected_segment_ids=expected_segment_ids,
                 allowed_registry=allowed_registry,
             )
+            primary_mismatches = _collect_primary_mismatches(
+                scene_casting=[_safe_dict(row) for row in _safe_list(sanitized.get("scene_casting"))],
+                core_subject_map=core_subject_map,
+            )
             diagnostics["role_plan_primary_mismatch_segments"] = primary_mismatches[:40]
+            diagnostics["director_primary_mismatches_after_override"] = primary_mismatches[:40]
+            diagnostics["director_role_override_segments"] = [
+                seg_id
+                for seg_id in expected_segment_ids
+                if seg_id in director_intents
+                and any(
+                    str(_safe_dict(row).get("segment_id") or "").strip() == seg_id
+                    for row in _safe_list(sanitized.get("scene_casting"))
+                )
+            ]
+            diagnostics["director_role_overrides_applied_count"] = len(diagnostics["director_role_override_segments"])
             diagnostics["sanitized_payload_preview"] = _normalize_text(json.dumps(sanitized, ensure_ascii=False), max_len=500)
             seen_segment_ids = [
                 str(_safe_dict(row).get("segment_id") or "").strip()
