@@ -28,7 +28,6 @@ const DIRECTOR_STATES = {
   ERROR: "error",
 };
 
-const quickPrompts = ["Больше сюжета", "Больше пения / lip-sync", "Сделать 50/50", "Без first/last кадров", "Добавить воспоминания", "Начать с перрона", "Финал в поезде"];
 
 const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref-character)", location: "var(--family-ref-location)", style: "var(--family-ref-style)", video: "var(--family-video-ref)", props: "var(--family-ref-items)", text: "var(--family-text)" };
 const fmt = (v) => Number(v || 0).toFixed(2);
@@ -67,15 +66,32 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const draftContract = data?.draftContract || null;
   const draftPlan = Array.isArray(data?.draftPlan) ? data.draftPlan : [];
   const error = data?.directorError || "";
+  const info = data?.directorInfo || "";
+  const currentAudioSourceNodeId = connectedInputs?.audio_in?.sourceNodeId || "";
+  const currentAudioUrl = connectedInputs?.audio_in?.value || connectedInputs?.audio_in?.url || "";
+  const hasDraft = Boolean(draftContract || draftPlan.length);
+  const isAudioChangedAfterParse = Boolean(audioMap) && (
+    (data?.parsedAudioSourceNodeId && currentAudioSourceNodeId && data.parsedAudioSourceNodeId !== currentAudioSourceNodeId)
+    || (data?.parsedAudioUrl && currentAudioUrl && data.parsedAudioUrl !== currentAudioUrl)
+  );
+  const isParseLocked = isApplied
+    || directorState === DIRECTOR_STATES.PARSING_AUDIO
+    || directorState === DIRECTOR_STATES.GENERATING_DRAFT
+    || directorState === DIRECTOR_STATES.DRAFT_READY
+    || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED
+    || directorState === DIRECTOR_STATES.APPLYING
+    || hasDraft;
 
   const segments = useMemo(() => normalizeDirectorV2AudioSegments(audioMap), [audioMap]);
 
   const patchData = (patch) => data?.onPatchNodeData?.(id, patch);
-  const isChatLocked = isApplied || !(directorState === DIRECTOR_STATES.AUDIO_PARSED || directorState === DIRECTOR_STATES.CHAT_ACTIVE || directorState === DIRECTOR_STATES.GENERATING_DRAFT || directorState === DIRECTOR_STATES.DRAFT_READY || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED || directorState === DIRECTOR_STATES.APPLYING || directorState === DIRECTOR_STATES.APPLIED);
+  const isChatLocked = isApplied
+    || isAudioChangedAfterParse
+    || !(directorState === DIRECTOR_STATES.AUDIO_PARSED || directorState === DIRECTOR_STATES.CHAT_ACTIVE || directorState === DIRECTOR_STATES.GENERATING_DRAFT || directorState === DIRECTOR_STATES.DRAFT_READY || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED || directorState === DIRECTOR_STATES.APPLYING || directorState === DIRECTOR_STATES.APPLIED);
 
   const parseAudio = async () => {
     if (!data?.onParseAudioStage) return;
-    patchData({ directorState: DIRECTOR_STATES.PARSING_AUDIO, directorError: "" });
+    patchData({ directorState: DIRECTOR_STATES.PARSING_AUDIO, directorError: "", directorInfo: "" });
     const result = await data.onParseAudioStage(id);
     if (!result?.ok) return patchData({ directorState: DIRECTOR_STATES.ERROR, directorError: String(result?.error || "Ошибка разбора аудио") });
     const nextAudioMap = result.audioMap || {};
@@ -87,6 +103,9 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
       audioMap: nextAudioMap,
       chatMessages: [{ role: "assistant", text: `Аудио разобрано. Я вижу ${nextSegments} сегментов, длительность ${duration.toFixed(2)} сек, lip-sync кандидатов: ${lip}. Теперь можно обсудить структуру клипа.` }],
       directorError: "",
+      directorInfo: "",
+      parsedAudioSourceNodeId: currentAudioSourceNodeId || "",
+      parsedAudioUrl: currentAudioUrl || "",
     });
   };
 
@@ -101,7 +120,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
 
   const onGenerateDraft = async () => {
     if (!data?.onGenerateDirectorDraft) return;
-    patchData({ directorState: DIRECTOR_STATES.GENERATING_DRAFT, directorError: "" });
+    patchData({ directorState: DIRECTOR_STATES.GENERATING_DRAFT, directorError: "", directorInfo: "" });
     const result = await data.onGenerateDirectorDraft(id);
     if (!result?.ok) return patchData({ directorState: DIRECTOR_STATES.ERROR, directorError: String(result?.error || "Ошибка генерации черновика") });
     patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo) });
@@ -110,12 +129,20 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const onApply = () => {
     const directorV2Package = { director_contract: draftContract || {}, draft_plan: draftPlan || [], audio_map: audioMap || {}, chat_history: chatMessages || [] };
     console.log("[AI SCENARIO DIRECTOR V2] apply", directorV2Package);
-    patchData({ directorState: DIRECTOR_STATES.APPLIED, confirmed: true, applied: true, directorV2Package, directorError: "Пакет подготовлен. Подключение к CORE будет следующим патчем." });
+    patchData({
+      directorState: DIRECTOR_STATES.APPLIED,
+      confirmed: true,
+      applied: true,
+      directorV2Package,
+      directorError: "",
+      directorInfo: "Пакет подготовлен. Подключение к CORE будет следующим патчем.",
+    });
   };
   const onReset = () => patchData({
     directorState: hasAudio ? DIRECTOR_STATES.READY_TO_PARSE_AUDIO : DIRECTOR_STATES.WAIT_INPUTS,
     audioMap: null, chatMessages: [], draftContract: null, draftPlan: [], confirmed: false, applied: false,
-    directorV2Package: null, directorError: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {},
+    directorV2Package: null, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {},
+    parsedAudioSourceNodeId: "", parsedAudioUrl: "",
   });
   const chipSource = Object.keys(connectedInputs).length ? connectedInputs : connections;
 
@@ -125,19 +152,19 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
       <div className="asdv2_body">
         <div className="asdv2_toolbar"><div className="asdv2_sub">Пошаговый режиссёрский flow</div><span className="asdv2_stepBadge">Состояние: {directorState}</span>
           <div className="asdv2_actions">
-            <button className="clipSB_btn asdv2_primaryAction" disabled={isApplied || !hasAudio || directorState === DIRECTOR_STATES.PARSING_AUDIO} onClick={parseAudio}>{audioMap ? "Переразобрать аудио" : "Разобрать аудио"}</button>
-            <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT} onClick={onGenerateDraft}>{draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик"}</button>
+            <button className="clipSB_btn asdv2_primaryAction" disabled={!hasAudio || isParseLocked} onClick={parseAudio}>{audioMap ? "Переразобрать аудио" : "Разобрать аудио"}</button>
+            <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик"}</button>
             <button className="clipSB_btn" disabled={isApplied || directorState !== DIRECTOR_STATES.DRAFT_READY} onClick={() => patchData({ directorState: DIRECTOR_STATES.DRAFT_CONFIRMED, confirmed: true })}>Подтвердить</button>
             <button className="clipSB_btn" disabled={isApplied || Boolean(data?.draftIsDemo) || directorState !== DIRECTOR_STATES.DRAFT_CONFIRMED} onClick={onApply}>Применить к CORE</button>
             <button className="clipSB_btn" onClick={onReset}>Сбросить</button>
           </div></div>
-        <div className="asdv2_inputsChips">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
-        {data?.draftIsDemo ? <div className="asdv2_emptyState">Демо-черновик UI, backend Gemini Director V2 ещё не подключён.</div> : null}
+        <div className="asdv2_inputsBar">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
+        {data?.draftIsDemo ? <div className="asdv2_emptyState">Демо-черновик UI. Реальный Gemini Director V2 ещё не подключён.</div> : null}
+        {isAudioChangedAfterParse ? <div className="asdv2_emptyState">Подключённое аудио изменилось. Нажми «Сбросить» и разбери новое аудио.</div> : null}
         <div className="asdv2_mainGrid">
           <div className={`asdv2_panel asdv2_chatPanel ${isChatLocked ? "asdv2_lockedPanel" : ""}`}><strong>AI-чат</strong><div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
             {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI сможет видеть сегменты, длительность, фразы и предложить структуру клипа.</div> : null}
-            <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked} onClick={onSend}>Отправить</button></div>
-            <div className="asdv2_quickPrompts">{quickPrompts.map((p) => <button key={p} className="clipSB_btn" disabled={isChatLocked} onClick={() => setChatInput((prev) => `${prev}${prev ? " " : ""}${p}`)}>{p}</button>)}</div></div>
+            <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked} onClick={onSend}>Отправить</button></div></div>
 
           <div className="asdv2_panel"><strong>Черновик контракта режиссёра</strong>{!draftContract ? <div className="asdv2_emptyState">Черновик режиссёра ещё не создан. Сначала разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractGrid">{Object.entries(draftContract).map(([k, v]) => <div key={k} className="asdv2_contractCard"><b>{k}</b><small>{String(v)}</small></div>)}</div>}<div className="asdv2_draftActions">{directorState === DIRECTOR_STATES.DRAFT_CONFIRMED ? "Черновик подтверждён. Теперь можно применить его к цепочке." : ""}</div></div>
 
@@ -145,6 +172,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
         </div>
         <div className="asdv2_panel asdv2_planPanel"><strong>План клипа</strong>{directorState === DIRECTOR_STATES.DRAFT_READY || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED || directorState === DIRECTOR_STATES.APPLIED ? <div className="asdv2_plan">{draftPlan.map((scene, idx) => <div className="asdv2_scene" key={scene.scene_id || idx}><b>{scene.scene_id || `scene_${idx + 1}`}</b><small>{scene.start_sec}–{scene.end_sec}</small><p>{scene.user_visible_description || scene.purpose || ""}</p></div>)}</div> : <div className="asdv2_emptyState">План клипа появится здесь после генерации режиссёрского черновика.</div>}</div>
         {error ? <div className="asdv2_emptyState">Ошибка: {error}</div> : null}
+        {info ? <div className="asdv2_emptyState">{info}</div> : null}
       </div>
     </NodeShell>
   </>);
