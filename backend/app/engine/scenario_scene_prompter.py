@@ -481,6 +481,16 @@ def _shared_space_enforcement_clause(must_be_visible_roles: list[str]) -> str:
     )
 
 
+def _is_split_timeline_contract(story_core: dict[str, Any]) -> bool:
+    blob = json.dumps(_safe_dict(story_core), ensure_ascii=False).lower()
+    return (
+        "character_1 present timeline" in blob
+        and "character_2 past_flashback timeline" in blob
+        and "character_1 only in present" in blob
+        and "character_2 only in past" in blob
+    )
+
+
 def _coerce_speaker_confidence(value: Any) -> Any:
     if isinstance(value, bool):
         return int(value)
@@ -2105,6 +2115,28 @@ def _strip_i2v_route_incompatible_clauses(text: str) -> tuple[str, bool]:
     cleaned = _append_compact_clauses("", kept)
     return cleaned, removed
 
+
+def _cleanup_prompt_corruption_fragments(text: str) -> str:
+    blob = str(text or "").strip()
+    if not blob:
+        return ""
+    cleaned = blob
+    banned_literals = (
+        "tinged with an underlying s;",
+        "where every shad",
+        "no visible vocal performance or .",
+        "No framing, no singer-first",
+    )
+    for token in banned_literals:
+        cleaned = cleaned.replace(token, "")
+    parts = [part.strip() for part in re.split(r"(?<=[;.!?])\s+|\s*;\s*", cleaned) if part.strip()]
+    safe_parts: list[str] = []
+    for part in parts:
+        if re.search(r"\b[a-zA-Z]\s*;?$", part):
+            continue
+        safe_parts.append(part)
+    return _append_compact_clauses("", safe_parts).strip()
+
 def _build_i2v_memory_beat_directive(
     scene_plan_row: dict[str, Any],
     role_row: dict[str, Any],
@@ -2174,6 +2206,14 @@ def _build_i2v_memory_beat_directive(
     primary_role = str(scene_plan_row.get("primary_role") or role_row.get("primary_role") or "").strip()
     world_bits = str(scene_plan_row.get("director_required_world") or "").strip()
     scene_goal = str(scene_plan_row.get("scene_goal") or "").strip()
+    visual_payoff = str(scene_plan_row.get("visual_payoff") or "").strip()
+    action_detail = str(scene_plan_row.get("action_detail") or "").strip()
+    blocking = str(scene_plan_row.get("blocking") or "").strip()
+    camera = str(scene_plan_row.get("camera") or "").strip()
+    environment = str(scene_plan_row.get("environment") or "").strip()
+    motion_constraints = str(scene_plan_row.get("motion_constraints") or "").strip()
+    must_show = str(scene_plan_row.get("must_show") or "").strip()
+    prompt_bridge_notes = str(scene_plan_row.get("prompt_bridge_notes") or "").strip()
     narrative_function = str(scene_plan_row.get("narrative_function") or "").strip()
     ltx_video_goal = str(scene_plan_row.get("ltx_video_goal") or "").strip()
     memory_contract = _safe_dict(global_contract.get("memory_contract"))
@@ -2182,7 +2222,28 @@ def _build_i2v_memory_beat_directive(
     if memory_focus:
         focus_selected = memory_focus[segment_index % len(memory_focus)]
     generic_memory_text = _is_generic_memory_text(scene_goal, narrative_function, ltx_video_goal)
-    candidate_core = _trim_sentence("; ".join([x for x in [scene_goal, narrative_function, ltx_video_goal] if x]), max_len=220)
+    candidate_core = _trim_sentence(
+        "; ".join(
+            [
+                x
+                for x in [
+                    scene_goal,
+                    visual_payoff,
+                    action_detail,
+                    blocking,
+                    camera,
+                    environment,
+                    motion_constraints,
+                    must_show,
+                    prompt_bridge_notes,
+                    narrative_function,
+                    ltx_video_goal,
+                ]
+                if x
+            ]
+        ),
+        max_len=320,
+    )
     route_incompatible_i2v_text_detected = _is_i2v_route_incompatible_memory_text(candidate_core)
     use_candidate_core = bool(candidate_core) and not generic_memory_text and not route_incompatible_i2v_text_detected
 
@@ -2199,6 +2260,10 @@ def _build_i2v_memory_beat_directive(
             f"Primary role anchor: {primary_role}" if primary_role else "",
             f"Role function context: {role_functions}" if role_functions else "",
             f"World/location context: {world_bits}" if world_bits else "",
+            f"Action detail: {action_detail}" if action_detail else "",
+            f"Blocking/camera: {blocking}; {camera}" if (blocking or camera) else "",
+            f"Environment and must-show anchors: {environment}; {must_show}" if (environment or must_show) else "",
+            f"Motion constraints: {motion_constraints}" if motion_constraints else "",
             "Show consequence, tension, regret, or emotional aftermath; avoid glamorizing harmful action." if prompt_policy else "",
             "No lip-sync framing, no singer-first framing, no mouth-readable performance language.",
         ],
@@ -2258,6 +2323,14 @@ def _build_i2v_memory_beat_directive(
             ("scene_goal", bool(scene_goal)),
             ("narrative_function", bool(narrative_function)),
             ("ltx_video_goal", bool(ltx_video_goal)),
+            ("visual_payoff", bool(visual_payoff)),
+            ("action_detail", bool(action_detail)),
+            ("blocking", bool(blocking)),
+            ("camera", bool(camera)),
+            ("environment", bool(environment)),
+            ("motion_constraints", bool(motion_constraints)),
+            ("must_show", bool(must_show)),
+            ("prompt_bridge_notes", bool(prompt_bridge_notes)),
             ("memory_contract.memory_focus_elements", bool(memory_focus)),
             ("prompt_policy", bool(prompt_policy)),
             ("active_roles", bool(role_bits)),
@@ -2443,6 +2516,8 @@ def _postprocess_prompts_v11_route_aware(
             post_bad = any(t in post for t in _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS if t != "memory beat") or _is_memory_beat_contamination(post) or any(t in post and t not in allowed_location_text for t in _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS)
             if contam and not post_bad:
                 diag["scene_prompts_ia2v_world_contamination_fixed_count"] += 1
+        for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "negative_video_prompt", "negative_prompt"):
+            segment[field] = _cleanup_prompt_corruption_fragments(str(segment.get(field) or ""))
     raw_payload["segments"] = segments
     return raw_payload, diag
 
@@ -2794,7 +2869,8 @@ def _normalize_scene_prompts(
         for role in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
         if str(role).strip()
     }
-    enforce_shared_space_rule = len(must_be_visible_roles) >= 2
+    split_timeline_contract = _is_split_timeline_contract(story_core)
+    enforce_shared_space_rule = len(must_be_visible_roles) >= 2 and not split_timeline_contract
     shared_space_missing_segments: list[str] = []
     offscreen_violation_segments: list[str] = []
     fingerprint = _build_package_anchor_fingerprint(package, story_core, world_continuity)
@@ -3480,15 +3556,22 @@ def _normalize_scene_prompts(
             )
             if contamination_detected and not (post_high_confidence_detected or post_disallowed_location_detected):
                 scene_prompts_ia2v_world_contamination_fixed_count += 1
+        required_visible_roles = list(must_be_visible_roles)
+        scene_timeline = str(scene.get("timeline") or scene.get("timeline_role") or "").strip().lower()
+        if split_timeline_contract:
+            if actual_route == "ia2v" or "present" in scene_timeline:
+                required_visible_roles = ["character_1"]
+            elif actual_route == "i2v" or "past" in scene_timeline or "flashback" in scene_timeline:
+                required_visible_roles = ["character_2"]
         if enforce_shared_space_rule:
-            missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
+            missing_roles = [role for role in required_visible_roles if not _text_mentions_role(photo_prompt, role)]
             if missing_roles:
                 shared_space_missing_segments.append(scene_id)
                 used_fallback = True
-                photo_prompt = _append_prompt_clause(photo_prompt, _shared_space_enforcement_clause(must_be_visible_roles))
+                photo_prompt = _append_prompt_clause(photo_prompt, _shared_space_enforcement_clause(required_visible_roles))
             offscreen_violations = [
                 role
-                for role in must_be_visible_roles
+                for role in required_visible_roles
                 if role not in may_be_offscreen_roles
                 and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}\b(offscreen|off-screen|not visible|outside frame)\b", photo_prompt.lower()))
             ]
@@ -3496,21 +3579,21 @@ def _normalize_scene_prompts(
                 offscreen_violation_segments.append(scene_id)
                 validation_errors.append(f"must_be_visible_offscreen_violation:{scene_id}")
             if actual_route == "first_last":
-                start_missing = [role for role in must_be_visible_roles if not _text_mentions_role(start_image_prompt, role)]
-                end_missing = [role for role in must_be_visible_roles if not _text_mentions_role(end_image_prompt, role)]
+                start_missing = [role for role in required_visible_roles if not _text_mentions_role(start_image_prompt, role)]
+                end_missing = [role for role in required_visible_roles if not _text_mentions_role(end_image_prompt, role)]
                 if start_missing:
                     shared_space_missing_segments.append(f"{scene_id}:start")
                     used_fallback = True
                     start_image_prompt = _append_prompt_clause(
                         start_image_prompt,
-                        _shared_space_enforcement_clause(must_be_visible_roles),
+                        _shared_space_enforcement_clause(required_visible_roles),
                     )
                 if end_missing:
                     shared_space_missing_segments.append(f"{scene_id}:end")
                     used_fallback = True
                     end_image_prompt = _append_prompt_clause(
                         end_image_prompt,
-                        _shared_space_enforcement_clause(must_be_visible_roles),
+                        _shared_space_enforcement_clause(required_visible_roles),
                     )
 
         scene_out = {
@@ -4676,7 +4759,8 @@ def _apply_prompts_v11_shared_space_post_repair(
         for role in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
         if str(role).strip()
     }
-    enforce_shared_space_rule = len(must_be_visible_roles) >= 2
+    split_timeline_contract = _is_split_timeline_contract(story_core)
+    enforce_shared_space_rule = len(must_be_visible_roles) >= 2 and not split_timeline_contract
     shared_space_missing_segments: list[str] = []
     offscreen_violation_segments: list[str] = []
     validation_errors: list[str] = []
@@ -4696,15 +4780,28 @@ def _apply_prompts_v11_shared_space_post_repair(
         first_frame_prompt = str(segment.get("first_frame_prompt") or "").strip()
         last_frame_prompt = str(segment.get("last_frame_prompt") or "").strip()
 
-        missing_roles = [role for role in must_be_visible_roles if not _text_mentions_role(photo_prompt, role)]
+        required_visible_roles = list(must_be_visible_roles)
+        timeline_hint = " ".join(
+            [
+                str(segment.get("timeline") or ""),
+                str(segment.get("timeline_role") or ""),
+                str(segment.get("scene_goal") or ""),
+            ]
+        ).lower()
+        if split_timeline_contract:
+            if route == "ia2v" or "present" in timeline_hint:
+                required_visible_roles = ["character_1"]
+            elif route == "i2v" or "past" in timeline_hint or "flashback" in timeline_hint:
+                required_visible_roles = ["character_2"]
+        missing_roles = [role for role in required_visible_roles if not _text_mentions_role(photo_prompt, role)]
         if missing_roles:
             shared_space_missing_segments.append(segment_id)
-            segment["photo_prompt"] = _append_prompt_clause(photo_prompt, enforcement_clause)
+            segment["photo_prompt"] = _append_prompt_clause(photo_prompt, _shared_space_enforcement_clause(required_visible_roles))
             photo_prompt = str(segment.get("photo_prompt") or "").strip()
 
         offscreen_violations = [
             role
-            for role in must_be_visible_roles
+            for role in required_visible_roles
             if role not in may_be_offscreen_roles
             and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}{offscreen_pattern}", photo_prompt.lower()))
         ]
@@ -4713,26 +4810,26 @@ def _apply_prompts_v11_shared_space_post_repair(
             validation_errors.append(f"must_be_visible_offscreen_violation:{segment_id}")
 
         if route == "first_last":
-            missing_first = [role for role in must_be_visible_roles if not _text_mentions_role(first_frame_prompt, role)]
-            missing_last = [role for role in must_be_visible_roles if not _text_mentions_role(last_frame_prompt, role)]
+            missing_first = [role for role in required_visible_roles if not _text_mentions_role(first_frame_prompt, role)]
+            missing_last = [role for role in required_visible_roles if not _text_mentions_role(last_frame_prompt, role)]
             if missing_first:
                 shared_space_missing_segments.append(f"{segment_id}:first")
-                segment["first_frame_prompt"] = _append_prompt_clause(first_frame_prompt, enforcement_clause)
+                segment["first_frame_prompt"] = _append_prompt_clause(first_frame_prompt, _shared_space_enforcement_clause(required_visible_roles))
                 first_frame_prompt = str(segment.get("first_frame_prompt") or "").strip()
             if missing_last:
                 shared_space_missing_segments.append(f"{segment_id}:last")
-                segment["last_frame_prompt"] = _append_prompt_clause(last_frame_prompt, enforcement_clause)
+                segment["last_frame_prompt"] = _append_prompt_clause(last_frame_prompt, _shared_space_enforcement_clause(required_visible_roles))
                 last_frame_prompt = str(segment.get("last_frame_prompt") or "").strip()
 
             first_offscreen_violations = [
                 role
-                for role in must_be_visible_roles
+                for role in required_visible_roles
                 if role not in may_be_offscreen_roles
                 and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}{offscreen_pattern}", first_frame_prompt.lower()))
             ]
             last_offscreen_violations = [
                 role
-                for role in must_be_visible_roles
+                for role in required_visible_roles
                 if role not in may_be_offscreen_roles
                 and bool(re.search(rf"\b{re.escape(role)}\b.{0,40}{offscreen_pattern}", last_frame_prompt.lower()))
             ]

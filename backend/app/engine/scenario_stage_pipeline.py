@@ -12403,6 +12403,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             plan_row_data.get("visual_focus_role"),
             role_row_data.get("visual_focus_role"),
         ).lower()
+        if route_name == "i2v" and primary_role == "character_2":
+            visual_focus_role = "character_2"
         speaker_role = _first_non_empty_str(
             segment_row.get("speaker_role"),
             prompts_row_data.get("speaker_role"),
