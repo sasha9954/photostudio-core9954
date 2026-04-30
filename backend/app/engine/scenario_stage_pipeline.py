@@ -16123,6 +16123,38 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         "vocal_phrases": _safe_list(raw_analysis.get("vocalPhrases")),
         "segments": _safe_list(audio_map.get("segments")),
     }
+    segments = _safe_list(audio_map.get("segments"))
+    scene_candidate_windows = _safe_list(audio_map.get("scene_candidate_windows"))
+    lip_sync_count = sum(1 for row in segments if bool(_safe_dict(row).get("is_lip_sync_candidate")))
+    warnings: list[str] = []
+    must_ask_user: list[str] = []
+    if director_mode == "clip" and segments and lip_sync_count >= max(1, len(segments) - 1):
+        warnings.append("All/most segments can support lip-sync, but Director should not make every scene IA2V by default.")
+    if len(segments) > len(scene_candidate_windows) > 0:
+        warnings.append("segments[] are phrase units; draft_plan may merge adjacent phrases into scenes.")
+    role_count = len(_safe_dict(input_pkg.get("assigned_roles")))
+    if director_mode == "clip" and str(audio_map.get("vocal_owner_role") or "unknown") == "unknown" and role_count >= 2:
+        must_ask_user.append("Кто поёт?")
+    likely_min = max(1, len(scene_candidate_windows) or max(1, len(segments) // 2))
+    likely_max = max(likely_min, len(scene_candidate_windows) or len(segments))
+    audio_map["mode_audio_reading"] = {
+        "mode": director_mode,
+        "audio_role_for_mode": "Главный ритмический таймлайн с фразами и энергией." if director_mode == "clip" else "Семантический и ритмический ориентир для режиссуры.",
+        "recommended_director_questions": must_ask_user[:1],
+        "scene_packaging_hint": "Сегменты можно объединять в режиссёрские сцены, сохраняя непрерывный тайминг.",
+        "route_affordance_hint": {
+            "ia2v_possible_windows": [str(_safe_dict(s).get("segment_id") or "") for s in segments if bool(_safe_dict(s).get("is_lip_sync_candidate"))][:8],
+            "i2v_possible_windows": [str(_safe_dict(s).get("segment_id") or "") for s in segments][:8],
+            "first_last_possible_windows": [str(_safe_dict(s).get("segment_id") or "") for s in segments if bool(_safe_dict(s).get("first_last_candidate"))][:4],
+        },
+        "warnings": warnings,
+    }
+    audio_map["director_audio_brief"] = {
+        "summary": "Audio Map даёт анализ тайминга/фраз и подсказки для режиссёра, но не финальный сценарий.",
+        "best_use_of_audio": "Использовать как source of truth по таймингу и переходам, а финальные сцены определить в Director V2 chat/draft.",
+        "likely_scene_count_range": {"min": likely_min, "max": likely_max, "reason": "Оценка на базе segment/scenario candidates без авторинга финального плана."},
+        "must_ask_user": must_ask_user,
+    }
 
     diagnostics["audio_map_analysis_mode"] = str(audio_map.get("analysis_mode") or "audio_map_v1_1_strict")
     diagnostics["audio_map_segmentation_backend"] = "timeout_fallback" if used_timeout_fallback else "gemini"

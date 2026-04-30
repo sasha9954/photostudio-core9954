@@ -23455,6 +23455,7 @@ onClipSec: (nodeId, value) => {
                   draftPlan: Array.isArray(response?.draft_plan) ? response.draft_plan : [],
                   questionsResolved: Array.isArray(response?.questions_resolved) ? response.questions_resolved : [],
                   remainingRisks: Array.isArray(response?.remaining_risks) ? response.remaining_risks : [],
+                  knowledgeVersion: String(response?.knowledge_version || ""),
                 };
               },
               onDirectorV2Chat: async (nodeId, userMessage) => {
@@ -23477,7 +23478,7 @@ onClipSec: (nodeId, value) => {
                 };
                 const response = await fetchJson("/api/director/v2/chat", { method: "POST", body: payload });
                 if (!response?.ok) return { ok: false, error: response?.error || "Gemini Director V2 не ответил" };
-                return { ok: true, assistantReply: String(response?.assistant_reply || ""), directorMemory: response?.director_memory || {} };
+                return { ok: true, assistantReply: String(response?.assistant_reply || ""), directorMemory: response?.director_memory || {}, knowledgeVersion: String(response?.knowledge_version || "") };
               },
               onRunDirectorV2PipelineStage: async (nodeId, stageKey) => {
                 try {
