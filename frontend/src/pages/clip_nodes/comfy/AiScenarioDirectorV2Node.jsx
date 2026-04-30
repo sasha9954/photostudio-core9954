@@ -15,24 +15,25 @@ const INPUTS = [
 ];
 
 const PLAN = [
-  ["1", "IA2V", "Настоящее", "...", "Мужик поёт в купе поезда."],
-  ["2", "I2V", "Воспоминание", "...", "Молодой герой дерётся во дворе."],
-  ["3", "IA2V", "Настоящее", "...", "Мужик поёт в тамбуре с сигаретой в руке."],
-  ["4", "I2V", "Воспоминание", "...", "Молодой герой ворует и убегает."],
-  ["5", "IA2V", "Настоящее", "...", "Мужик в вагоне-ресторане за столом с едой."],
-  ["6", "I2V", "Воспоминание", "...", "Молодой герой дарит цветы девушке."],
-  ["7", "IA2V", "Финал", "...", "Мужик поёт в том же купе, поезд приближается к Одессе."],
+  ["1", "IA2V", "Настоящее", "...", "Герой поёт в купе поезда, лицо читаемо, камера спокойно держит эмоцию."],
+  ["2", "I2V", "Дорога", "...", "Ночной город отражается в окне вагона, поезд движется к цели."],
+  ["3", "IA2V", "Настоящее", "...", "Герой поёт у окна, свет вагона мягко отделяет его от фона."],
+  ["4", "I2V", "Воспоминание", "...", "Короткое воспоминание: герой идёт по перрону в прошлом."],
+  ["5", "I2V", "Атмосфера", "...", "Детали дороги: билет, руки, свет в коридоре, движение поезда."],
+  ["6", "IA2V", "Кульминация", "...", "Герой поёт сильнее, эмоция становится открытой."],
+  ["7", "I2V", "Финал", "...", "Поезд приближается к городу, утренний свет появляется за окном."],
+  ["8", "IA2V", "Финал", "...", "Финальный крупный план героя: он допевает последнюю фразу."],
 ];
 
 const STAGES = [
-  { key: "plan", label: "PLAN" },
-  { key: "audio", label: "AUDIO" },
-  { key: "core", label: "CORE" },
-  { key: "roles", label: "ROLES" },
-  { key: "scenes", label: "SCENES" },
-  { key: "prompts", label: "PROMPTS" },
-  { key: "final_video_prompt", label: "FINAL VIDEO PROMPT" },
-  { key: "final", label: "FINAL" },
+  { key: "plan", label: "ПЛАН", tech: "PLAN" },
+  { key: "audio", label: "АУДИО", tech: "AUDIO" },
+  { key: "core", label: "СМЫСЛ", tech: "CORE" },
+  { key: "roles", label: "РОЛИ", tech: "ROLES" },
+  { key: "scenes", label: "СЦЕНЫ", tech: "SCENES" },
+  { key: "prompts", label: "ПРОМТЫ", tech: "PROMPTS" },
+  { key: "final_video_prompt", label: "ФИНАЛЬНЫЙ ПРОМТ", tech: "FINAL VIDEO PROMPT" },
+  { key: "final", label: "СБОРКА", tech: "FINAL" },
 ];
 
 const viewerText = {
@@ -78,7 +79,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
         <Handle key={item.id} type="target" position={Position.Left} id={item.id} className="clipSB_handle" style={{ ...handleStyle(item.id), top: 48 + index * 24 }} />
       ))}
       <Handle type="source" position={Position.Right} id="scenario_out_v2" className="clipSB_handle" style={handleStyle("scenario_out")} />
-      <NodeShell title="AI СЦЕНАРИСТ / РЕЖИССЁР" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeStoryboard" style={{ minWidth: 1120 }}>
+      <NodeShell title="AI РЕЖИССЁР V2" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeStoryboard asdv2_shell" style={{ minWidth: 1120 }}>
         <div className="asdv2_body">
           <div className="asdv2_toolbar">
             <div className="asdv2_titleBlock">
@@ -130,10 +131,11 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
               <strong>Этапы pipeline</strong>
               <div className="asdv2_pipelineList">
                 {STAGES.map((item) => {
-                  const info = statuses?.[item.key] || statuses?.[item.label] || {};
+                  const info = statuses?.[item.key] || statuses?.[item.tech] || {};
                   return (
                     <button key={item.key} type="button" className={`asdv2_stage ${stage === item.key ? "isActive" : ""}`} onClick={() => setStage(item.key)}>
                       <b>{item.label}</b>
+                      <small>{item.tech}</small>
                       <span>{formatStatus(info.status)}</span>
                       <small>{String(info.summary || "Ожидает")}</small>
                     </button>

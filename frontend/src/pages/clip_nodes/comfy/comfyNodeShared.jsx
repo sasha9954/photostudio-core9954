@@ -71,9 +71,9 @@ export function handleStyle(kind, extra = {}) {
   return { ...HANDLE_BASE_STYLE, background: color, boxShadow: `0 0 0 1px rgba(0,0,0,0.72), 0 0 0 2px color-mix(in srgb, ${color} 18%, transparent)`, ...extra };
 }
 
-export function NodeShell({ title, icon, children, className = "", onClose }) {
+export function NodeShell({ title, icon, children, className = "", onClose, style }) {
   return (
-    <div className={`clipSB_node ${className}`}>
+    <div className={`clipSB_node ${className}`} style={style}>
       <div className="clipSB_nodeHeader"><div className="clipSB_nodeTitle">{icon}{title}</div>{onClose ? <button className="clipSB_close" onClick={onClose}>×</button> : null}</div>
       <div className="clipSB_nodeBody">{children}</div>
     </div>
