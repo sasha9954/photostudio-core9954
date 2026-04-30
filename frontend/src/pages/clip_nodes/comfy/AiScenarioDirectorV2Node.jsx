@@ -240,9 +240,10 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     directorState: hasAudio ? DIRECTOR_STATES.READY_TO_PARSE_AUDIO : DIRECTOR_STATES.WAIT_INPUTS,
     audioMap: null, chatMessages: [], draftContract: null, draftPlan: [], confirmed: false, applied: false,
     directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
+    parsedAudioSourceNodeId: "", parsedAudioUrl: "",
     questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
   });
-  const hasDirectorCycleData = Boolean(audioMap) || Boolean(draftContract) || Boolean(data?.directorV2Package);
+  const hasDirectorCycleData = Boolean(audioMap) || Boolean(draftContract) || draftPlan.length > 0 || Boolean(data?.directorV2Package);
   const onModeChange = (value) => {
     const nextPatch = { directorMode: value, mode: value, contentType: resolveDirectorV2ContentType(value), content_type: resolveDirectorV2ContentType(value) };
     if (hasDirectorCycleData) return resetDirectorCycleForSettingsChange(nextPatch);
