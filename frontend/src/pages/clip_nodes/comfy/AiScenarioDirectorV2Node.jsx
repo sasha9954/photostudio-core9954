@@ -79,6 +79,61 @@ const renderContractValue = (value) => {
   }
 };
 
+const renderInlineMarkdown = (text = "") => {
+  const source = String(text || "");
+  const nodes = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let lastIndex = 0;
+  let match = pattern.exec(source);
+  while (match) {
+    if (match.index > lastIndex) nodes.push(source.slice(lastIndex, match.index));
+    const token = match[0];
+    if (token.startsWith("`") && token.endsWith("`")) nodes.push(<code key={`code_${match.index}`}>{token.slice(1, -1)}</code>);
+    else if (token.startsWith("**") && token.endsWith("**")) nodes.push(<strong key={`strong_${match.index}`}>{token.slice(2, -2)}</strong>);
+    else nodes.push(token);
+    lastIndex = match.index + token.length;
+    match = pattern.exec(source);
+  }
+  if (lastIndex < source.length) nodes.push(source.slice(lastIndex));
+  return nodes.length ? nodes : [source];
+};
+
+const renderAssistantMarkdown = (text = "") => {
+  const lines = String(text || "").split("\n");
+  const blocks = [];
+  let paragraph = [];
+  let listItems = [];
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    blocks.push(<p key={`p_${blocks.length}`}>{paragraph.map((line, idx) => <React.Fragment key={`pf_${idx}`}>{idx > 0 ? <br /> : null}{renderInlineMarkdown(line)}</React.Fragment>)}</p>);
+    paragraph = [];
+  };
+  const flushList = () => {
+    if (!listItems.length) return;
+    blocks.push(<ul key={`ul_${blocks.length}`}>{listItems.map((item, idx) => <li key={`li_${idx}`}>{renderInlineMarkdown(item)}</li>)}</ul>);
+    listItems = [];
+  };
+  lines.forEach((rawLine) => {
+    const line = rawLine || "";
+    const listMatch = line.match(/^\s*[-*]\s+(.+)$/);
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+    if (listMatch) {
+      flushParagraph();
+      listItems.push(listMatch[1]);
+      return;
+    }
+    flushList();
+    paragraph.push(line);
+  });
+  flushParagraph();
+  flushList();
+  return blocks.length ? blocks : <p>{renderInlineMarkdown(text)}</p>;
+};
+
 function normalizeDirectorV2AudioSegments(audioMap = null) {
   const source = isObject(audioMap) ? audioMap : {};
   const raw = Array.isArray(source?.segments) ? source.segments : [];
@@ -374,7 +429,18 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
               <strong>AI-чат / обсуждение клипа</strong>{data?.directorV2Package ? <button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "pipeline" })}>Открыть Pipeline Review</button> : null}
               <button className={`clipSB_btn ${copyFeedback.lastReply === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.lastReply ? "asdv2_copyOk" : "")}`} disabled={!lastAssistantMessage} onClick={() => copyText(lastAssistantMessage, "lastReply", "Ответ скопирован ✓")}>{copyFeedback.lastReply || "Скопировать последний ответ"}</button>
             </div>
-            <div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
+            <div className="asdv2_chatMessages">{chatMessages.map((m, i) => {
+              const isAssistant = m?.role === "assistant";
+              const copyKey = `msg_${i}`;
+              const copyLabel = copyFeedback[copyKey] || "Копировать";
+              return <div key={i} className={`asdv2_chatMsg ${isAssistant ? "isAssistant" : "isUser"}`}>
+                <div className="asdv2_chatMsgTop">
+                  <span className={`asdv2_chatRole ${isAssistant ? "isAssistant" : "isUser"}`}>{isAssistant ? "AI" : "Вы"}</span>
+                  {isAssistant ? <button className={`clipSB_btn asdv2_chatCopyBtn ${copyLabel === "Не удалось скопировать" ? "asdv2_copyError" : (copyLabel !== "Копировать" ? "asdv2_copyOk" : "")}`} onClick={() => copyText(String(m?.text || ""), copyKey, "Скопировано")}>{copyLabel}</button> : null}
+                </div>
+                <div className="asdv2_chatMsgBody">{isAssistant ? renderAssistantMarkdown(m?.text || "") : <p>{String(m?.text || "")}</p>}</div>
+              </div>;
+            })}</div>
             {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI увидит сегменты, длительность, фразы и сможет обсудить структуру клипа.</div> : null}
             <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked || Boolean(data?.directorChatPending)} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked || Boolean(data?.directorChatPending)} onClick={onSend}>{data?.directorChatPending ? "AI думает..." : "Отправить"}</button></div>
           </div>
