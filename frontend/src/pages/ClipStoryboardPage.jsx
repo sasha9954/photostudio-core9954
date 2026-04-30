@@ -27,6 +27,7 @@ import {
   RefLiteNode,
   ScenarioStoryboardNode,
   ScenarioPipelineDebugNode,
+  AiScenarioDirectorV2Node,
 } from "./clip_nodes/comfy";
 import VideoRefNode from "./clip_nodes/VideoRefNode";
 import {
@@ -24015,6 +24016,8 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "scenarioStoryboard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { scenes: [], sceneGeneration: {} } };
     } else if (type === "scenarioPipelineDebug") {
       node = { id, type: "scenarioPipelineDebug", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { storyboardPackage: {}, stageStatuses: {}, diagnostics: {} } };
+    } else if (type === "aiScenarioDirectorV2") {
+      node = { id, type: "aiScenarioDirectorV2", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { stageStatuses: {} } };
     } else if (type === "comfyVideoPreview") {
       node = { id, type: "comfyVideoPreview", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { previewStatus: 'idle', previewUrl: '', workflowPreset: 'comfy-default', format: '9:16', duration: 0 } };
     } else if (type === "refCharacter2") {
@@ -24362,6 +24365,7 @@ const hydrate = useCallback((source = "unknown") => {
       comfyNarrative: ComfyNarrativeNode,
       scenarioStoryboard: ScenarioStoryboardNode,
       scenarioPipelineDebug: ScenarioPipelineDebugNode,
+      aiScenarioDirectorV2: AiScenarioDirectorV2Node,
       comfyVideoPreview: ComfyVideoPreviewNode,
       refCharacter2: RefCharacter2Node,
       refCharacter3: RefCharacter3Node,
@@ -25799,6 +25803,7 @@ const hydrate = useCallback((source = "unknown") => {
               <div className="clipSB_drawerGroupTitle">COMFY FLOW</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioPipelineDebug")}>🧪 Scenario Pipeline Debug</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("aiScenarioDirectorV2")}>🎬 AI Scenario Director V2</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioStoryboard")}>🎞️ SCENARIO STORYBOARD</button>
