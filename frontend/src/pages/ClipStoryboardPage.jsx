@@ -23490,8 +23490,8 @@ onClipSec: (nodeId, value) => {
               },
               onRunDirectorV2PipelineStage: async (nodeId, stageKey) => {
                 try {
-                  const stageMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
-                  const packageKeyMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
+                  const stageMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
+                  const packageKeyMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
                   const stageId = stageMap[String(stageKey || "")] || "";
                   if (!stageId) return { ok: false, error: "Неизвестный этап" };
                   const activeNodes = nodesRef.current || [];
