@@ -19912,7 +19912,17 @@ onClipSec: (nodeId, value) => {
           const hasPendingScenarioOutputs = isLegacyNarrativeSource && !!sourceNode?.data?.pendingOutputs;
           const directPipelineStoryboardOut = isDirectPipelineSource ? extractScenarioPipelineStoryboardOut({ sourceNode, sourceHandle }) : null;
           const narrativeStoryboardOut = isLegacyNarrativeSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
-          const directorV2StoryboardOut = isDirectorV2Source ? (sourceNode?.data?.storyboardPackage?.final_storyboard || sourceNode?.data?.storyboardPackage?.storyboard_out || null) : null;
+          const directorV2StoryboardOut = isDirectorV2Source
+            ? (
+              sourceNode?.data?.storyboardPackage?.final_storyboard
+              || sourceNode?.data?.storyboardPackage?.storyboard_out
+              || sourceNode?.data?.storyboardPackage?.final_payload?.storyboard_out
+              || sourceNode?.data?.storyboardPackage?.final_payload?.final_storyboard
+              || sourceNode?.data?.storyboardPackage?.render_manifest?.storyboard_out
+              || sourceNode?.data?.storyboardPackage?.render_manifest
+              || null
+            )
+            : null;
           const storyboardOut = directPipelineStoryboardOut || narrativeStoryboardOut || directorV2StoryboardOut;
           const directorOutput = isDirectPipelineSource
             ? (sourceNode?.data?.directorOutput || null)
@@ -20065,8 +20075,11 @@ onClipSec: (nodeId, value) => {
             && !shouldSkipHardResetForFinalizeOnlyApply
             && (revisionChanged || sourceScenarioContextStale || connectedContextChanged);
           const directorV2FinalConfirmed = isDirectorV2Source ? (sourceNode?.data?.pipelineStages?.final?.confirmed === true) : true;
+          const directorV2ScenarioWarning = isDirectorV2Source && !directorV2FinalConfirmed
+            ? "Pipeline AI Director V2 ещё не завершён. Подтверди FINAL перед передачей в Scenario Storyboard."
+            : "";
           const runtimeBaseData = shouldHardResetStoryboardRuntime
-            ? clearScenarioStoryboardGeneratedRuntime(base?.data || {}, { clearScenes: true })
+            ? clearScenarioStoryboardGeneratedRuntime(base?.data || {}, { clearScenes: directorV2FinalConfirmed || !isDirectorV2Source })
             : (base?.data || {});
           const previousScenes = Array.isArray(runtimeBaseData?.scenes) ? runtimeBaseData.scenes : [];
           const resetBeforeRequest = sourceIsGenerating && (!hasPendingScenarioOutputs || Boolean(base?.data?.scenarioResetInFlight));
@@ -20633,6 +20646,7 @@ onClipSec: (nodeId, value) => {
               scenarioPackage: leanRuntimeStoryboard,
               debugStoryboardPackage: normalizedPackage,
               sceneContractSource: String(normalizedPackage?.sceneContractSource || "").trim(),
+              scenarioSourceWarning: directorV2ScenarioWarning,
               rawScenarioResponseSummary,
               storyboardOut: leanRuntimeStoryboard,
               directorOutput,
