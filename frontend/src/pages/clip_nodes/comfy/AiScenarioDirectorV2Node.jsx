@@ -3,15 +3,15 @@ import { Handle, Position } from "@xyflow/react";
 import { NodeShell, handleStyle } from "./comfyNodeShared";
 
 const INPUTS = [
-  { id: "audio_in", label: "Audio", tone: "audio", placeholder: "No audio connected" },
-  { id: "ref_character_1", label: "Character 1", tone: "character", placeholder: "Lead character ref" },
-  { id: "ref_character_2", label: "Character 2", tone: "character", placeholder: "Second role ref" },
-  { id: "ref_character_3", label: "Character 3", tone: "character", placeholder: "Third role ref" },
-  { id: "ref_location", label: "Location", tone: "location", placeholder: "Scene location ref" },
-  { id: "ref_style", label: "Style", tone: "style", placeholder: "Visual style mood" },
-  { id: "video_ref_in", label: "Video ref", tone: "video", placeholder: "Reference video" },
-  { id: "ref_props", label: "Props", tone: "props", placeholder: "Objects / props" },
-  { id: "text_in", label: "Text idea", tone: "text", placeholder: "Idea or synopsis" },
+  { id: "audio_in", label: "Аудио", tone: "audio", placeholder: "Аудио не подключено" },
+  { id: "ref_character_1", label: "Персонаж 1", tone: "character", placeholder: "Референс главного персонажа" },
+  { id: "ref_character_2", label: "Персонаж 2", tone: "character", placeholder: "Референс второго персонажа" },
+  { id: "ref_character_3", label: "Персонаж 3", tone: "character", placeholder: "Референс третьего персонажа" },
+  { id: "ref_location", label: "Локация", tone: "location", placeholder: "Референс локации" },
+  { id: "ref_style", label: "Стиль", tone: "style", placeholder: "Визуальный стиль / настроение" },
+  { id: "video_ref_in", label: "Видео-референс", tone: "video", placeholder: "Видео для ориентира" },
+  { id: "ref_props", label: "Предметы", tone: "props", placeholder: "Предметы / реквизит" },
+  { id: "text_in", label: "Идея / текст", tone: "text", placeholder: "Идея, текст или краткий сюжет" },
 ];
 
 const PLAN = [
@@ -36,14 +36,14 @@ const STAGES = [
 ];
 
 const viewerText = {
-  plan: "PLAN: clip cards summary",
-  audio: "Audio segmentation will appear here",
-  core: "Story spine will appear here",
-  roles: "Role assignment table will appear here",
-  scenes: "Scene plan will appear here",
-  prompts: "Photo/video prompts will appear here",
-  final_video_prompt: "LTX-ready prompts will appear here",
-  final: "Render manifest will appear here",
+  plan: "PLAN: краткий план карточек клипа",
+  audio: "Здесь будет разбивка аудио",
+  core: "Здесь будет смысловой позвоночник истории",
+  roles: "Здесь будет распределение ролей",
+  scenes: "Здесь будет план сцен",
+  prompts: "Здесь будут фото/видео промты",
+  final_video_prompt: "Здесь будут финальные LTX-ready промты",
+  final: "Здесь будет manifest сборки",
 };
 
 const toneToColor = {
@@ -54,6 +54,15 @@ const toneToColor = {
   video: "var(--family-video-ref)",
   props: "var(--family-ref-items)",
   text: "var(--family-text)",
+};
+
+const formatStatus = (status) => {
+  if (!status || status === "idle") return "ожидает";
+  if (status === "done") return "готово";
+  if (status === "error") return "ошибка";
+  if (status === "stale") return "устарело";
+  if (status === "running") return "в работе";
+  return String(status);
 };
 
 export default function AiScenarioDirectorV2Node({ id, data }) {
@@ -69,29 +78,86 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
         <Handle key={item.id} type="target" position={Position.Left} id={item.id} className="clipSB_handle" style={{ ...handleStyle(item.id), top: 48 + index * 24 }} />
       ))}
       <Handle type="source" position={Position.Right} id="scenario_out_v2" className="clipSB_handle" style={handleStyle("scenario_out")} />
-      <NodeShell title="AI SCENARIO" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeStoryboard" style={{ minWidth: 980 }}>
-        <div className="asdv2_sub">Director V2 / Clip planning</div>
-        <div className="asdv2_row">
-          <select className="asdv2_select" defaultValue="Clip"><option>Clip</option><option>Story</option><option>Advertisement</option><option>Kino</option><option>Test</option></select>
-          <select className="asdv2_select" defaultValue="9:16"><option>9:16</option><option>16:9</option><option>1:1</option></select>
-          <span className="asdv2_chip">Draft</span>
-          <button className="clipSB_btn" type="button" title="UI stub: backend integration pending" onClick={() => handleUiStubAction("analyze_inputs")}>Analyze inputs</button>
-          <button className="clipSB_btn" type="button" title="UI stub: backend integration pending" onClick={() => handleUiStubAction("build_plan")}>Build plan</button>
-          <button className="clipSB_btn" type="button" title="UI stub: backend integration pending" onClick={() => handleUiStubAction("build_contract")}>Build contract</button>
-          <button className="clipSB_btn" type="button" title="UI stub: backend integration pending" onClick={() => handleUiStubAction("run_next_stage")}>Run next stage</button>
+      <NodeShell title="AI СЦЕНАРИСТ / РЕЖИССЁР" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeStoryboard" style={{ minWidth: 1120 }}>
+        <div className="asdv2_body">
+          <div className="asdv2_toolbar">
+            <div className="asdv2_titleBlock">
+              <div className="asdv2_sub">Режиссёрская нода V2 / планирование клипа</div>
+            </div>
+            <div className="asdv2_controls">
+              <select className="asdv2_select" defaultValue="Клип"><option>Клип</option><option>История</option><option>Реклама</option><option>Кино</option><option>Тест</option></select>
+              <select className="asdv2_select" defaultValue="9:16"><option>9:16</option><option>16:9</option><option>1:1</option></select>
+              <span className="asdv2_chip">Черновик</span>
+            </div>
+            <div className="asdv2_actions">
+              <button className="clipSB_btn" type="button" title="UI-заготовка: backend ещё не подключён" onClick={() => handleUiStubAction("analyze_inputs")}>Проверить входы</button>
+              <button className="clipSB_btn" type="button" title="UI-заготовка: backend ещё не подключён" onClick={() => handleUiStubAction("build_plan")}>Собрать план</button>
+              <button className="clipSB_btn" type="button" title="UI-заготовка: backend ещё не подключён" onClick={() => handleUiStubAction("build_contract")}>Собрать контракт</button>
+              <button className="clipSB_btn" type="button" title="UI-заготовка: backend ещё не подключён" onClick={() => handleUiStubAction("run_next_stage")}>Запустить следующий этап</button>
+            </div>
+          </div>
+
+          <div className="asdv2_inputsBar">
+            {INPUTS.map((item) => {
+              const connected = Boolean(data?.connections?.[item.id]);
+              return (
+                <div key={item.id} className={`asdv2_inputChip ${connected ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[item.tone] || "rgba(255,255,255,0.2)" }} title={item.placeholder}>
+                  <span>{item.label}</span>
+                  <b>{connected ? "✓" : "пусто"}</b>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="asdv2_mainGrid">
+            <div className="asdv2_panel asdv2_panelCompact">
+              <strong>AI-помощник</strong>
+              <p>Опиши клип, который хочешь получить.</p>
+              <input className="asdv2_inputLine" placeholder="Например: мужик поёт в купе, между сценами воспоминания молодости..." readOnly />
+              <div className="asdv2_row"><button className="clipSB_btn" type="button">Больше сюжета</button><button className="clipSB_btn" type="button">Больше lip-sync</button><button className="clipSB_btn" type="button">50/50</button><button className="clipSB_btn" type="button">Без first_last</button></div>
+            </div>
+
+            <div className="asdv2_panel asdv2_panelCompact">
+              <div className="asdv2_row asdv2_between"><strong>Черновик контракта режиссёра</strong><button className="clipSB_btn" type="button">JSON</button></div>
+              <div className="asdv2_contractGrid">
+                {["Замысел", "Роли", "Мир", "Маршруты", "Обязательные сцены", "Референсы", "Монтаж"].map((name) => (
+                  <div key={name} className="asdv2_contractCard"><b>{name}</b><small>Черновик раздела контракта.</small></div>
+                ))}
+              </div>
+            </div>
+
+            <div className="asdv2_panel asdv2_panelCompact">
+              <strong>Этапы pipeline</strong>
+              <div className="asdv2_pipelineList">
+                {STAGES.map((item) => {
+                  const info = statuses?.[item.key] || statuses?.[item.label] || {};
+                  return (
+                    <button key={item.key} type="button" className={`asdv2_stage ${stage === item.key ? "isActive" : ""}`} onClick={() => setStage(item.key)}>
+                      <b>{item.label}</b>
+                      <span>{formatStatus(info.status)}</span>
+                      <small>{String(info.summary || "Ожидает")}</small>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="asdv2_viewer">{viewerText[stage] || ""}</div>
+            </div>
+          </div>
+
+          <div className="asdv2_panel asdv2_planPanel">
+            <strong>План клипа</strong>
+            <div className="asdv2_plan">
+              {PLAN.map(([idx, route, timeline, phrase, text]) => (
+                <div key={idx} className="asdv2_scene">
+                  <div className="asdv2_row"><b>#{idx}</b><span className="asdv2_tag">{route}</span><span className="asdv2_tag">{timeline}</span></div>
+                  <small>Фраза: "{phrase}"</small>
+                  <p>{text}</p>
+                  <small>изменить / закрепить / переместить</small>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
-        <div className="asdv2_strip">
-          {INPUTS.map((item) => {
-            const connected = Boolean(data?.connections?.[item.id]);
-            return <div key={item.id} className="asdv2_input" style={{ borderColor: toneToColor[item.tone] || "rgba(255,255,255,0.2)" }}><b>{item.label}</b><span>{connected ? "connected" : "empty"}</span><small>{item.placeholder}</small></div>;
-          })}
-        </div>
-        <div className="asdv2_grid">
-          <div className="asdv2_panel"><strong>AI chat</strong><p>Опиши клип, который хочешь получить.</p><input className="asdv2_inputLine" placeholder="Например: мужик поёт в купе, между сценами воспоминания молодости..." readOnly /><div className="asdv2_row"><button className="clipSB_btn" type="button">Больше сюжета</button><button className="clipSB_btn" type="button">Больше lip-sync</button><button className="clipSB_btn" type="button">50/50</button><button className="clipSB_btn" type="button">Без first_last</button></div></div>
-          <div className="asdv2_panel"><div className="asdv2_row" style={{ justifyContent: "space-between" }}><strong>Director Contract preview</strong><button className="clipSB_btn" type="button">JSON</button></div><div className="asdv2_contract">{["Story intent", "Roles", "Worlds", "Routes", "Required scenes", "Ref usage", "Montage policy"].map((name) => <div key={name} className="asdv2_contractCard"><b>{name}</b><small>Draft contract section placeholder.</small></div>)}</div></div>
-        </div>
-        <div className="asdv2_panel"><strong>Clip Assembly Plan</strong><div className="asdv2_plan">{PLAN.map(([idx, route, timeline, phrase, text]) => <div key={idx} className="asdv2_scene"><div className="asdv2_row"><b>#{idx}</b><span className="asdv2_tag">{route}</span><span className="asdv2_tag">{timeline}</span><small>edit / lock / move</small></div><small>Фраза: "{phrase}"</small><p>{text}</p></div>)}</div></div>
-        <div className="asdv2_panel"><strong>Pipeline rail</strong><div className="asdv2_rail">{STAGES.map((item) => { const info = statuses?.[item.key] || statuses?.[item.label] || {}; return <button key={item.key} type="button" className={`asdv2_stage ${stage === item.key ? "isActive" : ""}`} onClick={() => setStage(item.key)}><b>{item.label}</b><span>{String(info.status || "idle")}</span><small>{String(info.summary || "Summary placeholder")}</small></button>; })}</div><div className="asdv2_viewer">{viewerText[stage] || ""}</div></div>
       </NodeShell>
     </>
   );
