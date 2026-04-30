@@ -5619,9 +5619,9 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_panel{padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.02);min-width:0}
 .asdv2_panelHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
 .asdv2_contractPanel,.asdv2_chatPanel,.asdv2_audioMapPanel{height:560px;max-height:560px;min-height:560px;overflow:hidden}
-.asdv2_contractPanel,.asdv2_audioMapPanel{display:flex;flex-direction:column;gap:8px}
-.asdv2_contractList{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px}
-.asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:4px}
+.asdv2_contractPanel,.asdv2_audioMapPanel{display:flex;flex-direction:column;gap:8px;overflow:hidden}
+.asdv2_contractList{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:4px}
+.asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:4px;min-width:0}
 .asdv2_copyRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:8px;flex:0 0 auto}
 .asdv2_copyOk{border-color:rgba(127,230,154,.7) !important;background:rgba(127,230,154,.14) !important;color:#d8ffe1 !important}
 .asdv2_copyError{border-color:rgba(255,120,120,.7) !important;background:rgba(255,120,120,.14) !important;color:#ffdede !important}
@@ -5657,7 +5657,7 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_primaryAction{border-color:var(--family-audio);box-shadow:0 0 0 1px color-mix(in srgb,var(--family-audio) 40%,transparent) inset}
 .asdv2_emptyState{font-size:12px;opacity:.86;padding:10px;border:1px dashed rgba(255,255,255,.2);border-radius:8px}
 .asdv2_draftActions{margin-top:8px;font-size:12px;color:#7fe69a}
-.asdv2_contractCard small{white-space:pre-wrap;overflow-wrap:anywhere}
+.asdv2_contractCard small{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-width:100%}
 .asdv2_pipelineWindow{margin-top:10px;padding:12px;border:1px solid rgba(255,255,255,.14);border-radius:12px;background:rgba(255,255,255,.02);max-height:720px;overflow:hidden;display:flex;flex-direction:column}
 .asdv2_pipelineTop{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
 .asdv2_pipelineTabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -5671,4 +5671,10 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_stageReview pre{max-height:260px;overflow:auto}
 .asdv2_stageEditor{min-height:180px;max-height:260px;overflow:auto;font-family:monospace}
 .asdv2_stageActions{display:flex;gap:8px;flex-wrap:wrap}
+
+.asdv2_contractPanel .asdv2_copyRow{flex:0 0 auto;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,.08)}
+
+.asdv2_contractList,.asdv2_chatMessages,.asdv2_audioSegments,.asdv2_plan,.asdv2_stageReview,.asdv2_stageReview pre,.asdv2_stageEditor{scrollbar-width:thin}
+.asdv2_contractList::-webkit-scrollbar,.asdv2_chatMessages::-webkit-scrollbar,.asdv2_audioSegments::-webkit-scrollbar,.asdv2_plan::-webkit-scrollbar,.asdv2_stageReview::-webkit-scrollbar{width:8px}
+.asdv2_contractList::-webkit-scrollbar-thumb,.asdv2_chatMessages::-webkit-scrollbar-thumb,.asdv2_audioSegments::-webkit-scrollbar-thumb,.asdv2_plan::-webkit-scrollbar-thumb,.asdv2_stageReview::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:999px}
 .asdv2_stageStatus{font-size:11px;opacity:.85}
