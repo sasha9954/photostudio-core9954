@@ -4217,6 +4217,13 @@ def _normalize_intro_title_input(value: str | None) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
 
+def _normalize_intro_multiline_input(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.replace("\\n", "\n").strip()
+
+
 def _choose_hook_pattern(style_key: str, semantic_tokens: list[str]) -> str:
     for hint in _HOOK_SEMANTIC_HINTS.values():
         if any(token in hint["tokens"] for token in semantic_tokens):
@@ -4872,8 +4879,8 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     title = str(hook_title_payload.get("title") or original_title or "Intro frame")
     title_transformed = bool(hook_title_payload.get("transformed"))
     hook_pattern_used = hook_title_payload.get("patternUsed")
-    title_context = str(payload.titleContext or "").strip()
-    story_context = str(payload.storyContext or "").strip()
+    title_context = _normalize_intro_multiline_input(payload.titleContext)
+    story_context = _normalize_intro_multiline_input(payload.storyContext)
     source_node_types = [str(item or "").strip() for item in (payload.sourceNodeTypes or []) if str(item or "").strip()]
     try:
         duration_sec = max(0.5, min(8.0, float(payload.durationSec or 2.5)))
@@ -4892,10 +4899,10 @@ def _build_intro_frame_prompt(payload: IntroGenerateIn) -> tuple[str, dict[str, 
     hero_participants = _normalize_intro_text_list(getattr(payload, "heroParticipants", None), max_items=5)
     supporting_participants = _normalize_intro_text_list(getattr(payload, "supportingParticipants", None), max_items=6)
     important_props = _normalize_intro_text_list(getattr(payload, "importantProps", None), max_items=5)
-    world_context = str(getattr(payload, "worldContext", "") or "").strip()
-    style_context = str(getattr(payload, "styleContext", "") or "").strip()
-    story_summary = str(getattr(payload, "storySummary", "") or "").strip()
-    preview_prompt = str(getattr(payload, "previewPrompt", "") or "").strip()
+    world_context = _normalize_intro_multiline_input(getattr(payload, "worldContext", ""))
+    style_context = _normalize_intro_multiline_input(getattr(payload, "styleContext", ""))
+    story_summary = _normalize_intro_multiline_input(getattr(payload, "storySummary", ""))
+    preview_prompt = _normalize_intro_multiline_input(getattr(payload, "previewPrompt", ""))
     world = str(getattr(payload, "world", "") or "").strip()
     roles = _normalize_intro_text_list(getattr(payload, "roles", None), max_items=12)
     tone_style_direction = str(getattr(payload, "toneStyleDirection", "") or "").strip()
