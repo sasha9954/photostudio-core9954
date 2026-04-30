@@ -139,6 +139,13 @@
   height: 100%;
 }
 
+.react-flow__node-aiScenarioDirectorV2,
+.react-flow__node-aiscenariodirectorv2 {
+  width: 1260px !important;
+  min-width: 1260px !important;
+  max-width: 1260px !important;
+}
+
 /* Edge readability */
 .clipSB_canvas .react-flow__edge-path,
 .clipSB_canvas .react-flow__connection-path {

@@ -34,17 +34,24 @@ const fmt = (v) => Number(v || 0).toFixed(2);
 const isObject = (v) => !!v && typeof v === "object";
 const STAGE_ORDER = ["core", "roles", "scenes", "prompts", "final_video_prompt", "final"];
 const STAGE_TO_BACKEND = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
+const STAGE_TO_PACKAGE_KEY = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
 const STAGE_META = { core: { title: "CORE — смысловой позвоночник", description: "Базовая смысловая структура и опорные идеи ролика." }, roles: { title: "ROLES — роли и присутствие", description: "Распределение ролей, появлений и эмоционального фокуса." }, scenes: { title: "SCENES — план сцен", description: "Покомпонентный план сцен и переходов." }, prompts: { title: "PROMPTS — фото/видео промты", description: "Генерация промтов для визуальных и видео-сцен." }, final_video_prompt: { title: "FINAL VIDEO PROMPT — финальные видео-промты", description: "Финализация видео-промтов для рендера." }, final: { title: "FINAL — manifest сборки", description: "Финальный manifest/payload для передачи в storyboard." } };
 
 const CONTRACT_SECTIONS = [
-  ["concept", "Замысел"],
-  ["world", "Мир"],
-  ["roles", "Роли"],
-  ["routes", "Маршруты"],
-  ["lip_sync_policy", "Lip-sync policy"],
-  ["opening", "Opening"],
-  ["ending", "Ending"],
-  ["reference_usage", "Reference usage"],
+  ["story_goal", "Замысел"],
+  ["emotional_arc", "Эмоциональная арка"],
+  ["visual_world", "Мир / визуальная среда"],
+  ["performance_strategy", "Стратегия перформанса"],
+  ["route_mix", "Маршруты"],
+  ["lip_sync_policy", "Политика lip-sync"],
+  ["memory_policy", "Воспоминания / перебивки"],
+  ["opening_strategy", "Начало"],
+  ["ending_strategy", "Финал"],
+  ["reference_usage", "Использование референсов"],
+  ["must_keep", "Обязательно сохранить"],
+  ["must_avoid", "Нельзя делать"],
+  ["continuity_rules", "Правила continuity"],
+  ["montage_policy", "Монтажная политика"],
 ];
 
 const renderContractValue = (value) => {
@@ -213,7 +220,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const onReset = () => patchData({
     directorState: hasAudio ? DIRECTOR_STATES.READY_TO_PARSE_AUDIO : DIRECTOR_STATES.WAIT_INPUTS,
     audioMap: null, chatMessages: [], draftContract: null, draftPlan: [], confirmed: false, applied: false,
-    directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, stageReviewDraft: "", directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
+    directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
     parsedAudioSourceNodeId: "", parsedAudioUrl: "",
     questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
   });
@@ -232,8 +239,8 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     const nextStages = { ...sourceStages };
     const idx = STAGE_ORDER.indexOf(stageKey);
     STAGE_ORDER.slice(idx + 1).forEach((key) => {
-      const prev = ensureStage(key);
-      nextStages[key] = { ...prev, confirmed: false, stale: true, status: prev.output ? "stale" : "locked" };
+      const prev = nextStages[key] || ensureStage(key);
+      nextStages[key] = { ...prev, confirmed: false, stale: true, status: prev.output || prev.editedOutput ? "stale" : "locked" };
     });
     return nextStages;
   };
@@ -270,8 +277,8 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
           </div></div>
         <div className="asdv2_inputsBar">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
         {isAudioChangedAfterParse ? <div className="asdv2_emptyState">Подключённое аудио изменилось. Нажми «Сбросить» и разбери новое аудио.</div> : null}
-        {directorViewMode === "pipeline" ? <div className="asdv2_pipelineWindow"><div className="asdv2_pipelineTop"><strong>Pipeline Review</strong><div className="asdv2_actions"><button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "chat" })}>← Вернуться к чату</button></div></div><div className="asdv2_pipelineTabs">{STAGE_ORDER.map((key) => { const st = ensureStage(key); const title = key.toUpperCase().replaceAll("_", " "); return <button key={key} className={`asdv2_pipelineTab ${activePipelineStage === key ? "isActive" : ""} ${st.status === "locked" ? "isLocked" : ""} ${st.status === "confirmed" ? "isConfirmed" : ""} ${st.status === "stale" ? "isStale" : ""} ${st.status === "error" ? "isError" : ""}`} disabled={st.status === "locked"} onClick={() => patchData({ activePipelineStage: key })}>{title}<span className="asdv2_stageStatus">{st.status}</span></button>; })}</div><div className="asdv2_stageReview">{(() => { const st = ensureStage(activePipelineStage); const meta = STAGE_META[activePipelineStage] || { title: activePipelineStage, description: "" }; const editorValue = typeof data?.stageReviewDraft === "string" ? data.stageReviewDraft : JSON.stringify(st.editedOutput || st.output || {}, null, 2); return <><h4>{meta.title}</h4><p>{meta.description}</p><div className="asdv2_panel">{st.output ? <pre>{JSON.stringify(st.output, null, 2)}</pre> : <div className="asdv2_emptyState">Этап ещё не сгенерирован.</div>}</div><textarea className="asdv2_chatInput asdv2_stageEditor" value={editorValue} onChange={(e) => patchData({ stageReviewDraft: e.target.value })} /><div className="asdv2_stageActions"><button className="clipSB_btn" onClick={() => onRunPipelineStage(activePipelineStage)}>Сгенерировать этап</button><button className="clipSB_btn" onClick={() => onRunPipelineStage(activePipelineStage)}>Перегенерировать этап</button><button className="clipSB_btn" onClick={() => { try { const parsed = JSON.parse(String(data?.stageReviewDraft || "{}")); const current = ensureStage(activePipelineStage); const nextStages = markDownstreamStale(activePipelineStage, { ...pipelineStages, [activePipelineStage]: { ...current, editedOutput: parsed, confirmed: false, status: "ready", stale: false } }); patchData({ pipelineStages: nextStages }); } catch (_e) { patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...ensureStage(activePipelineStage), status: "error", error: "Невалидный JSON" } } }); } }}>Сохранить правки</button><button className="clipSB_btn" onClick={() => { const current = ensureStage(activePipelineStage); const nextStages = { ...pipelineStages, [activePipelineStage]: { ...current, status: "confirmed", confirmed: true, stale: false } }; const idx = STAGE_ORDER.indexOf(activePipelineStage); const nextKey = STAGE_ORDER[idx + 1]; if (nextKey) nextStages[nextKey] = { ...ensureStage(nextKey), status: "idle", stale: false }; patchData({ pipelineStages: nextStages }); }}>Подтвердить этап</button></div>{st.error ? <div className="asdv2_emptyState">Ошибка: {st.error}</div> : null}</>; })()}</div></div> : null}
-        <div className="asdv2_mainGrid">
+        {directorViewMode === "pipeline" ? <div className="asdv2_pipelineWindow"><div className="asdv2_pipelineTop"><strong>Pipeline Review</strong><div className="asdv2_actions"><button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "chat" })}>← Вернуться к чату</button></div></div><div className="asdv2_pipelineTabs">{STAGE_ORDER.map((key) => { const st = ensureStage(key); const title = key.toUpperCase().replaceAll("_", " "); return <button key={key} className={`asdv2_pipelineTab ${activePipelineStage === key ? "isActive" : ""} ${st.status === "locked" ? "isLocked" : ""} ${st.status === "confirmed" ? "isConfirmed" : ""} ${st.status === "stale" ? "isStale" : ""} ${st.status === "error" ? "isError" : ""}`} disabled={st.status === "locked"} onClick={() => patchData({ activePipelineStage: key })}>{title}<span className="asdv2_stageStatus">{st.status}</span></button>; })}</div><div className="asdv2_stageReview">{(() => { const st = ensureStage(activePipelineStage); const meta = STAGE_META[activePipelineStage] || { title: activePipelineStage, description: "" }; const editorValue = typeof st.reviewDraft === "string" ? st.reviewDraft : JSON.stringify(st.editedOutput || st.output || {}, null, 2); return <><h4>{meta.title}</h4><p>{meta.description}</p><div className="asdv2_panel">{st.output ? <pre>{JSON.stringify(st.output, null, 2)}</pre> : <div className="asdv2_emptyState">Сначала сгенерируй этап или сохрани ручные правки.</div>}</div><textarea className="asdv2_chatInput asdv2_stageEditor" value={editorValue} onChange={(e) => patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...st, reviewDraft: e.target.value } } })} /><div className="asdv2_stageActions"><button className="clipSB_btn" onClick={() => onRunPipelineStage(activePipelineStage)}>Сгенерировать этап</button><button className="clipSB_btn" onClick={() => { try { const parsed = JSON.parse(String(editorValue || "{}")); const current = ensureStage(activePipelineStage); const nextStages = markDownstreamStale(activePipelineStage, { ...pipelineStages, [activePipelineStage]: { ...current, editedOutput: parsed, confirmed: false, status: "ready", stale: false } }); const packageKey = STAGE_TO_PACKAGE_KEY[activePipelineStage]; const storyboardPackage = { ...(data?.storyboardPackage || {}) }; if (packageKey) storyboardPackage[packageKey] = parsed; if (activePipelineStage === "final" && parsed?.render_manifest) storyboardPackage.render_manifest = parsed.render_manifest; patchData({ pipelineStages: nextStages, storyboardPackage }); } catch (_e) { patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...ensureStage(activePipelineStage), status: "error", error: "Невалидный JSON" } } }); } }}>Сохранить правки</button><button className="clipSB_btn" disabled={(!st.output && !st.editedOutput) || st.status === "running" || st.status === "locked"} onClick={() => { const current = ensureStage(activePipelineStage); const nextStages = { ...pipelineStages, [activePipelineStage]: { ...current, status: "confirmed", confirmed: true, stale: false } }; const idx = STAGE_ORDER.indexOf(activePipelineStage); const nextKey = STAGE_ORDER[idx + 1]; if (nextKey) { nextStages[nextKey] = { ...ensureStage(nextKey), status: "idle", stale: false }; patchData({ pipelineStages: nextStages, activePipelineStage: nextKey }); } else { patchData({ pipelineStages: nextStages, activePipelineStage: "final", directorInfo: "FINAL подтверждён. Теперь можно передать в Scenario Storyboard." }); } }}>Подтвердить этап</button></div>{st.error ? <div className="asdv2_emptyState">Ошибка: {st.error}</div> : null}</>; })()}</div></div> : null}
+        {directorViewMode === "pipeline" ? null : <><div className="asdv2_mainGrid">
           <div className="asdv2_panel asdv2_contractPanel">
             <div className="asdv2_panelHead"><strong>Черновик контракта режиссёра</strong></div>
             {!draftContract ? <div className="asdv2_emptyState">Черновик ещё не создан. Разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractList">
@@ -310,7 +317,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
             </div>
           </div>
         </div>
-        <div className="asdv2_panel asdv2_planPanel"><strong>План клипа</strong>{draftPlan.length ? <div className="asdv2_plan">{draftPlan.map((scene, idx) => <div className="asdv2_scene" key={scene.scene_id || idx}><b>Сцена {idx + 1}</b><small>{scene.segment_id || "—"} · {scene.route || "—"}</small><div className="asdv2_scenePhrase">{scene.audio_phrase || scene.transcript || scene.phrase || "Фраза не указана"}</div><small>{fmt(scene.start_sec)}–{fmt(scene.end_sec)} · {scene.timeline_role || "роль не указана"}</small><p>{scene.user_visible_description || scene.purpose || ""}</p><div className="asdv2_sceneActions"><button className="clipSB_btn" disabled>Редактировать</button><button className="clipSB_btn" disabled>Закрепить</button><button className="clipSB_btn" disabled>Переместить</button></div></div>)}</div> : <div className="asdv2_emptyState">План клипа появится здесь после генерации режиссёрского черновика.</div>}</div>
+        <div className="asdv2_panel asdv2_planPanel"><strong>План клипа</strong>{draftPlan.length ? <div className="asdv2_plan">{draftPlan.map((scene, idx) => <div className="asdv2_scene" key={scene.scene_id || idx}><b>Сцена {idx + 1}</b><small>{scene.segment_id || "—"} · {scene.route || "—"}</small><div className="asdv2_scenePhrase">{scene.audio_phrase || scene.transcript || scene.phrase || "Фраза не указана"}</div><small>{fmt(scene.start_sec)}–{fmt(scene.end_sec)} · {scene.timeline_role || "роль не указана"}</small><p>{scene.user_visible_description || scene.purpose || ""}</p><div className="asdv2_sceneActions"><button className="clipSB_btn" disabled>Редактировать</button><button className="clipSB_btn" disabled>Закрепить</button><button className="clipSB_btn" disabled>Переместить</button></div></div>)}</div> : <div className="asdv2_emptyState">План клипа появится здесь после генерации режиссёрского черновика.</div>}</div></> }
         {Array.isArray(data?.questionsResolved) && data.questionsResolved.length ? <div className="asdv2_panel"><strong>Уточнено</strong><ul>{data.questionsResolved.map((item, idx) => <li key={`resolved_${idx}`}>{String(item || "")}</li>)}</ul></div> : null}
         {Array.isArray(data?.remainingRisks) && data.remainingRisks.length ? <div className="asdv2_panel"><strong>Что проверить перед применением</strong><ul>{data.remainingRisks.map((risk, idx) => <li key={`risk_${idx}`}>{String(risk || "")}</li>)}</ul></div> : null}
         {error ? <div className="asdv2_emptyState">Ошибка: {error}</div> : null}
