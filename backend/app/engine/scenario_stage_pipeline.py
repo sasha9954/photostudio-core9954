@@ -610,16 +610,29 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
     if "world_performance" not in roster_ids:
         roster.append({"entity_id": "world_performance", "role_name": performance_label, "continuity_rules": [f"{performance_label} anchors ia2v."]})
 
-    draft_rows = _safe_list(input_pkg.get("draft_plan"))
+    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    draft_rows = (
+        _safe_list(input_pkg.get("draft_plan"))
+        or _safe_list(director_v2_pkg.get("draft_plan"))
+        or _safe_list(package.get("draft_plan"))
+    )
     required_refs_by_segment: dict[str, set[str]] = {}
     for row in draft_rows:
         item = _safe_dict(row)
-        seg = str(item.get("segment_id") or item.get("id") or "").strip()
-        if not seg:
+        segment_ids: list[str] = []
+        main_seg = str(item.get("segment_id") or item.get("id") or "").strip()
+        if main_seg:
+            segment_ids.append(main_seg)
+        for seg in _safe_list(item.get("segment_ids")):
+            seg = str(seg or "").strip()
+            if seg and seg not in segment_ids:
+                segment_ids.append(seg)
+        if not segment_ids:
             continue
         refs = {str(ref).strip().lower() for ref in _safe_list(item.get("required_refs")) if str(ref).strip()}
         if refs:
-            required_refs_by_segment[seg] = refs
+            for seg_id in segment_ids:
+                required_refs_by_segment[seg_id] = refs
 
     scene_rows = []
     overrides_applied = 0
@@ -648,6 +661,16 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
             current_primary = str(cast.get("primary_role") or "").strip().lower()
             if current_primary != forced_primary:
                 blocking_mismatches.append({"segment_id": segment_id, "from": current_primary, "to": forced_primary})
+                secondary_roles = [
+                    str(role or "").strip().lower()
+                    for role in _safe_list(cast.get("secondary_roles"))
+                    if str(role or "").strip()
+                ]
+                if current_primary and current_primary != forced_primary and current_primary not in secondary_roles:
+                    secondary_roles.append(current_primary)
+                secondary_roles = [role for role in secondary_roles if role != forced_primary]
+                if secondary_roles:
+                    cast["secondary_roles"] = secondary_roles
                 cast["primary_role"] = forced_primary
                 overrides_applied += 1
                 overridden_mismatches.append({"segment_id": segment_id, "forced_primary": forced_primary, "required_refs": sorted(req_refs)})
@@ -663,6 +686,11 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
     diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
     diagnostics["director_draft_intents_count"] = len(required_refs_by_segment)
     diagnostics["director_role_overrides_applied_count"] = overrides_applied
+    diagnostics["director_required_refs_by_segment"] = {
+        segment_id: sorted(refs)
+        for segment_id, refs in sorted(required_refs_by_segment.items())
+    }
+    diagnostics["director_role_forced_primary_segments"] = overridden_mismatches[:40]
     diagnostics["director_blocking_primary_mismatches"] = blocking_mismatches[:40]
     diagnostics["director_core_mismatches_overridden_by_draft"] = overridden_mismatches[:40]
     applied = _safe_dict(diagnostics.get("director_contract_applied_stages"))
@@ -16087,13 +16115,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
-    diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
-    diagnostics["director_draft_intents_count"] = 0
-    diagnostics["director_role_overrides_applied_count"] = 0
-    diagnostics["director_blocking_primary_mismatches"] = []
-    diagnostics["director_core_mismatches_overridden_by_draft"] = []
     package["diagnostics"] = diagnostics
-    print("[ROLES] ACTIVE_ROLE_PLANNER_CODE_PATH=scenario_role_planner_v2")
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="audio_map")
 
     if duration_sec <= 0:
@@ -16623,13 +16645,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
-    diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
-    diagnostics["director_draft_intents_count"] = 0
-    diagnostics["director_role_overrides_applied_count"] = 0
-    diagnostics["director_blocking_primary_mismatches"] = []
-    diagnostics["director_core_mismatches_overridden_by_draft"] = []
     package["diagnostics"] = diagnostics
-    print("[ROLES] ACTIVE_ROLE_PLANNER_CODE_PATH=scenario_role_planner_v2")
     previous_role_plan = _safe_dict(package.get("role_plan"))
     previous_role_plan_valid = _has_valid_role_plan_payload(previous_role_plan)
 
@@ -16922,13 +16938,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
-    diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
-    diagnostics["director_draft_intents_count"] = 0
-    diagnostics["director_role_overrides_applied_count"] = 0
-    diagnostics["director_blocking_primary_mismatches"] = []
-    diagnostics["director_core_mismatches_overridden_by_draft"] = []
     package["diagnostics"] = diagnostics
-    print("[ROLES] ACTIVE_ROLE_PLANNER_CODE_PATH=scenario_role_planner_v2")
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_plan")
     hard_fail_error = ""
     if _is_clip_mode_package(package):
@@ -17827,13 +17837,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
-    diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
-    diagnostics["director_draft_intents_count"] = 0
-    diagnostics["director_role_overrides_applied_count"] = 0
-    diagnostics["director_blocking_primary_mismatches"] = []
-    diagnostics["director_core_mismatches_overridden_by_draft"] = []
     package["diagnostics"] = diagnostics
-    print("[ROLES] ACTIVE_ROLE_PLANNER_CODE_PATH=scenario_role_planner_v2")
     package["scene_prompts"] = {"scenes": []}
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_prompts")
 
@@ -18081,13 +18085,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
-    diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
-    diagnostics["director_draft_intents_count"] = 0
-    diagnostics["director_role_overrides_applied_count"] = 0
-    diagnostics["director_blocking_primary_mismatches"] = []
-    diagnostics["director_core_mismatches_overridden_by_draft"] = []
     package["diagnostics"] = diagnostics
-    print("[ROLES] ACTIVE_ROLE_PLANNER_CODE_PATH=scenario_role_planner_v2")
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="final_video_prompt")
 
     previous_payload = _safe_dict(package.get("final_video_prompt"))
