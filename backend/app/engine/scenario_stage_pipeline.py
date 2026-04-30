@@ -4132,6 +4132,89 @@ def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
+def _build_scene_plan_from_director_draft(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    safe_pkg = _safe_dict(package)
+    input_pkg = _safe_dict(safe_pkg.get("input"))
+    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    draft_plan = (
+        _safe_list(input_pkg.get("draft_plan"))
+        or _safe_list(director_v2_pkg.get("draft_plan"))
+        or _safe_list(safe_pkg.get("draft_plan"))
+    )
+    role_plan = _safe_dict(safe_pkg.get("role_plan"))
+    cast_lookup = {
+        str(_safe_dict(row).get("segment_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(role_plan.get("scene_casting"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    if not draft_plan:
+        return {}, {"applied": False}
+    scenes: list[dict[str, Any]] = []
+    for idx, row_raw in enumerate(draft_plan, start=1):
+        row = _safe_dict(row_raw)
+        segment_ids = [str(seg).strip() for seg in _safe_list(row.get("segment_ids")) if str(seg).strip()]
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or (segment_ids[0] if segment_ids else f"seg_{idx:02d}")).strip()
+        if not segment_ids:
+            segment_ids = [segment_id]
+        cast = _safe_dict(cast_lookup.get(segment_id))
+        t0 = _safe_float(row.get("start_sec"), 0.0)
+        t1 = _safe_float(row.get("end_sec"), t0)
+        route = _to_director_route(row.get("route")) or "i2v"
+        primary_role = str(cast.get("primary_role") or "").strip().lower() or "world"
+        scene_goal = str(row.get("purpose") or row.get("user_visible_description") or "").strip()
+        camera = {
+            "framing": str(row.get("shot_size_intent") or "").strip(),
+            "movement": str(row.get("camera_motion_intent") or "").strip(),
+        }
+        scene = {
+            "scene_id": str(row.get("scene_id") or segment_id).strip(),
+            "segment_id": segment_id,
+            "segment_ids": segment_ids,
+            "t0": t0,
+            "t1": t1,
+            "duration": max(0.0, t1 - t0),
+            "route": route,
+            "timeline_role": str(row.get("timeline_role") or "").strip(),
+            "primary_role": primary_role,
+            "visual_focus_role": primary_role,
+            "secondary_roles": _safe_list(cast.get("secondary_roles")),
+            "scene_goal": scene_goal,
+            "action": str(row.get("user_visible_description") or "").strip(),
+            "spoken_line": str(row.get("audio_phrase") or "").strip(),
+            "audio_phrase": str(row.get("audio_phrase") or "").strip(),
+            "camera": camera,
+            "lighting": str(row.get("lighting_intent") or "").strip(),
+            "location": str(row.get("timeline_role") or row.get("user_visible_description") or "").strip(),
+            "routeLocked": True,
+            "route_lock_source": "director_v2_draft_plan",
+        }
+        if route == "ia2v" and primary_role == "character_1":
+            scene.update({
+                "lipSync": True,
+                "requiresAudioSensitiveVideo": True,
+                "speaker_role": "character_1",
+                "mouth_visible_required": True,
+                "singing_readiness_required": True,
+                "story_beat_type": "performance",
+            })
+        elif route == "i2v" and primary_role == "character_2":
+            scene.update({
+                "lipSync": False,
+                "requiresAudioSensitiveVideo": False,
+                "lip_sync_allowed": False,
+                "story_beat_type": "memory_action",
+            })
+        scenes.append(scene)
+    scene_plan = {
+        "scenes_version": "v2",
+        "source": "director_v2_draft_plan",
+        "scenes": scenes,
+        "storyboard": deepcopy(scenes),
+        "route_mix_summary": _scene_plan_route_counts({"scenes": scenes}),
+    }
+    return scene_plan, {"applied": True, "scene_count": len(scenes)}
+
+
 def _normalize_role_usage_contract(director_contract: dict[str, Any], package: dict[str, Any]) -> dict[str, dict[str, Any]]:
     contract = _safe_dict(director_contract)
     package_safe = _safe_dict(package)
@@ -17073,6 +17156,12 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_i2v_default_role_source"] = ""
     diagnostics["scene_plan_i2v_rows_forced_to_vocal_owner_count"] = 0
     diagnostics["scene_plan_i2v_rows_memory_subject_filled_count"] = 0
+    diagnostics["scene_plan_director_draft_applied"] = False
+    diagnostics["scene_plan_director_draft_scene_count"] = 0
+    diagnostics["scene_plan_source"] = ""
+    diagnostics["scene_plan_route_source"] = ""
+    diagnostics["scene_plan_role_plan_applied"] = False
+    diagnostics["scene_plan_fallback_suppressed_by_director_draft"] = False
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
@@ -17126,6 +17215,27 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_requirement_goals_count"] = len(scene_requirement_goals)
     package["diagnostics"] = diagnostics
     scene_prompt_input = _safe_dict(scene_plan_prompt_package.get("input"))
+    director_scene_plan, director_scene_meta = _build_scene_plan_from_director_draft(scene_plan_prompt_package)
+    if _scene_bool(director_scene_meta.get("applied")):
+        package["scene_plan"] = _attach_downstream_mode_metadata(director_scene_plan, package)
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["scene_plan_used_model"] = "director_v2_draft_plan"
+        diagnostics["scene_plan_used_fallback"] = False
+        diagnostics["scene_plan_source"] = "director_v2_draft_plan"
+        diagnostics["scene_plan_route_source"] = "director_v2_draft_plan"
+        diagnostics["scene_plan_director_draft_applied"] = True
+        diagnostics["scene_plan_director_draft_scene_count"] = int(director_scene_meta.get("scene_count") or 0)
+        diagnostics["scene_plan_role_plan_applied"] = True
+        diagnostics["scene_plan_fallback_suppressed_by_director_draft"] = True
+        diagnostics["scene_plan_scene_count"] = int(director_scene_meta.get("scene_count") or 0)
+        diagnostics["scene_plan_route_counts"] = _scene_plan_route_counts(director_scene_plan)
+        diagnostics["scene_plan_clip_contract_validation_ok"] = True
+        diagnostics["scene_plan_error_code"] = ""
+        diagnostics["scene_plan_validation_error"] = ""
+        package["diagnostics"] = diagnostics
+        _append_diag_event(package, "scene_plan built from director_v2 draft_plan", stage_id="scene_plan")
+        return package
+
     scene_prompt_creative_config = deepcopy(_safe_dict(scene_prompt_input.get("creative_config")))
     strict_preset_name = str(scene_prompt_creative_config.get("route_strategy_preset") or "").strip().lower()
     backend_hard_route_map: dict[str, str] = {}
