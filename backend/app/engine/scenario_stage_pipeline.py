@@ -279,6 +279,44 @@ def _build_director_v2_primary_text(contract: dict[str, Any], draft_plan: list[A
         primary_parts.append("draft_plan_summary: " + "; ".join([line for line in draft_summary if line]))
     return "\n".join([part for part in primary_parts if part]).strip()
 
+
+def _extract_director_v2_source_anchors(contract: dict[str, Any], draft_plan: list[Any]) -> list[str]:
+    downstream = _safe_dict(contract.get("downstream_brief"))
+    source_parts = [
+        str(contract.get("story_goal") or "").strip(),
+        str(contract.get("visual_world") or "").strip(),
+        str(contract.get("performance_strategy") or "").strip(),
+        str(contract.get("emotional_arc") or "").strip(),
+        str(downstream.get("core") or "").strip(),
+        str(downstream.get("scenes") or "").strip(),
+    ]
+    for row in _safe_list(draft_plan):
+        item = _safe_dict(row)
+        source_parts.append(str(item.get("user_visible_description") or "").strip())
+        source_parts.append(str(item.get("purpose") or "").strip())
+        source_parts.append(str(item.get("audio_phrase") or "").strip())
+    source_text = " ".join([part for part in source_parts if part]).lower()
+    if not source_text:
+        return []
+
+    raw_tokens = re.findall(r"character_[1-3]|[a-zа-яё]{4,}", source_text, flags=re.IGNORECASE)
+    stopwords = {
+        "и", "в", "на", "для", "как", "это", "его", "ее", "её", "не", "без", "или", "что", "при", "под", "над", "через",
+        "with", "from", "this", "that", "into", "over", "under", "about", "than", "then", "they", "them", "their", "while",
+        "where", "when", "which", "will", "would", "could", "should", "there", "here", "have", "has", "had", "been", "being",
+    }
+    anchors: list[str] = []
+    seen: set[str] = set()
+    for token in raw_tokens:
+        norm = token.lower()
+        if norm in stopwords or norm in seen:
+            continue
+        seen.add(norm)
+        anchors.append(norm)
+        if len(anchors) >= 40:
+            break
+    return anchors
+
 def _audio_map_scene_candidates(audio_map: dict[str, Any]) -> list[Any]:
     safe_map = _safe_dict(audio_map)
     candidates = _safe_list(safe_map.get("scene_candidate_windows"))
@@ -492,6 +530,10 @@ def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
         "draft_plan_count": len(_safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))),
         "used_source_priority": "director_contract_primary" if contract_present else "default",
         "director_v2_primary_text_preview": director_v2_primary_text[:280],
+        "director_v2_source_anchors_preview": _extract_director_v2_source_anchors(
+            contract or _safe_dict(director_v2_pkg.get("director_contract")),
+            _safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan")),
+        )[:20],
         "source_text_bundle_after_override": {
             "text_len": len(str(input_pkg.get("text") or "")),
             "story_text_len": len(str(input_pkg.get("story_text") or "")),
@@ -11016,10 +11058,10 @@ def _build_story_core_prompt(
             "- draft_plan is the approved preliminary clip plan.\n"
             "- audio_map is timing/phrase truth, not a replacement for director_contract.\n"
             "- Do NOT invent a new concrete world.\n"
-            "- Do NOT replace Odessa/train/past-present story with corridor/industrial/abstract social pressure.\n"
+            "- Do NOT replace the concrete world, roles, timeline structure, or emotional premise from director_contract with an unrelated fallback world.\n"
             "- If director_contract exists, story_summary/opening_anchor/world_doctrine/style_doctrine must be grounded in it.\n"
-            "- Generated CORE must mention the core concrete anchors from director_contract.story_goal and visual_world.\n"
-            "- Do not introduce an unrelated corridor, industrial yard, rusted perimeter, abstract social-pressure world, or other concrete setting not present in director_contract.\n\n"
+            "- Generated CORE must preserve the concrete anchors from director_contract.story_goal, visual_world, performance_strategy, downstream_brief, and draft_plan.\n"
+            "- Do not introduce unrelated fallback settings such as corridor, industrial yard, rusted perimeter, abstract social-pressure world, or any other concrete setting not present in director_contract.\n\n"
             f"DIRECTOR_CONTRACT_JSON:\n{json.dumps(director_contract, ensure_ascii=False)[:4000]}\n\n"
             f"DRAFT_PLAN_SUMMARY:\n{json.dumps(director_draft_plan[:16], ensure_ascii=False)[:1800]}\n\n"
             f"AUDIO_MAP_SUMMARY:\n{json.dumps(director_audio_map, ensure_ascii=False)[:1200]}\n\n"
@@ -11113,17 +11155,8 @@ def _detect_director_v2_industrial_drift(input_pkg: dict[str, Any], story_core: 
     contract_present = bool(contract or _safe_dict(director_v2_pkg.get("director_contract")))
     if not (is_director_v2_source and contract_present):
         return False
-    downstream = _safe_dict(contract.get("downstream_brief"))
     draft_plan = _safe_list(input_pkg.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))
-    source_text = " ".join([
-        str(contract.get("story_goal") or ""),
-        str(contract.get("visual_world") or ""),
-        str(downstream.get("core") or ""),
-        " ".join(
-            str(_safe_dict(row).get("user_visible_description") or _safe_dict(row).get("purpose") or _safe_dict(row).get("goal") or "").strip()
-            for row in draft_plan[:16]
-        ),
-    ]).lower()
+    source_anchors = _extract_director_v2_source_anchors(contract, draft_plan)
     world_definition = _safe_dict(story_core_v1.get("world_definition"))
     generated_text = " ".join([
         str(story_core.get("story_summary") or ""),
@@ -11132,18 +11165,12 @@ def _detect_director_v2_industrial_drift(input_pkg: dict[str, Any], story_core: 
         str(_safe_dict(story_core.get("style_lock")).get("rule") or ""),
         json.dumps(world_definition, ensure_ascii=False),
     ]).lower()
-    source_anchor_candidates = (
-        "одесса", "поезд", "купе", "тамбур", "вагон", "ресторан", "привоз", "дерибасовская", "порт",
-        "прошлое", "настоящее", "odessa", "train", "carriage", "vestibule", "past", "present",
-        "character_1", "character_2",
-    )
-    source_anchors = [token for token in source_anchor_candidates if token in source_text]
-    generated_has_source_anchor = any(token in generated_text for token in source_anchors)
+    generated_has_source_anchor = any(token in generated_text for token in source_anchors) if source_anchors else True
     banned = (
         "corridor", "immaculate corridor", "pristine emptiness", "silent negotiation", "unspoken authority",
         "social pressure", "decaying industrial", "industrial", "rusted", "corrugated metal", "perimeter",
     )
-    has_foreign_concrete = any(token in generated_text and token not in source_text for token in banned)
+    has_foreign_concrete = any(token in generated_text for token in banned)
     return bool(has_foreign_concrete and not generated_has_source_anchor)
 
 
