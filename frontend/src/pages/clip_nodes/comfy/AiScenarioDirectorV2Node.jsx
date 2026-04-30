@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { NodeShell, handleStyle } from "./comfyNodeShared";
 import { resolveDirectorV2ContentType } from "./comfyNarrativeDomain";
@@ -95,6 +95,9 @@ function normalizeDirectorV2AudioSegments(audioMap = null) {
 
 export default function AiScenarioDirectorV2Node({ id, data }) {
   const [chatInput, setChatInput] = useState("");
+  const [copyFeedback, setCopyFeedback] = useState({});
+  const [actionFeedback, setActionFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
   const isApplied = data?.directorState === DIRECTOR_STATES.APPLIED;
   const connections = data?.connections || {};
   const connectedInputs = isObject(data?.connectedInputs) ? data.connectedInputs : {};
@@ -256,11 +259,27 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   };
   const chipSource = Object.keys(connectedInputs).length ? connectedInputs : connections;
 
-  const copyText = async (text, label) => {
+  const setTimedFeedback = (setter, key, label, timeoutMs) => {
+    setter((prev) => ({ ...prev, [key]: label }));
+    if (feedbackTimersRef.current[key]) window.clearTimeout(feedbackTimersRef.current[key]);
+    feedbackTimersRef.current[key] = window.setTimeout(() => {
+      setter((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      delete feedbackTimersRef.current[key];
+    }, timeoutMs);
+  };
+
+  const copyText = async (text, key, successLabel = "Скопировано ✓") => {
     try {
+      if (!navigator?.clipboard?.writeText) throw new Error("Clipboard API недоступен");
       await navigator.clipboard.writeText(String(text || ""));
+      setTimedFeedback(setCopyFeedback, key, successLabel, 1800);
     } catch (copyError) {
-      console.warn(`[AI Director V2] Не удалось скопировать ${label}`, copyError);
+      console.warn(`[AI Director V2] Не удалось скопировать ${key}`, copyError);
+      setTimedFeedback(setCopyFeedback, key, "Не удалось скопировать", 2200);
     }
   };
 
@@ -292,6 +311,9 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const lastAssistantMessage = [...chatMessages].reverse().find((m) => m?.role === "assistant")?.text || "";
   const segmentLines = segments.map((seg) => `${seg.id} | ${fmt(seg.startSec)}-${fmt(seg.endSec)} | lip-sync: ${seg.isLipSyncCandidate ? "да" : "нет"} | intensity: ${seg.intensity.toFixed(2)} | ${seg.transcript || "—"}`);
   const transcriptLines = segments.map((seg) => seg.transcript).filter(Boolean);
+  const sceneCandidateCount = Array.isArray(audioMap?.scene_candidate_windows)
+    ? audioMap.scene_candidate_windows.length
+    : (Array.isArray(audioMap?.scene_slots) ? audioMap.scene_slots.length : 0);
 
   return (<><Handle type="source" position={Position.Right} id="scenario_out_v2" className="clipSB_handle" style={handleStyle("scenario_out")} />
     {INPUTS.map((item, index) => <Handle key={item.id} type="target" position={Position.Left} id={item.id} className="clipSB_handle" style={{ ...handleStyle(item.id), top: 48 + index * 24 }} />)}
@@ -311,15 +333,15 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
             </label>
           </div>
           <div className="asdv2_actions">
-            <button className="clipSB_btn asdv2_primaryAction" disabled={!hasAudio || isParseLocked} onClick={parseAudio}>{audioMap ? "Переразобрать аудио" : "Разобрать аудио"}</button>
-            <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик"}</button>
+            <button className="clipSB_btn asdv2_primaryAction" disabled={!hasAudio || isParseLocked} onClick={parseAudio}>{directorState === DIRECTOR_STATES.PARSING_AUDIO ? "Разбираю аудио..." : (audioMap ? "Переразобрать аудио" : "Разобрать аудио")}</button>
+            <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{directorState === DIRECTOR_STATES.GENERATING_DRAFT ? "Генерирую..." : (draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик")}</button>
             <button className="clipSB_btn" disabled={isApplied || directorState !== DIRECTOR_STATES.DRAFT_READY} onClick={() => patchData({ directorState: DIRECTOR_STATES.DRAFT_CONFIRMED, confirmed: true })}>Подтвердить</button>
             <button className="clipSB_btn" disabled={isApplied || Boolean(data?.draftIsDemo) || directorState !== DIRECTOR_STATES.DRAFT_CONFIRMED} onClick={onApply}>Применить к CORE</button>
             <button className="clipSB_btn" onClick={onReset}>Сбросить</button>
           </div></div>
         <div className="asdv2_inputsBar">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
         {isAudioChangedAfterParse ? <div className="asdv2_emptyState">Подключённое аудио изменилось. Нажми «Сбросить» и разбери новое аудио.</div> : null}
-        {directorViewMode === "pipeline" ? <div className="asdv2_pipelineWindow"><div className="asdv2_pipelineTop"><strong>Pipeline Review</strong><div className="asdv2_actions"><button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "chat" })}>← Вернуться к чату</button></div></div><div className="asdv2_pipelineTabs">{STAGE_ORDER.map((key) => { const st = ensureStage(key); const title = key.toUpperCase().replaceAll("_", " "); return <button key={key} className={`asdv2_pipelineTab ${activePipelineStage === key ? "isActive" : ""} ${st.status === "locked" ? "isLocked" : ""} ${st.status === "confirmed" ? "isConfirmed" : ""} ${st.status === "stale" ? "isStale" : ""} ${st.status === "error" ? "isError" : ""}`} disabled={st.status === "locked"} onClick={() => patchData({ activePipelineStage: key })}>{title}<span className="asdv2_stageStatus">{st.status}</span></button>; })}</div><div className="asdv2_stageReview">{(() => { const st = ensureStage(activePipelineStage); const meta = STAGE_META[activePipelineStage] || { title: activePipelineStage, description: "" }; const editorValue = typeof st.reviewDraft === "string" ? st.reviewDraft : JSON.stringify(st.editedOutput || st.output || {}, null, 2); const stageBusyOrLocked = st.status === "running" || st.status === "locked"; return <><h4>{meta.title}</h4><p>{meta.description}</p>{st.status === "running" ? <div className="asdv2_emptyState">Этап выполняется...</div> : null}<div className="asdv2_panel">{st.output ? <pre>{JSON.stringify(st.output, null, 2)}</pre> : <div className="asdv2_emptyState">Сначала сгенерируй этап или сохрани ручные правки.</div>}</div><textarea className="asdv2_chatInput asdv2_stageEditor" value={editorValue} disabled={stageBusyOrLocked} onChange={(e) => patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...st, reviewDraft: e.target.value } } })} /><div className="asdv2_stageActions"><button className="clipSB_btn" disabled={stageBusyOrLocked} onClick={() => onRunPipelineStage(activePipelineStage)}>{st.output || st.editedOutput ? "Перегенерировать этап" : "Сгенерировать этап"}</button><button className="clipSB_btn" disabled={stageBusyOrLocked} onClick={() => { try { const parsed = JSON.parse(String(editorValue || "{}")); const current = ensureStage(activePipelineStage); const nextStages = markDownstreamStale(activePipelineStage, { ...pipelineStages, [activePipelineStage]: { ...current, editedOutput: parsed, confirmed: false, status: "ready", stale: false } }); const packageKey = STAGE_TO_PACKAGE_KEY[activePipelineStage]; const storyboardPackage = { ...(data?.storyboardPackage || {}) }; if (packageKey) storyboardPackage[packageKey] = parsed; if (activePipelineStage === "final" && parsed?.render_manifest) storyboardPackage.render_manifest = parsed.render_manifest; patchData({ pipelineStages: nextStages, storyboardPackage }); } catch (_e) { patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...ensureStage(activePipelineStage), status: "error", error: "Невалидный JSON" } } }); } }}>Сохранить правки</button><button className="clipSB_btn" disabled={stageBusyOrLocked || (!st.output && !st.editedOutput)} onClick={() => { const current = ensureStage(activePipelineStage); const nextStages = { ...pipelineStages, [activePipelineStage]: { ...current, status: "confirmed", confirmed: true, stale: false } }; const idx = STAGE_ORDER.indexOf(activePipelineStage); const nextKey = STAGE_ORDER[idx + 1]; if (nextKey) { nextStages[nextKey] = { ...ensureStage(nextKey), status: "idle", stale: false }; patchData({ pipelineStages: nextStages, activePipelineStage: nextKey }); } else { patchData({ pipelineStages: nextStages, activePipelineStage: "final", directorInfo: "FINAL подтверждён. Теперь можно передать в Scenario Storyboard." }); } }}>Подтвердить этап</button></div>{st.error ? <div className="asdv2_emptyState">Ошибка: {st.error}</div> : null}</>; })()}</div></div> : null}
+        {directorViewMode === "pipeline" ? <div className="asdv2_pipelineWindow"><div className="asdv2_pipelineTop"><strong>Pipeline Review</strong><div className="asdv2_actions"><button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "chat" })}>← Вернуться к чату</button></div></div><div className="asdv2_pipelineTabs">{STAGE_ORDER.map((key) => { const st = ensureStage(key); const title = key.toUpperCase().replaceAll("_", " "); return <button key={key} className={`asdv2_pipelineTab ${activePipelineStage === key ? "isActive" : ""} ${st.status === "locked" ? "isLocked" : ""} ${st.status === "confirmed" ? "isConfirmed" : ""} ${st.status === "stale" ? "isStale" : ""} ${st.status === "error" ? "isError" : ""}`} disabled={st.status === "locked"} onClick={() => patchData({ activePipelineStage: key })}>{title}<span className="asdv2_stageStatus">{st.status}</span></button>; })}</div><div className="asdv2_stageReview">{(() => { const st = ensureStage(activePipelineStage); const meta = STAGE_META[activePipelineStage] || { title: activePipelineStage, description: "" }; const editorValue = typeof st.reviewDraft === "string" ? st.reviewDraft : JSON.stringify(st.editedOutput || st.output || {}, null, 2); const stageBusyOrLocked = st.status === "running" || st.status === "locked"; return <><h4>{meta.title}</h4><p>{meta.description}</p>{st.status === "running" ? <div className="asdv2_emptyState">Этап выполняется...</div> : null}<div className="asdv2_panel">{st.output ? <pre>{JSON.stringify(st.output, null, 2)}</pre> : <div className="asdv2_emptyState">Сначала сгенерируй этап или сохрани ручные правки.</div>}</div><textarea className="asdv2_chatInput asdv2_stageEditor" value={editorValue} disabled={stageBusyOrLocked} onChange={(e) => patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...st, reviewDraft: e.target.value } } })} /><div className="asdv2_stageActions"><button className="clipSB_btn" disabled={stageBusyOrLocked} onClick={() => onRunPipelineStage(activePipelineStage)}>{st.status === "running" ? "Этап выполняется..." : (st.output || st.editedOutput ? "Перегенерировать этап" : "Сгенерировать этап")}</button><button className="clipSB_btn" disabled={stageBusyOrLocked} onClick={() => { try { const parsed = JSON.parse(String(editorValue || "{}")); const current = ensureStage(activePipelineStage); const nextStages = markDownstreamStale(activePipelineStage, { ...pipelineStages, [activePipelineStage]: { ...current, editedOutput: parsed, confirmed: false, status: "ready", stale: false } }); const packageKey = STAGE_TO_PACKAGE_KEY[activePipelineStage]; const storyboardPackage = { ...(data?.storyboardPackage || {}) }; if (packageKey) storyboardPackage[packageKey] = parsed; if (activePipelineStage === "final" && parsed?.render_manifest) storyboardPackage.render_manifest = parsed.render_manifest; patchData({ pipelineStages: nextStages, storyboardPackage }); setTimedFeedback(setActionFeedback, "saveStage", "Правки сохранены ✓", 1800); } catch (_e) { patchData({ pipelineStages: { ...pipelineStages, [activePipelineStage]: { ...ensureStage(activePipelineStage), status: "error", error: "Невалидный JSON" } } }); } }}>{actionFeedback.saveStage || "Сохранить правки"}</button><button className="clipSB_btn" disabled={stageBusyOrLocked || (!st.output && !st.editedOutput)} onClick={() => { const current = ensureStage(activePipelineStage); const nextStages = { ...pipelineStages, [activePipelineStage]: { ...current, status: "confirmed", confirmed: true, stale: false } }; const idx = STAGE_ORDER.indexOf(activePipelineStage); const nextKey = STAGE_ORDER[idx + 1]; if (nextKey) { nextStages[nextKey] = { ...ensureStage(nextKey), status: "idle", stale: false }; patchData({ pipelineStages: nextStages, activePipelineStage: nextKey, directorInfo: `Этап ${activePipelineStage.toUpperCase()} подтверждён. Открыт следующий этап ${nextKey.toUpperCase()}.` }); } else { patchData({ pipelineStages: nextStages, activePipelineStage: "final", directorInfo: "FINAL подтверждён. Теперь можно передать в Scenario Storyboard." }); } }}>Подтвердить этап</button></div>{st.error ? <div className="asdv2_emptyState">Ошибка: {st.error}</div> : null}</>; })()}</div></div> : null}
         {directorViewMode === "pipeline" ? null : <><div className="asdv2_mainGrid">
           <div className="asdv2_panel asdv2_contractPanel">
             <div className="asdv2_panelHead"><strong>Черновик контракта режиссёра</strong></div>
@@ -331,15 +353,15 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
               })}
             </div>}
             <div className="asdv2_copyRow">
-              <button className="clipSB_btn" disabled={!draftContract} onClick={() => copyText(JSON.stringify(draftContract || {}, null, 2), "черновик JSON")}>Скопировать JSON</button>
-              <button className="clipSB_btn" disabled={!draftContract} onClick={() => copyText(CONTRACT_SECTIONS.map(([key, label]) => `${label}: ${renderContractValue(draftContract?.[key] ?? "—")}`).join("\n\n"), "черновик summary")}>Скопировать summary</button>
+              <button className={`clipSB_btn ${copyFeedback.contractJson === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.contractJson ? "asdv2_copyOk" : "")}`} disabled={!draftContract} onClick={() => copyText(JSON.stringify(draftContract || {}, null, 2), "contractJson", "JSON скопирован ✓")}>{copyFeedback.contractJson || "Скопировать JSON"}</button>
+              <button className={`clipSB_btn ${copyFeedback.contractSummary === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.contractSummary ? "asdv2_copyOk" : "")}`} disabled={!draftContract} onClick={() => copyText(CONTRACT_SECTIONS.map(([key, label]) => `${label}: ${renderContractValue(draftContract?.[key] ?? "—")}`).join("\n\n"), "contractSummary", "Summary скопирован ✓")}>{copyFeedback.contractSummary || "Скопировать summary"}</button>
             </div>
           </div>
 
           <div className={`asdv2_panel asdv2_chatPanel ${isChatLocked ? "asdv2_lockedPanel" : ""}`}>
             <div className="asdv2_panelHead">
               <strong>AI-чат / обсуждение клипа</strong>{data?.directorV2Package ? <button className="clipSB_btn" onClick={() => patchData({ directorViewMode: "pipeline" })}>Открыть Pipeline Review</button> : null}
-              <button className="clipSB_btn" disabled={!lastAssistantMessage} onClick={() => copyText(lastAssistantMessage, "последний ответ")}>Скопировать последний ответ</button>
+              <button className={`clipSB_btn ${copyFeedback.lastReply === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.lastReply ? "asdv2_copyOk" : "")}`} disabled={!lastAssistantMessage} onClick={() => copyText(lastAssistantMessage, "lastReply", "Ответ скопирован ✓")}>{copyFeedback.lastReply || "Скопировать последний ответ"}</button>
             </div>
             <div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
             {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI увидит сегменты, длительность, фразы и сможет обсудить структуру клипа.</div> : null}
@@ -349,13 +371,13 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
           <div className="asdv2_panel asdv2_audioMapPanel">
             <div className="asdv2_panelHead"><strong>Аудио-разбор</strong></div>
             {!hasAudio ? <div className="asdv2_emptyState">Сначала подключи аудио.</div> : !audioMap ? <div className="asdv2_emptyState">Аудио подключено. Нажми «Разобрать аудио», чтобы получить сегменты, тайминги и lip-sync окна.</div> : <>
-              <div>Статус: audio_map готов</div><div>Сегментов: {segments.length}</div><div>Lip-sync кандидатов: {segments.filter((s) => s?.isLipSyncCandidate).length}</div>
+              <div>Статус: audio_map готов</div><div>Фразы audio_map: {segments.length}</div>{sceneCandidateCount ? <div>Кандидаты сцен: {sceneCandidateCount}</div> : null}<div>Lip-sync кандидатов: {segments.filter((s) => s?.isLipSyncCandidate).length}</div><div className="asdv2_hint">segments[] — это фразы, AI Director может объединять их в сцены.</div>
               <div className="asdv2_audioSegments">{segments.map((seg) => <div key={seg.id} className="asdv2_audioSegment"><div><b>{seg.id}</b> · {fmt(seg.startSec)}–{fmt(seg.endSec)}</div><div>lip-sync: {seg.isLipSyncCandidate ? "да" : "нет"} · intensity: {seg.intensity.toFixed(2)}</div>{seg.transcript ? <div>Фраза: {seg.transcript}</div> : null}</div>)}</div>
             </>}
             <div className="asdv2_copyRow">
-              <button className="clipSB_btn" disabled={!audioMap} onClick={() => copyText(JSON.stringify(audioMap || {}, null, 2), "audio_map JSON")}>Скопировать audio_map JSON</button>
-              <button className="clipSB_btn" disabled={!segments.length} onClick={() => copyText(segmentLines.join("\n"), "сегменты")}>Скопировать сегменты</button>
-              <button className="clipSB_btn" disabled={!transcriptLines.length} onClick={() => copyText(transcriptLines.join("\n"), "фразы")}>Скопировать фразы</button>
+              <button className={`clipSB_btn ${copyFeedback.audioMap === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.audioMap ? "asdv2_copyOk" : "")}`} disabled={!audioMap} onClick={() => copyText(JSON.stringify(audioMap || {}, null, 2), "audioMap", "audio_map скопирован ✓")}>{copyFeedback.audioMap || "Скопировать audio_map JSON"}</button>
+              <button className={`clipSB_btn ${copyFeedback.segments === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.segments ? "asdv2_copyOk" : "")}`} disabled={!segments.length} onClick={() => copyText(segmentLines.join("\n"), "segments", "Сегменты скопированы ✓")}>{copyFeedback.segments || "Скопировать сегменты"}</button>
+              <button className={`clipSB_btn ${copyFeedback.phrases === "Не удалось скопировать" ? "asdv2_copyError" : (copyFeedback.phrases ? "asdv2_copyOk" : "")}`} disabled={!transcriptLines.length} onClick={() => copyText(transcriptLines.join("\n"), "phrases", "Фразы скопированы ✓")}>{copyFeedback.phrases || "Скопировать фразы"}</button>
             </div>
           </div>
         </div>
