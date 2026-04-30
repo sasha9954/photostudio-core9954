@@ -482,13 +482,56 @@ def _shared_space_enforcement_clause(must_be_visible_roles: list[str]) -> str:
 
 
 def _is_split_timeline_contract(story_core: dict[str, Any]) -> bool:
-    blob = json.dumps(_safe_dict(story_core), ensure_ascii=False).lower()
-    return (
-        "character_1 present timeline" in blob
-        and "character_2 past_flashback timeline" in blob
-        and "character_1 only in present" in blob
-        and "character_2 only in past" in blob
+    return _is_split_timeline_contract_from_sources(story_core=story_core)
+
+
+def _is_split_timeline_contract_from_sources(
+    story_core: dict[str, Any],
+    package: dict[str, Any] | None = None,
+    scene_rows: list[dict[str, Any]] | None = None,
+) -> bool:
+    package_safe = _safe_dict(package)
+    blob_parts = [
+        _safe_dict(story_core),
+        _safe_dict(package_safe.get("director_contract")),
+        _safe_dict(package_safe.get("scene_plan")),
+        _safe_dict(package_safe.get("role_plan")),
+        list(scene_rows or []),
+    ]
+    blob = json.dumps(blob_parts, ensure_ascii=False).lower()
+    has_first_last = bool(re.search(r"\bfirst_last\b", blob))
+    if has_first_last:
+        return False
+    present_markers = ("present", "настоящее", "в настоящем", "поезде", "всегда в поезде")
+    past_markers = ("past", "past_flashback", "flashback", "прошлое", "флешбэк", "одессе 90")
+    char1_present = bool(
+        re.search(r"character_1.{0,80}(present|настоящее|в настоящем|поезде|всегда в поезде)", blob)
+        or re.search(r"(present|настоящее|в настоящем|поезде|всегда в поезде).{0,80}character_1", blob)
     )
+    char2_past = bool(
+        re.search(r"character_2.{0,90}(past|past_flashback|flashback|прошлое|флешбэк|одессе 90)", blob)
+        or re.search(r"(past|past_flashback|flashback|прошлое|флешбэк|одессе 90).{0,90}character_2", blob)
+    )
+    scene_has_present_char1 = bool(re.search(r"(scene|timeline|segment|сцена).{0,120}character_1.{0,80}(?:%s)" % "|".join(present_markers), blob))
+    scene_has_past_char2 = bool(re.search(r"(scene|timeline|segment|сцена).{0,120}character_2.{0,90}(?:%s)" % "|".join(past_markers), blob))
+    exclusivity_markers = (
+        "character_1 only in present",
+        "character_2 only in past",
+        "только в настоящем",
+        "только в прошлом",
+        "всегда в поезде",
+        "в одессе 90",
+    )
+    has_exclusive_marker = any(marker in blob for marker in exclusivity_markers)
+    return bool(char1_present and char2_past and (scene_has_present_char1 or scene_has_past_char2 or has_exclusive_marker))
+
+
+def _compact_detail_field(value: Any) -> str:
+    if isinstance(value, dict):
+        return "; ".join(f"{k}: {v}" for k, v in value.items() if v)
+    if isinstance(value, list):
+        return ", ".join(str(x) for x in value if str(x).strip())
+    return str(value or "").strip()
 
 
 def _coerce_speaker_confidence(value: Any) -> Any:
@@ -2137,6 +2180,16 @@ def _cleanup_prompt_corruption_fragments(text: str) -> str:
         safe_parts.append(part)
     return _append_compact_clauses("", safe_parts).strip()
 
+
+def _is_action_chase_text(text: str) -> bool:
+    blob = str(text or "").lower()
+    return any(token in blob for token in ("бежит", "погоня", "преследование", "running", "chase", "escape"))
+
+
+def _is_action_aftermath_text(text: str) -> bool:
+    blob = str(text or "").lower()
+    return any(token in blob for token in ("драка", "последствия", "лежит человек", "зеваки", "aftermath"))
+
 def _build_i2v_memory_beat_directive(
     scene_plan_row: dict[str, Any],
     role_row: dict[str, Any],
@@ -2209,13 +2262,13 @@ def _build_i2v_memory_beat_directive(
     visual_payoff = str(scene_plan_row.get("visual_payoff") or "").strip()
     action_detail = str(scene_plan_row.get("action_detail") or "").strip()
     blocking = str(scene_plan_row.get("blocking") or "").strip()
-    camera = str(scene_plan_row.get("camera") or "").strip()
-    environment = str(scene_plan_row.get("environment") or "").strip()
-    motion_constraints = str(scene_plan_row.get("motion_constraints") or "").strip()
-    must_show = str(scene_plan_row.get("must_show") or "").strip()
-    prompt_bridge_notes = str(scene_plan_row.get("prompt_bridge_notes") or "").strip()
+    camera = _compact_detail_field(scene_plan_row.get("camera"))
+    environment = _compact_detail_field(scene_plan_row.get("environment"))
+    motion_constraints = _compact_detail_field(scene_plan_row.get("motion_constraints"))
+    must_show = _compact_detail_field(scene_plan_row.get("must_show"))
+    prompt_bridge_notes = _compact_detail_field(scene_plan_row.get("prompt_bridge_notes"))
     narrative_function = str(scene_plan_row.get("narrative_function") or "").strip()
-    ltx_video_goal = str(scene_plan_row.get("ltx_video_goal") or "").strip()
+    ltx_video_goal = _compact_detail_field(scene_plan_row.get("ltx_video_goal"))
     memory_contract = _safe_dict(global_contract.get("memory_contract"))
     memory_focus = [str(x).strip() for x in _safe_list(memory_contract.get("memory_focus_elements")) if str(x).strip()]
     focus_selected = ""
@@ -2869,7 +2922,11 @@ def _normalize_scene_prompts(
         for role in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
         if str(role).strip()
     }
-    split_timeline_contract = _is_split_timeline_contract(story_core)
+    split_timeline_contract = _is_split_timeline_contract_from_sources(
+        story_core=story_core,
+        package=package,
+        scene_rows=scene_rows,
+    )
     enforce_shared_space_rule = len(must_be_visible_roles) >= 2 and not split_timeline_contract
     shared_space_missing_segments: list[str] = []
     offscreen_violation_segments: list[str] = []
@@ -3624,6 +3681,30 @@ def _normalize_scene_prompts(
                 anchors["identity_anchor"],
                 anchors["world_anchor"],
             )
+        action_blob = " ".join(
+            [
+                str(scene.get("scene_goal") or ""),
+                str(scene.get("action_detail") or ""),
+                str(scene.get("narrative_function") or ""),
+            ]
+        )
+        if final_route == "i2v":
+            if _is_action_chase_text(action_blob):
+                chase_clause = (
+                    "controlled urgent tracking shot, readable running motion, wet asphalt reflections, "
+                    "natural crowd reaction, no chaotic camera shake"
+                )
+                scene_out["video_prompt"] = _append_prompt_clause(str(scene_out.get("video_prompt") or ""), chase_clause)
+                scene_out["positive_video_prompt"] = _append_prompt_clause(str(scene_out.get("positive_video_prompt") or ""), chase_clause)
+            elif _is_action_aftermath_text(action_blob):
+                aftermath_clause = (
+                    "slow semi-circle camera move, tense stillness, subtle bystander motion, no graphic violence"
+                )
+                scene_out["video_prompt"] = _append_prompt_clause(str(scene_out.get("video_prompt") or ""), aftermath_clause)
+                scene_out["positive_video_prompt"] = _append_prompt_clause(str(scene_out.get("positive_video_prompt") or ""), aftermath_clause)
+            if str(role_row.get("primary_role") or scene.get("primary_role") or "").strip().lower() == "character_2":
+                scene_out["primary_role"] = "character_2"
+                scene_out["visual_focus_role"] = "character_2"
         scene_out["prompt_notes"].update(semantics_lock)
         if final_route == "ia2v":
             apply_ia2v_lipsync_canon_to_prompt_row(scene_out, source_scene=scene)
@@ -4759,7 +4840,7 @@ def _apply_prompts_v11_shared_space_post_repair(
         for role in _safe_list(prompt_interface_contract.get("may_be_offscreen"))
         if str(role).strip()
     }
-    split_timeline_contract = _is_split_timeline_contract(story_core)
+    split_timeline_contract = _is_split_timeline_contract_from_sources(story_core=story_core, scene_rows=_safe_list(prompts_v11.get("segments")))
     enforce_shared_space_rule = len(must_be_visible_roles) >= 2 and not split_timeline_contract
     shared_space_missing_segments: list[str] = []
     offscreen_violation_segments: list[str] = []
@@ -5152,7 +5233,8 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
                                 "excerpt": entry["excerpt"],
                             }
                         )
-        if lip_sync_only and route == "i2v":
+        primary_role_value = str(seg.get("primary_role") or prompt_row.get("primary_role") or "").strip().lower()
+        if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
             i2v_blob = " ".join(
                 [
                     str(row.get("photo_prompt") or ""),
@@ -5320,7 +5402,7 @@ def _sanitize_identity_and_visibility_conflicts(
             mutated = True
 
         def _rebuild_bad_cleanup_field(field_name: str) -> str:
-            if lip_sync_only and route == "i2v":
+            if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
                 if field_name == "photo_prompt":
                     return (
                         f"Environment cutaway in the current grounded world. {world_context}. "
