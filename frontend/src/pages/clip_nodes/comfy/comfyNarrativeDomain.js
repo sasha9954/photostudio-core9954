@@ -1297,6 +1297,32 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   return payload;
 }
 
+
+export function buildDirectorV2DraftPayload({
+  sourceState = {},
+  targetState = {},
+  audioMap = null,
+  chatHistory = [],
+  userDecisions = {},
+} = {}) {
+  const basePayload = buildScenarioDirectorRequestPayload(sourceState) || {};
+  const safeChatHistory = Array.isArray(chatHistory) ? chatHistory : [];
+  const safeAudioMap = audioMap && typeof audioMap === "object" ? audioMap : {};
+  return {
+    ...basePayload,
+    mode: "director_v2_draft",
+    pipelineMode: "director_v2",
+    stageId: "director_v2_draft",
+    chat_history: safeChatHistory,
+    audio_map: safeAudioMap,
+    user_decisions: userDecisions && typeof userDecisions === "object" ? userDecisions : {},
+    metadata: {
+      ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),
+      requestSource: "ai_scenario_director_v2:draft",
+    },
+  };
+}
+
 export function buildScenarioStageManualPayload({
   sourceState = {},
   targetState = {},

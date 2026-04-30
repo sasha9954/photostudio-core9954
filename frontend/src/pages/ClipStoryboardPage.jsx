@@ -46,7 +46,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, buildDirectorV2DraftPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
   buildScenarioHumanVisualAnchors,
   buildScenarioPreviewInput,
@@ -23309,11 +23309,7 @@ onClipSec: (nodeId, value) => {
           const connections = incoming.reduce((acc, edge) => {
             const targetHandle = String(edge?.targetHandle || "").trim();
             if (!targetHandle) return acc;
-            acc[targetHandle] = {
-              source: String(edge?.source || ""),
-              sourceHandle: String(edge?.sourceHandle || ""),
-              edgeId: String(edge?.id || ""),
-            };
+            acc[targetHandle] = { source: String(edge?.source || ""), sourceHandle: String(edge?.sourceHandle || ""), edgeId: String(edge?.id || "") };
             return acc;
           }, {});
           return {
@@ -23321,6 +23317,29 @@ onClipSec: (nodeId, value) => {
             data: {
               ...base.data,
               connections,
+              onPatchNodeData: (nodeId, patch = {}) => {
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => nodeItem.id === nodeId ? { ...nodeItem, data: { ...nodeItem.data, ...patch } } : nodeItem)));
+              },
+              onParseAudioStage: async (nodeId) => {
+                try {
+                  const activeNodes = nodesRef.current || [];
+                  const nodeItem = activeNodes.find((x) => x.id === nodeId);
+                  const payload = buildScenarioStageManualPayload({ sourceState: nodeItem?.data || {}, targetState: nodeItem?.data || {}, stageId: "audio", autoRun: false, storyboardPackage: nodeItem?.data?.storyboardPackage || {}, requestSource: "ai_scenario_director_v2:audio" });
+                  const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload });
+                  const pkg = response?.storyboardPackage && typeof response.storyboardPackage === 'object' ? response.storyboardPackage : {};
+                  const audioMap = pkg?.audio_map && typeof pkg.audio_map === 'object' ? pkg.audio_map : null;
+                  if (!response?.ok || !audioMap) return { ok: false, error: response?.detail || 'AUDIO stage не вернул audio_map' };
+                  setNodes((prev) => bindHandlers(prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, storyboardPackage: pkg, stageStatuses: pkg?.stage_statuses || {}, audioMap } } : x)));
+                  return { ok: true, audioMap };
+                } catch (error) { return { ok: false, error: String(error?.message || error || 'audio_stage_failed') }; }
+              },
+              onGenerateDirectorDraft: async (nodeId) => {
+                const activeNodes = nodesRef.current || [];
+                const nodeItem = activeNodes.find((x) => x.id === nodeId);
+                const payload = buildDirectorV2DraftPayload({ sourceState: nodeItem?.data || {}, targetState: nodeItem?.data || {}, audioMap: nodeItem?.data?.audioMap || {}, chatHistory: nodeItem?.data?.chatMessages || [] });
+                console.log('[AI SCENARIO DIRECTOR V2] draft payload prepared', payload);
+                return { ok: true, isDemo: true, draftContract: { status: 'Демо-черновик UI, backend ещё не подключён', story_goal: 'TODO: Gemini Director V2 endpoint', route_mix: '50/50', opening_strategy: 'Открытие на перроне', ending_strategy: 'Финал в поезде' }, draftPlan: [{ scene_id: 'scene_01', segment_id: 'seg_01', route: 'IA2V', start_sec: 0, end_sec: 4.2, purpose: 'Открытие', user_visible_description: 'Демо: открывающий кадр', editable: true }] };
+              },
             },
           };
         }
