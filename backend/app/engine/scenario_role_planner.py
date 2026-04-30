@@ -1446,6 +1446,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
         "director_blocking_primary_mismatches": [],
         "director_role_override_segments_changed": [],
         "director_role_override_changes_by_segment": {},
+        "active_role_planner_code_path": "scenario_role_planner_v2",
     }
 
     diagnostics.update(segment_row_diagnostics)
