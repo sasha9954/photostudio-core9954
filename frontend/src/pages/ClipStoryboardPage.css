@@ -5626,3 +5626,17 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_scene{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:6px;min-width:0}
 .asdv2_scene p{margin:0}
 .asdv2_tag{font-size:11px;padding:2px 6px;border-radius:999px;border:1px solid rgba(255,255,255,.25)}
+.asdv2_isDisabled{opacity:.45}
+.asdv2_lockedPanel{opacity:.45}
+.asdv2_stepBadge{font-size:11px;padding:4px 8px;border:1px solid rgba(255,255,255,.2);border-radius:999px}
+.asdv2_primaryAction{border-color:var(--family-audio);box-shadow:0 0 0 1px color-mix(in srgb,var(--family-audio) 40%,transparent) inset}
+.asdv2_audioMapPanel{min-height:280px}
+.asdv2_audioSegment{font-size:11px;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.08)}
+.asdv2_chatPanel{display:flex;flex-direction:column;gap:8px}
+.asdv2_chatMessages{max-height:170px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:6px}
+.asdv2_chatMsg{font-size:12px;margin-bottom:6px}
+.asdv2_chatComposer{display:flex;gap:8px;align-items:flex-start}
+.asdv2_chatInput{width:100%;min-height:68px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:6px 8px}
+.asdv2_quickPrompts{display:flex;flex-wrap:wrap;gap:6px}
+.asdv2_emptyState{font-size:12px;opacity:.86;padding:10px;border:1px dashed rgba(255,255,255,.2);border-radius:8px}
+.asdv2_draftActions{margin-top:8px;font-size:12px;color:#7fe69a}
