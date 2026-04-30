@@ -751,7 +751,7 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
 
         identity_rule = str(cast.get("identity_rule") or "").strip()
         identity_source = str(cast.get("identity_source") or "").strip()
-        notes = str(cast.get("notes") or "").strip()
+        notes_text = " ".join(str(x) for x in _safe_list(cast.get("notes"))).strip()
         stale_identity = any(
             role != current_primary and role in identity_rule.lower()
             for role in connected_character_roles
@@ -761,10 +761,10 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
             if forced_identity_rule:
                 cast["identity_rule"] = forced_identity_rule
                 cast["identity_source"] = "connected_visual_reference"
-                cast["notes"] = (
+                cast["notes"] = [
                     "visual reference is canonical; text appearance is auxiliary; "
                     f"must match connected {current_primary} reference exactly"
-                )
+                ]
                 if segment_id and segment_id not in stale_identity_rule_rewritten_segments:
                     stale_identity_rule_rewritten_segments.append(segment_id)
             else:
@@ -773,7 +773,7 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
                 cast.pop("notes", None)
                 if segment_id and segment_id not in stale_identity_rule_rewritten_segments:
                     stale_identity_rule_rewritten_segments.append(segment_id)
-        elif not identity_rule and (identity_source or notes):
+        elif not identity_rule and (identity_source or notes_text):
             cast.pop("identity_source", None)
             cast.pop("notes", None)
 
