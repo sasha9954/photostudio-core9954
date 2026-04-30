@@ -251,12 +251,27 @@ def _build_director_v2_primary_text(contract: dict[str, Any], draft_plan: list[A
     draft_summary = []
     for row in _safe_list(draft_plan)[:12]:
         item = _safe_dict(row)
+        goal_text = str(
+            item.get("user_visible_description")
+            or item.get("purpose")
+            or item.get("goal")
+            or item.get("scene_goal")
+            or ""
+        ).strip()
+        start_sec = str(item.get("start_sec") or "").strip()
+        end_sec = str(item.get("end_sec") or "").strip()
+        start_end = ""
+        if start_sec or end_sec:
+            start_end = f"{start_sec or '?'}-{end_sec or '?'}"
         draft_summary.append(
             " | ".join(
                 part for part in [
                     str(item.get("segment_id") or "").strip(),
                     str(item.get("route") or "").strip(),
-                    str(item.get("goal") or item.get("scene_goal") or "").strip(),
+                    str(item.get("timeline_role") or "").strip(),
+                    start_end,
+                    goal_text,
+                    str(item.get("audio_phrase") or "").strip(),
                 ] if part
             )
         )
@@ -11052,8 +11067,8 @@ def _is_usable_story_core(story_core: dict[str, Any]) -> bool:
 
 
 def _detect_director_v2_industrial_drift(input_pkg: dict[str, Any], story_core: dict[str, Any], story_core_v1: dict[str, Any]) -> bool:
-    contract = _safe_dict(input_pkg.get("director_contract"))
     director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    contract = _safe_dict(input_pkg.get("director_contract")) or _safe_dict(director_v2_pkg.get("director_contract"))
     draft_plan_present = bool(_safe_list(input_pkg.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan")))
     request_source = str(input_pkg.get("request_source") or "").strip().lower()
     is_director_v2_source = bool(
@@ -11110,7 +11125,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "ai_scenario_director_v2" in request_source_norm or director_v2_pkg or draft_plan or _safe_dict(director_v2_pkg.get("director_contract"))
     )
     director_v2_primary_text = _build_director_v2_primary_text(director_contract, draft_plan) if (is_director_v2_source and director_contract) else ""
-    should_override_text = bool(request_source_norm == "ai_scenario_director_v2")
+    should_override_text = bool("ai_scenario_director_v2" in request_source_norm)
     base_input = {
         "text": str(req.get("text") or "").strip() or primary_narrative_text,
         "story_text": str(req.get("storyText") or req.get("story_text") or "").strip() or primary_narrative_text,
@@ -18252,7 +18267,7 @@ def run_manual_stage(
     director_v2_primary_text = _build_director_v2_primary_text(incoming_director_contract, incoming_draft_plan) if (is_director_v2_source and incoming_director_contract) else ""
     if director_v2_primary_text:
         for field in ("text", "story_text", "note", "director_note"):
-            if request_source_norm == "ai_scenario_director_v2" or not str(input_pkg.get(field) or "").strip():
+            if "ai_scenario_director_v2" in request_source_norm or not str(input_pkg.get(field) or "").strip():
                 input_pkg[field] = director_v2_primary_text
 
     pkg["input"] = input_pkg
