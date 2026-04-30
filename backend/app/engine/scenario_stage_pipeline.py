@@ -28,6 +28,7 @@ from app.engine.gemini_rest import post_generate_content, resolve_gemini_api_key
 from app.engine.scenario_role_planner import ROLE_PLAN_PROMPT_VERSION, build_gemini_role_plan
 from app.engine.scenario_scene_planner import SCENE_PLAN_PROMPT_VERSION, build_gemini_scene_plan
 from app.engine.scenario_scene_prompter import SCENE_PROMPTS_PROMPT_VERSION, build_gemini_scene_prompts
+from app.engine.scenario_scene_detailer import SCENE_DETAIL_PROMPT_VERSION, build_gemini_scene_detail
 from app.engine.scenario_video_prompt_writer import (
     FINAL_VIDEO_PROMPT_DELIVERY_VERSION,
     FINAL_VIDEO_PROMPT_STAGE_VERSION,
@@ -100,6 +101,7 @@ STAGE_IDS = (
     "story_core",
     "role_plan",
     "scene_plan",
+    "scene_detail",
     "scene_prompts",
     "final_video_prompt",
     "finalize",
@@ -111,7 +113,8 @@ STAGE_DEPENDENCIES: dict[str, list[str]] = {
     "story_core": ["input_package", "audio_map"],
     "role_plan": ["input_package", "audio_map", "story_core"],
     "scene_plan": ["input_package", "audio_map", "story_core", "role_plan"],
-    "scene_prompts": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan"],
+    "scene_detail": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan"],
+    "scene_prompts": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_detail"],
     "final_video_prompt": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts"],
     "finalize": ["input_package", "audio_map", "story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt"],
 }
@@ -125,7 +128,8 @@ MANUAL_RESET_DOWNSTREAM: dict[str, list[str]] = {
     "audio_map": ["story_core", "role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"],
     "story_core": ["role_plan", "scene_plan", "scene_prompts", "final_video_prompt", "finalize"],
     "role_plan": ["scene_plan", "scene_prompts", "final_video_prompt", "finalize"],
-    "scene_plan": ["scene_prompts", "final_video_prompt", "finalize"],
+    "scene_plan": ["scene_detail", "scene_prompts", "final_video_prompt", "finalize"],
+    "scene_detail": ["scene_prompts", "final_video_prompt", "finalize"],
     "scene_prompts": ["final_video_prompt", "finalize"],
     "final_video_prompt": ["finalize"],
     "finalize": [],
@@ -136,6 +140,7 @@ STAGE_SECTION_RESETTERS: dict[str, Any] = {
     "audio_map": lambda: {},
     "role_plan": lambda: {},
     "scene_plan": lambda: {"scenes": []},
+    "scene_detail": lambda: {"scenes": []},
     "scene_prompts": lambda: {"scenes": []},
     "final_video_prompt": lambda: {"delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION, "segments": [], "scenes": []},
     "finalize": lambda: {"final_storyboard_version": "1.1", "render_manifest": [], "scenes": []},
@@ -146,6 +151,7 @@ STAGE_DIAGNOSTIC_PREFIXES: dict[str, tuple[str, ...]] = {
     "audio_map": ("audio_", "transcript_"),
     "role_plan": ("role_plan_",),
     "scene_plan": ("scene_plan_",),
+    "scene_detail": ("scene_detail_",),
     "scene_prompts": ("scene_prompts_",),
     "final_video_prompt": ("final_video_prompt_",),
     "finalize": ("finalize_",),
@@ -156,6 +162,7 @@ STAGE_PACKAGE_FIELD_BY_STAGE: dict[str, str] = {
     "story_core": "story_core",
     "role_plan": "role_plan",
     "scene_plan": "scene_plan",
+    "scene_detail": "scene_detail",
     "scene_prompts": "scene_prompts",
     "final_video_prompt": "final_video_prompt",
     "finalize": "final_storyboard",
@@ -165,6 +172,7 @@ _CLIP_SANITIZER_POST_STAGE_IDS = {
     "story_core",
     "role_plan",
     "scene_plan",
+    "scene_detail",
     "scene_prompts",
     "final_video_prompt",
     "finalize",
@@ -1881,6 +1889,8 @@ def _has_stage_output(package: dict[str, Any], stage_id: str) -> bool:
         return _has_valid_role_plan_payload(output)
     if stage_id == "scene_plan":
         return _has_valid_scene_plan_payload(output)
+    if stage_id == "scene_detail":
+        return _has_non_empty_collection(_safe_dict(output).get("scenes"))
     if stage_id == "scene_prompts":
         return _has_valid_scene_prompts_payload(output)
     if stage_id == "final_video_prompt":
@@ -1957,6 +1967,8 @@ def _scene_prompts_dependency_payload_ok(package: dict[str, Any], dependency_sta
         return _has_valid_role_plan_payload(_safe_dict(pkg.get("role_plan")))
     if dependency_stage_id == "scene_plan":
         return _has_valid_scene_plan_payload_for_scene_prompts(pkg)
+    if dependency_stage_id == "scene_detail":
+        return _has_non_empty_collection(_safe_dict(_safe_dict(pkg).get("scene_detail")).get("scenes"))
     return _can_reuse_stage_output(pkg, dependency_stage_id)
 
 
@@ -16929,7 +16941,7 @@ def _run_role_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="role_plan")
     result = build_gemini_role_plan(
         api_key=gemini_api_key,
-        package=package,
+        package=prompts_package,
     )
     role_plan = _safe_dict(result.get("role_plan"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
@@ -17360,7 +17372,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             route_assignment_source = "validated_route_map" if preferred_route_lock_source else "hard_route_map"
         else:
             route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
-                package=package,
+                package=prompts_package,
                 scene_plan=scene_plan,
                 previous_scene_plan=previous_scene_plan,
             )
@@ -17397,7 +17409,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     route_assignment_source = "validated_route_map" if preferred_route_lock_source else "hard_route_map"
                 else:
                     route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
-                        package=package,
+                        package=prompts_package,
                         scene_plan=retry_scene_plan,
                         previous_scene_plan=previous_scene_plan,
                     )
@@ -17415,11 +17427,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 result = semantic_retry_result
                 scene_plan = retry_scene_plan
         scene_plan, final_semantic_repairs = _repair_scene_plan_final_semantics(
-            package=package,
+            package=prompts_package,
             scene_plan=scene_plan,
         )
         scene_plan, post_validity_rebalance = _rebalance_scene_plan_routes_after_validity_repairs(
-            package=package,
+            package=prompts_package,
             scene_plan=scene_plan,
         )
         scene_plan, final_sync_meta = _sync_scene_plan_storyboard_mirror(scene_plan)
@@ -17441,7 +17453,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
     route_budget_feedback = ""
     route_budget_meta: dict[str, Any] = {}
     route_budget_ok, route_budget_feedback, route_budget_meta = _validate_scene_plan_route_budget(
-        package=package,
+        package=prompts_package,
         scene_plan=scene_plan,
         diagnostics=diagnostics,
     )
@@ -17484,7 +17496,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     route_assignment_source = "validated_route_map" if preferred_route_lock_source else "hard_route_map"
                 else:
                     route_locks_by_segment, route_lock_source = _resolve_scene_plan_route_locks(
-                        package=package,
+                        package=prompts_package,
                         scene_plan=retry_scene_plan,
                         previous_scene_plan=previous_scene_plan,
                     )
@@ -17495,11 +17507,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     overwrite_existing=True if backend_hard_route_map else (False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else (route_lock_source != "fallback_backend_route_fill")),
                 )
                 retry_scene_plan, retry_final_semantic_repairs = _repair_scene_plan_final_semantics(
-                    package=package,
+                    package=prompts_package,
                     scene_plan=retry_scene_plan,
                 )
                 retry_scene_plan, retry_post_validity_rebalance = _rebalance_scene_plan_routes_after_validity_repairs(
-                    package=package,
+                    package=prompts_package,
                     scene_plan=retry_scene_plan,
                 )
                 retry_scene_plan, retry_sync_meta = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
@@ -17519,7 +17531,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 diagnostics["camera_energy_applied_to_scene_count"] = int(retry_camera_energy_applied_count)
                 retry_result["scene_plan"] = retry_scene_plan
             retry_ok, retry_feedback, retry_meta = _validate_scene_plan_route_budget(
-                package=package,
+                package=prompts_package,
                 scene_plan=retry_scene_plan,
                 diagnostics=diagnostics,
             )
@@ -17605,11 +17617,11 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                 overwrite_existing=False if route_lock_source in {"scene_plan_validated_routes", "scene_plan_row_routes"} else True,
             )
             retry_scene_plan, retry_final_semantic_repairs = _repair_scene_plan_final_semantics(
-                package=package,
+                package=prompts_package,
                 scene_plan=retry_scene_plan,
             )
             retry_scene_plan, _ = _rebalance_scene_plan_routes_after_validity_repairs(
-                package=package,
+                package=prompts_package,
                 scene_plan=retry_scene_plan,
             )
             retry_scene_plan, _ = _sync_scene_plan_storyboard_mirror(retry_scene_plan)
@@ -17653,7 +17665,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
                     seed_requirements,
                 )
                 seeded_scene_plan, seed_diag = _seed_missing_scene_requirements_from_contract(
-                    package=package,
+                    package=prompts_package,
                     scene_plan=retry_scene_plan,
                     missing_requirement_ids=missing_retry_requirement_ids,
                     requirements=seed_requirements,
@@ -17977,7 +17989,7 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
         diagnostics["scene_plan_failed_candidate_validation_errors"] = _safe_list(diagnostics.get("scene_plan_validation_errors"))
         package["diagnostics"] = diagnostics
         can_restore_snapshot = _scene_plan_snapshot_restore_is_safe(
-            package=package,
+            package=prompts_package,
             previous_scene_plan=previous_scene_plan,
             resolved_target_budget=_safe_dict(route_budget_meta.get("route_budget_resolved_targets")),
         )
@@ -18054,6 +18066,21 @@ def _run_scene_plan_stage(package: dict[str, Any]) -> dict[str, Any]:
             _append_diag_event(package, "scene_plan_route_spacing_warning", stage_id="scene_plan")
     else:
         _append_diag_event(package, "scene_plan empty", stage_id="scene_plan")
+    return package
+
+
+
+
+def _run_scene_detail_stage(package: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["scene_detail_backend"] = "gemini"
+    diagnostics["scene_detail_prompt_version"] = SCENE_DETAIL_PROMPT_VERSION
+    package["diagnostics"] = diagnostics
+    gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="scene_detail")
+    result = build_gemini_scene_detail(api_key=gemini_api_key, package=package)
+    if not bool(result.get("ok")):
+        raise RuntimeError(str(result.get("error") or "scene_detail_failed"))
+    package["scene_detail"] = _safe_dict(result.get("scene_detail"))
     return package
 
 
@@ -18136,9 +18163,18 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     hard_fail_error = ""
 
+    scene_detail_rows = _safe_list(_safe_dict(package.get("scene_detail")).get("scenes"))
+    prompts_package = package
+    if scene_detail_rows:
+        prompts_package = deepcopy(package)
+        prompts_package["scene_plan"] = {**_safe_dict(prompts_package.get("scene_plan")), "scenes": scene_detail_rows, "storyboard": scene_detail_rows}
+        diagnostics = _safe_dict(prompts_package.get("diagnostics"))
+        diagnostics["scene_prompts_source_stage"] = "scene_detail"
+        prompts_package["diagnostics"] = diagnostics
+
     result = build_gemini_scene_prompts(
         api_key=gemini_api_key,
-        package=package,
+        package=prompts_package,
     )
     normalized_scene_prompts, normalized_validation_error, normalized_diag = _enforce_scene_prompts_identity_and_presence(
         package,
@@ -18162,7 +18198,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
         _append_diag_event(package, f"scene_prompts validation failed, retrying once: {validation_feedback}", stage_id="scene_prompts")
         retry_result = build_gemini_scene_prompts(
             api_key=gemini_api_key,
-            package=package,
+            package=prompts_package,
             validation_feedback=validation_feedback,
             compact_retry=True,
         )
@@ -18190,7 +18226,7 @@ def _run_scene_prompts_stage(package: dict[str, Any]) -> dict[str, Any]:
                 )
                 result = build_gemini_scene_prompts(
                     api_key=gemini_api_key,
-                    package=package,
+                    package=prompts_package,
                     force_rebuild_from_scene_plan=True,
                 )
                 normalized_scene_prompts, normalized_validation_error, normalized_diag = _enforce_scene_prompts_identity_and_presence(
@@ -18429,7 +18465,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     result = generate_ltx_video_prompt_metadata(
         api_key=gemini_api_key,
-        package=package,
+        package=prompts_package,
     )
     _apply_result_diagnostics(result)
 
@@ -18493,7 +18529,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         package["final_video_prompt"] = STAGE_SECTION_RESETTERS["final_video_prompt"]()
         retry_result = generate_ltx_video_prompt_metadata(
             api_key=gemini_api_key,
-            package=package,
+            package=prompts_package,
         )
         _apply_result_diagnostics(retry_result)
         retry_payload = _safe_dict(retry_result.get("final_video_prompt"))
@@ -18609,6 +18645,8 @@ def run_stage(stage_id: str, package: dict[str, Any], payload: dict[str, Any] | 
             pkg = _run_role_plan_stage(pkg)
         elif stage_id == "scene_plan":
             pkg = _run_scene_plan_stage(pkg)
+        elif stage_id == "scene_detail":
+            pkg = _run_scene_detail_stage(pkg)
         elif stage_id == "scene_prompts":
             pkg = _run_scene_prompts_stage(pkg)
         elif stage_id == "final_video_prompt":
