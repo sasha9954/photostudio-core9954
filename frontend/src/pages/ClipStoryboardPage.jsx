@@ -87,6 +87,7 @@ const PORT_COLORS = {
   storyboard_out: "var(--family-narrative)",
   preview_out: "var(--family-narrative)",
   scenario_out: "var(--family-narrative)",
+  scenario_out_v2: "var(--family-narrative)",
   scenario_storyboard_in: "var(--family-narrative)",
   scenario_pipeline_debug_in: "var(--family-narrative)",
   scenario_storyboard_out: "var(--family-storyboard)",
@@ -19905,12 +19906,14 @@ onClipSec: (nodeId, value) => {
           const sourceHandle = String(incomingEdge?.sourceHandle || "");
           const isDirectPipelineSource = sourceNode?.type === "scenarioPipelineDebug" && sourceHandle === "storyboard_out";
           const isLegacyNarrativeSource = sourceNode?.type === "comfyNarrative" && sourceHandle === "storyboard_out";
-          const validScenarioSource = isDirectPipelineSource || isLegacyNarrativeSource;
+          const isDirectorV2Source = sourceNode?.type === "aiScenarioDirectorV2" && sourceHandle === "scenario_out_v2";
+          const validScenarioSource = isDirectPipelineSource || isLegacyNarrativeSource || isDirectorV2Source;
           const sourceIsGenerating = validScenarioSource && sourceNode?.data?.isGenerating === true;
           const hasPendingScenarioOutputs = isLegacyNarrativeSource && !!sourceNode?.data?.pendingOutputs;
           const directPipelineStoryboardOut = isDirectPipelineSource ? extractScenarioPipelineStoryboardOut({ sourceNode, sourceHandle }) : null;
           const narrativeStoryboardOut = isLegacyNarrativeSource ? extractNarrativeStoryboardOut({ sourceNode, sourceHandle }) : null;
-          const storyboardOut = directPipelineStoryboardOut || narrativeStoryboardOut;
+          const directorV2StoryboardOut = isDirectorV2Source ? (sourceNode?.data?.storyboardPackage?.final_storyboard || sourceNode?.data?.storyboardPackage?.storyboard_out || null) : null;
+          const storyboardOut = directPipelineStoryboardOut || narrativeStoryboardOut || directorV2StoryboardOut;
           const directorOutput = isDirectPipelineSource
             ? (sourceNode?.data?.directorOutput || null)
             : isLegacyNarrativeSource
@@ -20061,15 +20064,16 @@ onClipSec: (nodeId, value) => {
             && !sourceIsGenerating
             && !shouldSkipHardResetForFinalizeOnlyApply
             && (revisionChanged || sourceScenarioContextStale || connectedContextChanged);
+          const directorV2FinalConfirmed = isDirectorV2Source ? (sourceNode?.data?.pipelineStages?.final?.confirmed === true) : true;
           const runtimeBaseData = shouldHardResetStoryboardRuntime
             ? clearScenarioStoryboardGeneratedRuntime(base?.data || {}, { clearScenes: true })
             : (base?.data || {});
           const previousScenes = Array.isArray(runtimeBaseData?.scenes) ? runtimeBaseData.scenes : [];
           const resetBeforeRequest = sourceIsGenerating && (!hasPendingScenarioOutputs || Boolean(base?.data?.scenarioResetInFlight));
           const resetBecauseConnectedContextChanged = !sourceIsGenerating && (sourceScenarioContextStale || connectedContextChanged);
-          const normalizedScenes = Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
+          const normalizedScenes = (!directorV2FinalConfirmed && isDirectorV2Source) ? [] : (Array.isArray(normalizedPackage?.scenes) && normalizedPackage.scenes.length
             ? normalizedPackage.scenes
-            : ((resetBeforeRequest || resetBecauseConnectedContextChanged) ? [] : previousScenes);
+            : ((resetBeforeRequest || resetBecauseConnectedContextChanged) ? [] : previousScenes));
           const previousStoryboardSignature = String(
             base?.data?.storyboardSignature
             || buildSceneSignature(previousScenes, "scene")
@@ -23459,6 +23463,34 @@ onClipSec: (nodeId, value) => {
                 if (!response?.ok) return { ok: false, error: response?.error || "Gemini Director V2 не ответил" };
                 return { ok: true, assistantReply: String(response?.assistant_reply || ""), directorMemory: response?.director_memory || {} };
               },
+              onRunDirectorV2PipelineStage: async (nodeId, stageKey) => {
+                try {
+                  const stageMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
+                  const stageId = stageMap[String(stageKey || "")] || "";
+                  if (!stageId) return { ok: false, error: "Неизвестный этап" };
+                  const activeNodes = nodesRef.current || [];
+                  const nodeItem = activeNodes.find((x) => x.id === nodeId);
+                  if (!nodeItem) return { ok: false, error: "Нода режиссёра не найдена" };
+                  const edgesNow = edgesRef.current || [];
+                  const activeNodesById = new Map(activeNodes.map((x) => [x.id, x]));
+                  const sourceState = buildDirectorV2ScenarioSourceState({ directorNode: nodeItem, nodesById: activeNodesById, edges: edgesNow });
+                  sourceState.directorV2Package = nodeItem?.data?.directorV2Package || {};
+                  sourceState.director_contract = sourceState.directorV2Package?.director_contract || {};
+                  sourceState.draft_plan = sourceState.directorV2Package?.draft_plan || [];
+                  sourceState.audio_map = sourceState.directorV2Package?.audio_map || {};
+                  sourceState.chat_history = sourceState.directorV2Package?.chat_history || [];
+                  const payload = buildScenarioStageManualPayload({ sourceState, targetState: nodeItem?.data || {}, stageId, autoRun: false, storyboardPackage: nodeItem?.data?.storyboardPackage || nodeItem?.data?.directorV2Package || {}, requestSource: `ai_scenario_director_v2:${stageId}` });
+                  const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload });
+                  if (!response?.ok) return { ok: false, error: response?.detail || "Ошибка генерации этапа" };
+                  const storyboardPackage = response?.storyboardPackage || {};
+                  const keyMap = { core: 'story_core', roles: 'role_plan', scenes: 'scene_plan', prompts: 'scene_prompts', final_video_prompt: 'final_video_prompt', final: 'final_payload' };
+                  const output = storyboardPackage?.[keyMap[stageKey]] || storyboardPackage?.render_manifest || storyboardPackage?.finalize || null;
+                  setNodes((prev) => bindHandlers(prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, storyboardPackage, stageStatuses: storyboardPackage?.stage_statuses || {} } } : x)));
+                  return { ok: true, output, storyboardPackage, stageStatuses: storyboardPackage?.stage_statuses || {} };
+                } catch (error) {
+                  return { ok: false, error: String(error?.message || error || 'stage_failed') };
+                }
+              },
             },
           };
         }
@@ -24604,6 +24636,18 @@ const hydrate = useCallback((source = "unknown") => {
             data: { kind: presentation.kind },
           }, cleaned);
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:ai-scenario-director-v2");
+          return nextEdges;
+        }
+
+        if (src.type === "aiScenarioDirectorV2" && (params.sourceHandle || "") === "scenario_out_v2") {
+          const targetHandle = params.targetHandle || "";
+          const isScenarioStoryboardRoute = dst.type === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in";
+          const isScenarioPipelineDebugRoute = dst.type === "scenarioPipelineDebug" && targetHandle === "scenario_pipeline_debug_in";
+          if (!isScenarioStoryboardRoute && !isScenarioPipelineDebugRoute) return eds;
+          const cleaned = eds.filter((e) => !(e.target === dst.id && (e.targetHandle || "") === targetHandle));
+          const presentation = getEdgePresentation({ sourceHandle: params.sourceHandle || "", targetHandle, sourceType: src.type, targetType: dst.type });
+          nextEdges = addEdge({ ...params, type: "smoothstep", className: presentation.className, animated: presentation.animated, style: presentation.style, data: { kind: presentation.kind } }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:ai-director-v2-output");
           return nextEdges;
         }
 
