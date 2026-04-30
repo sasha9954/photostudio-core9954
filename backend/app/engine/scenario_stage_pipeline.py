@@ -4135,8 +4135,12 @@ def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
 def _build_scene_plan_from_director_draft(package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     safe_pkg = _safe_dict(package)
     input_pkg = _safe_dict(safe_pkg.get("input"))
-    audio_map = _safe_dict(safe_pkg.get("audio_map"))
     director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    audio_map = (
+        _safe_dict(safe_pkg.get("audio_map"))
+        or _safe_dict(input_pkg.get("audio_map"))
+        or _safe_dict(director_v2_pkg.get("audio_map"))
+    )
     draft_plan = (
         _safe_list(input_pkg.get("draft_plan"))
         or _safe_list(director_v2_pkg.get("draft_plan"))
@@ -4179,8 +4183,14 @@ def _build_scene_plan_from_director_draft(package: dict[str, Any]) -> tuple[dict
             cast = _safe_dict(cast_lookup.get(seg_id))
             primary_role = str(cast.get("primary_role") or "").strip().lower() or "world"
             audio_seg = _safe_dict(audio_map_segments_lookup.get(seg_id))
-            t0 = _safe_float(audio_seg.get("start_sec"), _safe_float(row.get("start_sec"), 0.0))
-            t1 = _safe_float(audio_seg.get("end_sec"), _safe_float(row.get("end_sec"), t0))
+            t0 = _safe_float(
+                audio_seg.get("t0", audio_seg.get("start_sec")),
+                _safe_float(row.get("start_sec"), 0.0),
+            )
+            t1 = _safe_float(
+                audio_seg.get("t1", audio_seg.get("end_sec")),
+                _safe_float(row.get("end_sec"), t0),
+            )
             scene_id = f"{draft_scene_id or primary_segment_id}_{seg_id}" if len(original_segment_ids) > 1 else (draft_scene_id or seg_id)
             scene = {
                 "scene_id": str(scene_id).strip(),
