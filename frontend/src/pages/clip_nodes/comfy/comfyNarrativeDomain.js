@@ -1336,7 +1336,7 @@ export function buildDirectorV2DraftPayload({
       location: safeConnectedInputs?.ref_location || null,
       style: safeConnectedInputs?.ref_style || null,
       props: safeConnectedInputs?.ref_props || null,
-      video_ref: safeConnectedInputs?.video_ref_in || null,
+      video_ref: safeConnectedInputs?.video_ref_in || safeConnectedInputs?.video_file_in || safeConnectedInputs?.video_link_in || null,
     },
     metadata: {
       ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),

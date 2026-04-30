@@ -62,6 +62,7 @@ const CONTRACT_SECTIONS = [
   ["opening_strategy", "Начало"],
   ["ending_strategy", "Финал"],
   ["reference_usage", "Использование референсов"],
+  ["connected_input_questions_resolved", "Уточнение входящих нод"],
   ["must_keep", "Обязательно сохранить"],
   ["must_avoid", "Нельзя делать"],
   ["continuity_rules", "Правила continuity"],

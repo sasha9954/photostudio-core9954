@@ -2480,6 +2480,25 @@ def _validate_director_v2_draft(payload: dict[str, Any], parsed: dict[str, Any])
     if not isinstance(parsed.get("director_contract"), dict):
         errors.append("director_contract must be object")
     contract = _safe_dict(parsed.get("director_contract"))
+    reference_usage = _safe_dict(contract.get("reference_usage"))
+    if not reference_usage:
+        errors.append("director_contract.reference_usage must be object")
+    connected_resolved = _safe_dict(contract.get("connected_input_questions_resolved"))
+    if not connected_resolved:
+        errors.append("director_contract.connected_input_questions_resolved must be object")
+    required_connected_keys = ("character_1", "character_2", "character_3", "animal", "group", "location", "style", "props", "video_ref")
+    allowed_resolved_values = {"resolved", "assumption", "unresolved", "not_connected"}
+    for key in required_connected_keys:
+        if key not in reference_usage:
+            errors.append(f"director_contract.reference_usage.{key} missing")
+        if key not in connected_resolved:
+            errors.append(f"director_contract.connected_input_questions_resolved.{key} missing")
+            continue
+        value = str(connected_resolved.get(key) or "").strip().lower()
+        if value not in allowed_resolved_values:
+            errors.append(
+                f"director_contract.connected_input_questions_resolved.{key} invalid value: {value or '<empty>'}"
+            )
     for required_field in ("mode_understanding", "audio_interpretation", "visual_directing_rules", "downstream_brief"):
         if not isinstance(contract.get(required_field), dict):
             errors.append(f"director_contract.{required_field} must be object")
@@ -2583,7 +2602,7 @@ async def director_v2_chat(payload: dict[str, Any]) -> dict[str, Any]:
         "has_location": bool(safe_connected_inputs.get("ref_location")),
         "has_style": bool(safe_connected_inputs.get("ref_style")),
         "has_props": bool(safe_connected_inputs.get("ref_props")),
-        "has_video_ref": bool(safe_connected_inputs.get("video_ref_in")),
+        "has_video_ref": bool(safe_connected_inputs.get("video_ref_in") or safe_connected_inputs.get("video_file_in") or safe_connected_inputs.get("video_link_in")),
         "has_text_idea": bool(safe_connected_inputs.get("text_in") or safe_payload.get("source_text")),
     }
     prompt = f"{_director_v2_chat_system_prompt()}\n\nINPUT_JSON:\n{json.dumps(enriched_payload, ensure_ascii=False)}"
@@ -2636,7 +2655,7 @@ async def director_v2_draft(payload: dict[str, Any]) -> dict[str, Any]:
         "has_location": bool(safe_connected_inputs.get("ref_location")),
         "has_style": bool(safe_connected_inputs.get("ref_style")),
         "has_props": bool(safe_connected_inputs.get("ref_props")),
-        "has_video_ref": bool(safe_connected_inputs.get("video_ref_in")),
+        "has_video_ref": bool(safe_connected_inputs.get("video_ref_in") or safe_connected_inputs.get("video_file_in") or safe_connected_inputs.get("video_link_in")),
         "has_text_idea": bool(safe_connected_inputs.get("text_in") or safe_payload.get("source_text")),
     }
     prompt = f"{_director_v2_draft_system_prompt()}\n\nINPUT_JSON:\n{json.dumps(enriched_payload, ensure_ascii=False)}"
