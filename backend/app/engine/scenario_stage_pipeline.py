@@ -479,6 +479,10 @@ def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
         or str(director_v2_pkg.get("source") or "").strip().lower() == "ai_director_v2"
     )
     story_core = _safe_dict(package.get("story_core"))
+    director_v2_primary_text = _build_director_v2_primary_text(
+        contract or _safe_dict(director_v2_pkg.get("director_contract")),
+        _safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan")),
+    ) if contract_present else ""
     story_core["source_trace"] = {
         "is_director_v2_source": is_director_v2_source,
         "has_director_contract": contract_present,
@@ -487,6 +491,14 @@ def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
         "director_contract_visual_world_preview": str(contract.get("visual_world") or "")[:220],
         "draft_plan_count": len(_safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))),
         "used_source_priority": "director_contract_primary" if contract_present else "default",
+        "director_v2_primary_text_preview": director_v2_primary_text[:280],
+        "source_text_bundle_after_override": {
+            "text_len": len(str(input_pkg.get("text") or "")),
+            "story_text_len": len(str(input_pkg.get("story_text") or "")),
+            "note_len": len(str(input_pkg.get("note") or "")),
+            "director_note_len": len(str(input_pkg.get("director_note") or "")),
+        },
+        "director_v2_prompt_block_applied": bool(contract_present),
     }
     package["story_core"] = story_core
     if not contract:
@@ -10990,6 +11002,29 @@ def _build_story_core_prompt(
             "- Build compact meaning from audio segment progression, refs, and concept.\n"
             "- Keep one coherent world family and identity continuity.\n"
         )
+    director_v2_pkg = _safe_dict(core_input_context.get("director_v2_package"))
+    director_contract = _safe_dict(core_input_context.get("director_contract")) or _safe_dict(director_v2_pkg.get("director_contract"))
+    director_draft_plan = _safe_list(core_input_context.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))
+    director_audio_map = _safe_dict(core_input_context.get("audio_map")) or _safe_dict(director_v2_pkg.get("audio_map"))
+    director_v2_primary_text = _build_director_v2_primary_text(director_contract, director_draft_plan) if director_contract else ""
+    director_v2_prompt_block = ""
+    if director_contract:
+        director_v2_prompt_block = (
+            "DIRECTOR_V2_SOURCE_OF_TRUTH:\n"
+            "- This block is the primary creative instruction for CORE.\n"
+            "- Preserve story_goal, visual_world, performance_strategy, emotional_arc, route_mix, downstream_brief.\n"
+            "- draft_plan is the approved preliminary clip plan.\n"
+            "- audio_map is timing/phrase truth, not a replacement for director_contract.\n"
+            "- Do NOT invent a new concrete world.\n"
+            "- Do NOT replace Odessa/train/past-present story with corridor/industrial/abstract social pressure.\n"
+            "- If director_contract exists, story_summary/opening_anchor/world_doctrine/style_doctrine must be grounded in it.\n"
+            "- Generated CORE must mention the core concrete anchors from director_contract.story_goal and visual_world.\n"
+            "- Do not introduce an unrelated corridor, industrial yard, rusted perimeter, abstract social-pressure world, or other concrete setting not present in director_contract.\n\n"
+            f"DIRECTOR_CONTRACT_JSON:\n{json.dumps(director_contract, ensure_ascii=False)[:4000]}\n\n"
+            f"DRAFT_PLAN_SUMMARY:\n{json.dumps(director_draft_plan[:16], ensure_ascii=False)[:1800]}\n\n"
+            f"AUDIO_MAP_SUMMARY:\n{json.dumps(director_audio_map, ensure_ascii=False)[:1200]}\n\n"
+            f"DIRECTOR_V2_PRIMARY_TEXT:\n{director_v2_primary_text[:2200]}\n\n"
+        )
     return (
         "You are STORY CORE v1.1 stage.\n"
         "Return STRICT JSON only. No markdown.\n"
@@ -11052,6 +11087,7 @@ def _build_story_core_prompt(
         "HARD CONTRACT: respect explicit user world locks (e.g., no club/no neon) and avoid contradictions.\n"
         f"{mode_instructions}\n"
         f"story_core_mode={mode}\n\n"
+        f"{director_v2_prompt_block}"
         f"CORE_INPUT_CONTEXT:\n{json.dumps(compact_input, ensure_ascii=False)[:4200]}\n\n"
         f"ASSIGNED_ROLES:\n{json.dumps(compact_assigned_roles, ensure_ascii=False)[:1200]}\n\n"
     )
@@ -11078,10 +11114,15 @@ def _detect_director_v2_industrial_drift(input_pkg: dict[str, Any], story_core: 
     if not (is_director_v2_source and contract_present):
         return False
     downstream = _safe_dict(contract.get("downstream_brief"))
+    draft_plan = _safe_list(input_pkg.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan"))
     source_text = " ".join([
         str(contract.get("story_goal") or ""),
         str(contract.get("visual_world") or ""),
         str(downstream.get("core") or ""),
+        " ".join(
+            str(_safe_dict(row).get("user_visible_description") or _safe_dict(row).get("purpose") or _safe_dict(row).get("goal") or "").strip()
+            for row in draft_plan[:16]
+        ),
     ]).lower()
     world_definition = _safe_dict(story_core_v1.get("world_definition"))
     generated_text = " ".join([
@@ -11091,8 +11132,19 @@ def _detect_director_v2_industrial_drift(input_pkg: dict[str, Any], story_core: 
         str(_safe_dict(story_core.get("style_lock")).get("rule") or ""),
         json.dumps(world_definition, ensure_ascii=False),
     ]).lower()
-    banned = ("corrugated metal", "rusted industrial", "industrial perimeter", "decaying industrial")
-    return any(token in generated_text and token not in source_text for token in banned)
+    source_anchor_candidates = (
+        "одесса", "поезд", "купе", "тамбур", "вагон", "ресторан", "привоз", "дерибасовская", "порт",
+        "прошлое", "настоящее", "odessa", "train", "carriage", "vestibule", "past", "present",
+        "character_1", "character_2",
+    )
+    source_anchors = [token for token in source_anchor_candidates if token in source_text]
+    generated_has_source_anchor = any(token in generated_text for token in source_anchors)
+    banned = (
+        "corridor", "immaculate corridor", "pristine emptiness", "silent negotiation", "unspoken authority",
+        "social pressure", "decaying industrial", "industrial", "rusted", "corrugated metal", "perimeter",
+    )
+    has_foreign_concrete = any(token in generated_text and token not in source_text for token in banned)
+    return bool(has_foreign_concrete and not generated_has_source_anchor)
 
 
 def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -11125,7 +11177,6 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "ai_scenario_director_v2" in request_source_norm or director_v2_pkg or draft_plan or _safe_dict(director_v2_pkg.get("director_contract"))
     )
     director_v2_primary_text = _build_director_v2_primary_text(director_contract, draft_plan) if (is_director_v2_source and director_contract) else ""
-    should_override_text = bool("ai_scenario_director_v2" in request_source_norm)
     base_input = {
         "text": str(req.get("text") or "").strip() or primary_narrative_text,
         "story_text": str(req.get("storyText") or req.get("story_text") or "").strip() or primary_narrative_text,
@@ -11159,10 +11210,9 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "ownership_binding_inventory": ownership_binding_inventory,
         "request_source": request_source,
     }
-    if director_v2_primary_text:
+    if is_director_v2_source and director_v2_primary_text:
         for field in ("text", "story_text", "note", "director_note"):
-            if should_override_text or not str(base_input.get(field) or "").strip():
-                base_input[field] = director_v2_primary_text
+            base_input[field] = director_v2_primary_text
     normalized_input = _normalize_input_audio_source(base_input, refs_inventory)
     stages = {
         stage_id: {
@@ -18265,10 +18315,9 @@ def run_manual_stage(
         or _safe_dict(incoming_director_v2_package.get("director_contract"))
     )
     director_v2_primary_text = _build_director_v2_primary_text(incoming_director_contract, incoming_draft_plan) if (is_director_v2_source and incoming_director_contract) else ""
-    if director_v2_primary_text:
+    if is_director_v2_source and director_v2_primary_text:
         for field in ("text", "story_text", "note", "director_note"):
-            if "ai_scenario_director_v2" in request_source_norm or not str(input_pkg.get(field) or "").strip():
-                input_pkg[field] = director_v2_primary_text
+            input_pkg[field] = director_v2_primary_text
 
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
