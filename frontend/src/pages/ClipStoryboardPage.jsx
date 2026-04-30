@@ -23297,7 +23297,15 @@ onClipSec: (nodeId, value) => {
           };
         }
         if (n.type === "aiScenarioDirectorV2") {
-          const incoming = (effectiveEdges || []).filter((edge) => edge?.target === n.id);
+          const safeEdgesForConnections =
+            (typeof effectiveEdges !== "undefined" && Array.isArray(effectiveEdges))
+              ? effectiveEdges
+              : Array.isArray(edgesNow)
+                ? edgesNow
+                : Array.isArray(edgesRef.current)
+                  ? edgesRef.current
+                  : [];
+          const incoming = safeEdgesForConnections.filter((edge) => edge?.target === n.id);
           const connections = incoming.reduce((acc, edge) => {
             const targetHandle = String(edge?.targetHandle || "").trim();
             if (!targetHandle) return acc;
@@ -24429,21 +24437,22 @@ const hydrate = useCallback((source = "unknown") => {
         }
         if (dst.type === "aiScenarioDirectorV2") {
           const h = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
           const srcKind = src?.data?.kind || "";
           const ok =
-            (h === "audio_in" && src.type === "audioNode") ||
-            (h === "text_in" && src.type === "textNode") ||
-            (h === "video_ref_in" && src.type === "videoRefNode") ||
-            (h === "ref_character_1" && src.type === "refNode" && srcKind === "ref_character") ||
-            (h === "ref_location" && src.type === "refNode" && srcKind === "ref_location") ||
-            (h === "ref_style" && src.type === "refNode" && srcKind === "ref_style") ||
-            (h === "ref_props" && src.type === "refNode" && srcKind === "ref_items") ||
-            (h === "ref_character_2" && src.type === "refCharacter2") ||
-            (h === "ref_character_3" && src.type === "refCharacter3");
+            (h === "audio_in" && src.type === "audioNode" && sourceHandle === "audio") ||
+            (h === "text_in" && src.type === "textNode" && sourceHandle === "text") ||
+            (h === "video_ref_in" && src.type === "videoRefNode" && sourceHandle === "video_ref") ||
+            (h === "ref_character_1" && src.type === "refNode" && srcKind === "ref_character" && sourceHandle === "ref_character") ||
+            (h === "ref_location" && src.type === "refNode" && srcKind === "ref_location" && sourceHandle === "ref_location") ||
+            (h === "ref_style" && src.type === "refNode" && srcKind === "ref_style" && sourceHandle === "ref_style") ||
+            (h === "ref_props" && src.type === "refNode" && srcKind === "ref_items" && sourceHandle === "ref_items") ||
+            (h === "ref_character_2" && src.type === "refCharacter2" && sourceHandle === "ref_character_2") ||
+            (h === "ref_character_3" && src.type === "refCharacter3" && sourceHandle === "ref_character_3");
           if (!ok) return eds;
           const cleaned = eds.filter((e) => !(e.target === params.target && e.targetHandle === h));
           const presentation = getEdgePresentation({
-            sourceHandle: params.sourceHandle || "",
+            sourceHandle,
             targetHandle: h,
             sourceType: src.type,
             targetType: dst.type,
