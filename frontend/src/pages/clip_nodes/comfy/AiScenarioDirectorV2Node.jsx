@@ -33,6 +33,17 @@ const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref
 const fmt = (v) => Number(v || 0).toFixed(2);
 const isObject = (v) => !!v && typeof v === "object";
 
+const CONTRACT_SECTIONS = [
+  ["concept", "Замысел"],
+  ["world", "Мир"],
+  ["roles", "Роли"],
+  ["routes", "Маршруты"],
+  ["lip_sync_policy", "Lip-sync policy"],
+  ["opening", "Opening"],
+  ["ending", "Ending"],
+  ["reference_usage", "Reference usage"],
+];
+
 const renderContractValue = (value) => {
   if (value == null) return "";
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
@@ -197,6 +208,18 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   });
   const chipSource = Object.keys(connectedInputs).length ? connectedInputs : connections;
 
+  const copyText = async (text, label) => {
+    try {
+      await navigator.clipboard.writeText(String(text || ""));
+    } catch (copyError) {
+      console.warn(`[AI Director V2] Не удалось скопировать ${label}`, copyError);
+    }
+  };
+
+  const lastAssistantMessage = [...chatMessages].reverse().find((m) => m?.role === "assistant")?.text || "";
+  const segmentLines = segments.map((seg) => `${seg.id} | ${fmt(seg.startSec)}-${fmt(seg.endSec)} | lip-sync: ${seg.isLipSyncCandidate ? "да" : "нет"} | intensity: ${seg.intensity.toFixed(2)} | ${seg.transcript || "—"}`);
+  const transcriptLines = segments.map((seg) => seg.transcript).filter(Boolean);
+
   return (<><Handle type="source" position={Position.Right} id="scenario_out_v2" className="clipSB_handle" style={handleStyle("scenario_out")} />
     {INPUTS.map((item, index) => <Handle key={item.id} type="target" position={Position.Left} id={item.id} className="clipSB_handle" style={{ ...handleStyle(item.id), top: 48 + index * 24 }} />)}
     <NodeShell title="AI РЕЖИССЁР V2" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeStoryboard asdv2_shell" style={{ minWidth: 1120 }}>
@@ -212,15 +235,45 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
         <div className="asdv2_inputsBar">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
         {isAudioChangedAfterParse ? <div className="asdv2_emptyState">Подключённое аудио изменилось. Нажми «Сбросить» и разбери новое аудио.</div> : null}
         <div className="asdv2_mainGrid">
-          <div className={`asdv2_panel asdv2_chatPanel ${isChatLocked ? "asdv2_lockedPanel" : ""}`}><strong>AI-чат</strong><div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
-            {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI сможет видеть сегменты, длительность, фразы и предложить структуру клипа.</div> : null}
-            <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked || Boolean(data?.directorChatPending)} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked || Boolean(data?.directorChatPending)} onClick={onSend}>{data?.directorChatPending ? "AI думает..." : "Отправить"}</button></div></div>
+          <div className="asdv2_panel asdv2_contractPanel">
+            <div className="asdv2_panelHead"><strong>Черновик контракта режиссёра</strong></div>
+            {!draftContract ? <div className="asdv2_emptyState">Черновик ещё не создан. Разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractList">
+              {CONTRACT_SECTIONS.map(([key, label]) => {
+                const value = draftContract?.[key];
+                if (value == null || value === "") return null;
+                return <div key={key} className="asdv2_contractCard"><b>{label}</b><small>{renderContractValue(value)}</small></div>;
+              })}
+            </div>}
+            <div className="asdv2_copyRow">
+              <button className="clipSB_btn" disabled={!draftContract} onClick={() => copyText(JSON.stringify(draftContract || {}, null, 2), "черновик JSON")}>Скопировать JSON</button>
+              <button className="clipSB_btn" disabled={!draftContract} onClick={() => copyText(CONTRACT_SECTIONS.map(([key, label]) => `${label}: ${renderContractValue(draftContract?.[key] ?? "—")}`).join("\n\n"), "черновик summary")}>Скопировать summary</button>
+            </div>
+          </div>
 
-          <div className="asdv2_panel"><strong>Черновик контракта режиссёра</strong>{!draftContract ? <div className="asdv2_emptyState">Черновик режиссёра ещё не создан. Сначала разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractGrid">{Object.entries(draftContract).map(([k, v]) => <div key={k} className="asdv2_contractCard"><b>{k}</b><small>{renderContractValue(v)}</small></div>)}</div>}<div className="asdv2_draftActions">{directorState === DIRECTOR_STATES.DRAFT_CONFIRMED ? "Черновик подтверждён. Теперь можно применить его к цепочке." : ""}</div></div>
+          <div className={`asdv2_panel asdv2_chatPanel ${isChatLocked ? "asdv2_lockedPanel" : ""}`}>
+            <div className="asdv2_panelHead">
+              <strong>AI-чат / обсуждение клипа</strong>
+              <button className="clipSB_btn" disabled={!lastAssistantMessage} onClick={() => copyText(lastAssistantMessage, "последний ответ")}>Скопировать последний ответ</button>
+            </div>
+            <div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
+            {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI увидит сегменты, длительность, фразы и сможет обсудить структуру клипа.</div> : null}
+            <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked || Boolean(data?.directorChatPending)} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked || Boolean(data?.directorChatPending)} onClick={onSend}>{data?.directorChatPending ? "AI думает..." : "Отправить"}</button></div>
+          </div>
 
-          <div className="asdv2_panel asdv2_audioMapPanel"><strong>Аудио и этапы</strong>{!hasAudio ? <div className="asdv2_emptyState">Сначала подключи аудио.</div> : !audioMap ? <div className="asdv2_emptyState">Аудио подключено. Нажми «Разобрать аудио», чтобы получить сегменты, тайминги и lip-sync окна.</div> : <><div>Статус: audio_map готов</div><div>Сегментов: {segments.length}</div><div>Lip-sync кандидатов: {segments.filter((s) => s?.isLipSyncCandidate).length}</div><div className="asdv2_chatMessages">{segments.map((seg) => <div key={seg.id} className="asdv2_audioSegment">{seg.id} · {fmt(seg.startSec)}–{fmt(seg.endSec)} · {seg.isLipSyncCandidate ? "lip-sync ✓" : "lip-sync —"} {seg.intensity ? `· intensity ${seg.intensity.toFixed(2)}` : ""}{seg.transcript ? <div>"{seg.transcript}"</div> : null}</div>)}</div></>}</div>
+          <div className="asdv2_panel asdv2_audioMapPanel">
+            <div className="asdv2_panelHead"><strong>Аудио-разбор</strong></div>
+            {!hasAudio ? <div className="asdv2_emptyState">Сначала подключи аудио.</div> : !audioMap ? <div className="asdv2_emptyState">Аудио подключено. Нажми «Разобрать аудио», чтобы получить сегменты, тайминги и lip-sync окна.</div> : <>
+              <div>Статус: audio_map готов</div><div>Сегментов: {segments.length}</div><div>Lip-sync кандидатов: {segments.filter((s) => s?.isLipSyncCandidate).length}</div>
+              <div className="asdv2_audioSegments">{segments.map((seg) => <div key={seg.id} className="asdv2_audioSegment"><div><b>{seg.id}</b> · {fmt(seg.startSec)}–{fmt(seg.endSec)}</div><div>lip-sync: {seg.isLipSyncCandidate ? "да" : "нет"} · intensity: {seg.intensity.toFixed(2)}</div>{seg.transcript ? <div>Фраза: {seg.transcript}</div> : null}</div>)}</div>
+            </>}
+            <div className="asdv2_copyRow">
+              <button className="clipSB_btn" disabled={!audioMap} onClick={() => copyText(JSON.stringify(audioMap || {}, null, 2), "audio_map JSON")}>Скопировать audio_map JSON</button>
+              <button className="clipSB_btn" disabled={!segments.length} onClick={() => copyText(segmentLines.join("\n"), "сегменты")}>Скопировать сегменты</button>
+              <button className="clipSB_btn" disabled={!transcriptLines.length} onClick={() => copyText(transcriptLines.join("\n"), "фразы")}>Скопировать фразы</button>
+            </div>
+          </div>
         </div>
-        <div className="asdv2_panel asdv2_planPanel"><strong>План клипа</strong>{directorState === DIRECTOR_STATES.DRAFT_READY || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED || directorState === DIRECTOR_STATES.APPLIED ? <div className="asdv2_plan">{draftPlan.map((scene, idx) => <div className="asdv2_scene" key={scene.scene_id || idx}><b>{scene.scene_id || `scene_${idx + 1}`}</b><small>{scene.start_sec}–{scene.end_sec}</small><p>{scene.user_visible_description || scene.purpose || ""}</p></div>)}</div> : <div className="asdv2_emptyState">План клипа появится здесь после генерации режиссёрского черновика.</div>}</div>
+        <div className="asdv2_panel asdv2_planPanel"><strong>План клипа</strong>{draftPlan.length ? <div className="asdv2_plan">{draftPlan.map((scene, idx) => <div className="asdv2_scene" key={scene.scene_id || idx}><b>Сцена {idx + 1}</b><small>{scene.segment_id || "—"} · {scene.route || "—"}</small><div className="asdv2_scenePhrase">{scene.audio_phrase || scene.transcript || scene.phrase || "Фраза не указана"}</div><small>{fmt(scene.start_sec)}–{fmt(scene.end_sec)} · {scene.timeline_role || "роль не указана"}</small><p>{scene.user_visible_description || scene.purpose || ""}</p><div className="asdv2_sceneActions"><button className="clipSB_btn" disabled>Редактировать</button><button className="clipSB_btn" disabled>Закрепить</button><button className="clipSB_btn" disabled>Переместить</button></div></div>)}</div> : <div className="asdv2_emptyState">План клипа появится здесь после генерации режиссёрского черновика.</div>}</div>
         {Array.isArray(data?.questionsResolved) && data.questionsResolved.length ? <div className="asdv2_panel"><strong>Уточнено</strong><ul>{data.questionsResolved.map((item, idx) => <li key={`resolved_${idx}`}>{String(item || "")}</li>)}</ul></div> : null}
         {Array.isArray(data?.remainingRisks) && data.remainingRisks.length ? <div className="asdv2_panel"><strong>Что проверить перед применением</strong><ul>{data.remainingRisks.map((risk, idx) => <li key={`risk_${idx}`}>{String(risk || "")}</li>)}</ul></div> : null}
         {error ? <div className="asdv2_emptyState">Ошибка: {error}</div> : null}

@@ -5594,51 +5594,40 @@ body.ps_clip_fullscreen .mainCol {
 }
 
 /* AI Scenario Director V2 (scoped) */
-.asdv2_shell{width:1160px !important;min-width:1160px !important;max-width:1160px !important}
-.react-flow__node-aiScenarioDirectorV2{width:1160px !important;min-width:1160px !important;max-width:1160px !important}
+.asdv2_shell{width:1260px !important;min-width:1260px !important;max-width:1260px !important}
+
 .asdv2_body{width:100%;overflow:visible;padding-right:0}
 .asdv2_toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:10px;align-items:center}
-.asdv2_titleBlock{min-width:220px}
 .asdv2_sub{opacity:.82;font-size:12px}
-.asdv2_controls,.asdv2_actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap}
-.asdv2_row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.asdv2_actions{justify-content:flex-end}
+.asdv2_actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;justify-content:flex-end}
 .asdv2_actions .clipSB_btn{white-space:nowrap;padding:5px 8px;font-size:11px}
-.asdv2_between{justify-content:space-between}
-.asdv2_select,.asdv2_inputLine{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:6px 8px}
-.asdv2_chip{padding:4px 8px;border-radius:999px;background:rgba(127,218,149,.2);border:1px solid rgba(127,218,149,.5);font-size:11px}
 .asdv2_inputsBar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .asdv2_inputChip{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid rgba(255,255,255,.2);border-left-width:3px;border-radius:999px;background:rgba(255,255,255,.03);font-size:12px;white-space:nowrap}
-.asdv2_inputChip b{font-size:11px;text-transform:lowercase}
-.asdv2_inputChip.isConnected b{color:#7fe69a}
-.asdv2_inputChip.isEmpty b{color:rgba(255,255,255,.72)}
-.asdv2_mainGrid{display:grid;grid-template-columns:300px 1fr 280px;gap:10px;margin-top:10px;align-items:start}
+.asdv2_inputChip.isConnected{color:#7fe69a}
+.asdv2_inputChip.isEmpty{color:rgba(255,255,255,.72)}
+.asdv2_mainGrid{display:grid;grid-template-columns:320px minmax(0,1fr) 340px;gap:12px;margin-top:10px;align-items:stretch}
 .asdv2_panel{padding:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;background:rgba(255,255,255,.02);min-width:0}
-.asdv2_panelCompact{max-height:none;overflow:visible}
-.asdv2_contractGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
+.asdv2_panelHead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.asdv2_contractPanel,.asdv2_audioMapPanel{min-height:460px;display:flex;flex-direction:column;gap:8px}
+.asdv2_contractList{display:flex;flex-direction:column;gap:8px;overflow:auto;padding-right:2px}
 .asdv2_contractCard{padding:8px;border:1px solid rgba(255,255,255,.12);border-radius:8px;background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:4px}
-.asdv2_pipelineList{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px}
-.asdv2_stage{border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.02);color:#fff;border-radius:8px;padding:7px;text-align:left;display:flex;flex-direction:column;gap:2px}
-.asdv2_stage.isActive{border-color:var(--family-storyboard);box-shadow:0 0 0 1px var(--family-storyboard) inset}
-.asdv2_viewer{margin-top:8px;padding:10px;border-radius:8px;border:1px dashed rgba(255,255,255,.2)}
-.asdv2_planPanel{margin-top:10px}
-.asdv2_plan{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;max-height:260px;overflow-y:auto;overflow-x:hidden;margin-top:8px}
+.asdv2_copyRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding-top:8px}
+.asdv2_chatPanel{display:flex;flex-direction:column;gap:8px;min-height:460px}
+.asdv2_chatMessages{flex:1;min-height:300px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:8px}
+.asdv2_chatMsg{font-size:12px;margin-bottom:8px}
+.asdv2_chatComposer{display:flex;gap:8px;align-items:flex-start}
+.asdv2_chatInput{width:100%;min-height:96px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:6px 8px}
+.asdv2_audioSegments{max-height:320px;overflow:auto;border:1px solid rgba(255,255,255,.08);border-radius:8px}
+.asdv2_audioSegment{font-size:11px;padding:7px;border-bottom:1px solid rgba(255,255,255,.08)}
+.asdv2_planPanel{margin-top:12px}
+.asdv2_plan{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;max-height:320px;overflow-y:auto;overflow-x:hidden;margin-top:8px}
 .asdv2_scene{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);display:flex;flex-direction:column;gap:6px;min-width:0}
 .asdv2_scene p{margin:0}
-.asdv2_tag{font-size:11px;padding:2px 6px;border-radius:999px;border:1px solid rgba(255,255,255,.25)}
-.asdv2_isDisabled{opacity:.45}
+.asdv2_scenePhrase{font-size:12px;padding:6px;border-radius:6px;background:rgba(0,0,0,.2);border:1px solid rgba(255,255,255,.12)}
+.asdv2_sceneActions{display:flex;gap:6px;flex-wrap:wrap}
 .asdv2_lockedPanel{opacity:.45}
 .asdv2_stepBadge{font-size:11px;padding:4px 8px;border:1px solid rgba(255,255,255,.2);border-radius:999px}
 .asdv2_primaryAction{border-color:var(--family-audio);box-shadow:0 0 0 1px color-mix(in srgb,var(--family-audio) 40%,transparent) inset}
-.asdv2_audioMapPanel{min-height:280px}
-.asdv2_audioSegment{font-size:11px;padding:5px 6px;border-bottom:1px solid rgba(255,255,255,.08)}
-.asdv2_chatPanel{display:flex;flex-direction:column;gap:8px}
-.asdv2_chatMessages{max-height:170px;overflow:auto;border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:6px}
-.asdv2_chatMsg{font-size:12px;margin-bottom:6px}
-.asdv2_chatComposer{display:flex;gap:8px;align-items:flex-start}
-.asdv2_chatInput{width:100%;min-height:68px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:6px 8px}
-.asdv2_quickPrompts{display:flex;flex-wrap:wrap;gap:6px}
 .asdv2_emptyState{font-size:12px;opacity:.86;padding:10px;border:1px dashed rgba(255,255,255,.2);border-radius:8px}
 .asdv2_draftActions{margin-top:8px;font-size:12px;color:#7fe69a}
-
 .asdv2_contractCard small{white-space:pre-wrap;overflow-wrap:anywhere}
