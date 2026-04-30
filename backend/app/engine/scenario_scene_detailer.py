@@ -236,6 +236,14 @@ def _extract_gemini_text(response: Any) -> str:
     except Exception:
         return ""
 
+
+def _is_timeout_http_error(response: Any) -> bool:
+    if not isinstance(response, dict) or not response.get("__http_error__"):
+        return False
+    error_text = str(response.get("text") or response.get("error") or "")
+    return "REQUEST_TIMEOUT" in error_text or "ReadTimeout" in error_text
+
+
 def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     scene_plan = _safe_dict(package.get("scene_plan"))
     source_rows = _safe_list(scene_plan.get("scenes") or scene_plan.get("storyboard"))
@@ -295,31 +303,48 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
     diagnostics["scene_detail_compact_payload"] = True
     diagnostics["scene_detail_compact_scene_count"] = len(compact_rows)
     diagnostics["scene_detail_compact_audio_segments_count"] = len(compact_audio)
+    diagnostics["scene_detail_timeout_retry_attempted"] = False
+    diagnostics["scene_detail_timeout_retry_succeeded"] = False
+    diagnostics["scene_detail_attempt_count"] = 1
+    diagnostics["scene_detail_last_error_text"] = ""
     try:
         configured_timeout = get_scenario_stage_timeout("scene_detail")
     except Exception:
         configured_timeout = 300
+    configured_timeout = max(int(configured_timeout or 0), 240)
     diagnostics["scene_detail_configured_timeout_sec"] = configured_timeout
 
+    request_body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": prompt_text}
+                ],
+            }
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.2,
+        },
+    }
     response = post_generate_content(
         api_key=str(api_key or "").strip(),
         model=SCENE_DETAIL_MODEL,
-        body={
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt_text}
-                    ],
-                }
-            ],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.2,
-            },
-        },
+        body=request_body,
         timeout=configured_timeout,
     )
+    if _is_timeout_http_error(response):
+        diagnostics["scene_detail_timeout_retry_attempted"] = True
+        diagnostics["scene_detail_attempt_count"] = 2
+        response = post_generate_content(
+            api_key=str(api_key or "").strip(),
+            model=SCENE_DETAIL_MODEL,
+            body=request_body,
+            timeout=configured_timeout,
+        )
+        if not (isinstance(response, dict) and response.get("__http_error__")):
+            diagnostics["scene_detail_timeout_retry_succeeded"] = True
 
     if isinstance(response, dict) and response.get("__http_error__"):
         diagnostics["scene_detail_gemini_http_error"] = True
@@ -327,6 +352,7 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
         diagnostics["scene_detail_gemini_http_text"] = str(
             response.get("text") or response.get("error") or response
         )[:2000]
+        diagnostics["scene_detail_last_error_text"] = diagnostics["scene_detail_gemini_http_text"]
         diagnostics["scene_detail_gemini_model"] = SCENE_DETAIL_MODEL
         error_text = str(response.get("text") or response.get("error") or "")[:500]
         return {
