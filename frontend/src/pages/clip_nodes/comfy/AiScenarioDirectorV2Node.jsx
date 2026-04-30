@@ -144,9 +144,26 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
 
   const onGenerateDraft = async () => {
     if (!data?.onGenerateDirectorDraft) return;
-    patchData({ directorState: DIRECTOR_STATES.GENERATING_DRAFT, directorError: "", directorInfo: "" });
+    patchData({
+      directorState: DIRECTOR_STATES.GENERATING_DRAFT,
+      directorError: "",
+      directorInfo: "",
+      draftContract: null,
+      draftPlan: [],
+      questionsResolved: [],
+      remainingRisks: [],
+    });
     const result = await data.onGenerateDirectorDraft(id);
-    if (!result?.ok) return patchData({ directorState: DIRECTOR_STATES.ERROR, directorError: String(result?.error || "Ошибка генерации черновика") });
+    if (!result?.ok) {
+      return patchData({
+        directorState: DIRECTOR_STATES.ERROR,
+        directorError: String(result?.error || "Ошибка генерации черновика"),
+        draftContract: null,
+        draftPlan: [],
+        questionsResolved: [],
+        remainingRisks: [],
+      });
+    }
     patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo), questionsResolved: result.questionsResolved || [], remainingRisks: result.remainingRisks || [] });
   };
 
@@ -176,6 +193,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     audioMap: null, chatMessages: [], draftContract: null, draftPlan: [], confirmed: false, applied: false,
     directorV2Package: null, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {},
     parsedAudioSourceNodeId: "", parsedAudioUrl: "",
+    questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
   });
   const chipSource = Object.keys(connectedInputs).length ? connectedInputs : connections;
 
