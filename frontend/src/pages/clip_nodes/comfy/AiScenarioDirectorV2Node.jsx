@@ -175,6 +175,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const contentType = resolveDirectorV2ContentType(currentMode);
   const error = data?.directorError || "";
   const info = data?.directorInfo || "";
+  const draftRegenerating = Boolean(data?.draftRegenerating);
   const currentAudioSourceNodeId = connectedInputs?.audio_in?.sourceNodeId || "";
   const currentAudioUrl = connectedInputs?.audio_in?.value || connectedInputs?.audio_in?.url || "";
   const hasDraft = Boolean(draftContract || draftPlan.length);
@@ -254,27 +255,52 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
 
   const onGenerateDraft = async () => {
     if (!data?.onGenerateDirectorDraft) return;
-    patchData({
+    const hadExistingDraft = Boolean(draftContract || draftPlan.length);
+    const draftPatch = {
       directorState: DIRECTOR_STATES.GENERATING_DRAFT,
       directorError: "",
-      directorInfo: "",
-      draftContract: null,
-      draftPlan: [],
-      questionsResolved: [],
-      remainingRisks: [],
-    });
+      draftRegenerating: hadExistingDraft,
+      directorInfo: hadExistingDraft ? "Перегенерирую черновик..." : "",
+    };
+    if (!hadExistingDraft) {
+      draftPatch.draftContract = null;
+      draftPatch.draftPlan = [];
+      draftPatch.questionsResolved = [];
+      draftPatch.remainingRisks = [];
+    }
+    patchData(draftPatch);
     const result = await data.onGenerateDirectorDraft(id);
     if (!result?.ok) {
+      if (hadExistingDraft) {
+        return patchData({
+          draftRegenerating: false,
+          directorState: DIRECTOR_STATES.DRAFT_READY,
+          directorError: `Не удалось перегенерировать черновик: ${String(result?.error || "Ошибка генерации черновика")}`,
+          directorInfo: "Старый черновик сохранён. Можно повторить перегенерацию.",
+        });
+      }
       return patchData({
+        draftRegenerating: false,
         directorState: DIRECTOR_STATES.ERROR,
-        directorError: String(result?.error || "Ошибка генерации черновика"),
+        directorError: String(result?.error || "Gemini Director V2 не смог собрать черновик"),
         draftContract: null,
         draftPlan: [],
         questionsResolved: [],
         remainingRisks: [],
       });
     }
-    patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo), questionsResolved: result.questionsResolved || [], remainingRisks: result.remainingRisks || [], directorKnowledgeVersion: result?.knowledgeVersion || data?.directorKnowledgeVersion || "" });
+    patchData({
+      draftRegenerating: false,
+      directorState: DIRECTOR_STATES.DRAFT_READY,
+      draftContract: result.draftContract || {},
+      draftPlan: result.draftPlan || [],
+      draftIsDemo: Boolean(result?.isDemo),
+      questionsResolved: result.questionsResolved || [],
+      remainingRisks: result.remainingRisks || [],
+      directorKnowledgeVersion: result?.knowledgeVersion || data?.directorKnowledgeVersion || "",
+      directorError: "",
+      directorInfo: hadExistingDraft ? "Черновик обновлён." : "",
+    });
   };
 
   const onApply = () => {
@@ -309,6 +335,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
     parsedAudioSourceNodeId: "", parsedAudioUrl: "",
     questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
+    draftRegenerating: false,
   });
   const resetDirectorCycleForSettingsChange = (nextPatch = {}) => patchData({
     ...nextPatch,
@@ -317,6 +344,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
     parsedAudioSourceNodeId: "", parsedAudioUrl: "",
     questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
+    draftRegenerating: false,
   });
   const hasDirectorCycleData = Boolean(audioMap) || Boolean(draftContract) || draftPlan.length > 0 || Boolean(data?.directorV2Package);
   const onModeChange = (value) => {
@@ -407,7 +435,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
           {data?.directorKnowledgeVersion ? <div className="asdv2_sub">Knowledge: {data.directorKnowledgeVersion}</div> : null}
           <div className="asdv2_actions">
             <button className="clipSB_btn asdv2_primaryAction" disabled={!hasAudio || isParseLocked} onClick={parseAudio}>{directorState === DIRECTOR_STATES.PARSING_AUDIO ? "Разбираю аудио..." : (audioMap ? "Переразобрать аудио" : "Разобрать аудио")}</button>
-            <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{directorState === DIRECTOR_STATES.GENERATING_DRAFT ? "Генерирую..." : (draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик")}</button>
+            <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{directorState === DIRECTOR_STATES.GENERATING_DRAFT ? (draftRegenerating || hasDraft ? "Перегенерирую..." : "Генерирую...") : (hasDraft ? "Перегенерировать черновик" : "Сгенерировать черновик")}</button>
             <button className="clipSB_btn" disabled={isApplied || directorState !== DIRECTOR_STATES.DRAFT_READY} onClick={() => patchData({ directorState: DIRECTOR_STATES.DRAFT_CONFIRMED, confirmed: true })}>Подтвердить</button>
             <button className="clipSB_btn" disabled={isApplied || Boolean(data?.draftIsDemo) || directorState !== DIRECTOR_STATES.DRAFT_CONFIRMED} onClick={onApply}>Применить к CORE</button>
             <button className="clipSB_btn" onClick={onReset}>Сбросить</button>
