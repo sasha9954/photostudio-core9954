@@ -46,6 +46,10 @@ const STAGE_TO_PACKAGE_KEY = { core: "story_core", roles: "role_plan", scenes: "
 const STAGE_META = { core: { title: "CORE — смысловой позвоночник", description: "Базовая смысловая структура и опорные идеи ролика." }, roles: { title: "ROLES — роли и присутствие", description: "Распределение ролей, появлений и эмоционального фокуса." }, scenes: { title: "SCENES — план сцен", description: "Покомпонентный план сцен и переходов." }, prompts: { title: "PROMPTS — фото/видео промты", description: "Генерация промтов для визуальных и видео-сцен." }, final_video_prompt: { title: "FINAL VIDEO PROMPT — финальные видео-промты", description: "Финализация видео-промтов для рендера." }, final: { title: "FINAL — manifest сборки", description: "Финальный manifest/payload для передачи в storyboard." } };
 
 const CONTRACT_SECTIONS = [
+  ["mode_understanding", "Понимание режима"],
+  ["audio_interpretation", "Понимание аудио"],
+  ["visual_directing_rules", "Режиссёрская грамматика"],
+  ["downstream_brief", "Задание для цепочки"],
   ["story_goal", "Замысел"],
   ["emotional_arc", "Эмоциональная арка"],
   ["visual_world", "Мир / визуальная среда"],
@@ -177,6 +181,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     patchData({
       directorChatPending: false,
       directorMemory: result?.directorMemory || {},
+      directorKnowledgeVersion: result?.knowledgeVersion || data?.directorKnowledgeVersion || "",
       directorError: "",
       chatMessages: [...chatMessages, { role: "user", text: userMessage }, { role: "assistant", text: String(result?.assistantReply || "") }],
     });
@@ -204,7 +209,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
         remainingRisks: [],
       });
     }
-    patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo), questionsResolved: result.questionsResolved || [], remainingRisks: result.remainingRisks || [] });
+    patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo), questionsResolved: result.questionsResolved || [], remainingRisks: result.remainingRisks || [], directorKnowledgeVersion: result?.knowledgeVersion || data?.directorKnowledgeVersion || "" });
   };
 
   const onApply = () => {
@@ -372,6 +377,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
             <div className="asdv2_panelHead"><strong>Аудио-разбор</strong></div>
             {!hasAudio ? <div className="asdv2_emptyState">Сначала подключи аудио.</div> : !audioMap ? <div className="asdv2_emptyState">Аудио подключено. Нажми «Разобрать аудио», чтобы получить сегменты, тайминги и lip-sync окна.</div> : <>
               <div>Статус: audio_map готов</div><div>Фразы audio_map: {segments.length}</div>{sceneCandidateCount ? <div>Кандидаты сцен: {sceneCandidateCount}</div> : null}<div>Lip-sync кандидатов: {segments.filter((s) => s?.isLipSyncCandidate).length}</div><div className="asdv2_hint">segments[] — это фразы, AI Director может объединять их в сцены.</div>
+              {(audioMap?.mode_audio_reading || audioMap?.director_audio_brief) ? <div className="asdv2_hint"><b>Режиссёрская подсказка аудио</b>{audioMap?.director_audio_brief?.summary ? <div>{audioMap.director_audio_brief.summary}</div> : null}{audioMap?.director_audio_brief?.likely_scene_count_range ? <div>Реком. число сцен: {audioMap.director_audio_brief.likely_scene_count_range.min}–{audioMap.director_audio_brief.likely_scene_count_range.max}</div> : null}{Array.isArray(audioMap?.director_audio_brief?.must_ask_user) && audioMap.director_audio_brief.must_ask_user.length ? <div>Спросить: {audioMap.director_audio_brief.must_ask_user.slice(0, 2).join(", ")}</div> : null}{Array.isArray(audioMap?.mode_audio_reading?.warnings) && audioMap.mode_audio_reading.warnings.length ? <div>⚠ {audioMap.mode_audio_reading.warnings[0]}</div> : null}</div> : null}
               <div className="asdv2_audioSegments">{segments.map((seg) => <div key={seg.id} className="asdv2_audioSegment"><div><b>{seg.id}</b> · {fmt(seg.startSec)}–{fmt(seg.endSec)}</div><div>lip-sync: {seg.isLipSyncCandidate ? "да" : "нет"} · intensity: {seg.intensity.toFixed(2)}</div>{seg.transcript ? <div>Фраза: {seg.transcript}</div> : null}</div>)}</div>
             </>}
             <div className="asdv2_copyRow">
