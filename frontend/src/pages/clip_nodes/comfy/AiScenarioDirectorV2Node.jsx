@@ -33,6 +33,16 @@ const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref
 const fmt = (v) => Number(v || 0).toFixed(2);
 const isObject = (v) => !!v && typeof v === "object";
 
+const renderContractValue = (value) => {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch (_error) {
+    return String(value);
+  }
+};
+
 function normalizeDirectorV2AudioSegments(audioMap = null) {
   const source = isObject(audioMap) ? audioMap : {};
   const raw = Array.isArray(source?.segments) ? source.segments : [];
@@ -137,7 +147,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     patchData({ directorState: DIRECTOR_STATES.GENERATING_DRAFT, directorError: "", directorInfo: "" });
     const result = await data.onGenerateDirectorDraft(id);
     if (!result?.ok) return patchData({ directorState: DIRECTOR_STATES.ERROR, directorError: String(result?.error || "Ошибка генерации черновика") });
-    patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo) });
+    patchData({ directorState: DIRECTOR_STATES.DRAFT_READY, draftContract: result.draftContract || {}, draftPlan: result.draftPlan || [], draftIsDemo: Boolean(result?.isDemo), questionsResolved: result.questionsResolved || [], remainingRisks: result.remainingRisks || [] });
   };
 
   const onApply = () => {
@@ -188,11 +198,13 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
             {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI сможет видеть сегменты, длительность, фразы и предложить структуру клипа.</div> : null}
             <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked || Boolean(data?.directorChatPending)} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked || Boolean(data?.directorChatPending)} onClick={onSend}>{data?.directorChatPending ? "AI думает..." : "Отправить"}</button></div></div>
 
-          <div className="asdv2_panel"><strong>Черновик контракта режиссёра</strong>{!draftContract ? <div className="asdv2_emptyState">Черновик режиссёра ещё не создан. Сначала разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractGrid">{Object.entries(draftContract).map(([k, v]) => <div key={k} className="asdv2_contractCard"><b>{k}</b><small>{String(v)}</small></div>)}</div>}<div className="asdv2_draftActions">{directorState === DIRECTOR_STATES.DRAFT_CONFIRMED ? "Черновик подтверждён. Теперь можно применить его к цепочке." : ""}</div></div>
+          <div className="asdv2_panel"><strong>Черновик контракта режиссёра</strong>{!draftContract ? <div className="asdv2_emptyState">Черновик режиссёра ещё не создан. Сначала разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractGrid">{Object.entries(draftContract).map(([k, v]) => <div key={k} className="asdv2_contractCard"><b>{k}</b><small>{renderContractValue(v)}</small></div>)}</div>}<div className="asdv2_draftActions">{directorState === DIRECTOR_STATES.DRAFT_CONFIRMED ? "Черновик подтверждён. Теперь можно применить его к цепочке." : ""}</div></div>
 
           <div className="asdv2_panel asdv2_audioMapPanel"><strong>Аудио и этапы</strong>{!hasAudio ? <div className="asdv2_emptyState">Сначала подключи аудио.</div> : !audioMap ? <div className="asdv2_emptyState">Аудио подключено. Нажми «Разобрать аудио», чтобы получить сегменты, тайминги и lip-sync окна.</div> : <><div>Статус: audio_map готов</div><div>Сегментов: {segments.length}</div><div>Lip-sync кандидатов: {segments.filter((s) => s?.isLipSyncCandidate).length}</div><div className="asdv2_chatMessages">{segments.map((seg) => <div key={seg.id} className="asdv2_audioSegment">{seg.id} · {fmt(seg.startSec)}–{fmt(seg.endSec)} · {seg.isLipSyncCandidate ? "lip-sync ✓" : "lip-sync —"} {seg.intensity ? `· intensity ${seg.intensity.toFixed(2)}` : ""}{seg.transcript ? <div>"{seg.transcript}"</div> : null}</div>)}</div></>}</div>
         </div>
         <div className="asdv2_panel asdv2_planPanel"><strong>План клипа</strong>{directorState === DIRECTOR_STATES.DRAFT_READY || directorState === DIRECTOR_STATES.DRAFT_CONFIRMED || directorState === DIRECTOR_STATES.APPLIED ? <div className="asdv2_plan">{draftPlan.map((scene, idx) => <div className="asdv2_scene" key={scene.scene_id || idx}><b>{scene.scene_id || `scene_${idx + 1}`}</b><small>{scene.start_sec}–{scene.end_sec}</small><p>{scene.user_visible_description || scene.purpose || ""}</p></div>)}</div> : <div className="asdv2_emptyState">План клипа появится здесь после генерации режиссёрского черновика.</div>}</div>
+        {Array.isArray(data?.questionsResolved) && data.questionsResolved.length ? <div className="asdv2_panel"><strong>Уточнено</strong><ul>{data.questionsResolved.map((item, idx) => <li key={`resolved_${idx}`}>{String(item || "")}</li>)}</ul></div> : null}
+        {Array.isArray(data?.remainingRisks) && data.remainingRisks.length ? <div className="asdv2_panel"><strong>Что проверить перед применением</strong><ul>{data.remainingRisks.map((risk, idx) => <li key={`risk_${idx}`}>{String(risk || "")}</li>)}</ul></div> : null}
         {error ? <div className="asdv2_emptyState">Ошибка: {error}</div> : null}
         {info ? <div className="asdv2_emptyState">{info}</div> : null}
       </div>

@@ -23453,6 +23453,7 @@ onClipSec: (nodeId, value) => {
                   user_message: String(userMessage || ""),
                   director_state: nodeItem?.data?.directorState || "",
                   current_decisions: nodeItem?.data?.currentDecisions || {},
+                  director_memory: nodeItem?.data?.directorMemory || {},
                 };
                 const response = await fetchJson("/api/director/v2/chat", { method: "POST", body: payload });
                 if (!response?.ok) return { ok: false, error: response?.error || "Gemini Director V2 не ответил" };
