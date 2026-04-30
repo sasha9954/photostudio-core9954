@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from typing import Any
 
 from app.engine.gemini_rest import post_generate_content
+try:
+    from app.engine.scenario_timeouts import get_scenario_stage_timeout
+except Exception:  # pragma: no cover - fallback for older deployments
+    from app.engine.scenario_stage_timeout_policy import get_scenario_stage_timeout
 
 SCENE_DETAIL_PROMPT_VERSION = "scene_detail_v1"
-SCENE_DETAIL_MODEL = "gemini-2.5-pro"
+SCENE_DETAIL_MODEL = os.getenv("SCENE_DETAIL_MODEL", "gemini-2.5-flash")
 
 DETAIL_FIELDS = (
     "scene_goal",
@@ -205,6 +210,13 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
     )
 
     prompt_text = instruction + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False)
+    diagnostics["scene_detail_prompt_chars"] = len(prompt_text)
+    diagnostics["scene_detail_payload_scene_count"] = len(source_rows)
+    try:
+        configured_timeout = get_scenario_stage_timeout("scene_detail")
+    except Exception:
+        configured_timeout = 300
+    diagnostics["scene_detail_configured_timeout_sec"] = configured_timeout
 
     response = post_generate_content(
         api_key=str(api_key or "").strip(),
@@ -223,12 +235,20 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
                 "temperature": 0.2,
             },
         },
+        timeout=configured_timeout,
     )
 
     if isinstance(response, dict) and response.get("__http_error__"):
+        diagnostics["scene_detail_gemini_http_error"] = True
+        diagnostics["scene_detail_gemini_http_status"] = response.get("status")
+        diagnostics["scene_detail_gemini_http_text"] = str(
+            response.get("text") or response.get("error") or response
+        )[:2000]
+        diagnostics["scene_detail_gemini_model"] = SCENE_DETAIL_MODEL
+        error_text = str(response.get("text") or response.get("error") or "")[:500]
         return {
             "ok": False,
-            "error": f"gemini_http_error:{response.get('status')}",
+            "error": f"gemini_http_error:{response.get('status')}:{error_text}",
             "diagnostics": diagnostics,
             "scene_detail": {
                 "scene_detail_version": "v1",
