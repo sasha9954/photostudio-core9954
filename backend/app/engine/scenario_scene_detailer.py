@@ -134,6 +134,26 @@ def _extract_json_payload(text: str) -> tuple[dict[str, Any] | None, str]:
     return None, "failed"
 
 
+
+def _extract_gemini_text(response: Any) -> str:
+    if isinstance(response, str):
+        return response
+    if not isinstance(response, dict):
+        return ""
+    try:
+        candidates = response.get("candidates") or []
+        if not candidates:
+            return ""
+        content = candidates[0].get("content") or {}
+        parts = content.get("parts") or []
+        out = []
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                out.append(part.get("text"))
+        return "\n".join(out).strip()
+    except Exception:
+        return ""
+
 def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     scene_plan = _safe_dict(package.get("scene_plan"))
     source_rows = _safe_list(scene_plan.get("scenes") or scene_plan.get("storyboard"))
@@ -184,7 +204,42 @@ def build_gemini_scene_detail(*, api_key: str, package: dict[str, Any]) -> dict[
         "Не добавляй хаотичные орбиты, невозможную акробатику, резкие скачки камеры, лишних персонажей или новые сюжетные события, которых нет в skeleton."
     )
 
-    text, _ = post_generate_content(api_key=api_key, model=SCENE_DETAIL_MODEL, prompt=instruction + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False))
+    prompt_text = instruction + "\n\nINPUT:\n" + json.dumps(payload, ensure_ascii=False)
+
+    response = post_generate_content(
+        api_key=str(api_key or "").strip(),
+        model=SCENE_DETAIL_MODEL,
+        body={
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt_text}
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.2,
+            },
+        },
+    )
+
+    if isinstance(response, dict) and response.get("__http_error__"):
+        return {
+            "ok": False,
+            "error": f"gemini_http_error:{response.get('status')}",
+            "diagnostics": diagnostics,
+            "scene_detail": {
+                "scene_detail_version": "v1",
+                "source_stage": "scenes",
+                "scenes": [],
+            },
+        }
+
+    text = _extract_gemini_text(response)
+    diagnostics["scene_detail_raw_model_response_preview"] = str(text or "")[:500]
+
     parsed, parse_mode = _extract_json_payload(text)
     diagnostics["scene_detail_json_parse_mode"] = parse_mode
     if parsed is None:
