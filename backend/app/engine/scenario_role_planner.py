@@ -123,6 +123,18 @@ _SINGLE_CAST_WORLD_HINTS = {
     "crowd",
     "locals",
 }
+_ROMANCE_INTENT_TOKENS = ("girl", "девушка", "romantic", "romance", "love", "flowers", "цветы")
+_FIGHT_INTENT_TOKENS = (
+    "fight",
+    "courtyard fight",
+    "драка",
+    "разборка",
+    "побитый",
+    "лежит на земле",
+    "bystanders",
+    "зеваки",
+    "fallen",
+)
 
 
 def _safe_dict(value: Any) -> dict[str, Any]:
@@ -997,6 +1009,7 @@ def _normalize_scene_casting_from_core(
 def _validate_roles_payload(
     *,
     roles_payload: dict[str, Any],
+    package: dict[str, Any],
     expected_segment_ids: list[str],
     allowed_registry: dict[str, dict[str, Any]],
     strict_single_cast_anchor: str = "",
@@ -1067,13 +1080,39 @@ def _validate_roles_payload(
     if seen_segment_ids != expected_segment_ids:
         return {}, ROLES_CONTINUITY_BREAK
     scene_by_segment = {str(row.get("segment_id") or "").strip(): row for row in scene_casting}
-    romantic = _safe_dict(scene_by_segment.get("seg_09"))
-    if romantic and "episodic_girl" not in {str(x).strip() for x in _safe_list(romantic.get("secondary_roles"))}:
-        return {}, ROLES_ENTITY_HALLUCINATION
-    conflict_segments = ["seg_03", "seg_05", "seg_06"]
-    if any(seg in scene_by_segment for seg in conflict_segments):
-        if not any("courtyard fight" in str(_safe_dict(scene_by_segment.get(seg)).get("continuity_notes") or "").lower() for seg in conflict_segments):
-            return {}, ROLES_CONTINUITY_BREAK
+    draft_intents = _extract_director_draft_role_intents(package)
+    for segment_id, intent in draft_intents.items():
+        row = _safe_dict(scene_by_segment.get(segment_id))
+        if not row:
+            continue
+        required_refs = {str(item).strip() for item in _safe_list(_safe_dict(intent).get("required_refs"))}
+        primary_role = str(row.get("primary_role") or "").strip()
+        if "character_2" in required_refs and primary_role != "character_2":
+            return {}, ROLE_PRIMARY_MISMATCH
+        if "character_1" in required_refs and primary_role != "character_1":
+            return {}, ROLE_PRIMARY_MISMATCH
+        intent_text = " ".join(
+            [
+                str(_safe_dict(intent).get("user_visible_description") or ""),
+                str(_safe_dict(intent).get("purpose") or ""),
+                str(_safe_dict(intent).get("audio_phrase") or ""),
+            ]
+        ).lower()
+        has_romance_intent = any(token in intent_text for token in _ROMANCE_INTENT_TOKENS)
+        has_fight_intent = any(token in intent_text for token in _FIGHT_INTENT_TOKENS)
+        secondary_roles = {str(item).strip() for item in _safe_list(row.get("secondary_roles"))}
+        if has_romance_intent and (
+            "episodic_girl" not in secondary_roles or "episodic_girl" not in roster_ids
+        ):
+            return {}, ROLES_ENTITY_HALLUCINATION
+        if has_fight_intent:
+            if "crowd_bystanders" in allowed_registry and (
+                "crowd_bystanders" not in secondary_roles or "crowd_bystanders" not in roster_ids
+            ):
+                return {}, ROLES_ENTITY_HALLUCINATION
+            if "fallen_man" in allowed_registry:
+                if "fallen_man" not in secondary_roles and "opponent_text_only" not in secondary_roles:
+                    return {}, ROLES_ENTITY_HALLUCINATION
 
     normalized = {
         "roles_version": ROLES_VERSION,
@@ -1106,42 +1145,125 @@ def _collect_primary_mismatches(
     return mismatches
 
 
+def _extract_director_draft_role_intents(package: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    package_dict = _safe_dict(package)
+    input_pkg = _safe_dict(package_dict.get("input"))
+    director_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    draft_plan = (
+        _safe_list(director_pkg.get("draft_plan"))
+        or _safe_list(input_pkg.get("draft_plan"))
+        or _safe_list(package_dict.get("draft_plan"))
+    )
+    intents: dict[str, dict[str, Any]] = {}
+    for row in draft_plan:
+        draft_row = _safe_dict(row)
+        segment_ids = [str(draft_row.get("segment_id") or "").strip()] + [
+            str(item or "").strip() for item in _safe_list(draft_row.get("segment_ids"))
+        ]
+        segment_ids = [seg_id for seg_id in segment_ids if seg_id]
+        if not segment_ids:
+            continue
+        intent_row = {
+            "route": _normalize_text(draft_row.get("route"), max_len=80).lower(),
+            "timeline_role": _normalize_text(draft_row.get("timeline_role"), max_len=80).lower(),
+            "required_refs": [str(item or "").strip() for item in _safe_list(draft_row.get("required_refs")) if str(item or "").strip()],
+            "user_visible_description": _normalize_text(draft_row.get("user_visible_description"), max_len=500),
+            "purpose": _normalize_text(draft_row.get("purpose"), max_len=500),
+            "audio_phrase": _normalize_text(draft_row.get("audio_phrase"), max_len=500),
+        }
+        for seg_id in segment_ids:
+            intents[seg_id] = dict(intent_row)
+    return intents
+
+
 def _apply_director_role_overrides(
     *,
     roles_payload: dict[str, Any],
+    package: dict[str, Any],
     expected_segment_ids: list[str],
     allowed_registry: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     payload = dict(_safe_dict(roles_payload))
+    intent_by_segment = _extract_director_draft_role_intents(package)
     scene_casting = [_safe_dict(row) for row in _safe_list(payload.get("scene_casting"))]
     by_segment = {str(row.get("segment_id") or "").strip(): dict(row) for row in scene_casting if str(row.get("segment_id") or "").strip()}
-    seg_roles = {
-        "seg_01": "character_1", "seg_02": "character_2", "seg_03": "character_2", "seg_04": "character_1",
-        "seg_05": "character_2", "seg_06": "character_2", "seg_07": "character_1", "seg_08": "character_1",
-        "seg_09": "character_2", "seg_10": "character_2", "seg_11": "character_1", "seg_12": "character_1",
-    }
+    roster = _normalize_roster(payload.get("roster"), allowed_registry)
+    roster_by_id = {str(row.get("entity_id") or "").strip(): row for row in roster}
+    romance_segments: set[str] = set()
+    conflict_segments: set[str] = set()
     for segment_id in expected_segment_ids:
         row = by_segment.get(segment_id)
         if not row:
             continue
-        forced = seg_roles.get(segment_id)
-        if forced:
-            row["primary_role"] = forced
+        intent = _safe_dict(intent_by_segment.get(segment_id))
+        required_refs = {str(item).strip() for item in _safe_list(intent.get("required_refs"))}
+        forced_primary = ""
+        for character_role in ("character_1", "character_2", "character_3"):
+            if character_role in required_refs and character_role in allowed_registry:
+                forced_primary = character_role
+                break
+        if not forced_primary:
+            route = str(intent.get("route") or "").lower()
+            timeline_role = str(intent.get("timeline_role") or "").lower()
+            if timeline_role == "present" and route == "ia2v" and "character_1" in allowed_registry:
+                forced_primary = "character_1"
+            elif timeline_role == "past" and "character_2" in allowed_registry:
+                forced_primary = "character_2"
+        if forced_primary:
+            row["primary_role"] = forced_primary
         secondary = [str(x).strip() for x in _safe_list(row.get("secondary_roles")) if str(x).strip()]
-        if segment_id == "seg_09" and "episodic_girl" in allowed_registry and "episodic_girl" not in secondary:
-            secondary.append("episodic_girl")
-        if segment_id in {"seg_03", "seg_05", "seg_06"}:
-            for extra in ("crowd_bystanders", "fallen_man"):
+        intent_text = " ".join(
+            [
+                str(intent.get("user_visible_description") or ""),
+                str(intent.get("purpose") or ""),
+                str(intent.get("audio_phrase") or ""),
+            ]
+        ).lower()
+        has_romance_intent = any(token in intent_text for token in _ROMANCE_INTENT_TOKENS)
+        has_fight_intent = any(token in intent_text for token in _FIGHT_INTENT_TOKENS)
+        if has_romance_intent:
+            romance_segments.add(segment_id)
+            if "episodic_girl" in allowed_registry and "episodic_girl" not in secondary:
+                secondary.append("episodic_girl")
+            if "episodic_girl" in allowed_registry and "episodic_girl" not in roster_by_id:
+                roster_by_id["episodic_girl"] = {
+                    "entity_id": "episodic_girl",
+                    "role_name": "Episodic Girl",
+                    "continuity_rules": ["role_type: text_only_ephemeral", "identity_lock: false", "draft_intent: romance"],
+                }
+        if has_fight_intent:
+            conflict_segments.add(segment_id)
+            for extra in ("crowd_bystanders", "fallen_man", "opponent_text_only"):
                 if extra in allowed_registry and extra not in secondary:
                     secondary.append(extra)
-            notes = str(row.get("continuity_notes") or "")
-            fight_clause = (
-                "character_2 stands bruised after a courtyard fight; one person lies on the ground; "
-                "bystanders form a tense circle; camera can stage a slow semi-circular move; no gore, no weapon."
-            )
-            if "stands bruised after a courtyard fight" not in notes:
-                row["continuity_notes"] = f"{notes} {fight_clause}".strip()
+            role_defs = {
+                "crowd_bystanders": ("Crowd Bystanders", "text_only_group"),
+                "fallen_man": ("Fallen Man", "text_only_ephemeral"),
+                "opponent_text_only": ("Opponent", "text_only_ephemeral"),
+            }
+            for role_id, (role_name, role_type) in role_defs.items():
+                if role_id in allowed_registry and role_id not in roster_by_id:
+                    roster_by_id[role_id] = {
+                        "entity_id": role_id,
+                        "role_name": role_name,
+                        "continuity_rules": [f"role_type: {role_type}", "identity_lock: false", "draft_intent: conflict"],
+                    }
+            fight_notes = _normalize_text(intent.get("user_visible_description"), max_len=500)
+            if fight_notes:
+                notes = str(row.get("continuity_notes") or "").strip()
+                if fight_notes.lower() not in notes.lower():
+                    row["continuity_notes"] = f"{notes} {fight_notes}".strip()
+        row["secondary_roles"] = secondary
         by_segment[segment_id] = row
+    for role_id, row in roster_by_id.items():
+        rules = [str(rule).strip() for rule in _safe_list(row.get("continuity_rules")) if str(rule).strip()]
+        if role_id == "episodic_girl" and romance_segments:
+            rules.append("allowed_segments: " + ", ".join(sorted(romance_segments)))
+        if role_id in {"crowd_bystanders", "fallen_man", "opponent_text_only"} and conflict_segments:
+            rules.append("allowed_segments: " + ", ".join(sorted(conflict_segments)))
+        row["continuity_rules"] = list(dict.fromkeys(rules))
+        roster_by_id[role_id] = row
+    payload["roster"] = list(roster_by_id.values())
     payload["scene_casting"] = [by_segment.get(seg_id, row) for seg_id, row in ((str(r.get("segment_id") or "").strip(), r) for r in scene_casting)]
     return payload
 
@@ -1287,11 +1409,6 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 core_subject_map=core_subject_map,
                 allowed_registry=allowed_registry,
             )
-            sanitized = _apply_director_role_overrides(
-                roles_payload=sanitized,
-                expected_segment_ids=expected_segment_ids,
-                allowed_registry=allowed_registry,
-            )
             sanitized, technical_leaks_sanitized = _sanitize_role_plan_payload_fields(sanitized)
             sanitized, invented_styling_removed = _sanitize_invented_styling_from_roster(sanitized)
             sanitized, focal_rewrites_applied = _rewrite_allowed_focal_phrases(sanitized)
@@ -1311,6 +1428,12 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 core_subject_map=core_subject_map,
             )
             sanitized["scene_casting"] = normalized_scene_casting
+            sanitized = _apply_director_role_overrides(
+                roles_payload=sanitized,
+                package=package,
+                expected_segment_ids=expected_segment_ids,
+                allowed_registry=allowed_registry,
+            )
             diagnostics["role_plan_primary_mismatch_segments"] = primary_mismatches[:40]
             diagnostics["sanitized_payload_preview"] = _normalize_text(json.dumps(sanitized, ensure_ascii=False), max_len=500)
             seen_segment_ids = [
@@ -1334,6 +1457,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                 continue
             normalized, validation_error = _validate_roles_payload(
                 roles_payload=sanitized,
+                package=package,
                 expected_segment_ids=expected_segment_ids,
                 allowed_registry=allowed_registry,
                 strict_single_cast_anchor=single_cast_anchor,
@@ -1352,6 +1476,7 @@ def build_gemini_role_plan(*, api_key: str, package: dict[str, Any]) -> dict[str
                     )
                     fallback_normalized, fallback_error = _validate_roles_payload(
                         roles_payload=fallback_candidate,
+                        package=package,
                         expected_segment_ids=expected_segment_ids,
                         allowed_registry=allowed_registry,
                         strict_single_cast_anchor=single_cast_anchor,
