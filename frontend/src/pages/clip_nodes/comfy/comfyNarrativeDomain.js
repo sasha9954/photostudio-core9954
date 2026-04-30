@@ -192,6 +192,8 @@ export const NARRATIVE_INPUT_HANDLES = [
   { id: "ref_character_1", labelRu: "Персонаж 1", mode: "CONTEXT", kind: "context", role: "character_1" },
   { id: "ref_character_2", labelRu: "Персонаж 2", mode: "CONTEXT", kind: "context", role: "character_2" },
   { id: "ref_character_3", labelRu: "Персонаж 3", mode: "CONTEXT", kind: "context", role: "character_3" },
+  { id: "ref_animal", labelRu: "Животное", mode: "CONTEXT", kind: "context", role: "animal" },
+  { id: "ref_group", labelRu: "Группа", mode: "CONTEXT", kind: "context", role: "group" },
   { id: "ref_props", labelRu: "Предметы", mode: "CONTEXT", kind: "context", role: "props" },
   { id: "ref_location", labelRu: "Локация", mode: "CONTEXT", kind: "context", role: "location" },
   { id: "ref_style", labelRu: "Стиль", mode: "CONTEXT", kind: "context", role: "style" },
@@ -1328,6 +1330,9 @@ export function buildDirectorV2DraftPayload({
     refs_summary: {
       character_1: safeConnectedInputs?.ref_character_1 || null,
       character_2: safeConnectedInputs?.ref_character_2 || null,
+      character_3: safeConnectedInputs?.ref_character_3 || null,
+      animal: safeConnectedInputs?.ref_animal || null,
+      group: safeConnectedInputs?.ref_group || null,
       location: safeConnectedInputs?.ref_location || null,
       style: safeConnectedInputs?.ref_style || null,
       props: safeConnectedInputs?.ref_props || null,

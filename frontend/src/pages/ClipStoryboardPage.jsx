@@ -6715,7 +6715,11 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
-  if (targetHandle === "ref_animal" && sourceNode.type === "refAnimal" && sourceHandle === "ref_animal") {
+  if (
+    targetHandle === "ref_animal"
+    && ["refAnimal", "RefAnimalNode", "ref_animal"].includes(String(sourceNode.type || ""))
+    && sourceHandle === "ref_animal"
+  ) {
     const refs = (Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [])
       .map((item) => String(item?.url || "").trim())
       .filter(Boolean)
@@ -6732,7 +6736,11 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
-  if (targetHandle === "ref_group" && sourceNode.type === "refGroup" && sourceHandle === "ref_group") {
+  if (
+    targetHandle === "ref_group"
+    && ["refGroup", "RefGroupNode", "ref_group"].includes(String(sourceNode.type || ""))
+    && sourceHandle === "ref_group"
+  ) {
     const refs = (Array.isArray(sourceNode?.data?.refs) ? sourceNode.data.refs : [])
       .map((item) => String(item?.url || "").trim())
       .filter(Boolean)
