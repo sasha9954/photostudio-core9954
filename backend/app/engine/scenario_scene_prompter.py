@@ -5014,6 +5014,7 @@ def _apply_storyboard_stage_metadata_passthrough(
             apply_ia2v_lipsync_canon_to_prompt_row(segment, source_scene=storyboard_row)
         elif lip_sync_only_policy_applied and route == "i2v":
             lip_sync_only_i2v_segments.append(segment_id)
+            lip_sync_only_i2v_sanitized_segments.append(segment_id)
             segment["primary_role"] = ""
             segment["speaker_role"] = ""
             segment["vocal_owner_role"] = ""
@@ -5340,6 +5341,8 @@ def _sanitize_identity_and_visibility_conflicts(
     i2v_visual_removed = 0
     lip_sync_only_i2v_segments: list[str] = []
     lip_sync_only_i2v_rebuilt_segments: list[str] = []
+    lip_sync_only_i2v_sanitized_segments: list[str] = []
+    lip_sync_only_i2v_character2_preserved_segments: list[str] = []
     gender_conflict_segments: list[str] = []
     gender_terms_removed: set[str] = set()
     gender_conflict_matches: list[dict[str, str]] = []
@@ -5383,7 +5386,7 @@ def _sanitize_identity_and_visibility_conflicts(
             global_style_anchor=str(out.get("global_style_anchor") or ""),
         )
         mutated = False
-        if lip_sync_only and route == "i2v":
+        if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
             seg["photo_prompt"] = (
                 f"Environment cutaway in the current grounded world. {world_context}. "
                 "No dominant performer; singer remains offscreen voiceover."
@@ -5412,7 +5415,12 @@ def _sanitize_identity_and_visibility_conflicts(
             )
             i2v_visual_removed += 1
             lip_sync_only_i2v_segments.append(segment_id)
+            lip_sync_only_i2v_sanitized_segments.append(segment_id)
             mutated = True
+
+        if lip_sync_only and route == "i2v" and primary_role_value == "character_2":
+            if segment_id:
+                lip_sync_only_i2v_character2_preserved_segments.append(segment_id)
 
         def _rebuild_bad_cleanup_field(field_name: str) -> str:
             if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
@@ -5463,7 +5471,7 @@ def _sanitize_identity_and_visibility_conflicts(
             if any(p.search(value) for p in _IDENTITY_REFERENCE_LEAK_PATTERNS):
                 stale_identity_removed += 1
                 mutated = True
-                if lip_sync_only and route == "i2v":
+                if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
                     seg[field] = str(seg.get("video_prompt") or seg.get("photo_prompt") or "")
                 else:
                     seg[field] = re.sub(r"(?i)\bshow the same (woman|man|person)[^.]*\.?", " ", value).strip()
@@ -5546,7 +5554,7 @@ def _sanitize_identity_and_visibility_conflicts(
             if notes_changed:
                 prompt_notes["notes"] = notes
                 seg["prompt_notes"] = prompt_notes
-        if lip_sync_only and route == "i2v":
+        if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
             rebuilt_for_i2v_anchor = False
             for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "first_frame_prompt", "last_frame_prompt"):
                 field_value = str(seg.get(field) or "")
@@ -5599,6 +5607,8 @@ def _sanitize_identity_and_visibility_conflicts(
         "lip_sync_only_i2v_hero_visual_removed_count": i2v_visual_removed,
         "lip_sync_only_i2v_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_segments if seg])),
         "lip_sync_only_i2v_rebuilt_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_rebuilt_segments if seg])),
+        "scene_prompts_lip_sync_only_i2v_sanitized_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_sanitized_segments if seg])),
+        "scene_prompts_lip_sync_only_i2v_character2_preserved_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_character2_preserved_segments if seg])),
         "lip_sync_only_policy_applied": bool(lip_sync_only),
     }
 
