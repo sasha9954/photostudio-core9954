@@ -23466,6 +23466,7 @@ onClipSec: (nodeId, value) => {
               onRunDirectorV2PipelineStage: async (nodeId, stageKey) => {
                 try {
                   const stageMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
+                  const packageKeyMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
                   const stageId = stageMap[String(stageKey || "")] || "";
                   if (!stageId) return { ok: false, error: "Неизвестный этап" };
                   const activeNodes = nodesRef.current || [];
@@ -23479,7 +23480,13 @@ onClipSec: (nodeId, value) => {
                   sourceState.draft_plan = sourceState.directorV2Package?.draft_plan || [];
                   sourceState.audio_map = sourceState.directorV2Package?.audio_map || {};
                   sourceState.chat_history = sourceState.directorV2Package?.chat_history || [];
-                  const payload = buildScenarioStageManualPayload({ sourceState, targetState: nodeItem?.data || {}, stageId, autoRun: false, storyboardPackage: nodeItem?.data?.storyboardPackage || nodeItem?.data?.directorV2Package || {}, requestSource: `ai_scenario_director_v2:${stageId}` });
+                  const effectiveStoryboardPackage = { ...(nodeItem?.data?.storyboardPackage || {}) };
+                  const pipelineStages = nodeItem?.data?.pipelineStages && typeof nodeItem.data.pipelineStages === "object" ? nodeItem.data.pipelineStages : {};
+                  Object.entries(pipelineStages).forEach(([key, stage]) => {
+                    const packageKey = packageKeyMap[key];
+                    if (packageKey && stage?.editedOutput) effectiveStoryboardPackage[packageKey] = stage.editedOutput;
+                  });
+                  const payload = buildScenarioStageManualPayload({ sourceState, targetState: nodeItem?.data || {}, stageId, autoRun: false, storyboardPackage: effectiveStoryboardPackage, requestSource: `ai_scenario_director_v2:${stageId}` });
                   const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload });
                   if (!response?.ok) return { ok: false, error: response?.detail || "Ошибка генерации этапа" };
                   const storyboardPackage = response?.storyboardPackage || {};
