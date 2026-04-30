@@ -16143,9 +16143,37 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     present_cast_roles = _safe_list(connected_summary.get("presentCastRoles"))
     character_count = int(connected_summary.get("characterCount") or 0)
     refs_present = _safe_dict(connected_summary.get("refsPresentByRole"))
+    connected_refs_present = _safe_dict(connected_summary.get("connectedRefsPresentByRole"))
+    refs_inventory = _safe_dict(package.get("refs_inventory") or input_pkg.get("refs_inventory"))
+
+    def _has_connected_ref(input_pkg_row: dict[str, Any], *keys: str) -> bool:
+        connected_summary_row = _safe_dict(input_pkg_row.get("connected_context_summary"))
+        refs_present_row = _safe_dict(connected_summary_row.get("refsPresentByRole"))
+        connected_refs_present_row = _safe_dict(connected_summary_row.get("connectedRefsPresentByRole"))
+        refs_inventory_row = _safe_dict(package.get("refs_inventory") or input_pkg_row.get("refs_inventory"))
+        for raw_key in keys:
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            if _safe_list(refs_present_row.get(key)) or _safe_list(connected_refs_present_row.get(key)):
+                return True
+            if refs_inventory_row.get(key) or refs_inventory_row.get(f"ref_{key}"):
+                return True
+            if key == "video_ref" and (
+                refs_inventory_row.get("video_ref_in")
+                or refs_inventory_row.get("video_file_in")
+                or refs_inventory_row.get("video_link_in")
+            ):
+                return True
+            if key == "animal" and refs_inventory_row.get("ref_animal"):
+                return True
+            if key == "group" and refs_inventory_row.get("ref_group"):
+                return True
+        return False
+
     refs_character_count = sum(
         1 for key in ("character_1", "character_2", "character_3")
-        if _safe_list(refs_present.get(key))
+        if _safe_list(refs_present.get(key)) or _safe_list(connected_refs_present.get(key)) or refs_inventory.get(f"ref_{key}")
     )
     assigned_role_count = len(_safe_dict(input_pkg.get("assigned_roles")))
     role_count = max(
@@ -16157,13 +16185,16 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     if director_mode == "clip" and str(audio_map.get("vocal_owner_role") or "unknown") == "unknown" and role_count >= 2:
         must_ask_user.append("Кто поёт?")
     connected_input_observations = {
-        "characters_connected": [key for key in ("character_1", "character_2", "character_3") if _safe_list(refs_present.get(key))],
-        "animal_connected": bool(_safe_list(refs_present.get("animal"))),
-        "group_connected": bool(_safe_list(refs_present.get("group"))),
-        "location_connected": bool(_safe_list(refs_present.get("location"))),
-        "style_connected": bool(_safe_list(refs_present.get("style"))),
-        "props_connected": bool(_safe_list(refs_present.get("props"))),
-        "video_ref_connected": bool(_safe_list(refs_present.get("video_ref"))),
+        "characters_connected": [
+            key for key in ("character_1", "character_2", "character_3")
+            if _has_connected_ref(input_pkg, key)
+        ],
+        "animal_connected": _has_connected_ref(input_pkg, "animal"),
+        "group_connected": _has_connected_ref(input_pkg, "group"),
+        "location_connected": _has_connected_ref(input_pkg, "location"),
+        "style_connected": _has_connected_ref(input_pkg, "style"),
+        "props_connected": _has_connected_ref(input_pkg, "props"),
+        "video_ref_connected": _has_connected_ref(input_pkg, "video_ref"),
     }
     if connected_input_observations["animal_connected"]:
         must_ask_user.append("Какую роль играет животное?")
@@ -16178,7 +16209,7 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
     audio_map["mode_audio_reading"] = {
         "mode": director_mode,
         "audio_role_for_mode": "Главный ритмический таймлайн с фразами и энергией." if director_mode == "clip" else "Семантический и ритмический ориентир для режиссуры.",
-        "recommended_director_questions": must_ask_user[:1],
+        "recommended_director_questions": must_ask_user[:4],
         "scene_packaging_hint": "Сегменты можно объединять в режиссёрские сцены, сохраняя непрерывный тайминг.",
         "route_affordance_hint": {
             "ia2v_possible_windows": [str(_safe_dict(s).get("segment_id") or "") for s in segments if bool(_safe_dict(s).get("is_lip_sync_candidate"))][:8],
