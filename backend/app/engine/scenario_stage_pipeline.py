@@ -279,6 +279,32 @@ def _build_director_v2_primary_text(contract: dict[str, Any], draft_plan: list[A
         primary_parts.append("draft_plan_summary: " + "; ".join([line for line in draft_summary if line]))
     return "\n".join([part for part in primary_parts if part]).strip()
 
+def _apply_director_v2_primary_text_to_input(input_pkg: dict[str, Any], package: dict[str, Any] | None = None) -> dict[str, Any]:
+    safe_input = _safe_dict(input_pkg)
+    director_v2_pkg = _safe_dict(safe_input.get("director_v2_package") or _safe_dict(package or {}).get("director_v2_package"))
+    contract = _safe_dict(safe_input.get("director_contract")) or _safe_dict(director_v2_pkg.get("director_contract"))
+    draft_plan = (
+        _safe_list(safe_input.get("draft_plan"))
+        or _safe_list(_safe_dict(package or {}).get("draft_plan"))
+        or _safe_list(director_v2_pkg.get("draft_plan"))
+    )
+
+    is_director_v2_source = bool(contract or director_v2_pkg or draft_plan)
+    if not is_director_v2_source or not contract:
+        return safe_input
+
+    primary_text = _build_director_v2_primary_text(contract, draft_plan)
+    if not primary_text:
+        return safe_input
+
+    for field in ("text", "story_text", "note", "director_note"):
+        safe_input[field] = primary_text
+
+    safe_input["director_v2_primary_text_applied"] = True
+    safe_input["director_v2_primary_text_len"] = len(primary_text)
+    safe_input["director_v2_primary_text_preview"] = primary_text[:300]
+    return safe_input
+
 
 def _extract_director_v2_source_anchors(contract: dict[str, Any], draft_plan: list[Any]) -> list[str]:
     downstream = _safe_dict(contract.get("downstream_brief"))
@@ -11240,6 +11266,10 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
     if is_director_v2_source and director_v2_primary_text:
         for field in ("text", "story_text", "note", "director_note"):
             base_input[field] = director_v2_primary_text
+    base_input = _apply_director_v2_primary_text_to_input(
+        base_input,
+        {"director_v2_package": director_v2_pkg, "draft_plan": draft_plan},
+    )
     normalized_input = _normalize_input_audio_source(base_input, refs_inventory)
     stages = {
         stage_id: {
@@ -12359,7 +12389,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
-    input_pkg = _safe_dict(package.get("input"))
+    input_pkg = _apply_director_v2_primary_text_to_input(_safe_dict(package.get("input")), package)
+    package["input"] = input_pkg
     creative_config = _normalize_creative_config(input_pkg.get("creative_config"))
     audio_map = _safe_dict(package.get("audio_map"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
@@ -12504,6 +12535,9 @@ def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["scene_plan_capability_guard_applied"] = False
     diagnostics["prompt_capability_guard_applied"] = False
     diagnostics["capability_rules_source_version"] = get_capability_rules_source_version()
+    diagnostics["director_v2_primary_text_applied_to_input"] = bool(input_pkg.get("director_v2_primary_text_applied"))
+    diagnostics["director_v2_primary_text_len"] = input_pkg.get("director_v2_primary_text_len")
+    diagnostics["director_v2_primary_text_preview"] = input_pkg.get("director_v2_primary_text_preview")
     package["diagnostics"] = diagnostics
     _append_diag_event(package, "story_core audio-informed build requested", stage_id="story_core")
     try:
@@ -18346,6 +18380,7 @@ def run_manual_stage(
         for field in ("text", "story_text", "note", "director_note"):
             input_pkg[field] = director_v2_primary_text
 
+    input_pkg = _apply_director_v2_primary_text_to_input(input_pkg, pkg)
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
     stale_director_contract_ignored = bool(_safe_dict(pkg.get("diagnostics")).get("director_stale_contract_ignored"))
