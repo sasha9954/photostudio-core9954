@@ -499,9 +499,10 @@ def _is_split_timeline_contract_from_sources(
         list(scene_rows or []),
     ]
     blob = json.dumps(blob_parts, ensure_ascii=False).lower()
-    has_first_last = bool(re.search(r"\bfirst_last\b", blob))
-    if has_first_last:
-        return False
+    actual_first_last_scene = any(
+        str(_safe_dict(row).get("route") or "").strip().lower() == "first_last"
+        for row in (scene_rows or [])
+    )
     present_markers = ("present", "настоящее", "в настоящем", "поезде", "всегда в поезде")
     past_markers = ("past", "past_flashback", "flashback", "прошлое", "флешбэк", "одессе 90")
     char1_present = bool(
@@ -523,7 +524,11 @@ def _is_split_timeline_contract_from_sources(
         "в одессе 90",
     )
     has_exclusive_marker = any(marker in blob for marker in exclusivity_markers)
-    return bool(char1_present and char2_past and (scene_has_present_char1 or scene_has_past_char2 or has_exclusive_marker))
+    return bool(
+        char1_present
+        and char2_past
+        and (scene_has_present_char1 or scene_has_past_char2 or has_exclusive_marker or actual_first_last_scene)
+    )
 
 
 def _compact_detail_field(value: Any) -> str:
@@ -3785,6 +3790,7 @@ def _normalize_scene_prompts(
         "i2v_unknown_family_fallback_count": i2v_unknown_family_fallback_count,
         "i2v_prompt_family_counts": i2v_prompt_family_counts,
         "i2v_template_override_applied": i2v_template_override_applied,
+        "scene_prompts_split_timeline_contract": split_timeline_contract,
         "scene_prompts_shared_space_rule_applied": enforce_shared_space_rule,
         "scene_prompts_must_be_visible_roles": must_be_visible_roles,
         "scene_prompts_shared_space_missing_segments": list(dict.fromkeys(shared_space_missing_segments)),
@@ -4925,6 +4931,7 @@ def _apply_prompts_v11_shared_space_post_repair(
 
     patched["segments"] = segments_out
     return patched, {
+        "scene_prompts_split_timeline_contract": split_timeline_contract,
         "scene_prompts_shared_space_rule_applied": enforce_shared_space_rule,
         "scene_prompts_must_be_visible_roles": must_be_visible_roles,
         "scene_prompts_shared_space_missing_segments": list(dict.fromkeys([seg for seg in shared_space_missing_segments if seg])),
@@ -5362,6 +5369,12 @@ def _sanitize_identity_and_visibility_conflicts(
         seg = dict(_safe_dict(raw))
         segment_id = str(seg.get("segment_id") or "").strip()
         route = str(seg.get("route") or "").strip().lower()
+        primary_role_value = str(
+            seg.get("primary_role")
+            or seg.get("visual_focus_role")
+            or _safe_dict(seg.get("prompt_notes")).get("primary_role")
+            or ""
+        ).strip().lower()
         prompt_row = _safe_dict(rows_by_id.get(segment_id))
         world_context = _build_current_world_context_for_fallback(
             package=package,
