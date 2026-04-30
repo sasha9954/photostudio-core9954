@@ -434,6 +434,21 @@ def _apply_director_contract_story_core(package: dict[str, Any]) -> None:
     if memory_label:
         world_lock["memory_world"] = memory_label
     story_core["world_lock"] = world_lock
+    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package") or package.get("director_v2_package"))
+    draft_plan_present = bool(_safe_list(input_pkg.get("draft_plan")) or _safe_list(package.get("draft_plan")) or _safe_list(director_v2_pkg.get("draft_plan")))
+    contract_present = bool(contract or _safe_dict(director_v2_pkg.get("director_contract")))
+    request_source = str(_safe_dict(package.get("input")).get("request_source") or "").strip().lower()
+    is_director_v2_source = bool(
+        "ai_scenario_director_v2" in request_source
+        or str(contract.get("source") or "").strip().lower() == "ai_director_v2"
+        or str(director_v2_pkg.get("source") or "").strip().lower() == "ai_director_v2"
+    )
+    story_core["source_trace"] = {
+        "is_director_v2_source": is_director_v2_source,
+        "has_director_contract": contract_present,
+        "has_draft_plan": draft_plan_present,
+        "used_source_priority": "director_contract_primary" if contract_present else "default",
+    }
     package["story_core"] = story_core
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["core_director_contract_applied"] = True
@@ -11038,6 +11053,8 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
         "creative_config": _normalize_creative_config(_extract_request_creative_config(req, metadata)),
         "director_config": _safe_dict(req.get("director_config")),
         "director_contract": _safe_dict(req.get("director_contract")),
+        "director_v2_package": _safe_dict(req.get("director_v2_package")),
+        "draft_plan": _safe_list(req.get("draft_plan")),
         "connected_context_summary": _safe_dict(req.get("connected_context_summary")),
         "refs_by_role": _safe_dict(req.get("refsByRole")),
         "selected_refs": {
@@ -11047,6 +11064,7 @@ def create_storyboard_package(payload: dict[str, Any] | None = None) -> dict[str
             "props": [str(item).strip() for item in _safe_list(req.get("selectedPropsRefUrls")) if str(item).strip()],
         },
         "ownership_binding_inventory": ownership_binding_inventory,
+        "request_source": str(metadata.get("requestSource") or "").strip(),
     }
     normalized_input = _normalize_input_audio_source(base_input, refs_inventory)
     stages = {
@@ -18106,6 +18124,9 @@ def run_manual_stage(
     input_pkg = _safe_dict(pkg.get("input"))
     incoming_director_config = _safe_dict(req.get("director_config"))
     incoming_director_contract = _safe_dict(req.get("director_contract"))
+    incoming_director_v2_package = _safe_dict(req.get("director_v2_package"))
+    incoming_draft_plan = _safe_list(req.get("draft_plan"))
+    incoming_audio_map = _safe_dict(req.get("audio_map"))
 
     if incoming_director_config:
         input_pkg["director_config"] = incoming_director_config
@@ -18114,6 +18135,14 @@ def run_manual_stage(
     if incoming_director_contract:
         input_pkg["director_contract"] = incoming_director_contract
         pkg["director_contract"] = incoming_director_contract
+    if incoming_director_v2_package:
+        input_pkg["director_v2_package"] = incoming_director_v2_package
+        pkg["director_v2_package"] = incoming_director_v2_package
+    if incoming_draft_plan:
+        input_pkg["draft_plan"] = incoming_draft_plan
+        pkg["draft_plan"] = incoming_draft_plan
+    if incoming_audio_map and stage_id == "story_core":
+        pkg["audio_map"] = incoming_audio_map
 
     pkg["input"] = input_pkg
     _normalize_director_package_input(pkg)
@@ -18645,3 +18674,4 @@ def resolve_stage_sequence(
     for stage_id in stage_ids:
         _resolve_stage_with_dependencies(stage_id, ordered, visited)
     return ordered
+
