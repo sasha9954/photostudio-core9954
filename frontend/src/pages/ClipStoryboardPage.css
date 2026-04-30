@@ -5640,3 +5640,5 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_quickPrompts{display:flex;flex-wrap:wrap;gap:6px}
 .asdv2_emptyState{font-size:12px;opacity:.86;padding:10px;border:1px dashed rgba(255,255,255,.2);border-radius:8px}
 .asdv2_draftActions{margin-top:8px;font-size:12px;color:#7fe69a}
+
+.asdv2_contractCard small{white-space:pre-wrap;overflow-wrap:anywhere}

@@ -2264,12 +2264,79 @@ def _director_v2_chat_system_prompt() -> str:
 
 
 def _director_v2_draft_system_prompt() -> str:
-    return (
-        "Ты собираешь director_contract и draft_plan для цепочки AUDIO → CORE → ROLES → SCENES → PROMPTS → FINAL VIDEO PROMPT → FINAL.\n"
-        "AUDIO уже готов, audio_map — источник тайминга. Нельзя менять тайминг произвольно и резать посреди слов.\n"
-        "first_last не использовать по умолчанию в clip mode. Учитывай решения из чата и connected refs.\n"
-        "Верни только JSON строго по схеме."
-    )
+    return """Ты собираешь director_contract и draft_plan для цепочки AUDIO → CORE → ROLES → SCENES → PROMPTS → FINAL VIDEO PROMPT → FINAL.
+AUDIO уже готов, audio_map — источник тайминга. Нельзя менять тайминг произвольно и резать посреди слов.
+first_last не использовать по умолчанию в clip mode. Учитывай решения из чата и connected refs.
+Верни только JSON строго по схеме ниже и без дополнительного текста:
+{
+  "director_contract": {
+    "version": "director_v2_clip_1",
+    "mode": "clip",
+    "content_type": "music_video",
+    "story_goal": "...",
+    "emotional_arc": "...",
+    "visual_world": "...",
+    "performance_strategy": "...",
+    "route_mix": {
+      "ia2v_count": 0,
+      "i2v_count": 0,
+      "first_last_count": 0,
+      "notes": "..."
+    },
+    "lip_sync_policy": {
+      "enabled": true,
+      "where": "...",
+      "rules": []
+    },
+    "memory_policy": {
+      "enabled": false,
+      "where": "...",
+      "rules": []
+    },
+    "opening_strategy": "...",
+    "ending_strategy": "...",
+    "reference_usage": {
+      "character_1": "...",
+      "character_2": "...",
+      "location": "...",
+      "style": "...",
+      "props": "...",
+      "video_ref": "..."
+    },
+    "must_keep": [],
+    "must_avoid": [],
+    "continuity_rules": [],
+    "montage_policy": {
+      "audio_timeline_is_source_of_truth": true,
+      "no_freeze_as_default": true,
+      "no_speed_stretch_as_default": true
+    }
+  },
+  "draft_plan": [
+    {
+      "scene_id": "sc_01",
+      "segment_id": "seg_01",
+      "start_sec": 0.0,
+      "end_sec": 5.0,
+      "route": "ia2v",
+      "timeline_role": "present",
+      "purpose": "...",
+      "audio_phrase": "...",
+      "user_visible_description": "...",
+      "required_refs": [],
+      "editable": true,
+      "locked_by_user": false
+    }
+  ],
+  "questions_resolved": [],
+  "remaining_risks": []
+}
+Ограничения:
+- route только lowercase: "ia2v", "i2v", "first_last".
+- Для текущего clip mode first_last_count должен быть 0, если пользователь явно не попросил first_last.
+- draft_plan должен идти по audio_map.segments в исходном порядке.
+- segment_id каждого элемента draft_plan должен совпадать с audio_map.segments[].segment_id.
+- start_sec/end_sec должны соответствовать значениям из audio_map, не придумывай их произвольно."""
 
 
 def _validate_director_v2_draft(payload: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
@@ -2347,10 +2414,27 @@ async def director_v2_draft(payload: dict[str, Any]) -> dict[str, Any]:
                 errors = retry_errors
     if errors:
         return {"ok": False, "error": "director_v2_draft_validation_failed", "validation_errors": errors}
+
+    normalized_plan: list[dict[str, Any]] = []
+    for raw_scene in _safe_list(parsed.get("draft_plan")):
+        scene = _safe_dict(raw_scene)
+        normalized_scene = dict(scene)
+        normalized_scene["route"] = str(scene.get("route") or "").strip().lower()
+        normalized_scene["scene_id"] = str(scene.get("scene_id") or "")
+        normalized_scene["segment_id"] = str(scene.get("segment_id") or "")
+        for time_field in ("start_sec", "end_sec"):
+            value = scene.get(time_field)
+            try:
+                normalized_scene[time_field] = float(value)
+            except (TypeError, ValueError):
+                normalized_scene[time_field] = value
+        normalized_scene["editable"] = bool(scene.get("editable", True))
+        normalized_scene["locked_by_user"] = bool(scene.get("locked_by_user", False))
+        normalized_plan.append(normalized_scene)
     return {
         "ok": True,
         "director_contract": _safe_dict(parsed.get("director_contract")),
-        "draft_plan": _safe_list(parsed.get("draft_plan")),
+        "draft_plan": normalized_plan,
         "questions_resolved": _safe_list(parsed.get("questions_resolved")),
         "remaining_risks": _safe_list(parsed.get("remaining_risks")),
     }
