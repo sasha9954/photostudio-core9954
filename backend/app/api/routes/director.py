@@ -114,6 +114,71 @@ def _stable_hash_payload(value: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _estimate_audio_map_duration(audio_map: dict[str, Any], payload: dict[str, Any] | None = None) -> float:
+    safe_map = _safe_dict(audio_map)
+    safe_payload = _safe_dict(payload)
+    direct = _safe_float(safe_map.get("duration_sec"), None)
+    if direct and direct > 0:
+        return float(direct)
+    payload_duration = _safe_float(safe_payload.get("audio_duration_sec"), None)
+    if not payload_duration:
+        payload_duration = _safe_float(safe_payload.get("audioDurationSec"), None)
+    if payload_duration and payload_duration > 0:
+        return float(payload_duration)
+    input_duration = _safe_float(_safe_dict(safe_payload.get("input")).get("audio_duration_sec"), None)
+    if input_duration and input_duration > 0:
+        return float(input_duration)
+    diag_duration = _safe_float(_safe_dict(safe_map.get("diagnostics")).get("total_segments_duration"), None)
+    if diag_duration and diag_duration > 0:
+        return float(diag_duration)
+    segments = _safe_list(safe_map.get("segments"))
+    seg_ends = []
+    for raw in segments:
+        seg = _safe_dict(raw)
+        end_value = _safe_float(seg.get("t1"), None)
+        if end_value is None:
+            end_value = _safe_float(seg.get("end_sec"), None)
+        if end_value is None:
+            end_value = _safe_float(seg.get("endSec"), None)
+        if end_value is not None:
+            seg_ends.append(float(end_value))
+    if seg_ends:
+        return max(seg_ends)
+    total_duration = 0.0
+    has_duration = False
+    for raw in segments:
+        seg_duration = _safe_float(_safe_dict(raw).get("duration_sec"), None)
+        if seg_duration is not None:
+            total_duration += float(seg_duration)
+            has_duration = True
+    return total_duration if has_duration else 0.0
+
+
+def _user_requested_first_last(payload: dict[str, Any]) -> bool:
+    text_parts: list[str] = []
+    safe_payload = _safe_dict(payload)
+    for key in ("user_text", "text", "prompt", "director_note", "narrative_note"):
+        value = safe_payload.get(key)
+        if isinstance(value, str) and value.strip():
+            text_parts.append(value.strip().lower())
+    for row in _safe_list(safe_payload.get("chat_history")):
+        msg = _safe_dict(row)
+        text = msg.get("text")
+        if isinstance(text, str) and text.strip():
+            text_parts.append(text.strip().lower())
+    for row in _safe_list(safe_payload.get("chatMessages")):
+        msg = _safe_dict(row)
+        text = msg.get("text")
+        if isinstance(text, str) and text.strip():
+            text_parts.append(text.strip().lower())
+    decisions = safe_payload.get("currentDecisions")
+    if isinstance(decisions, dict):
+        text_parts.append(json.dumps(decisions, ensure_ascii=False).lower())
+    merged = " ".join(text_parts)
+    markers = ("first_last", "first last", "первый последний", "первый/последний кадр")
+    return any(marker in merged for marker in markers)
+
+
 def _compute_payload_scenario_input_signature(payload: dict[str, Any]) -> str:
     safe = payload if isinstance(payload, dict) else {}
     source = _safe_dict(safe.get("source"))
@@ -2392,8 +2457,16 @@ def _validate_director_v2_draft(payload: dict[str, Any], parsed: dict[str, Any])
         return errors
     allowed_routes = {"ia2v", "i2v", "first_last"}
     segs = _safe_list(_safe_dict(payload.get("audio_map")).get("segments"))
-    seg_ids = {str(_safe_dict(s).get("segment_id") or _safe_dict(s).get("id") or "").strip() for s in segs}
+    ordered_seg_ids = [str(_safe_dict(s).get("segment_id") or _safe_dict(s).get("id") or "").strip() for s in segs]
+    ordered_seg_ids = [seg_id for seg_id in ordered_seg_ids if seg_id]
+    seg_ids = set(ordered_seg_ids)
+    seg_index = {seg_id: idx for idx, seg_id in enumerate(ordered_seg_ids)}
+    seg_by_id = {seg_id: _safe_dict(s) for seg_id, s in zip(ordered_seg_ids, segs)}
     seg_ids.discard("")
+    mode = str(payload.get("mode") or "clip").strip().lower()
+    first_last_count = int(_safe_float(_safe_dict(contract.get("route_mix")).get("first_last_count"), 0) or 0)
+    if mode == "clip" and first_last_count > 0 and not _user_requested_first_last(payload):
+        errors.append("first_last_count must be 0 in clip mode unless explicitly requested")
     for i, raw_scene in enumerate(plan):
         scene = _safe_dict(raw_scene)
         for field in ("segment_id", "route", "start_sec", "end_sec", "user_visible_description"):
@@ -2406,10 +2479,36 @@ def _validate_director_v2_draft(payload: dict[str, Any], parsed: dict[str, Any])
             errors.append(f"draft_plan[{i}].route must be lowercase")
         if seg_ids and str(scene.get("segment_id") or "").strip() not in seg_ids:
             errors.append(f"draft_plan[{i}].segment_id not in audio_map.segments")
-        for seg_id in _safe_list(scene.get("segment_ids")):
-            if seg_ids and str(seg_id).strip() not in seg_ids:
-                errors.append(f"draft_plan[{i}].segment_ids contains unknown id")
-                break
+        raw_segment_ids = [str(seg_id).strip() for seg_id in _safe_list(scene.get("segment_ids")) if str(seg_id).strip()]
+        segment_id = str(scene.get("segment_id") or "").strip()
+        segment_ids = raw_segment_ids or ([segment_id] if segment_id else [])
+        if seg_ids and any(seg_id not in seg_ids for seg_id in segment_ids):
+            errors.append(f"draft_plan[{i}].segment_ids contains unknown id")
+            continue
+        if segment_id and segment_ids and segment_id not in segment_ids:
+            errors.append(f"draft_plan[{i}].segment_id must belong to segment_ids")
+        if segment_ids:
+            indexes = [seg_index[seg_id] for seg_id in segment_ids if seg_id in seg_index]
+            if indexes and any(indexes[pos + 1] - indexes[pos] != 1 for pos in range(len(indexes) - 1)):
+                errors.append(f"draft_plan[{i}].segment_ids must be adjacent")
+            first_seg = _safe_dict(seg_by_id.get(segment_ids[0]))
+            last_seg = _safe_dict(seg_by_id.get(segment_ids[-1]))
+            expected_start = _safe_float(first_seg.get("t0"), None)
+            if expected_start is None:
+                expected_start = _safe_float(first_seg.get("start_sec"), None)
+            if expected_start is None:
+                expected_start = _safe_float(first_seg.get("startSec"), None)
+            expected_end = _safe_float(last_seg.get("t1"), None)
+            if expected_end is None:
+                expected_end = _safe_float(last_seg.get("end_sec"), None)
+            if expected_end is None:
+                expected_end = _safe_float(last_seg.get("endSec"), None)
+            scene_start = _safe_float(scene.get("start_sec"), None)
+            scene_end = _safe_float(scene.get("end_sec"), None)
+            if expected_start is not None and scene_start is not None and abs(scene_start - expected_start) > 0.08:
+                errors.append(f"draft_plan[{i}].start_sec must match first segment timing")
+            if expected_end is not None and scene_end is not None and abs(scene_end - expected_end) > 0.08:
+                errors.append(f"draft_plan[{i}].end_sec must match last segment timing")
     if seg_ids and len(plan) > len(seg_ids):
         errors.append("draft_plan has more scenes than audio_map.segments")
     return errors
@@ -2425,13 +2524,16 @@ async def director_v2_chat(payload: dict[str, Any]) -> dict[str, Any]:
     audio_map = _safe_dict(safe_payload.get("audio_map"))
     segments = _safe_list(audio_map.get("segments"))
     scene_candidates = _safe_list(audio_map.get("scene_candidate_windows"))
+    if not scene_candidates:
+        scene_candidates = _safe_list(audio_map.get("scene_slots"))
     lip_sync_count = sum(1 for s in segments if bool(_safe_dict(s).get("is_lip_sync_candidate") or _safe_dict(s).get("isLipSyncCandidate")))
+    estimated_duration = _estimate_audio_map_duration(audio_map, safe_payload)
     enriched_payload = dict(safe_payload)
     enriched_payload["knowledge_version"] = DIRECTOR_V2_KNOWLEDGE_VERSION
     enriched_payload["mode_knowledge"] = get_director_v2_mode_knowledge(mode)
     enriched_payload["universal_directing_grammar"] = get_director_v2_universal_grammar()
     enriched_payload["audio_map_summary"] = {
-        "duration_sec": audio_map.get("duration_sec"),
+        "duration_sec": estimated_duration,
         "segment_count": len(segments),
         "scene_candidate_count": len(scene_candidates),
         "lip_sync_candidate_count": lip_sync_count,
@@ -2458,10 +2560,25 @@ async def director_v2_draft(payload: dict[str, Any]) -> dict[str, Any]:
     if not key_info.get("valid"):
         return {"ok": False, "error": f"gemini_key_invalid:{key_info.get('error') or 'missing'}", "validation_errors": []}
     mode = str(safe_payload.get("mode") or "clip").strip().lower()
+    audio_map = _safe_dict(safe_payload.get("audio_map"))
+    segments = _safe_list(audio_map.get("segments"))
+    scene_candidates = _safe_list(audio_map.get("scene_candidate_windows"))
+    if not scene_candidates:
+        scene_candidates = _safe_list(audio_map.get("scene_slots"))
+    lip_sync_count = sum(1 for s in segments if bool(_safe_dict(s).get("is_lip_sync_candidate") or _safe_dict(s).get("isLipSyncCandidate")))
+    estimated_duration = _estimate_audio_map_duration(audio_map, safe_payload)
     enriched_payload = dict(safe_payload)
     enriched_payload["knowledge_version"] = DIRECTOR_V2_KNOWLEDGE_VERSION
     enriched_payload["mode_knowledge"] = get_director_v2_mode_knowledge(mode)
     enriched_payload["universal_directing_grammar"] = get_director_v2_universal_grammar()
+    enriched_payload["audio_map_summary"] = {
+        "duration_sec": estimated_duration,
+        "segment_count": len(segments),
+        "scene_candidate_count": len(scene_candidates),
+        "lip_sync_candidate_count": lip_sync_count,
+        "vocal_owner_role": audio_map.get("vocal_owner_role"),
+        "vocal_owner_confidence": audio_map.get("vocal_owner_confidence"),
+    }
     prompt = f"{_director_v2_draft_system_prompt()}\n\nINPUT_JSON:\n{json.dumps(enriched_payload, ensure_ascii=False)}"
     def _call(extra: str = "") -> dict[str, Any] | None:
         res = post_generate_content(str(key_info.get("api_key") or ""), DIRECTOR_V2_MODEL, {
@@ -2494,6 +2611,10 @@ async def director_v2_draft(payload: dict[str, Any]) -> dict[str, Any]:
         normalized_scene["route"] = str(scene.get("route") or "").strip().lower()
         normalized_scene["scene_id"] = str(scene.get("scene_id") or "")
         normalized_scene["segment_id"] = str(scene.get("segment_id") or "")
+        if isinstance(scene.get("segment_ids"), list):
+            normalized_scene["segment_ids"] = [str(x) for x in scene.get("segment_ids") if str(x).strip()]
+        else:
+            normalized_scene["segment_ids"] = [normalized_scene["segment_id"]] if normalized_scene["segment_id"] else []
         for time_field in ("start_sec", "end_sec"):
             value = scene.get(time_field)
             try:

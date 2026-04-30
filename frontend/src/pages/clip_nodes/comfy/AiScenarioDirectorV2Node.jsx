@@ -222,6 +222,8 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
       mode: currentMode,
       format: currentFormat,
       content_type: contentType,
+      knowledge_version: data?.directorKnowledgeVersion || "",
+      directorKnowledgeVersion: data?.directorKnowledgeVersion || "",
     };
     console.log("[AI SCENARIO DIRECTOR V2] apply", directorV2Package);
     patchData({
@@ -337,6 +339,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
               </select>
             </label>
           </div>
+          {data?.directorKnowledgeVersion ? <div className="asdv2_sub">Knowledge: {data.directorKnowledgeVersion}</div> : null}
           <div className="asdv2_actions">
             <button className="clipSB_btn asdv2_primaryAction" disabled={!hasAudio || isParseLocked} onClick={parseAudio}>{directorState === DIRECTOR_STATES.PARSING_AUDIO ? "Разбираю аудио..." : (audioMap ? "Переразобрать аудио" : "Разобрать аудио")}</button>
             <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{directorState === DIRECTOR_STATES.GENERATING_DRAFT ? "Генерирую..." : (draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик")}</button>

@@ -234,6 +234,13 @@ def _safe_dict(value: Any) -> dict[str, Any]:
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
+def _audio_map_scene_candidates(audio_map: dict[str, Any]) -> list[Any]:
+    safe_map = _safe_dict(audio_map)
+    candidates = _safe_list(safe_map.get("scene_candidate_windows"))
+    if candidates:
+        return candidates
+    return _safe_list(safe_map.get("scene_slots"))
+
 
 def _to_contract_location(value: Any) -> str:
     token = str(value or "").strip().lower().replace(" ", "_")
@@ -16124,19 +16131,33 @@ def _run_audio_map_stage(package: dict[str, Any]) -> dict[str, Any]:
         "segments": _safe_list(audio_map.get("segments")),
     }
     segments = _safe_list(audio_map.get("segments"))
-    scene_candidate_windows = _safe_list(audio_map.get("scene_candidate_windows"))
+    scene_candidates = _audio_map_scene_candidates(audio_map)
     lip_sync_count = sum(1 for row in segments if bool(_safe_dict(row).get("is_lip_sync_candidate")))
     warnings: list[str] = []
     must_ask_user: list[str] = []
     if director_mode == "clip" and segments and lip_sync_count >= max(1, len(segments) - 1):
         warnings.append("All/most segments can support lip-sync, but Director should not make every scene IA2V by default.")
-    if len(segments) > len(scene_candidate_windows) > 0:
+    if len(segments) > len(scene_candidates) > 0:
         warnings.append("segments[] are phrase units; draft_plan may merge adjacent phrases into scenes.")
-    role_count = len(_safe_dict(input_pkg.get("assigned_roles")))
+    connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
+    present_cast_roles = _safe_list(connected_summary.get("presentCastRoles"))
+    character_count = int(connected_summary.get("characterCount") or 0)
+    refs_present = _safe_dict(connected_summary.get("refsPresentByRole"))
+    refs_character_count = sum(
+        1 for key in ("character_1", "character_2", "character_3")
+        if _safe_list(refs_present.get(key))
+    )
+    assigned_role_count = len(_safe_dict(input_pkg.get("assigned_roles")))
+    role_count = max(
+        assigned_role_count,
+        character_count,
+        len(present_cast_roles),
+        refs_character_count,
+    )
     if director_mode == "clip" and str(audio_map.get("vocal_owner_role") or "unknown") == "unknown" and role_count >= 2:
         must_ask_user.append("Кто поёт?")
-    likely_min = max(1, len(scene_candidate_windows) or max(1, len(segments) // 2))
-    likely_max = max(likely_min, len(scene_candidate_windows) or len(segments))
+    likely_min = max(1, len(scene_candidates) or max(1, len(segments) // 2))
+    likely_max = max(likely_min, len(scene_candidates) or len(segments))
     audio_map["mode_audio_reading"] = {
         "mode": director_mode,
         "audio_role_for_mode": "Главный ритмический таймлайн с фразами и энергией." if director_mode == "clip" else "Семантический и ритмический ориентир для режиссуры.",
