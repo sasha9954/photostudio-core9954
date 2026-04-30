@@ -7,11 +7,13 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from app.core.config import settings
 from app.engine.gemini_rest import post_generate_content, resolve_gemini_api_key
 
 router = APIRouter()
 
 DIRECTOR_QUESTIONS_MODEL = "gemini-2.5-flash"
+DIRECTOR_V2_MODEL = (getattr(settings, "GEMINI_TEXT_MODEL", None) or DIRECTOR_QUESTIONS_MODEL).strip() or DIRECTOR_QUESTIONS_MODEL
 ALLOWED_IDS = ("performance_density", "world_mode", "intro_mode")
 ALLOWED_VALUES_BY_ID = {
     "performance_density": {"atmospheric", "balanced", "performance_heavy"},
@@ -2245,6 +2247,112 @@ def _normalize_director_v2_output(parsed: dict[str, Any], payload: dict[str, Any
         "director_package_preview": _safe_dict(parsed.get("director_package_preview")),
         "done": done,
         "diagnostics": diagnostics,
+    }
+
+
+def _director_v2_chat_system_prompt() -> str:
+    return (
+        "Ты AI Scenario Director V2 для генерации музыкальных клипов.\n"
+        "Ты работаешь после audio_map.\n"
+        "Ты видишь:\n- audio_map.segments;\n- входящие ноды/референсы;\n- текстовую идею;\n- историю чата.\n\n"
+        "Твоя задача: не генерировать весь pipeline сразу, а уточнить замысел, долю lip-sync/i2v, где герой поёт, "
+        "что между performance-сценами, начало и финал. first_last по умолчанию не использовать в clip mode. "
+        "Пиши простым русским языком, задавай 2-4 вопроса за раз.\n"
+        "Если данных достаточно, предложи краткую структуру и скажи, что можно нажать «Сгенерировать черновик».\n"
+        "Верни JSON: {\"assistant_reply\": string, \"director_memory\": {\"known_user_intent\": string, \"route_preference\": string, \"open_questions\": string[], \"decisions\": object}}"
+    )
+
+
+def _director_v2_draft_system_prompt() -> str:
+    return (
+        "Ты собираешь director_contract и draft_plan для цепочки AUDIO → CORE → ROLES → SCENES → PROMPTS → FINAL VIDEO PROMPT → FINAL.\n"
+        "AUDIO уже готов, audio_map — источник тайминга. Нельзя менять тайминг произвольно и резать посреди слов.\n"
+        "first_last не использовать по умолчанию в clip mode. Учитывай решения из чата и connected refs.\n"
+        "Верни только JSON строго по схеме."
+    )
+
+
+def _validate_director_v2_draft(payload: dict[str, Any], parsed: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(parsed.get("director_contract"), dict):
+        errors.append("director_contract must be object")
+    plan = parsed.get("draft_plan")
+    if not isinstance(plan, list) or not plan:
+        errors.append("draft_plan must be non-empty array")
+        return errors
+    allowed_routes = {"ia2v", "i2v", "first_last"}
+    segs = _safe_list(_safe_dict(payload.get("audio_map")).get("segments"))
+    seg_ids = {str(_safe_dict(s).get("segment_id") or _safe_dict(s).get("id") or "").strip() for s in segs}
+    seg_ids.discard("")
+    for i, raw_scene in enumerate(plan):
+        scene = _safe_dict(raw_scene)
+        for field in ("segment_id", "route", "start_sec", "end_sec", "user_visible_description"):
+            if scene.get(field) in (None, ""):
+                errors.append(f"draft_plan[{i}].{field} is required")
+        route = str(scene.get("route") or "").strip().lower()
+        if route and route not in allowed_routes:
+            errors.append(f"draft_plan[{i}].route invalid:{route}")
+        if seg_ids and str(scene.get("segment_id") or "").strip() not in seg_ids:
+            errors.append(f"draft_plan[{i}].segment_id not in audio_map.segments")
+    if seg_ids and len(plan) > len(seg_ids):
+        errors.append("draft_plan has more scenes than audio_map.segments")
+    return errors
+
+
+@router.post("/director/v2/chat")
+async def director_v2_chat(payload: dict[str, Any]) -> dict[str, Any]:
+    key_info = resolve_gemini_api_key()
+    if not key_info.get("valid"):
+        return {"ok": False, "error": f"gemini_key_invalid:{key_info.get('error') or 'missing'}", "code": "GEMINI_DIRECTOR_V2_CHAT_FAILED"}
+    prompt = f"{_director_v2_chat_system_prompt()}\n\nINPUT_JSON:\n{json.dumps(payload if isinstance(payload, dict) else {}, ensure_ascii=False)}"
+    result = post_generate_content(str(key_info.get("api_key") or ""), DIRECTOR_V2_MODEL, {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "topP": 0.9, "responseMimeType": "application/json"},
+    }, timeout=60)
+    if result.get("__http_error__"):
+        return {"ok": False, "error": "gemini_request_failed", "code": "GEMINI_DIRECTOR_V2_CHAT_FAILED"}
+    parsed = _extract_json_object(_extract_text_from_gemini(result))
+    if not isinstance(parsed, dict) or not str(parsed.get("assistant_reply") or "").strip():
+        return {"ok": False, "error": "gemini_invalid_json", "code": "GEMINI_DIRECTOR_V2_CHAT_FAILED"}
+    return {"ok": True, "assistant_reply": str(parsed.get("assistant_reply") or "").strip(), "director_memory": _safe_dict(parsed.get("director_memory"))}
+
+
+@router.post("/director/v2/draft")
+async def director_v2_draft(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_payload = payload if isinstance(payload, dict) else {}
+    key_info = resolve_gemini_api_key()
+    if not key_info.get("valid"):
+        return {"ok": False, "error": f"gemini_key_invalid:{key_info.get('error') or 'missing'}", "validation_errors": []}
+    prompt = f"{_director_v2_draft_system_prompt()}\n\nINPUT_JSON:\n{json.dumps(safe_payload, ensure_ascii=False)}"
+    def _call(extra: str = "") -> dict[str, Any] | None:
+        res = post_generate_content(str(key_info.get("api_key") or ""), DIRECTOR_V2_MODEL, {
+            "contents": [{"parts": [{"text": prompt + extra}]}],
+            "generationConfig": {"temperature": 0.15, "topP": 0.9, "responseMimeType": "application/json"},
+        }, timeout=90)
+        if res.get("__http_error__"):
+            return None
+        return _extract_json_object(_extract_text_from_gemini(res))
+    parsed = _call()
+    if not isinstance(parsed, dict):
+        return {"ok": False, "error": "gemini_invalid_json", "validation_errors": ["invalid_json"]}
+    errors = _validate_director_v2_draft(safe_payload, parsed)
+    if errors:
+        parsed_retry = _call(f"\n\nИсправь ошибки валидации и верни JSON строго по схеме. errors={json.dumps(errors, ensure_ascii=False)}")
+        if isinstance(parsed_retry, dict):
+            retry_errors = _validate_director_v2_draft(safe_payload, parsed_retry)
+            if not retry_errors:
+                parsed = parsed_retry
+                errors = []
+            else:
+                errors = retry_errors
+    if errors:
+        return {"ok": False, "error": "director_v2_draft_validation_failed", "validation_errors": errors}
+    return {
+        "ok": True,
+        "director_contract": _safe_dict(parsed.get("director_contract")),
+        "draft_plan": _safe_list(parsed.get("draft_plan")),
+        "questions_resolved": _safe_list(parsed.get("questions_resolved")),
+        "remaining_risks": _safe_list(parsed.get("remaining_risks")),
     }
 
 

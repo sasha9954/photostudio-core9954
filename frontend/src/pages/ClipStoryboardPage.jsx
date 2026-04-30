@@ -23418,9 +23418,45 @@ onClipSec: (nodeId, value) => {
               onGenerateDirectorDraft: async (nodeId) => {
                 const activeNodes = nodesRef.current || [];
                 const nodeItem = activeNodes.find((x) => x.id === nodeId);
-                const payload = buildDirectorV2DraftPayload({ sourceState: nodeItem?.data || {}, targetState: nodeItem?.data || {}, audioMap: nodeItem?.data?.audioMap || {}, chatHistory: nodeItem?.data?.chatMessages || [] });
-                console.log('[AI SCENARIO DIRECTOR V2] draft payload prepared', payload);
-                return { ok: true, isDemo: true, draftContract: { status: 'Демо-черновик UI, backend ещё не подключён', story_goal: 'TODO: Gemini Director V2 endpoint', route_mix: '50/50', opening_strategy: 'Открытие на перроне', ending_strategy: 'Финал в поезде' }, draftPlan: [{ scene_id: 'scene_01', segment_id: 'seg_01', route: 'IA2V', start_sec: 0, end_sec: 4.2, purpose: 'Открытие', user_visible_description: 'Демо: открывающий кадр', editable: true }] };
+                if (!nodeItem) return { ok: false, error: "Нода режиссёра не найдена" };
+                const payload = buildDirectorV2DraftPayload({
+                  sourceState: nodeItem?.data || {},
+                  targetState: nodeItem?.data || {},
+                  audioMap: nodeItem?.data?.audioMap || {},
+                  chatHistory: nodeItem?.data?.chatMessages || [],
+                  directorMemory: nodeItem?.data?.directorMemory || {},
+                  connectedInputs: nodeItem?.data?.connectedInputs || {},
+                  userDecisions: nodeItem?.data?.currentDecisions || {},
+                });
+                const response = await fetchJson("/api/director/v2/draft", { method: "POST", body: payload });
+                if (!response?.ok) return { ok: false, error: response?.error || "Gemini Director V2 не смог собрать черновик" };
+                return {
+                  ok: true,
+                  isDemo: false,
+                  draftContract: response?.director_contract || {},
+                  draftPlan: Array.isArray(response?.draft_plan) ? response.draft_plan : [],
+                  questionsResolved: Array.isArray(response?.questions_resolved) ? response.questions_resolved : [],
+                  remainingRisks: Array.isArray(response?.remaining_risks) ? response.remaining_risks : [],
+                };
+              },
+              onDirectorV2Chat: async (nodeId, userMessage) => {
+                const activeNodes = nodesRef.current || [];
+                const nodeItem = activeNodes.find((x) => x.id === nodeId);
+                if (!nodeItem) return { ok: false, error: "Нода режиссёра не найдена" };
+                const payload = {
+                  mode: "clip",
+                  format: nodeItem?.data?.format || "9:16",
+                  content_type: "music_video",
+                  audio_map: nodeItem?.data?.audioMap || {},
+                  connected_inputs: nodeItem?.data?.connectedInputs || {},
+                  chat_history: Array.isArray(nodeItem?.data?.chatMessages) ? nodeItem.data.chatMessages : [],
+                  user_message: String(userMessage || ""),
+                  director_state: nodeItem?.data?.directorState || "",
+                  current_decisions: nodeItem?.data?.currentDecisions || {},
+                };
+                const response = await fetchJson("/api/director/v2/chat", { method: "POST", body: payload });
+                if (!response?.ok) return { ok: false, error: response?.error || "Gemini Director V2 не ответил" };
+                return { ok: true, assistantReply: String(response?.assistant_reply || ""), directorMemory: response?.director_memory || {} };
               },
             },
           };

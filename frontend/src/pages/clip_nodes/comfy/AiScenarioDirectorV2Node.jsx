@@ -109,13 +109,27 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     });
   };
 
-  const onSend = () => {
+  const onSend = async () => {
     if (!chatInput.trim()) return;
-    patchData({
-      directorState: DIRECTOR_STATES.CHAT_ACTIVE,
-      chatMessages: [...chatMessages, { role: "user", text: chatInput.trim() }, { role: "assistant", text: "Принял. На следующем шаге Gemini уточнит структуру клипа и соберёт director contract." }],
-    });
+    if (!data?.onDirectorV2Chat) return;
+    const userMessage = chatInput.trim();
+    patchData({ directorState: DIRECTOR_STATES.CHAT_ACTIVE, directorChatPending: true, chatMessages: [...chatMessages, { role: "user", text: userMessage }] });
     setChatInput("");
+    const result = await data.onDirectorV2Chat(id, userMessage);
+    if (!result?.ok) {
+      patchData({
+        directorChatPending: false,
+        directorError: String(result?.error || "Gemini Director V2 не ответил"),
+        chatMessages: [...chatMessages, { role: "user", text: userMessage }, { role: "assistant", text: `Ошибка: ${String(result?.error || "Gemini Director V2 не ответил")}` }],
+      });
+      return;
+    }
+    patchData({
+      directorChatPending: false,
+      directorMemory: result?.directorMemory || {},
+      directorError: "",
+      chatMessages: [...chatMessages, { role: "user", text: userMessage }, { role: "assistant", text: String(result?.assistantReply || "") }],
+    });
   };
 
   const onGenerateDraft = async () => {
@@ -127,7 +141,16 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   };
 
   const onApply = () => {
-    const directorV2Package = { director_contract: draftContract || {}, draft_plan: draftPlan || [], audio_map: audioMap || {}, chat_history: chatMessages || [] };
+    const directorV2Package = {
+      director_contract: draftContract || {},
+      draft_plan: draftPlan || [],
+      audio_map: audioMap || {},
+      chat_history: chatMessages || [],
+      connected_inputs: connectedInputs || {},
+      mode: "clip",
+      format: data?.format || "9:16",
+      content_type: "music_video",
+    };
     console.log("[AI SCENARIO DIRECTOR V2] apply", directorV2Package);
     patchData({
       directorState: DIRECTOR_STATES.APPLIED,
@@ -135,7 +158,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
       applied: true,
       directorV2Package,
       directorError: "",
-      directorInfo: "Пакет подготовлен. Подключение к CORE будет следующим патчем.",
+      directorInfo: "Режиссёрский пакет подготовлен. Подключение к CORE будет следующим шагом.",
     });
   };
   const onReset = () => patchData({
@@ -159,12 +182,11 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
             <button className="clipSB_btn" onClick={onReset}>Сбросить</button>
           </div></div>
         <div className="asdv2_inputsBar">{INPUTS.map((input) => <div key={input.id} className={`asdv2_inputChip ${chipSource?.[input.id] ? "isConnected" : "isEmpty"}`} style={{ borderColor: toneToColor[input.tone] || "rgba(255,255,255,0.2)" }}>{input.label}: {chipSource?.[input.id] ? "✓" : "пусто"}</div>)}</div>
-        {data?.draftIsDemo ? <div className="asdv2_emptyState">Демо-черновик UI. Реальный Gemini Director V2 ещё не подключён.</div> : null}
         {isAudioChangedAfterParse ? <div className="asdv2_emptyState">Подключённое аудио изменилось. Нажми «Сбросить» и разбери новое аудио.</div> : null}
         <div className="asdv2_mainGrid">
           <div className={`asdv2_panel asdv2_chatPanel ${isChatLocked ? "asdv2_lockedPanel" : ""}`}><strong>AI-чат</strong><div className="asdv2_chatMessages">{chatMessages.map((m, i) => <div key={i} className="asdv2_chatMsg"><b>{m.role === "assistant" ? "AI" : "Вы"}:</b> {m.text}</div>)}</div>
             {isChatLocked ? <div className="asdv2_emptyState">Сначала разбери аудио. После этого AI сможет видеть сегменты, длительность, фразы и предложить структуру клипа.</div> : null}
-            <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked} onClick={onSend}>Отправить</button></div></div>
+            <div className="asdv2_chatComposer"><textarea className="asdv2_chatInput" value={chatInput} disabled={isChatLocked || Boolean(data?.directorChatPending)} onChange={(e) => setChatInput(e.target.value)} /><button className="clipSB_btn" disabled={isChatLocked || Boolean(data?.directorChatPending)} onClick={onSend}>{data?.directorChatPending ? "AI думает..." : "Отправить"}</button></div></div>
 
           <div className="asdv2_panel"><strong>Черновик контракта режиссёра</strong>{!draftContract ? <div className="asdv2_emptyState">Черновик режиссёра ещё не создан. Сначала разбери аудио, обсуди клип в чате и нажми «Сгенерировать черновик».</div> : <div className="asdv2_contractGrid">{Object.entries(draftContract).map(([k, v]) => <div key={k} className="asdv2_contractCard"><b>{k}</b><small>{String(v)}</small></div>)}</div>}<div className="asdv2_draftActions">{directorState === DIRECTOR_STATES.DRAFT_CONFIRMED ? "Черновик подтверждён. Теперь можно применить его к цепочке." : ""}</div></div>
 

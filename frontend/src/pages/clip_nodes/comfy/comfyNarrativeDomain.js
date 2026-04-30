@@ -1304,18 +1304,33 @@ export function buildDirectorV2DraftPayload({
   audioMap = null,
   chatHistory = [],
   userDecisions = {},
+  directorMemory = {},
+  connectedInputs = {},
 } = {}) {
   const basePayload = buildScenarioDirectorRequestPayload(sourceState) || {};
   const safeChatHistory = Array.isArray(chatHistory) ? chatHistory : [];
   const safeAudioMap = audioMap && typeof audioMap === "object" ? audioMap : {};
+  const safeConnectedInputs = connectedInputs && typeof connectedInputs === "object" ? connectedInputs : {};
+  const safeDirectorMemory = directorMemory && typeof directorMemory === "object" ? directorMemory : {};
+  const sourceText = String(safeConnectedInputs?.text_in?.value || safeConnectedInputs?.text_in?.text || "").trim();
   return {
-    ...basePayload,
-    mode: "director_v2_draft",
-    pipelineMode: "director_v2",
-    stageId: "director_v2_draft",
+    mode: "clip",
+    format: String(basePayload?.format || targetState?.format || "9:16"),
+    content_type: "music_video",
     chat_history: safeChatHistory,
     audio_map: safeAudioMap,
+    connected_inputs: safeConnectedInputs,
+    director_memory: safeDirectorMemory,
     user_decisions: userDecisions && typeof userDecisions === "object" ? userDecisions : {},
+    source_text: sourceText,
+    refs_summary: {
+      character_1: safeConnectedInputs?.ref_character_1 || null,
+      character_2: safeConnectedInputs?.ref_character_2 || null,
+      location: safeConnectedInputs?.ref_location || null,
+      style: safeConnectedInputs?.ref_style || null,
+      props: safeConnectedInputs?.ref_props || null,
+      video_ref: safeConnectedInputs?.video_ref_in || null,
+    },
     metadata: {
       ...(basePayload?.metadata && typeof basePayload.metadata === "object" ? basePayload.metadata : {}),
       requestSource: "ai_scenario_director_v2:draft",
