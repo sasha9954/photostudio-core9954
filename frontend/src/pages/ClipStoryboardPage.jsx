@@ -6620,7 +6620,7 @@ function extractNarrativeConnectedValue({ sourceNode = null, sourceHandle = "", 
     };
   }
 
-  if (targetHandle === "video_file_in" && sourceNode.type === "videoRefNode" && sourceHandle === "video_ref") {
+  if ((targetHandle === "video_file_in" || targetHandle === "video_ref_in") && sourceNode.type === "videoRefNode" && sourceHandle === "video_ref") {
     const payload = getVideoRefNodeSavedPayload(sourceNode?.data);
     if (!payload) return null;
     return {
@@ -6799,6 +6799,7 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
       audio_in: null,
       text_in: null,
       video_file_in: null,
+      video_ref_in: null,
       video_link_in: null,
       ref_character_1: null,
       ref_character_2: null,
@@ -6811,7 +6812,7 @@ function getNarrativeConnectedInputsSnapshot({ node = null, nodesById = new Map(
     };
   }
 
-  return ["audio_in", "text_in", "video_file_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_animal", "ref_group", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
+  return ["audio_in", "text_in", "video_file_in", "video_ref_in", "video_link_in", "ref_character_1", "ref_character_2", "ref_character_3", "ref_animal", "ref_group", "ref_props", "ref_location", "ref_style"].reduce((acc, handleId) => {
     const edge = getLatestIncomingEdgeForHandle({ targetNodeId: node.id, targetHandle: handleId, edges });
     const sourceNode = edge ? (nodesById.get(edge.source) || null) : null;
     const extracted = extractNarrativeConnectedValue({
@@ -23379,7 +23380,9 @@ onClipSec: (nodeId, value) => {
                   const activeNodesById = new Map(activeNodes.map((x) => [x.id, x]));
                   const sourceState = buildDirectorV2ScenarioSourceState({ directorNode: nodeItem, nodesById: activeNodesById, edges: edgesNow });
                   if (!sourceState.audioUrl) return { ok: false, error: "Аудио не подключено" };
-                  if (!(Number(sourceState.audioDurationSec) > 0)) return { ok: false, error: "Длительность аудио не определена" };
+                  if (!(Number(sourceState.audioDurationSec) > 0)) {
+                    console.warn("[AI SCENARIO DIRECTOR V2] audio duration is missing; audio_map stage will try to resolve it");
+                  }
                   const payload = buildScenarioStageManualPayload({
                     sourceState,
                     targetState: nodeItem?.data || {},
@@ -23392,7 +23395,23 @@ onClipSec: (nodeId, value) => {
                   const pkg = response?.storyboardPackage && typeof response.storyboardPackage === 'object' ? response.storyboardPackage : {};
                   const audioMap = extractDirectorV2AudioMap(response);
                   if (!response?.ok || !audioMap) return { ok: false, error: response?.detail || "Стадия audio_map не вернула карту аудио" };
-                  setNodes((prev) => bindHandlers(prev.map((x) => x.id === nodeId ? { ...x, data: { ...x.data, storyboardPackage: pkg, stageStatuses: pkg?.stage_statuses || {}, audioMap, directorState: "audio_parsed", directorError: "" } } : x)));
+                  const connectedInputs = sourceState?.connectedInputs && typeof sourceState.connectedInputs === "object" ? sourceState.connectedInputs : {};
+                  const parsedAudioSourceNodeId = String(connectedInputs?.audio_in?.sourceNodeId || "");
+                  const parsedAudioUrl = String(connectedInputs?.audio_in?.value || connectedInputs?.audio_in?.url || "");
+                  setNodes((prev) => bindHandlers(prev.map((x) => x.id === nodeId ? {
+                    ...x,
+                    data: {
+                      ...x.data,
+                      storyboardPackage: pkg,
+                      stageStatuses: pkg?.stage_statuses || {},
+                      audioMap,
+                      directorState: "audio_parsed",
+                      directorError: "",
+                      directorInfo: "",
+                      parsedAudioSourceNodeId,
+                      parsedAudioUrl,
+                    },
+                  } : x)));
                   return { ok: true, audioMap };
                 } catch (error) { return { ok: false, error: String(error?.message || error || 'audio_stage_failed') }; }
               },
