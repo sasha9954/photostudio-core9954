@@ -4969,6 +4969,8 @@ def _apply_storyboard_stage_metadata_passthrough(
     ia2v_audio_driven_count = 0
     lip_sync_only_policy_applied = _is_lip_sync_only_character_1(package)
     lip_sync_only_i2v_segments: list[str] = []
+    lip_sync_only_i2v_sanitized_segments: list[str] = []
+    lip_sync_only_i2v_character2_preserved_segments: list[str] = []
     lip_sync_only_ia2v_segments: list[str] = []
     repaired_owner_segments: list[str] = []
     repaired_owner_count = 0
@@ -4993,6 +4995,14 @@ def _apply_storyboard_stage_metadata_passthrough(
         segment["singing_readiness_required"] = bool(storyboard_row.get("singing_readiness_required"))
         segment["object_action_allowed"] = bool(storyboard_row.get("object_action_allowed"))
         segment["foreground_performance_rule"] = str(storyboard_row.get("foreground_performance_rule") or "").strip()
+        primary_role_value = str(
+            segment.get("primary_role")
+            or segment.get("visual_focus_role")
+            or _safe_dict(segment.get("prompt_notes")).get("primary_role")
+            or storyboard_row.get("primary_role")
+            or storyboard_row.get("visual_focus_role")
+            or ""
+        ).strip().lower()
 
         if route == "ia2v":
             lip_sync_only_ia2v_segments.append(segment_id)
@@ -5012,7 +5022,7 @@ def _apply_storyboard_stage_metadata_passthrough(
             segment["mouth_visible_required"] = True
             segment["singing_readiness_required"] = True
             apply_ia2v_lipsync_canon_to_prompt_row(segment, source_scene=storyboard_row)
-        elif lip_sync_only_policy_applied and route == "i2v":
+        elif lip_sync_only_policy_applied and route == "i2v" and primary_role_value != "character_2":
             lip_sync_only_i2v_segments.append(segment_id)
             lip_sync_only_i2v_sanitized_segments.append(segment_id)
             segment["primary_role"] = ""
@@ -5025,6 +5035,19 @@ def _apply_storyboard_stage_metadata_passthrough(
             segment["listener_reaction_allowed"] = False
             segment["visual_focus_role"] = "environment"
             segment["subject_priority"] = "environment"
+        elif lip_sync_only_policy_applied and route == "i2v" and primary_role_value == "character_2":
+            lip_sync_only_i2v_segments.append(segment_id)
+            lip_sync_only_i2v_character2_preserved_segments.append(segment_id)
+            segment["lip_sync_allowed"] = False
+            segment["lip_sync_priority"] = "none"
+            segment["mouth_visible_required"] = False
+            segment["singing_readiness_required"] = False
+            segment["listener_reaction_allowed"] = False
+            segment["speaker_role"] = ""
+            segment["vocal_owner_role"] = ""
+            segment["primary_role"] = "character_2"
+            segment["visual_focus_role"] = "character_2"
+            segment["subject_priority"] = "character"
 
         if lip_sync_only_policy_applied and route == "i2v":
             role_complete = True
@@ -5057,6 +5080,8 @@ def _apply_storyboard_stage_metadata_passthrough(
         "scene_prompts_ia2v_audio_driven_count": ia2v_audio_driven_count,
         "lip_sync_only_policy_applied": bool(lip_sync_only_policy_applied),
         "lip_sync_only_i2v_segments": [seg for seg in lip_sync_only_i2v_segments if seg],
+        "scene_prompts_lip_sync_only_i2v_sanitized_segments": [seg for seg in lip_sync_only_i2v_sanitized_segments if seg],
+        "scene_prompts_lip_sync_only_i2v_character2_preserved_segments": [seg for seg in lip_sync_only_i2v_character2_preserved_segments if seg],
         "lip_sync_only_ia2v_segments": [seg for seg in lip_sync_only_ia2v_segments if seg],
         "scene_prompts_ia2v_vocal_owner_repaired_count": repaired_owner_count,
         "scene_prompts_ia2v_vocal_owner_repaired_segments": [seg for seg in repaired_owner_segments if seg],
