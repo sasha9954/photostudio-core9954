@@ -5604,8 +5604,11 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_shell{width:1260px !important;min-width:1260px !important;max-width:1260px !important}
 
 .asdv2_body{width:100%;overflow:visible;padding-right:0}
-.asdv2_toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto;gap:10px;align-items:center}
+.asdv2_toolbar{display:grid;grid-template-columns:minmax(220px,1fr) auto auto auto;gap:10px;align-items:center}
 .asdv2_sub{opacity:.82;font-size:12px}
+.asdv2_settingsRow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.asdv2_setting{display:inline-flex;align-items:center;gap:6px;font-size:11px;opacity:.9}
+.asdv2_select{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.16);color:#fff;border-radius:8px;padding:5px 8px;font-size:11px}
 .asdv2_actions{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;justify-content:flex-end}
 .asdv2_actions .clipSB_btn{white-space:nowrap;padding:5px 8px;font-size:11px}
 .asdv2_inputsBar{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}

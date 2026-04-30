@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { NodeShell, handleStyle } from "./comfyNodeShared";
+import { resolveDirectorV2ContentType } from "./comfyNarrativeDomain";
 
 const INPUTS = [
   { id: "audio_in", label: "Аудио", tone: "audio", placeholder: "Аудио не подключено" },
@@ -28,6 +29,14 @@ const DIRECTOR_STATES = {
   ERROR: "error",
 };
 
+const DIRECTOR_MODE_OPTIONS = [
+  { value: "clip", label: "Клип" },
+  { value: "story", label: "История" },
+  { value: "advertisement", label: "Реклама" },
+  { value: "kino", label: "Кино" },
+  { value: "test", label: "Тест" },
+];
+const DIRECTOR_FORMAT_OPTIONS = ["9:16", "16:9", "1:1"];
 
 const toneToColor = { audio: "var(--family-audio)", character: "var(--family-ref-character)", location: "var(--family-ref-location)", style: "var(--family-ref-style)", video: "var(--family-video-ref)", props: "var(--family-ref-items)", text: "var(--family-text)" };
 const fmt = (v) => Number(v || 0).toFixed(2);
@@ -95,6 +104,9 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
   const chatMessages = Array.isArray(data?.chatMessages) ? data.chatMessages : [];
   const draftContract = data?.draftContract || null;
   const draftPlan = Array.isArray(data?.draftPlan) ? data.draftPlan : [];
+  const currentMode = data?.directorMode || data?.mode || "clip";
+  const currentFormat = data?.directorFormat || data?.format || "9:16";
+  const contentType = resolveDirectorV2ContentType(currentMode);
   const error = data?.directorError || "";
   const info = data?.directorInfo || "";
   const currentAudioSourceNodeId = connectedInputs?.audio_in?.sourceNodeId || "";
@@ -199,9 +211,9 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
       audio_map: audioMap || {},
       chat_history: chatMessages || [],
       connected_inputs: connectedInputs || {},
-      mode: "clip",
-      format: data?.format || "9:16",
-      content_type: "music_video",
+      mode: currentMode,
+      format: currentFormat,
+      content_type: contentType,
     };
     console.log("[AI SCENARIO DIRECTOR V2] apply", directorV2Package);
     patchData({
@@ -223,6 +235,24 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     parsedAudioSourceNodeId: "", parsedAudioUrl: "",
     questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
   });
+  const resetDirectorCycleForSettingsChange = (nextPatch = {}) => patchData({
+    ...nextPatch,
+    directorState: hasAudio ? DIRECTOR_STATES.READY_TO_PARSE_AUDIO : DIRECTOR_STATES.WAIT_INPUTS,
+    audioMap: null, chatMessages: [], draftContract: null, draftPlan: [], confirmed: false, applied: false,
+    directorV2Package: null, directorViewMode: "chat", activePipelineStage: "core", pipelineStages: {}, directorError: "", directorInfo: "", draftIsDemo: false, storyboardPackage: null, stageStatuses: {}, coreOutput: null, roleOutput: null, sceneOutput: null, promptOutput: null, finalVideoPromptOutput: null, finalOutput: null,
+    questionsResolved: [], remainingRisks: [], directorMemory: {}, currentDecisions: {}, directorChatPending: false,
+  });
+  const hasDirectorCycleData = Boolean(audioMap) || Boolean(draftContract) || Boolean(data?.directorV2Package);
+  const onModeChange = (value) => {
+    const nextPatch = { directorMode: value, mode: value, contentType: resolveDirectorV2ContentType(value), content_type: resolveDirectorV2ContentType(value) };
+    if (hasDirectorCycleData) return resetDirectorCycleForSettingsChange(nextPatch);
+    patchData(nextPatch);
+  };
+  const onFormatChange = (value) => {
+    const nextPatch = { directorFormat: value, format: value, contentType, content_type: contentType };
+    if (hasDirectorCycleData) return resetDirectorCycleForSettingsChange(nextPatch);
+    patchData(nextPatch);
+  };
   const chipSource = Object.keys(connectedInputs).length ? connectedInputs : connections;
 
   const copyText = async (text, label) => {
@@ -267,6 +297,18 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     <NodeShell title="AI РЕЖИССЁР V2" onClose={() => data?.onRemoveNode?.(id)} icon={<span aria-hidden>🎬</span>} className="clipSB_nodeStoryboard asdv2_shell" style={{ minWidth: 1120 }}>
       <div className="asdv2_body">
         <div className="asdv2_toolbar"><div className="asdv2_sub">Пошаговый режиссёрский flow</div><span className="asdv2_stepBadge">Состояние: {directorState}</span>
+          <div className="asdv2_settingsRow">
+            <label className="asdv2_setting">Режим:
+              <select className="asdv2_select" value={currentMode} disabled={isApplied} onChange={(e) => onModeChange(e.target.value)}>
+                {DIRECTOR_MODE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="asdv2_setting">Формат:
+              <select className="asdv2_select" value={currentFormat} disabled={isApplied} onChange={(e) => onFormatChange(e.target.value)}>
+                {DIRECTOR_FORMAT_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="asdv2_actions">
             <button className="clipSB_btn asdv2_primaryAction" disabled={!hasAudio || isParseLocked} onClick={parseAudio}>{audioMap ? "Переразобрать аудио" : "Разобрать аудио"}</button>
             <button className="clipSB_btn" disabled={isApplied || !audioMap || directorState === DIRECTOR_STATES.GENERATING_DRAFT || isAudioChangedAfterParse} onClick={onGenerateDraft}>{draftPlan.length ? "Перегенерировать" : "Сгенерировать черновик"}</button>

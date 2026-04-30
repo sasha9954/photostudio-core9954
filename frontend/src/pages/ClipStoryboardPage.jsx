@@ -46,7 +46,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, buildDirectorV2DraftPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, buildDirectorV2DraftPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveDirectorV2ContentType, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
   buildScenarioHumanVisualAnchors,
   buildScenarioPreviewInput,
@@ -23461,10 +23461,12 @@ onClipSec: (nodeId, value) => {
                 const activeNodes = nodesRef.current || [];
                 const nodeItem = activeNodes.find((x) => x.id === nodeId);
                 if (!nodeItem) return { ok: false, error: "Нода режиссёра не найдена" };
+                const mode = nodeItem?.data?.directorMode || nodeItem?.data?.mode || "clip";
+                const format = nodeItem?.data?.directorFormat || nodeItem?.data?.format || "9:16";
                 const payload = {
-                  mode: "clip",
-                  format: nodeItem?.data?.format || "9:16",
-                  content_type: "music_video",
+                  mode,
+                  format,
+                  content_type: resolveDirectorV2ContentType(mode),
                   audio_map: nodeItem?.data?.audioMap || {},
                   connected_inputs: nodeItem?.data?.connectedInputs || {},
                   chat_history: Array.isArray(nodeItem?.data?.chatMessages) ? nodeItem.data.chatMessages : [],
@@ -23490,6 +23492,12 @@ onClipSec: (nodeId, value) => {
                   const activeNodesById = new Map(activeNodes.map((x) => [x.id, x]));
                   const sourceState = buildDirectorV2ScenarioSourceState({ directorNode: nodeItem, nodesById: activeNodesById, edges: edgesNow });
                   sourceState.directorV2Package = nodeItem?.data?.directorV2Package || {};
+                  sourceState.directorMode = nodeItem?.data?.directorMode || nodeItem?.data?.mode || "clip";
+                  sourceState.mode = sourceState.directorMode;
+                  sourceState.directorFormat = nodeItem?.data?.directorFormat || nodeItem?.data?.format || "9:16";
+                  sourceState.format = sourceState.directorFormat;
+                  sourceState.contentType = resolveDirectorV2ContentType(sourceState.directorMode);
+                  sourceState.content_type = sourceState.contentType;
                   sourceState.director_contract = sourceState.directorV2Package?.director_contract || {};
                   sourceState.draft_plan = sourceState.directorV2Package?.draft_plan || [];
                   sourceState.audio_map = sourceState.directorV2Package?.audio_map || {};

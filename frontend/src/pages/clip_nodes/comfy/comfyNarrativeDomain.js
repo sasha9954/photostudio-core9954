@@ -1313,10 +1313,12 @@ export function buildDirectorV2DraftPayload({
   const safeConnectedInputs = connectedInputs && typeof connectedInputs === "object" ? connectedInputs : {};
   const safeDirectorMemory = directorMemory && typeof directorMemory === "object" ? directorMemory : {};
   const sourceText = String(safeConnectedInputs?.text_in?.value || safeConnectedInputs?.text_in?.text || "").trim();
+  const mode = String(sourceState?.directorMode || sourceState?.mode || targetState?.directorMode || targetState?.mode || "clip");
+  const format = String(sourceState?.directorFormat || sourceState?.format || targetState?.directorFormat || targetState?.format || basePayload?.format || "9:16");
   return {
-    mode: "clip",
-    format: String(basePayload?.format || targetState?.format || "9:16"),
-    content_type: "music_video",
+    mode,
+    format,
+    content_type: resolveDirectorV2ContentType(mode),
     chat_history: safeChatHistory,
     audio_map: safeAudioMap,
     connected_inputs: safeConnectedInputs,
@@ -1336,6 +1338,18 @@ export function buildDirectorV2DraftPayload({
       requestSource: "ai_scenario_director_v2:draft",
     },
   };
+}
+
+export function resolveDirectorV2ContentType(mode) {
+  switch (String(mode || "")) {
+    case "advertisement": return "advertisement";
+    case "story": return "story_video";
+    case "kino": return "cinematic_video";
+    case "test": return "test";
+    case "clip":
+    default:
+      return "music_video";
+  }
 }
 
 export function buildScenarioStageManualPayload({
