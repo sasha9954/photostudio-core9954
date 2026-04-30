@@ -617,6 +617,7 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
         or _safe_list(package.get("draft_plan"))
     )
     required_refs_by_segment: dict[str, set[str]] = {}
+    draft_intent_by_segment: dict[str, dict[str, str | list[str]]] = {}
     for row in draft_rows:
         item = _safe_dict(row)
         segment_ids: list[str] = []
@@ -633,9 +634,24 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
         if refs:
             for seg_id in segment_ids:
                 required_refs_by_segment[seg_id] = refs
+        intent_payload: dict[str, str | list[str]] = {
+            "required_refs": sorted(refs),
+            "route": str(item.get("route") or "").strip(),
+            "timeline_role": str(item.get("timeline_role") or "").strip(),
+            "purpose": str(item.get("purpose") or "").strip(),
+            "user_visible_description": str(item.get("user_visible_description") or "").strip(),
+            "audio_phrase": str(item.get("audio_phrase") or "").strip(),
+            "shot_size_intent": str(item.get("shot_size_intent") or "").strip(),
+            "camera_motion_intent": str(item.get("camera_motion_intent") or "").strip(),
+            "lighting_intent": str(item.get("lighting_intent") or "").strip(),
+        }
+        for seg_id in segment_ids:
+            draft_intent_by_segment[seg_id] = intent_payload
 
     scene_rows = []
     overrides_applied = 0
+    focus_rewritten_segments = 0
+    notes_rewritten_segments = 0
     blocking_mismatches: list[dict[str, Any]] = []
     overridden_mismatches: list[dict[str, Any]] = []
     for row in _safe_list(role_plan.get("scene_casting")):
@@ -674,6 +690,53 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
                 cast["primary_role"] = forced_primary
                 overrides_applied += 1
                 overridden_mismatches.append({"segment_id": segment_id, "forced_primary": forced_primary, "required_refs": sorted(req_refs)})
+            if route == "ia2v" and forced_primary == "character_1":
+                cast["presence_mode"] = "physical"
+                cast["presence_weight"] = "anchor"
+            if route == "i2v" and forced_primary == "character_2":
+                cast["presence_mode"] = "physical"
+                cast["presence_weight"] = "anchor"
+
+        if route == "i2v" and forced_primary == "character_2":
+            current_primary_after_force = str(cast.get("primary_role") or "").strip().lower()
+            if original_primary == "world" and current_primary_after_force == "character_2":
+                secondary_roles = [
+                    str(role or "").strip().lower()
+                    for role in _safe_list(cast.get("secondary_roles"))
+                    if str(role or "").strip()
+                ]
+                if "world" not in secondary_roles:
+                    secondary_roles.append("world")
+                secondary_roles = [role for role in secondary_roles if role != "character_2"]
+                if secondary_roles:
+                    cast["secondary_roles"] = secondary_roles
+
+        intent = _safe_dict(draft_intent_by_segment.get(segment_id))
+        if forced_primary or intent:
+            existing_focus = str(cast.get("performance_focus") or "").strip()
+            purpose = str(intent.get("purpose") or "").strip()
+            user_visible_description = str(intent.get("user_visible_description") or "").strip()
+            new_focus = user_visible_description or purpose or existing_focus
+            if new_focus and new_focus != existing_focus:
+                cast["performance_focus"] = new_focus
+                focus_rewritten_segments += 1
+            timeline_role = str(intent.get("timeline_role") or "").strip()
+            intent_route = str(intent.get("route") or "").strip()
+            notes_parts = [
+                part
+                for part in [timeline_role, intent_route]
+                if part
+            ]
+            notes_intro = ", ".join(notes_parts) if notes_parts else "unspecified"
+            continuity_note = f"Director draft intent: {notes_intro}."
+            if purpose:
+                continuity_note += f" {purpose}."
+            if user_visible_description:
+                continuity_note += f" {user_visible_description}"
+            continuity_note = re.sub(r"\s+", " ", continuity_note).strip()
+            if continuity_note and continuity_note != str(cast.get("continuity_notes") or "").strip():
+                cast["continuity_notes"] = continuity_note
+                notes_rewritten_segments += 1
         scene_rows.append(cast)
 
     role_plan["roster"] = roster
@@ -684,12 +747,18 @@ def _apply_director_contract_roles(package: dict[str, Any]) -> None:
     diagnostics = _safe_dict(package.get("diagnostics"))
     diagnostics["roles_director_world_split_applied"] = True
     diagnostics["active_role_planner_code_path"] = "scenario_role_planner_v2"
-    diagnostics["director_draft_intents_count"] = len(required_refs_by_segment)
+    diagnostics["director_draft_intents_count"] = len(draft_intent_by_segment)
     diagnostics["director_role_overrides_applied_count"] = overrides_applied
     diagnostics["director_required_refs_by_segment"] = {
         segment_id: sorted(refs)
         for segment_id, refs in sorted(required_refs_by_segment.items())
     }
+    diagnostics["director_draft_intent_by_segment"] = {
+        segment_id: payload
+        for segment_id, payload in sorted(draft_intent_by_segment.items())
+    }
+    diagnostics["director_role_focus_rewritten_segments"] = focus_rewritten_segments
+    diagnostics["director_role_notes_rewritten_segments"] = notes_rewritten_segments
     diagnostics["director_role_forced_primary_segments"] = overridden_mismatches[:40]
     diagnostics["director_blocking_primary_mismatches"] = blocking_mismatches[:40]
     diagnostics["director_core_mismatches_overridden_by_draft"] = overridden_mismatches[:40]
