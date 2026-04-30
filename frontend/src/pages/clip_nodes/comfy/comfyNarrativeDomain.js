@@ -1182,7 +1182,15 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
   const directorPackage = state?.director_package && typeof state.director_package === "object"
     ? state.director_package
     : (state?.directorPackage && typeof state.directorPackage === "object" ? state.directorPackage : {});
-
+  const directorV2Package = state?.directorV2Package && typeof state.directorV2Package === "object"
+    ? state.directorV2Package
+    : (state?.director_v2_package && typeof state.director_v2_package === "object" ? state.director_v2_package : {});
+  const draftPlan = Array.isArray(state?.draft_plan)
+    ? state.draft_plan
+    : (Array.isArray(state?.draftPlan) ? state.draftPlan : (Array.isArray(directorV2Package?.draft_plan) ? directorV2Package.draft_plan : []));
+  const directorAudioMap = state?.audio_map && typeof state.audio_map === "object"
+    ? state.audio_map
+    : (state?.audioMap && typeof state.audioMap === "object" ? state.audioMap : (directorV2Package?.audio_map && typeof directorV2Package.audio_map === "object" ? directorV2Package.audio_map : {}));
 
   const markStaleFrom = String(state?.markStaleFrom || "").trim();
   const staleReason = String(state?.staleReason || "").trim();
@@ -1231,6 +1239,9 @@ export function buildScenarioDirectorRequestPayload(state = {}) {
     director_config: directorConfig,
     director_contract: directorContract,
     director_package: directorPackage,
+    director_v2_package: directorV2Package,
+    draft_plan: draftPlan,
+    audio_map: directorAudioMap,
     director_controls: {
       contentType: safeContentType,
       format,
@@ -1429,11 +1440,20 @@ export function buildScenarioStageManualPayload({
     : (source?.directorContract && typeof source.directorContract === "object"
       ? source.directorContract
       : (basePayload?.director_contract && typeof basePayload.director_contract === "object" ? basePayload.director_contract : {}));
+  const directorV2Package = source?.directorV2Package && typeof source.directorV2Package === "object"
+    ? source.directorV2Package
+    : (source?.director_v2_package && typeof source.director_v2_package === "object" ? source.director_v2_package : {});
   const directorPackage = source?.director_package && typeof source.director_package === "object"
     ? source.director_package
     : (source?.directorPackage && typeof source.directorPackage === "object"
       ? source.directorPackage
       : (basePayload?.director_package && typeof basePayload.director_package === "object" ? basePayload.director_package : {}));
+  const draftPlan = Array.isArray(source?.draft_plan)
+    ? source.draft_plan
+    : (Array.isArray(source?.draftPlan) ? source.draftPlan : (Array.isArray(directorV2Package?.draft_plan) ? directorV2Package.draft_plan : []));
+  const directorAudioMap = source?.audio_map && typeof source.audio_map === "object"
+    ? source.audio_map
+    : (source?.audioMap && typeof source.audioMap === "object" ? source.audioMap : (directorV2Package?.audio_map && typeof directorV2Package.audio_map === "object" ? directorV2Package.audio_map : {}));
 
   const safeInput =
     stageStoryboardPackage?.input && typeof stageStoryboardPackage.input === "object"
@@ -1457,6 +1477,9 @@ export function buildScenarioStageManualPayload({
     ...(Object.keys(directorConfig || {}).length ? { director_config: directorConfig } : {}),
     ...(Object.keys(directorContract || {}).length ? { director_contract: directorContract } : {}),
     ...(Object.keys(directorPackage || {}).length ? { director_package: directorPackage } : {}),
+    ...(Object.keys(directorV2Package || {}).length ? { director_v2_package: directorV2Package } : {}),
+    ...(Array.isArray(draftPlan) && draftPlan.length ? { draft_plan: draftPlan } : {}),
+    ...(Object.keys(directorAudioMap || {}).length ? { audio_map: directorAudioMap } : {}),
   };
 
   if (Object.keys(directorConfig || {}).length) {
@@ -1467,6 +1490,15 @@ export function buildScenarioStageManualPayload({
   }
   if (Object.keys(directorPackage || {}).length) {
     stageStoryboardPackage.director_package = directorPackage;
+  }
+  if (Object.keys(directorV2Package || {}).length) {
+    stageStoryboardPackage.director_v2_package = directorV2Package;
+  }
+  if (Array.isArray(draftPlan) && draftPlan.length) {
+    stageStoryboardPackage.draft_plan = draftPlan;
+  }
+  if (Object.keys(directorAudioMap || {}).length) {
+    stageStoryboardPackage.audio_map = directorAudioMap;
   }
 
   console.debug("[SCENARIO MANUAL DIRECTOR CONTRACT]", {
@@ -1525,6 +1557,9 @@ export function buildScenarioStageManualPayload({
     director_config: directorConfig,
     director_contract: directorContract,
     director_package: directorPackage,
+    director_v2_package: directorV2Package,
+    draft_plan: draftPlan,
+    audio_map: directorAudioMap,
     director_controls: {
       ...(basePayload?.director_controls && typeof basePayload.director_controls === "object" ? basePayload.director_controls : {}),
       ...(source?.director_controls && typeof source.director_controls === "object" ? source.director_controls : {}),
@@ -1555,6 +1590,9 @@ export function buildScenarioStageManualPayload({
       stagePayloadMode: "lean",
       director_config: directorConfig,
       director_contract: directorContract,
+      director_v2_package: directorV2Package,
+      draft_plan: draftPlan,
+      audio_map: directorAudioMap,
     },
     scenario: target?.scenario || source?.scenario || "",
     ...(debugMirrorsEnabled && source?.master_output && typeof source.master_output === "object" ? { master_output: source.master_output } : {}),
