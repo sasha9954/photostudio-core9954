@@ -18086,7 +18086,7 @@ def _run_scene_detail_stage(package: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(str(result.get("error") or "scene_detail_failed"))
     scene_detail = _safe_dict(result.get("scene_detail"))
     scene_detail["created_for_signature"] = _current_scenario_input_signature(package)
-    package["scene_detail"] = scene_detail
+    package["scene_detail"] = _attach_downstream_mode_metadata(scene_detail, package)
     return package
 
 
