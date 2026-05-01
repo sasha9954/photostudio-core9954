@@ -15349,10 +15349,11 @@ const extractUrlsFromConnectedInputValue = (value) => {
         chosenExpectedRole: expectedRole,
         chosenExpectedRoleSource,
       });
-      const requestedPrimaryRole = normalizeScenarioRoleName(expectedRole || refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "");
+      let requestedPrimaryRole = normalizeScenarioRoleName(expectedRole || refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "");
       const hasSceneSelectedContract = Boolean(sceneSelectedCharacterRole && sceneSelectedCharacterRefs.length > 0);
       if (hasSceneSelectedContract) {
         expectedRole = sceneSelectedCharacterRole;
+        requestedPrimaryRole = normalizeScenarioRoleName(sceneSelectedCharacterRole);
         refsByRoleEffective = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
         refsUsedByRoleEffective = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
         const selectedHandle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[sceneSelectedCharacterRole];
@@ -15561,32 +15562,6 @@ const extractUrlsFromConnectedInputValue = (value) => {
         refsPayloadForRequest.expectedRole = expectedRole;
         refsPayloadForRequest.expected_role = expectedRole;
         refsPayloadForRequest.character = expectedRefs;
-      }
-      if (hasSceneSelectedContract) {
-        finalRequestBody.expectedRole = sceneSelectedCharacterRole;
-        finalRequestBody.expected_role = sceneSelectedCharacterRole;
-        finalRequestBody.primaryRole = sceneSelectedCharacterRole;
-        finalRequestBody.heroEntityId = sceneSelectedCharacterRole;
-        finalRequestBody.sceneActiveRoles = [sceneSelectedCharacterRole];
-        finalRequestBody.refsUsed = [sceneSelectedCharacterRole];
-        finalRequestBody.mustAppear = [sceneSelectedCharacterRole];
-        finalRequestBody.refsByRole = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
-        finalRequestBody.refsUsedByRole = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
-        finalRequestBody.connectedInputs = connectedInputsEffective;
-        finalRequestBody.refs = {
-          ...(finalRequestBody.refs || {}),
-          expectedRole: sceneSelectedCharacterRole,
-          expected_role: sceneSelectedCharacterRole,
-          primaryRole: sceneSelectedCharacterRole,
-          heroEntityId: sceneSelectedCharacterRole,
-          sceneActiveRoles: [sceneSelectedCharacterRole],
-          refsUsed: [sceneSelectedCharacterRole],
-          mustAppear: [sceneSelectedCharacterRole],
-          refsByRole: { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs },
-          refsUsedByRole: { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs },
-          connectedInputs: connectedInputsEffective,
-          character: sceneSelectedCharacterRefs,
-        };
       }
       const sceneGoalEffective = String(
         targetScene?.sceneGoalRu
@@ -15877,6 +15852,32 @@ Aspect ratio: ${imageFormat}`,
         expectedRole,
         expected_role: expectedRole,
       };
+      if (hasSceneSelectedContract) {
+        finalRequestBody.expectedRole = sceneSelectedCharacterRole;
+        finalRequestBody.expected_role = sceneSelectedCharacterRole;
+        finalRequestBody.primaryRole = sceneSelectedCharacterRole;
+        finalRequestBody.heroEntityId = sceneSelectedCharacterRole;
+        finalRequestBody.sceneActiveRoles = [sceneSelectedCharacterRole];
+        finalRequestBody.refsUsed = [sceneSelectedCharacterRole];
+        finalRequestBody.mustAppear = [sceneSelectedCharacterRole];
+        finalRequestBody.refsByRole = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
+        finalRequestBody.refsUsedByRole = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
+        finalRequestBody.connectedInputs = connectedInputsEffective;
+        finalRequestBody.refs = {
+          ...(finalRequestBody.refs || {}),
+          expectedRole: sceneSelectedCharacterRole,
+          expected_role: sceneSelectedCharacterRole,
+          primaryRole: sceneSelectedCharacterRole,
+          heroEntityId: sceneSelectedCharacterRole,
+          sceneActiveRoles: [sceneSelectedCharacterRole],
+          refsUsed: [sceneSelectedCharacterRole],
+          mustAppear: [sceneSelectedCharacterRole],
+          refsByRole: { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs },
+          refsUsedByRole: { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs },
+          connectedInputs: connectedInputsEffective,
+          character: sceneSelectedCharacterRefs,
+        };
+      }
       if (shouldUseCharacter1 && expectedRole === "character_1") {
         finalRequestBody.sceneActiveRoles = [...new Set([...(Array.isArray(finalRequestBody.sceneActiveRoles) ? finalRequestBody.sceneActiveRoles : []), "character_1"])];
         finalRequestBody.refsUsed = [...new Set([...(Array.isArray(finalRequestBody.refsUsed) ? finalRequestBody.refsUsed : []), "character_1"])];
