@@ -15236,7 +15236,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         { scenes: scenarioPackageForImage?.final_storyboard?.scenes },
         { segments: scenarioPackageForImage?.final_storyboard?.segments },
       ) || {};
+      const embeddedRenderManifestRow =
+        targetScene?.render_manifest_row && typeof targetScene.render_manifest_row === "object"
+          ? targetScene.render_manifest_row
+          : (targetScene?.renderManifestRow && typeof targetScene.renderManifestRow === "object"
+            ? targetScene.renderManifestRow
+            : {});
       const expectedRoleResolution = resolveScenarioExpectedImageRoleFromSources({
+        embeddedRenderManifestRow,
         targetScene,
         sceneFinalPayload,
         renderManifestRow,
@@ -15251,6 +15258,8 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         segmentId: targetScene?.segment_id || targetScene?.segmentId || "",
         targetScenePrimaryRole: targetScene?.primaryRole || targetScene?.primary_role || "",
         targetSceneRefsUsed: targetScene?.refsUsed || targetScene?.refs_used || [],
+        embeddedRenderManifestPrimaryRole: embeddedRenderManifestRow?.primaryRole || embeddedRenderManifestRow?.primary_role || "",
+        embeddedRenderManifestRefsUsed: embeddedRenderManifestRow?.refsUsed || embeddedRenderManifestRow?.refs_used || [],
         finalPayloadPrimaryRole: sceneFinalPayload?.primaryRole || sceneFinalPayload?.primary_role || "",
         renderManifestPrimaryRole: renderManifestRow?.primaryRole || renderManifestRow?.primary_role || "",
         renderManifestRefsUsed: renderManifestRow?.refsUsed || renderManifestRow?.refs_used || [],
@@ -15259,6 +15268,16 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         chosenExpectedRoleSource,
       });
       const requestedPrimaryRole = normalizeScenarioRoleName(expectedRole || refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "");
+      const manifestChosenRole = normalizeScenarioRoleName(
+        embeddedRenderManifestRow?.primaryRole
+        || embeddedRenderManifestRow?.primary_role
+        || renderManifestRow?.primaryRole
+        || renderManifestRow?.primary_role
+        || ""
+      );
+      if (manifestChosenRole === "character_2" && expectedRole === "character_1") {
+        throw new Error(`image_request_stale_runtime_role_override:${sceneId}:manifest=character_2:chosen=character_1`);
+      }
       let primaryRoleEffective = SCENARIO_IMAGE_WORLD_ROLE_KEYS.includes(requestedPrimaryRole) ? "" : String(requestedPrimaryRole || "").trim();
       let heroEntityIdEffective = String(
         refsForImageRequest?.heroEntityId
@@ -15319,9 +15338,62 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         refsByRoleEffective.character_1 = [...new Set(ensuredCharacter1Refs)];
       }
       if (expectedRole) {
-        const expectedOnlyRefs = Array.isArray(refsByRoleEffective?.[expectedRole])
+        let expectedOnlyRefs = Array.isArray(refsByRoleEffective?.[expectedRole])
           ? refsByRoleEffective[expectedRole].map((value) => String(value || "").trim()).filter(Boolean)
           : [];
+        const includesRole = (source = {}, role = "") => {
+          const refsUsed = Array.isArray(source?.refsUsed) ? source.refsUsed : (Array.isArray(source?.refs_used) ? source.refs_used : []);
+          return refsUsed.map((value) => normalizeScenarioRoleName(value)).includes(role);
+        };
+        if (!expectedOnlyRefs.length) {
+          const recoverySources = [
+            {
+              label: "embeddedRenderManifestRow.linked_assets.character_refs_for_active_role",
+              values: embeddedRenderManifestRow?.linked_assets?.character_refs_for_active_role?.[expectedRole],
+            },
+            {
+              label: "renderManifestRow.linked_assets.character_refs_for_active_role",
+              values: renderManifestRow?.linked_assets?.character_refs_for_active_role?.[expectedRole],
+            },
+            {
+              label: "targetScene.linked_assets.character_refs_for_active_role",
+              values: targetScene?.linked_assets?.character_refs_for_active_role?.[expectedRole],
+            },
+            { label: "embeddedRenderManifestRow.refsByRole", values: embeddedRenderManifestRow?.refsByRole?.[expectedRole] || embeddedRenderManifestRow?.refs_by_role?.[expectedRole] },
+            { label: "renderManifestRow.refsByRole", values: renderManifestRow?.refsByRole?.[expectedRole] || renderManifestRow?.refs_by_role?.[expectedRole] },
+            { label: "targetScene.refsByRole", values: targetScene?.refsByRole?.[expectedRole] || targetScene?.refs_by_role?.[expectedRole] },
+            {
+              label: "embeddedRenderManifestRow.source_image_refs",
+              values: includesRole(embeddedRenderManifestRow, expectedRole) ? (embeddedRenderManifestRow?.source_image_refs || embeddedRenderManifestRow?.sourceImageRefs) : [],
+            },
+            {
+              label: "renderManifestRow.source_image_refs",
+              values: includesRole(renderManifestRow, expectedRole) ? (renderManifestRow?.source_image_refs || renderManifestRow?.sourceImageRefs) : [],
+            },
+            {
+              label: "targetScene.source_image_refs",
+              values: includesRole(targetScene, expectedRole) ? (targetScene?.source_image_refs || targetScene?.sourceImageRefs) : [],
+            },
+          ];
+          const recoveredFrom = [];
+          const recovered = [];
+          recoverySources.forEach(({ label, values }) => {
+            const normalizedValues = (Array.isArray(values) ? values : [])
+              .map((value) => String(value || "").trim())
+              .filter(Boolean);
+            if (normalizedValues.length) recoveredFrom.push(label);
+            recovered.push(...normalizedValues);
+          });
+          expectedOnlyRefs = [...new Set(recovered)];
+          if (expectedOnlyRefs.length) refsByRoleEffective[expectedRole] = expectedOnlyRefs;
+          console.info("[SCENARIO EXPECTED ROLE REF RECOVERY]", {
+            sceneId,
+            expectedRole,
+            recoveredFrom,
+            recoveredCount: expectedOnlyRefs.length,
+            refsByRoleCountsAfterRecovery: summarizeRefsByRole(refsByRoleEffective || {}),
+          });
+        }
 
         if (!expectedOnlyRefs.length) {
           const detail = `image_request_missing_character_ref:${sceneId}:${expectedRole}`;
