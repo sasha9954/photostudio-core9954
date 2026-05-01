@@ -5266,7 +5266,14 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
                                 "excerpt": entry["excerpt"],
                             }
                         )
-        primary_role_value = str(seg.get("primary_role") or prompt_row.get("primary_role") or "").strip().lower()
+        primary_role_value = str(
+            row.get("primary_role")
+            or row.get("visual_focus_role")
+            or _safe_dict(row.get("prompt_notes")).get("primary_role")
+            or prompt_row.get("primary_role")
+            or prompt_row.get("visual_focus_role")
+            or ""
+        ).strip().lower()
         if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
             i2v_blob = " ".join(
                 [
@@ -5344,11 +5351,13 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             "lip_sync_only_i2v_visibility_violation_segments": list(
                 dict.fromkeys([seg for seg in lip_sync_only_i2v_violation_segments if seg])
             ),
+            "scene_prompts_active_code_path": "scenario_scene_prompter_split_timeline_v3",
         }
 
     return "", "", {
         "scene_prompts_transition_required_count": transition_required_count,
         "scene_prompts_transition_present_count": transition_present_count,
+        "scene_prompts_active_code_path": "scenario_scene_prompter_split_timeline_v3",
     }
 
 
