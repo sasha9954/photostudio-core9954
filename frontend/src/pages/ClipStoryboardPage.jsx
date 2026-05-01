@@ -10617,6 +10617,7 @@ const scenarioFlowSourceNode = useMemo(() => {
   return scenarioNode;
 }, [activeScenarioStoryboardNode, scenarioNode]);
 const runtimeHydratedRef = useRef(false);
+const storyboardRuntimeRestoredRef = useRef(false);
 const buildScenarioRuntimeSnapshot = useCallback((nodeData = {}, selectedSceneId = "") => {
   const scenes = Array.isArray(nodeData?.scenes) ? nodeData.scenes : [];
   const montageCount = scenes.filter((scene) => Boolean(scene?.montageReady || scene?.montageState)).length;
@@ -10624,32 +10625,93 @@ const buildScenarioRuntimeSnapshot = useCallback((nodeData = {}, selectedSceneId
     + (String(scene?.imageUrl || scene?.startImageUrl || scene?.endImageUrl || "").trim() ? 1 : 0)
     + (String(scene?.videoUrl || "").trim() ? 1 : 0)
     + (String(scene?.audioSliceUrl || "").trim() ? 1 : 0), 0);
-  return { scenes, selectedSceneId: String(selectedSceneId || "").trim(), diagnostics: { montageCount, generatedAssetCount } };
-}, []);
-useEffect(() => {
-  const activeNode = activeScenarioStoryboardNode;
-  if (!activeNode?.id) return;
-  const snapshot = buildScenarioRuntimeSnapshot(activeNode?.data || {}, scenarioEditor?.selectedSceneId || "");
-  safeSet(STORYBOARD_RUNTIME_STORE_KEY, JSON.stringify(snapshot));
-  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_persist_enabled: true, storyboard_runtime_persist_scene_count: snapshot.scenes.length, storyboard_runtime_persist_generated_asset_count: snapshot.diagnostics.generatedAssetCount, storyboard_runtime_persist_montage_saved: snapshot.diagnostics.montageCount > 0 });
-}, [STORYBOARD_RUNTIME_STORE_KEY, activeScenarioStoryboardNode, buildScenarioRuntimeSnapshot, scenarioEditor?.selectedSceneId]);
+  return {
+    nodeId: String(activeScenarioStoryboardNode?.id || "").trim(),
+    scenes,
+    selectedSceneId: String(selectedSceneId || "").trim(),
+    diagnostics: { montageCount, generatedAssetCount },
+  };
+}, [activeScenarioStoryboardNode?.id]);
 useEffect(() => {
   if (runtimeHydratedRef.current) return;
   runtimeHydratedRef.current = true;
   console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_attempted: true, storyboard_runtime_restore_attempted: true, storyboard_runtime_hydrate_source: "runtime_persist" });
   const raw = safeGet(STORYBOARD_RUNTIME_STORE_KEY);
-  if (!raw) return;
+  const targetNodeId = String(activeScenarioStoryboardNode?.id || activeScenarioStoryboardId || "").trim();
+  if (!targetNodeId) {
+    storyboardRuntimeRestoredRef.current = true;
+    console.info("[SCENARIO RUNTIME]", {
+      storyboard_runtime_restore_completed: true,
+      storyboard_runtime_restore_skipped: true,
+      reason: "empty_target_node_id",
+      storyboard_runtime_restore_target_node_id: targetNodeId,
+    });
+    return;
+  }
+  if (!raw) {
+    storyboardRuntimeRestoredRef.current = true;
+    console.info("[SCENARIO RUNTIME]", {
+      storyboard_runtime_restore_completed: true,
+      storyboard_runtime_restore_target_node_id: targetNodeId,
+      storyboard_runtime_restore_source: "runtime_persist",
+      storyboard_runtime_restore_snapshot_present: false,
+    });
+    return;
+  }
   try {
     const parsed = JSON.parse(raw);
     const persistedScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
+    const persistedNodeId = String(parsed?.nodeId || "").trim();
     const persistedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
-    setNodes((prev) => prev.map((node) => (node?.type === "scenarioStoryboard" ? { ...node, data: { ...(node?.data || {}), scenes: persistedScenes } } : node)));
-    if (persistedSelectedSceneId) setScenarioEditor((prev) => ({ ...prev, selectedSceneId: persistedSelectedSceneId }));
-    console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_scene_count: persistedScenes.length, storyboard_runtime_hydrate_selected_scene: persistedSelectedSceneId, storyboard_runtime_restore_success: true, storyboard_runtime_restore_scene_count: persistedScenes.length, storyboard_runtime_restore_generated_asset_count: Number(parsed?.diagnostics?.generatedAssetCount || 0), storyboard_runtime_restore_montage_restored: Number(parsed?.diagnostics?.montageCount || 0) > 0, storyboard_runtime_restore_source: "runtime_persist" });
+    if (persistedNodeId && persistedNodeId !== targetNodeId) {
+      storyboardRuntimeRestoredRef.current = true;
+      console.info("[SCENARIO RUNTIME]", {
+        storyboard_runtime_restore_completed: true,
+        storyboard_runtime_restore_skipped: true,
+        reason: "node_id_mismatch",
+        storyboard_runtime_restore_target_node_id: targetNodeId,
+        storyboard_runtime_restore_snapshot_node_id: persistedNodeId,
+      });
+      return;
+    }
+    setNodes((prev) => prev.map((node) => {
+      if (node?.type !== "scenarioStoryboard") return node;
+      if (targetNodeId && String(node.id) !== targetNodeId) return node;
+      return { ...node, data: { ...(node?.data || {}), scenes: persistedScenes } };
+    }));
+    setScenarioEditor((prev) => ({
+      ...prev,
+      selectedSceneId: persistedSelectedSceneId || persistedScenes[0]?.sceneId || persistedScenes[0]?.segment_id || "",
+    }));
+    storyboardRuntimeRestoredRef.current = true;
+    console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_scene_count: persistedScenes.length, storyboard_runtime_hydrate_selected_scene: persistedSelectedSceneId, storyboard_runtime_restore_success: true, storyboard_runtime_restore_scene_count: persistedScenes.length, storyboard_runtime_restore_generated_asset_count: Number(parsed?.diagnostics?.generatedAssetCount || 0), storyboard_runtime_restore_montage_restored: Number(parsed?.diagnostics?.montageCount || 0) > 0, storyboard_runtime_restore_source: "runtime_persist", storyboard_runtime_restore_target_node_id: targetNodeId, storyboard_runtime_restore_completed: true });
   } catch (error) {
+    storyboardRuntimeRestoredRef.current = true;
     console.warn("[SCENARIO RUNTIME] restore failed", error);
   }
-}, [STORYBOARD_RUNTIME_STORE_KEY, setNodes]);
+}, [STORYBOARD_RUNTIME_STORE_KEY, setNodes, activeScenarioStoryboardId, activeScenarioStoryboardNode?.id]);
+useEffect(() => {
+  if (!storyboardRuntimeRestoredRef.current) {
+    console.info("[SCENARIO RUNTIME]", {
+      storyboard_runtime_persist_skipped: true,
+      reason: "restore_not_completed",
+    });
+    return;
+  }
+  const activeNode = activeScenarioStoryboardNode;
+  if (!activeNode?.id) return;
+  const snapshot = buildScenarioRuntimeSnapshot(activeNode?.data || {}, scenarioEditor?.selectedSceneId || "");
+  if (!snapshot.scenes.length) {
+    console.info("[SCENARIO RUNTIME]", {
+      storyboard_runtime_persist_skipped: true,
+      reason: "empty_scenes_snapshot",
+      storyboard_runtime_persist_node_id: snapshot.nodeId,
+    });
+    return;
+  }
+  safeSet(STORYBOARD_RUNTIME_STORE_KEY, JSON.stringify(snapshot));
+  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_persist_enabled: true, storyboard_runtime_persist_scene_count: snapshot.scenes.length, storyboard_runtime_persist_generated_asset_count: snapshot.diagnostics.generatedAssetCount, storyboard_runtime_persist_montage_saved: snapshot.diagnostics.montageCount > 0, storyboard_runtime_persist_node_id: snapshot.nodeId });
+}, [STORYBOARD_RUNTIME_STORE_KEY, activeScenarioStoryboardNode, buildScenarioRuntimeSnapshot, scenarioEditor?.selectedSceneId]);
 
 const scenarioBrainRefs = useMemo(() => {
   if (!scenarioFlowSourceNode?.id) return { character: [], location: [], style: [], props: [], refsByRole: {} };
