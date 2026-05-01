@@ -3044,10 +3044,10 @@ export function resolveScenarioExpectedImageRoleFromSources({
   );
 
   const orderedSources = [
-    { label: "targetScene", source: targetScene },
-    { label: "sceneFinalPayload", source: sceneFinalPayload },
     { label: "renderManifestRow", source: renderManifestRow },
     { label: "finalStoryboardScene", source: finalStoryboardScene },
+    { label: "sceneFinalPayload", source: sceneFinalPayload },
+    { label: "targetScene", source: targetScene },
   ];
   for (const entry of orderedSources) {
     const role = pickRoleFromSource(entry.source);
