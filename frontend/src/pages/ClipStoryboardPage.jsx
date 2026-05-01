@@ -30,6 +30,7 @@ import {
   AiScenarioDirectorV2Node,
 } from "./clip_nodes/comfy";
 import VideoRefNode from "./clip_nodes/VideoRefNode";
+import ManualClipBoardNode from "./clip_nodes/manual/ManualClipBoardNode";
 import {
   normalizeRenderProfile,
   normalizeAudioStoryMode,
@@ -24961,6 +24962,8 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "refAnimal", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'single animal', speciesHint: '', scaleLock: false, behavior: 'neutral', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "refGroup") {
       node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
+    } else if (type === "manualClipBoard") {
+      node = { id, type: "manualClipBoard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else {
       return;
     }
@@ -25304,6 +25307,7 @@ const hydrate = useCallback((source = "unknown") => {
       refCharacter3: RefCharacter3Node,
       refAnimal: RefAnimalNode,
       refGroup: RefGroupNode,
+      manualClipBoard: ManualClipBoardNode,
     }),
     []
   );
@@ -26782,6 +26786,7 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioPipelineDebug")}>🧪 Scenario Pipeline Debug</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("aiScenarioDirectorV2")}>🎬 AI Scenario Director V2</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("manualClipBoard")}>✂️ AI-разбивка клипа</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioStoryboard")}>🎞️ SCENARIO STORYBOARD</button>
