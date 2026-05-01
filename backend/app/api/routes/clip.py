@@ -353,6 +353,8 @@ class ClipImageRefsIn(BaseModel):
     refsUsed: list[str] | dict | None = None
     refDirectives: dict | None = None
     primaryRole: str | None = None
+    expectedRole: str | None = None
+    expected_role: str | None = None
     secondaryRoles: list[str] | None = None
     sceneActiveRoles: list[str] | None = None
     refsUsedByRole: dict | None = None
@@ -12716,6 +12718,26 @@ def clip_image(payload: ClipImageIn):
     print("[COMFY IMAGE DEBUG] cleaned refsByRole counts=" + json.dumps({role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES}, ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_1=" + json.dumps(comfy_refs_by_role.get("character_1") or [], ensure_ascii=False))
     print("[COMFY IMAGE DEBUG] cleaned refsByRole.character_2=" + json.dumps(comfy_refs_by_role.get("character_2") or [], ensure_ascii=False))
+    expected_role_raw = (
+        getattr(refs_obj, "expectedRole", None)
+        or getattr(refs_obj, "expected_role", None)
+        or payload_map.get("expectedRole")
+        or payload_map.get("expected_role")
+    )
+    expected_role = str(expected_role_raw or "").strip()
+    if expected_role:
+        expected_refs = comfy_refs_by_role.get(expected_role) or []
+        if len(expected_refs) == 0:
+            return JSONResponse({
+                "ok": False,
+                "detail": f"image_request_missing_character_ref:{scene_id}:{expected_role}",
+            }, status_code=400)
+        other_character_roles = [r for r in ("character_1", "character_2", "character_3") if r != expected_role]
+        if any(len(comfy_refs_by_role.get(role) or []) > 0 for role in other_character_roles):
+            return JSONResponse({
+                "ok": False,
+                "detail": f"image_request_wrong_character_ref:{scene_id}",
+            }, status_code=400)
     print("[CLIP IMAGE REFS SUMMARY] " + json.dumps({
         "sceneId": scene_id,
         "route": route_value,
