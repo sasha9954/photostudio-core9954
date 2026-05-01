@@ -2198,11 +2198,13 @@ def _final_video_prompt_dependency_payload_ok(package: dict[str, Any], dependenc
         return bool(role_plan) and bool(roster) and (bool(scene_casting) or bool(coverage_ok))
     if dependency_stage_id == "scene_plan":
         scene_plan = _safe_dict(pkg.get("scene_plan"))
-        scene_rows, _ = _get_scene_plan_rows(scene_plan, pkg)
-        coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
-        if isinstance(coverage_ok, bool):
-            return bool(scene_plan) and bool(scene_rows) and coverage_ok
-        return bool(scene_plan) and bool(scene_rows)
+        computed = _compute_final_video_prompt_scene_plan_coverage(pkg)
+        legacy_coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
+        if computed.get("ok"):
+            return bool(scene_plan) and bool(computed.get("row_count"))
+        if isinstance(legacy_coverage_ok, bool):
+            return bool(scene_plan) and bool(computed.get("row_count")) and legacy_coverage_ok
+        return bool(scene_plan) and bool(computed.get("row_count"))
     if dependency_stage_id == "scene_prompts":
         return _has_valid_scene_prompts_payload_for_final_video_prompt(pkg)
     return _can_reuse_stage_output(pkg, dependency_stage_id)
@@ -2285,13 +2287,13 @@ def _final_video_prompt_dependency_reason(package: dict[str, Any], dependency_st
         scene_plan = _safe_dict(pkg.get("scene_plan"))
         if not scene_plan:
             return "missing_scene_plan_payload"
-        scene_rows, _ = _get_scene_plan_rows(scene_plan, pkg)
-        if not scene_rows:
+        computed = _compute_final_video_prompt_scene_plan_coverage(pkg)
+        if not bool(computed.get("row_count")):
             return "empty_scene_plan_storyboard"
-        coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
-        if isinstance(coverage_ok, bool) and not coverage_ok:
-            return "empty_scene_plan_storyboard"
-        return ""
+        if computed.get("ok"):
+            return ""
+        missing_segment_ids = _safe_list(computed.get("missing_segment_ids"))
+        return "scene_plan_missing_segment_ids" if missing_segment_ids else "scene_plan_segment_coverage_failed"
     if dependency_stage_id == "scene_prompts":
         return "" if _has_valid_scene_prompts_payload_for_final_video_prompt(pkg) else "scene_prompts_payload_invalid_for_final_video_prompt"
     if dependency_stage_id == "input_package":
@@ -2400,6 +2402,13 @@ def _collect_final_video_prompt_dependency_gate_state(
     diagnostics["final_video_prompt_dependency_scene_prompts_segment_count"] = len(scene_prompts_segments)
     scene_plan = _safe_dict(pkg.get("scene_plan"))
     scene_plan_rows, scene_plan_rows_source = _get_scene_plan_rows(scene_plan, pkg)
+    if not _safe_list(scene_plan.get("storyboard")) and scene_plan_rows:
+        scene_plan["storyboard"] = list(scene_plan_rows)
+    computed_coverage = _compute_final_video_prompt_scene_plan_coverage(pkg)
+    legacy_coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
+    legacy_ignored = bool(computed_coverage.get("ok") and isinstance(legacy_coverage_ok, bool) and not legacy_coverage_ok)
+    if legacy_ignored:
+        false_positive_prevented = True
     used_legacy_storyboard = bool(scene_plan_rows) and scene_plan_rows_source == "scene_plan.storyboard"
     used_new_scene_rows = bool(scene_plan_rows) and scene_plan_rows_source in {
         "scene_plan.scenes",
@@ -2409,6 +2418,11 @@ def _collect_final_video_prompt_dependency_gate_state(
     }
     diagnostics["final_video_prompt_dependency_gate_scene_plan_rows_source"] = scene_plan_rows_source
     diagnostics["final_video_prompt_dependency_gate_scene_plan_rows_count"] = len(scene_plan_rows)
+    diagnostics["final_video_prompt_scene_plan_computed_coverage_ok"] = bool(computed_coverage.get("ok"))
+    diagnostics["final_video_prompt_scene_plan_computed_missing_segment_ids"] = _safe_list(computed_coverage.get("missing_segment_ids"))
+    diagnostics["final_video_prompt_scene_plan_computed_extra_segment_ids"] = _safe_list(computed_coverage.get("extra_segment_ids"))
+    diagnostics["final_video_prompt_scene_plan_legacy_coverage_ok"] = legacy_coverage_ok if isinstance(legacy_coverage_ok, bool) else None
+    diagnostics["final_video_prompt_scene_plan_legacy_coverage_ignored"] = bool(legacy_ignored)
     diagnostics["final_video_prompt_dependency_gate_used_legacy_storyboard"] = bool(used_legacy_storyboard)
     diagnostics["final_video_prompt_dependency_gate_used_new_scene_rows"] = bool(used_new_scene_rows)
     diagnostics["final_video_prompt_dependency_gate_recomputed_after_payload_overrides"] = True
@@ -4175,6 +4189,45 @@ def _get_scene_plan_rows(scene_plan: dict[str, Any], package: dict[str, Any]) ->
     if draft_plan_rows and str(scene_plan.get("source") or "").strip() == "director_v2_draft_plan":
         return draft_plan_rows, "director_v2_package.draft_plan"
     return [], ""
+
+
+def _compute_final_video_prompt_scene_plan_coverage(package: dict[str, Any]) -> dict[str, Any]:
+    pkg = _safe_dict(package)
+    scene_plan = _safe_dict(pkg.get("scene_plan"))
+    scene_rows, source = _get_scene_plan_rows(scene_plan, pkg)
+    row_segment_ids = {
+        str(_safe_dict(row).get("segment_id") or "").strip()
+        for row in scene_rows
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+
+    audio_map = _safe_dict(pkg.get("audio_map"))
+    audio_expected_ids = [
+        str(_safe_dict(row).get("segment_id") or "").strip()
+        for row in _safe_list(audio_map.get("segments"))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    ]
+    scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+    prompts_expected_ids = [
+        str(_safe_dict(row).get("segment_id") or "").strip()
+        for row in (_safe_list(scene_prompts.get("segments")) or _safe_list(scene_prompts.get("scenes")))
+        if str(_safe_dict(row).get("segment_id") or "").strip()
+    ]
+
+    expected_ids = list(dict.fromkeys(audio_expected_ids or prompts_expected_ids))
+    expected_set = set(expected_ids)
+    missing_segment_ids = sorted(expected_set - row_segment_ids)
+    extra_segment_ids = sorted(row_segment_ids - expected_set) if expected_set else []
+
+    ok = bool(scene_rows) and (not expected_set or not missing_segment_ids)
+    return {
+        "ok": bool(ok),
+        "row_count": len(scene_rows),
+        "expected_count": len(expected_ids),
+        "missing_segment_ids": missing_segment_ids,
+        "extra_segment_ids": extra_segment_ids,
+        "source": source,
+    }
 
 
 def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
