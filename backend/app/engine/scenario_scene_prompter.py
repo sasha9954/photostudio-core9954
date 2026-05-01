@@ -195,6 +195,13 @@ _SPLIT_TIMELINE_IA2V_CHARACTER2_PHYSICAL_PATTERNS: tuple[re.Pattern[str], ...] =
 _SPLIT_TIMELINE_IA2V_CHARACTER2_SAFE_CLAUSE = (
     "If character_2 appears, keep it non-physical only: reflection, old photo, vague memory impression, or ghostly reflection in glass."
 )
+_SPLIT_TIMELINE_ALLOWED_CHARACTER2_NON_PHYSICAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bold photo\b"),
+    re.compile(r"(?i)\breflection\b"),
+    re.compile(r"(?i)\bvague memory\b"),
+    re.compile(r"(?i)\bghostly\b.{0,20}\breflection\b"),
+    re.compile(r"(?i)\bglass reflection\b"),
+)
 _GENERIC_MEMORY_BEAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bmemory beat\b"),
     re.compile(r"(?i)\batmospheric world\b"),
@@ -258,6 +265,54 @@ _IA2V_WORLD_CONTAMINATION_HIGH_CONFIDENCE_TOKENS: tuple[str, ...] = (
     "visual story beat",
 )
 _IA2V_WORLD_CONTAMINATION_LOCATION_SENSITIVE_TOKENS: tuple[str, ...] = ("street", "courtyard")
+
+
+def _remove_physical_character1_from_i2v_text(text: str) -> tuple[str, bool]:
+    src = str(text or "")
+    if not src.strip():
+        return src, False
+    chunks = re.split(r"(?<=[.!?;])\s+", src)
+    removed = False
+    kept: list[str] = []
+    physical_patterns = [
+        r"(?i)\bolder\s+character_1\b",
+        r"(?i)\bcharacter_1\b.{0,120}\b(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)\b",
+        r"(?i)\bolder\s+(man|hero|vocalist|version)\b.{0,120}\b(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)\b",
+        r"(?i)\bpresent[- ]day\s+(vocalist|hero|man)\b.{0,120}\b(visible|seen|stands|standing|watches|observing|presence|silhouette|figure)\b",
+    ]
+    safe_patterns = [r"(?i)offscreen", r"(?i)voiceover only", r"(?i)not physically visible", r"(?i)memory voiceover"]
+    for chunk in chunks:
+        c = chunk.strip()
+        if not c:
+            continue
+        has_physical = any(re.search(p, c) for p in physical_patterns)
+        is_safe = any(re.search(p, c) for p in safe_patterns)
+        if has_physical and not is_safe:
+            removed = True
+            continue
+        kept.append(c)
+    return " ".join(kept).strip(), removed
+
+
+def _remove_physical_character2_from_ia2v_text(text: str) -> tuple[str, bool]:
+    src = str(text or "")
+    if not src.strip():
+        return src, False
+    chunks = re.split(r"(?<=[.!?;])\s+", src)
+    removed = False
+    kept: list[str] = []
+    for chunk in chunks:
+        c = chunk.strip()
+        if not c:
+            continue
+        has_character2 = bool(re.search(r"(?i)\bcharacter_2\b", c))
+        has_safe_non_physical = any(p.search(c) for p in _SPLIT_TIMELINE_ALLOWED_CHARACTER2_NON_PHYSICAL_PATTERNS)
+        has_physical = any(p.search(c) for p in _SPLIT_TIMELINE_IA2V_CHARACTER2_PHYSICAL_PATTERNS)
+        if has_character2 and (has_physical or not has_safe_non_physical):
+            removed = True
+            continue
+        kept.append(c)
+    return " ".join(kept).strip(), removed
 _IA2V_PROTECTED_ANCHOR_PREFIXES: tuple[str, ...] = (
     "performance location anchor:",
     "route default world anchor:",
@@ -5251,6 +5306,10 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
     male_identity_leak_fields: list[str] = []
     male_identity_leak_matches: list[dict[str, str]] = []
     lip_sync_only_i2v_violation_segments: list[str] = []
+    split_timeline_visible_character1_remaining_segments: list[str] = []
+    split_timeline_visible_character1_remaining_fields: list[str] = []
+    split_timeline_visible_character2_remaining_segments: list[str] = []
+    split_timeline_contract = _is_split_timeline_contract_from_sources(story_core={}, scene_rows=prompt_rows)
     lip_sync_only = _is_lip_sync_only_character_1(package)
     character_1_gender_hint = _get_character_1_gender_hint(package)
     transition_required_count = 0
@@ -5314,6 +5373,40 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
             )
             if any(pattern.search(i2v_blob) for pattern in _LIP_SYNC_ONLY_I2V_VIOLATION_PATTERNS):
                 lip_sync_only_i2v_violation_segments.append(segment_id)
+        timeline_role_value = str(
+            row.get("timeline_role")
+            or row.get("timeline")
+            or prompt_row.get("timeline_role")
+            or prompt_row.get("timeline")
+            or ""
+        ).strip().lower()
+        if split_timeline_contract and route == "i2v" and ("past" in timeline_role_value or "flashback" in timeline_role_value):
+            for field in (
+                "photo_prompt",
+                "video_prompt",
+                "positive_video_prompt",
+                "negative_prompt",
+                "first_frame_prompt",
+                "last_frame_prompt",
+            ):
+                field_text = str(row.get(field) or "")
+                if any(p.search(field_text) for p in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS):
+                    split_timeline_visible_character1_remaining_segments.append(segment_id)
+                    split_timeline_visible_character1_remaining_fields.append(f"{segment_id}:{field}")
+            prompt_notes = _safe_dict(row.get("prompt_notes"))
+            for idx, note in enumerate(_safe_list(prompt_notes.get("notes"))):
+                if any(p.search(str(note or "")) for p in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS):
+                    split_timeline_visible_character1_remaining_segments.append(segment_id)
+                    split_timeline_visible_character1_remaining_fields.append(f"{segment_id}:prompt_notes.notes[{idx}]")
+            if any(p.search(str(prompt_notes.get("world_anchor") or "")) for p in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS):
+                split_timeline_visible_character1_remaining_segments.append(segment_id)
+                split_timeline_visible_character1_remaining_fields.append(f"{segment_id}:prompt_notes.world_anchor")
+        if split_timeline_contract and route == "ia2v" and "present" in timeline_role_value:
+            ia2v_blob = " ".join(
+                [str(row.get("photo_prompt") or ""), str(row.get("video_prompt") or ""), str(row.get("positive_video_prompt") or "")]
+            )
+            if any(p.search(ia2v_blob) for p in _SPLIT_TIMELINE_IA2V_CHARACTER2_PHYSICAL_PATTERNS):
+                split_timeline_visible_character2_remaining_segments.append(segment_id)
 
         blob = " ".join(
             [
@@ -5376,6 +5469,21 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
                 dict.fromkeys([seg for seg in lip_sync_only_i2v_violation_segments if seg])
             ),
             "scene_prompts_active_code_path": "scenario_scene_prompter_split_timeline_v3",
+        }
+    if split_timeline_visible_character1_remaining_segments:
+        return "PROMPTS_SPLIT_TIMELINE_VISIBLE_CHARACTER1_IN_I2V", "split_timeline_visible_character1_in_i2v", {
+            "scene_prompts_split_timeline_visible_character1_remaining_segments": list(
+                dict.fromkeys([seg for seg in split_timeline_visible_character1_remaining_segments if seg])
+            ),
+            "scene_prompts_split_timeline_visible_character1_remaining_fields": list(
+                dict.fromkeys([fld for fld in split_timeline_visible_character1_remaining_fields if fld])
+            ),
+        }
+    if split_timeline_visible_character2_remaining_segments:
+        return "PROMPTS_SPLIT_TIMELINE_VISIBLE_CHARACTER2_IN_IA2V", "split_timeline_visible_character2_in_ia2v", {
+            "scene_prompts_split_timeline_visible_character2_remaining_segments": list(
+                dict.fromkeys([seg for seg in split_timeline_visible_character2_remaining_segments if seg])
+            )
         }
 
     return "", "", {
@@ -5491,30 +5599,53 @@ def _sanitize_identity_and_visibility_conflicts(
                 lip_sync_only_i2v_character2_preserved_segments.append(segment_id)
         if split_timeline_contract and route == "i2v" and ("past" in timeline_role_value or "flashback" in timeline_role_value):
             removed_visible_character1 = False
-            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+            for field in (
+                "photo_prompt",
+                "video_prompt",
+                "positive_video_prompt",
+                "negative_prompt",
+                "first_frame_prompt",
+                "last_frame_prompt",
+            ):
                 field_value = str(seg.get(field) or "")
                 if not field_value:
                     continue
-                cleaned_value = field_value
-                for pattern in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS:
-                    cleaned_value = pattern.sub(" ", cleaned_value)
-                cleaned_value = re.sub(r"\s{2,}", " ", cleaned_value).strip(" .")
-                if cleaned_value != field_value:
+                cleaned_value, field_removed = _remove_physical_character1_from_i2v_text(field_value)
+                if field_removed:
                     removed_visible_character1 = True
-                seg[field] = _append_prompt_clause(cleaned_value, _SPLIT_TIMELINE_SAFE_I2V_OFFSCREEN_CLAUSE)
+                seg[field] = cleaned_value
+            prompt_notes = dict(_safe_dict(seg.get("prompt_notes")))
+            world_anchor = str(prompt_notes.get("world_anchor") or "")
+            if re.search(r"(?i)\bcharacter_1\b", world_anchor):
+                cleaned_anchor, anchor_removed = _remove_physical_character1_from_i2v_text(world_anchor)
+                if anchor_removed:
+                    removed_visible_character1 = True
+                prompt_notes["world_anchor"] = cleaned_anchor
+            notes = [str(v or "") for v in _safe_list(prompt_notes.get("notes"))]
+            notes_changed = False
+            for idx, note in enumerate(notes):
+                cleaned_note, note_removed = _remove_physical_character1_from_i2v_text(note)
+                if note_removed:
+                    removed_visible_character1 = True
+                    notes[idx] = cleaned_note
+                    notes_changed = True
+            if notes_changed:
+                prompt_notes["notes"] = notes
+            if prompt_notes:
+                seg["prompt_notes"] = prompt_notes
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+                seg[field] = _append_prompt_clause(str(seg.get(field) or ""), _SPLIT_TIMELINE_SAFE_I2V_OFFSCREEN_CLAUSE)
             if removed_visible_character1 and segment_id:
                 split_timeline_visible_character1_removed_from_i2v_segments.append(segment_id)
+                mutated = True
         if split_timeline_contract and route == "ia2v" and ("present" in timeline_role_value):
             downgraded_character2 = False
-            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt", "negative_prompt", "first_frame_prompt", "last_frame_prompt"):
                 field_value = str(seg.get(field) or "")
                 if not field_value:
                     continue
-                cleaned_value = field_value
-                for pattern in _SPLIT_TIMELINE_IA2V_CHARACTER2_PHYSICAL_PATTERNS:
-                    cleaned_value = pattern.sub(" ", cleaned_value)
-                cleaned_value = re.sub(r"\s{2,}", " ", cleaned_value).strip(" .")
-                if cleaned_value != field_value:
+                cleaned_value, field_removed = _remove_physical_character2_from_ia2v_text(field_value)
+                if field_removed:
                     downgraded_character2 = True
                     seg[field] = cleaned_value
             if downgraded_character2:
