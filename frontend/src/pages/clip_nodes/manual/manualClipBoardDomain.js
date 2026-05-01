@@ -21,6 +21,31 @@ export function getDefaultManualClipNodeData() {
   };
 }
 
+export function normalizeManualAudio(audio = null) {
+  if (!audio || typeof audio !== "object") return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
+  const url = String(audio.url || audio.value || audio.href || "").trim();
+  const filename = String(audio.filename || audio.fileName || audio.name || audio.meta?.filename || "").trim();
+  const durationSecRaw = Number(
+    audio.duration_sec
+    ?? audio.durationSec
+    ?? audio.duration
+    ?? audio.meta?.duration_sec
+    ?? audio.meta?.duration
+    ?? 0
+  );
+  const durationMsRaw = Number(
+    audio.duration_ms
+    ?? audio.durationMs
+    ?? audio.meta?.duration_ms
+    ?? 0
+  );
+  const duration_sec = Number.isFinite(durationSecRaw) ? Number(durationSecRaw.toFixed(3)) : 0;
+  const duration_ms = Number.isFinite(durationMsRaw) && durationMsRaw > 0
+    ? Math.round(durationMsRaw)
+    : Math.round(duration_sec * 1000);
+  return { url, filename, duration_sec, duration_ms };
+}
+
 export function buildMockSplitJson(durationSec = 24) {
   const total = Math.max(12, Number(durationSec) || 24);
   const scenes = [

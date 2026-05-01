@@ -1,14 +1,17 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
-import { buildMockSplitJson, buildMontageManifest, getDefaultManualClipNodeData, normalizeScene, ROUTES } from "./manualClipBoardDomain";
+import { buildMockSplitJson, buildMontageManifest, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, ROUTES } from "./manualClipBoardDomain";
 
 export default function ManualClipBoardNode({ id, data }) {
   const patch = (p) => data?.onPatchNodeData?.(id, p);
   const model = { ...getDefaultManualClipNodeData(), ...(data || {}) };
   const [splitInput, setSplitInput] = useState(model?.split_chat?.user_request || "");
   const scenes = Array.isArray(model.scenes) ? model.scenes : [];
+  const connectedAudio = data?.connectedInputs?.audio_in || data?.connectedAudio || data?.audioInput || null;
+  const normalizedConnectedAudio = normalizeManualAudio(connectedAudio);
+  const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : model.audio;
   const aiScenes = Array.isArray(model?.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : [];
   const selectedScene = scenes.find((s) => s.scene_id === model.selectedSceneId) || scenes[0] || null;
 
@@ -22,6 +25,7 @@ export default function ManualClipBoardNode({ id, data }) {
       const durationSec = Number(audioEl.duration || 0);
       patch({
         step: "audio_loaded",
+        audio_source: "local_upload",
         audio: {
           url,
           filename: file.name,
@@ -34,6 +38,7 @@ export default function ManualClipBoardNode({ id, data }) {
     audioEl.onerror = () => {
       patch({
         step: "audio_loaded",
+        audio_source: "local_upload",
         audio: {
           url,
           filename: file.name,
@@ -48,7 +53,7 @@ export default function ManualClipBoardNode({ id, data }) {
 
   const onAskSplit = () => patch({ step: "split_chat_ready" });
   const onRunMockSplit = () => {
-    const ai = buildMockSplitJson(model?.audio?.duration_sec || 24);
+    const ai = buildMockSplitJson(effectiveAudio?.duration_sec || 24);
     patch({ step: "split_chat_ready", split_chat: { user_request: splitInput, ai_summary: ai.global_hint, raw_ai_json: ai } });
   };
   const onBuildScenes = () => {
@@ -58,6 +63,15 @@ export default function ManualClipBoardNode({ id, data }) {
   };
 
   const scenePreview = useMemo(() => buildMontageManifest(model), [model]);
+  useEffect(() => {
+    if (model.step === "empty" && normalizedConnectedAudio?.url) {
+      patch({
+        step: "audio_loaded",
+        audio: normalizedConnectedAudio,
+        audio_source: "connected_audio_node",
+      });
+    }
+  }, [model.step, normalizedConnectedAudio?.url]);
 
   const updateScene = (sceneId, patchScene) => {
     const next = scenes.map((s) => (s.scene_id === sceneId ? normalizeScene({ ...s, ...patchScene, status: resolveStatus({ ...s, ...patchScene }) }, s.index - 1) : s));
@@ -76,14 +90,14 @@ export default function ManualClipBoardNode({ id, data }) {
   return <NodeShell title="AI-разбивка клипа" onClose={() => data?.onRemoveNode?.(id)} icon={<span>✂️</span>} className="clipSB_nodeStoryboard manualClipBoardNode">
     <div className="manualClipBoardNode_body">
       {model.step === "empty" ? <div className="manualLockedState">
-        <h3>Загрузите аудио, чтобы начать</h3>
+        <h3>Подключите аудио-ноду или загрузите аудио вручную</h3>
         <label className="clipSB_btn">
           Загрузить аудио
           <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} hidden />
         </label>
       </div> : model.step === "director_board" && selectedScene ? <div className="manualBoardLayout"><div className="manualSceneList">{scenes.map((s) => <button key={s.scene_id} className="manualSceneItem" onClick={() => patch({ selectedSceneId: s.scene_id })}>{s.scene_id.toUpperCase()} · {s.start_sec}-{s.end_sec} · {s.status}</button>)}</div><div className="manualSceneCard"><input value={selectedScene.drama_hint} onChange={(e) => updateScene(selectedScene.scene_id, { drama_hint: e.target.value })} /><select value={selectedScene.route} onChange={(e) => updateScene(selectedScene.scene_id, { route: e.target.value })}>{ROUTES.map((r) => <option key={r} value={r}>{r}</option>)}</select><textarea placeholder="video_prompt" value={selectedScene.video_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { video_prompt: e.target.value })} /><textarea placeholder="negative_prompt" value={selectedScene.negative_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { negative_prompt: e.target.value })} />{selectedScene.route === "i2v_sound" ? <textarea placeholder="sound_prompt" value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /> : null}<input type="file" accept="image/*" onChange={(e) => updateScene(selectedScene.scene_id, { image_url: URL.createObjectURL(e.target.files?.[0]) })} /><div>{selectedScene.image_url ? <img alt="scene" src={selectedScene.image_url} className="manualPreview" /> : "Нет превью"}</div><div>{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div>Mock video ready</div> : <video src={selectedScene.video_url} controls className="manualPreview" />) : "Видео не создано"}</div><button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { status: "video_ready", video_url: "mock://manual-video-ready" })}>Создать видео</button><pre>{JSON.stringify(scenePreview, null, 2)}</pre></div></div> : <div>
         <div className="manualHeaderRow">
-          <div className="manualChip">Аудио: {model.audio?.url ? "готово" : "пусто"}</div>
+          <div className="manualChip">Аудио: {model.audio_source === "connected_audio_node" ? "подключено" : model.audio_source === "local_upload" ? "локальное" : effectiveAudio?.url ? "готово" : "пусто"}</div>
           <div className="manualChip">Разбивка: {model.split_chat?.raw_ai_json ? "готово" : "пусто"}</div>
           <div className="manualChip">Сцен: {scenes.length}</div>
           <div className="manualChip">Режим: Клип</div>
@@ -124,12 +138,12 @@ export default function ManualClipBoardNode({ id, data }) {
 
           <section className="manualPanel">
             <h4>Аудио-разбор</h4>
-            <div>filename: {model.audio?.filename || "—"}</div>
-            <div>duration_sec: {Number(model.audio?.duration_sec || 0).toFixed(2)}</div>
+            <div>filename: {effectiveAudio?.filename || "—"}</div>
+            <div>duration_sec: {Number(effectiveAudio?.duration_sec || 0).toFixed(2)}</div>
             <div>split_type: phrase_based</div>
             <div>candidate phrase boundaries: [0.00, 3.65, 8.20, 12.80]</div>
             <div>Анализ будет подключен позже</div>
-            <button className="clipSB_btn" onClick={() => navigator.clipboard?.writeText(JSON.stringify(model.audio || {}, null, 2))}>Скопировать audio_map JSON</button>
+            <button className="clipSB_btn" onClick={() => navigator.clipboard?.writeText(JSON.stringify(effectiveAudio || {}, null, 2))}>Скопировать audio_map JSON</button>
             <button className="clipSB_btn" onClick={() => navigator.clipboard?.writeText("Анализ будет подключен позже")}>Скопировать анализ</button>
             <button className="clipSB_btn" onClick={() => navigator.clipboard?.writeText("0.00|3.65|8.20|12.80")}>Скопировать фразы</button>
           </section>
