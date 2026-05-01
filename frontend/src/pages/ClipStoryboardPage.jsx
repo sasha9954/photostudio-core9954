@@ -56,6 +56,7 @@ import {
   normalizeScenarioStoryboardPackage,
   resolveCanonicalSegmentId,
   resolveScenarioSceneVideoProfile,
+  resolveScenarioExpectedImageRoleFromSources,
   resolveSceneDisplayTime,
   resolveScenarioExplicitModelKey,
   resolveScenarioExplicitWorkflowKey,
@@ -15216,9 +15217,46 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         ...(Array.isArray(derivedRoleContract?.sceneActiveRoles) ? derivedRoleContract.sceneActiveRoles : []),
         ...SCENARIO_IMAGE_CAST_ROLE_KEYS.filter((role) => Array.isArray(refsByRoleEffective?.[role]) && refsByRoleEffective[role].length > 0),
       ])];
-      const expectedRole = resolveScenarioExpectedImageRole({
-        ...(targetScene || {}),
-        ...(refsForImageRequest || {}),
+      const sceneFinalPayload = targetScene?.final_payload && typeof targetScene.final_payload === "object"
+        ? targetScene.final_payload
+        : (targetScene?.finalPayload && typeof targetScene.finalPayload === "object" ? targetScene.finalPayload : {});
+      const segmentLookupId = targetScene?.segment_id
+        || targetScene?.segmentId
+        || targetScene?.scene_id
+        || targetScene?.sceneId
+        || sceneId
+        || "";
+      const renderManifestRow = resolveStoryboardSceneBySegmentId(
+        segmentLookupId,
+        scenarioPackageForImage?.final_storyboard,
+        { render_manifest: scenarioPackageForImage?.final_storyboard?.render_manifest },
+        { renderManifest: scenarioPackageForImage?.final_storyboard?.renderManifest },
+      ) || {};
+      const finalStoryboardScene = resolveStoryboardSceneBySegmentId(
+        segmentLookupId,
+        scenarioPackageForImage?.final_storyboard,
+      ) || {};
+      const expectedRoleResolution = resolveScenarioExpectedImageRoleFromSources({
+        targetScene,
+        sceneFinalPayload,
+        renderManifestRow,
+        finalStoryboardScene,
+        refsForImageRequest,
+      });
+      const expectedRole = expectedRoleResolution?.role
+        || resolveScenarioExpectedImageRole(refsForImageRequest || {});
+      const chosenExpectedRoleSource = expectedRoleResolution?.source || "refsForImageRequest.fallback";
+      console.info("[SCENARIO EXPECTED ROLE RESOLUTION]", {
+        sceneId,
+        segmentId: targetScene?.segment_id || targetScene?.segmentId || "",
+        targetScenePrimaryRole: targetScene?.primaryRole || targetScene?.primary_role || "",
+        targetSceneRefsUsed: targetScene?.refsUsed || targetScene?.refs_used || [],
+        finalPayloadPrimaryRole: sceneFinalPayload?.primaryRole || sceneFinalPayload?.primary_role || "",
+        renderManifestPrimaryRole: renderManifestRow?.primaryRole || renderManifestRow?.primary_role || "",
+        renderManifestRefsUsed: renderManifestRow?.refsUsed || renderManifestRow?.refs_used || [],
+        refsForImageRequestPrimaryRole: refsForImageRequest?.primaryRole || refsForImageRequest?.primary_role || "",
+        chosenExpectedRole: expectedRole,
+        chosenExpectedRoleSource,
       });
       const requestedPrimaryRole = normalizeScenarioRoleName(expectedRole || refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "");
       let primaryRoleEffective = SCENARIO_IMAGE_WORLD_ROLE_KEYS.includes(requestedPrimaryRole) ? "" : String(requestedPrimaryRole || "").trim();
@@ -15371,12 +15409,12 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       const framePrompt = (isTwoFrameScene && wardrobeLockForImagePayload)
         ? buildWardrobeLockPromptForHumanScene(framePromptRaw)
         : framePromptRaw;
-      const sceneFinalPayload = targetScene?.final_payload && typeof targetScene.final_payload === "object"
+      const sceneFinalPayloadForPrompt = targetScene?.final_payload && typeof targetScene.final_payload === "object"
         ? targetScene.final_payload
         : (targetScene?.finalPayload && typeof targetScene.finalPayload === "object" ? targetScene.finalPayload : null);
       let imagePromptEffective = String(
         (isTwoFrameScene ? framePrompt : "")
-        || sceneFinalPayload?.image_prompt
+        || sceneFinalPayloadForPrompt?.image_prompt
         || promptContext?.imagePrompt
         || targetScene?.image_prompt
         || targetScene?.scene_prompt

@@ -3016,3 +3016,42 @@ export function shouldClearStoryboardRuntime({
   if (normalizedReason === "manual_reset" || normalizedReason === "upstream_semantic_change") return true;
   return false;
 }
+
+export function resolveScenarioExpectedImageRoleFromSources({
+  targetScene = {},
+  sceneFinalPayload = {},
+  renderManifestRow = {},
+  finalStoryboardScene = {},
+  refsForImageRequest = {},
+} = {}) {
+  const normalizeRole = (value) => {
+    const role = normalizeText(value).toLowerCase();
+    return /^character_\d+$/.test(role) ? role : "";
+  };
+  const firstCharacter = (value) => {
+    const list = Array.isArray(value) ? value : [];
+    return list.map((item) => normalizeRole(item)).find(Boolean) || "";
+  };
+  const firstCharacterKey = (value) => firstCharacter(Array.isArray(value) ? value : Object.keys(normalizeObjectMap(value)));
+  const pickRoleFromSource = (source = {}) => (
+    normalizeRole(source?.primaryRole || source?.primary_role)
+    || normalizeRole(source?.visualFocusRole || source?.visual_focus_role)
+    || firstCharacter(source?.refsUsed || source?.refs_used)
+    || firstCharacterKey(source?.refsByRole || source?.refs_by_role)
+    || firstCharacterKey(source?.linked_assets?.character_refs_for_active_role || {})
+    || firstCharacter(source?.mustAppear || source?.must_appear)
+    || firstCharacter(source?.sceneActiveRoles || source?.scene_active_roles)
+  );
+
+  const orderedSources = [
+    { label: "targetScene", source: targetScene },
+    { label: "sceneFinalPayload", source: sceneFinalPayload },
+    { label: "renderManifestRow", source: renderManifestRow },
+    { label: "finalStoryboardScene", source: finalStoryboardScene },
+  ];
+  for (const entry of orderedSources) {
+    const role = pickRoleFromSource(entry.source);
+    if (role) return { role, source: entry.label };
+  }
+  return { role: "", source: "" };
+}
