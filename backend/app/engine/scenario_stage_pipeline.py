@@ -12685,13 +12685,20 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     for idx, segment in enumerate(final_segments, start=1):
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
-        scene_id = str(segment_id or segment.get("scene_id") or "").strip()
+        fallback_scene_id = f"sc_{idx:02d}"
+        prompts_row = _safe_dict(prompts_by_id.get(segment_id))
+        scene_id = str(
+            segment.get("scene_id")
+            or _safe_dict(plan_by_id.get(segment_id) or {}).get("scene_id")
+            or prompts_row.get("scene_id")
+            or fallback_scene_id
+        ).strip()
         plan_row = _safe_dict(plan_by_id.get(segment_id) or plan_by_id.get(scene_id) or {})
         if not plan_row:
             finalize_missing_plan_row_count += 1
             plan_row = segment
             finalize_used_segment_as_plan_row_count += 1
-        prompts_row = _safe_dict(prompts_by_id.get(segment_id) or prompts_by_id.get(scene_id))
+        prompts_row = _safe_dict(prompts_row or prompts_by_id.get(segment_id) or prompts_by_id.get(scene_id))
         role_casting_row = _safe_dict(role_casting_by_id.get(segment_id) or role_casting_by_id.get(scene_id))
 
         route_payload = _safe_dict(segment.get("route_payload"))
@@ -12770,6 +12777,33 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "prompt_source": final_prompt_source,
         }
 
+        resolved_render_mode = str(
+            segment.get("renderMode")
+            or segment.get("render_mode")
+            or video_metadata.get("renderMode")
+            or video_metadata.get("render_mode")
+            or route_payload.get("renderMode")
+            or route_payload.get("render_mode")
+            or ""
+        ).strip()
+        resolved_workflow_key = str(
+            segment.get("resolvedWorkflowKey")
+            or segment.get("resolved_workflow_key")
+            or video_metadata.get("resolvedWorkflowKey")
+            or video_metadata.get("resolved_workflow_key")
+            or route_payload.get("resolvedWorkflowKey")
+            or route_payload.get("resolved_workflow_key")
+            or ""
+        ).strip()
+        resolved_ltx_mode = str(
+            segment.get("ltxMode")
+            or segment.get("ltx_mode")
+            or video_metadata.get("ltxMode")
+            or video_metadata.get("ltx_mode")
+            or route_payload.get("ltxMode")
+            or route_payload.get("ltx_mode")
+            or ""
+        ).strip()
         manifest_row = {
             "segment_id": segment_id,
             "scene_id": scene_id,
@@ -12779,9 +12813,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "duration_sec": duration_sec,
             },
             "route": route,
-            "renderMode": str(video_metadata.get("render_mode") or route_payload.get("render_mode") or "").strip(),
-            "resolvedWorkflowKey": str(segment.get("resolved_workflow_key") or video_metadata.get("resolved_workflow_key") or "").strip(),
-            "ltxMode": str(video_metadata.get("ltx_mode") or route_payload.get("ltx_mode") or "").strip(),
+            "renderMode": resolved_render_mode,
+            "resolvedWorkflowKey": resolved_workflow_key,
+            "ltxMode": resolved_ltx_mode,
             "lipSync": bool(video_metadata.get("lip_sync") or route == "ia2v"),
             "requiresAudioSensitiveVideo": bool(segment.get("requires_audio_sensitive_video") or route == "ia2v"),
             "image_prompt": final_image_prompt,
@@ -12828,8 +12862,12 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             if str(value or "").strip()
         )
         active_warning_roles = list(dict.fromkeys([role for role in active_warning_roles if role]))
-        if "character_1" in active_warning_roles and not _safe_list(_safe_dict(linked_assets.get("character_refs_for_active_role")).get("character_1")):
-            final_missing_character_ref_segments.append(segment_id)
+        character_refs_for_active_role = _safe_dict(linked_assets.get("character_refs_for_active_role"))
+        for role in active_warning_roles:
+            if not str(role).startswith("character_"):
+                continue
+            if not _safe_list(character_refs_for_active_role.get(str(role))):
+                final_missing_character_ref_segments.append(f"{segment_id}:{role}")
 
         compat_scenes.append(
             {
