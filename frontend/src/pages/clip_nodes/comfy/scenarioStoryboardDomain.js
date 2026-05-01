@@ -2413,9 +2413,8 @@ export function normalizeScenarioStoryboardPackage({
     const segId = normalizeText(safeRow?.segment_id ?? safeRow?.segmentId);
     const sceneId = normalizeText(safeRow?.sceneId ?? safeRow?.scene_id);
     if (!segId && !sceneId) return;
-    const lookup = segId || sceneId;
-    if (!lookup) return;
-    persistedSceneBySegmentId.set(lookup, safeRow);
+    if (segId) persistedSceneBySegmentId.set(segId, safeRow);
+    if (sceneId) persistedSceneBySegmentId.set(sceneId, safeRow);
   };
   (Array.isArray(safeSourcePackage?.scenes) ? safeSourcePackage.scenes : []).forEach(registerPersistedSceneRow);
   (Array.isArray(safeSourcePackage?.final_storyboard?.scenes) ? safeSourcePackage.final_storyboard.scenes : []).forEach(registerPersistedSceneRow);

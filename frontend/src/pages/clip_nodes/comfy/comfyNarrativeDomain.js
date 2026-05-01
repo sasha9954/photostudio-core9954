@@ -952,7 +952,7 @@ export function normalizeDirectorV2RuntimeStateOnHydrate(nodeData = {}) {
       acc[stageId] = current;
       return acc;
     }
-    const packageKey = stageId === "final" ? "final_payload" : ({
+    const packageKey = stageId === "final" ? "final_storyboard" : ({
       core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt",
     }[stageId] || "");
     const stageOutput = current?.editedOutput ?? current?.output;
