@@ -23491,7 +23491,7 @@ onClipSec: (nodeId, value) => {
               onRunDirectorV2PipelineStage: async (nodeId, stageKey, runtime = {}) => {
                 try {
                   const stageMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
-                  const packageKeyMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
+                  const packageKeyMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_storyboard" };
                   const stageId = stageMap[String(stageKey || "")] || "";
                   if (!stageId) return { ok: false, error: "Неизвестный этап" };
                   const activeNodes = nodesRef.current || [];
@@ -23521,8 +23521,8 @@ onClipSec: (nodeId, value) => {
                   const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload, signal: runtime?.signal });
                   if (!response?.ok) return { ok: false, error: response?.detail || "Ошибка генерации этапа" };
                   const storyboardPackage = response?.storyboardPackage || {};
-                  const keyMap = { core: 'story_core', roles: 'role_plan', scenes: 'scene_plan', scene_detail: 'scene_detail', prompts: 'scene_prompts', final_video_prompt: 'final_video_prompt', final: 'final_payload' };
-                  const output = storyboardPackage?.[keyMap[stageKey]] || storyboardPackage?.render_manifest || storyboardPackage?.finalize || null;
+                  const keyMap = { core: 'story_core', roles: 'role_plan', scenes: 'scene_plan', scene_detail: 'scene_detail', prompts: 'scene_prompts', final_video_prompt: 'final_video_prompt', final: 'final_storyboard' };
+                  const output = storyboardPackage?.[keyMap[stageKey]] || (stageId === 'finalize' ? storyboardPackage?.final_storyboard : null) || storyboardPackage?.render_manifest || storyboardPackage?.finalize || null;
                   return { ok: true, output, storyboardPackage, stageStatuses: storyboardPackage?.stage_statuses || {} };
                 } catch (error) {
                   return { ok: false, error: String(error?.message || error || 'stage_failed') };

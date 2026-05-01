@@ -17,7 +17,7 @@ const TABS = [
   { id: "scene_plan", label: "SCENE PLAN" },
   { id: "scene_prompts", label: "PROMPTS" },
   { id: "final_video_prompt", label: "FINAL VIDEO PROMPT" },
-  { id: "final", label: "FINAL" },
+  { id: "finalize", label: "FINAL" },
   { id: "diagnostics", label: "DIAGNOSTICS" },
   { id: "raw", label: "RAW JSON" },
 ];
@@ -29,7 +29,7 @@ const TAB_STAGE_ID = {
   scene_plan: "scene_plan",
   scene_prompts: "scene_prompts",
   final_video_prompt: "final_video_prompt",
-  final: "finalize",
+  finalize: "finalize",
 };
 
 const FINALIZE_UPSTREAM_STAGES = [
@@ -237,6 +237,7 @@ export default function ScenarioPipelineDebugEditor({
     return { ...stage, status, error, statusColor: colorByStatus[status] || colorByStatus.idle };
   }), [stageStatuses]);
   const activeStageStatus = String(stageStatuses?.[TAB_STAGE_ID[activeTab]]?.status || "").trim().toLowerCase();
+  const finalizeStatus = String(stageStatuses?.finalize?.status || "").trim().toLowerCase();
 
   const executeStageRun = async (stageId, autoRun = false) => {
     if (typeof onRunPipelineStage !== "function") return;
@@ -526,7 +527,7 @@ export default function ScenarioPipelineDebugEditor({
         <div className="clipSB_storyboardKv"><span>FINAL VIDEO PROMPT</span><strong>final_video_prompt empty</strong></div>
       </div>
     ),
-    final: (
+    finalize: (
       <div>
         <div className="clipSB_storyboardKv"><span>director_mode</span><strong>{String(finalMeta?.director_mode || "—")}</strong></div>
         <div className="clipSB_storyboardKv"><span>story_truth_source</span><strong>{String(finalMeta?.story_truth_source || "—")}</strong></div>
@@ -549,7 +550,11 @@ export default function ScenarioPipelineDebugEditor({
             <strong>{String(allDiagnostics?.finalize_has_both_scene_casting_and_scene_roles)}</strong>
           </div>
         ) : null}
-        <pre className="clipSB_pre">{toJson(finalStoryboard?.scenes || [])}</pre>
+        <div className="clipSB_storyboardKv"><span>stage_statuses.finalize.status</span><strong>{finalizeStatus || "—"}</strong></div>
+        <div className="clipSB_storyboardKv"><span>FINAL badge</span><strong>{finalizeStatus === "done" ? "confirmed/done" : (finalizeStatus === "ready" ? "ready" : (finalizeStatus || "idle"))}</strong></div>
+        <div className="clipSB_storyboardKv"><span>render_manifest_count</span><strong>{Array.isArray(finalStoryboard?.render_manifest) ? finalStoryboard.render_manifest.length : 0}</strong></div>
+        <div className="clipSB_storyboardKv"><span>scene_count</span><strong>{Array.isArray(finalStoryboard?.scenes) ? finalStoryboard.scenes.length : 0}</strong></div>
+        <pre className="clipSB_pre">{toJson(finalStoryboard)}</pre>
       </div>
     ),
     diagnostics: <pre className="clipSB_pre">{toJson(allDiagnostics)}</pre>,
