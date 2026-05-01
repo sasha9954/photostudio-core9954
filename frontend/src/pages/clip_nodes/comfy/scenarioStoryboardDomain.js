@@ -2507,12 +2507,12 @@ export function normalizeScenarioStoryboardPackage({
       video_metadata: (safeScene?.video_metadata && typeof safeScene.video_metadata === "object")
         ? safeScene.video_metadata
         : (manifestRow?.video_metadata && typeof manifestRow.video_metadata === "object" ? manifestRow.video_metadata : {}),
-      route_payload: (safeScene?.route_payload && typeof safeScene.route_payload === "object")
-        ? safeScene.route_payload
-        : (manifestRow?.route_payload && typeof manifestRow.route_payload === "object" ? manifestRow.route_payload : {}),
-      engine_hints: (safeScene?.engine_hints && typeof safeScene.engine_hints === "object")
-        ? safeScene.engine_hints
-        : (manifestRow?.engine_hints && typeof manifestRow.engine_hints === "object" ? manifestRow.engine_hints : {}),
+      route_payload: (manifestRow?.route_payload && typeof manifestRow.route_payload === "object")
+        ? manifestRow.route_payload
+        : (safeScene?.route_payload && typeof safeScene.route_payload === "object" ? safeScene.route_payload : {}),
+      engine_hints: (manifestRow?.engine_hints && typeof manifestRow.engine_hints === "object")
+        ? manifestRow.engine_hints
+        : (safeScene?.engine_hints && typeof safeScene.engine_hints === "object" ? safeScene.engine_hints : {}),
     };
   });
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
