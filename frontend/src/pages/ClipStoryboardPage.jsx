@@ -1799,7 +1799,10 @@ function findScenarioRowByAnyId(rows = [], ids = []) {
   const idSet = new Set((Array.isArray(ids) ? ids : [])
     .map((value) => String(value || "").trim().toLowerCase())
     .filter(Boolean));
-  return (Array.isArray(rows) ? rows : []).find((row) => {
+
+  if (!idSet.size) return null;
+
+  const hit = (Array.isArray(rows) ? rows : []).find((row) => {
     const candidates = [
       row?.segment_id,
       row?.segmentId,
@@ -1812,7 +1815,9 @@ function findScenarioRowByAnyId(rows = [], ids = []) {
       extractBaseSegmentId(row?.segmentId),
     ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
     return candidates.some((value) => idSet.has(value));
-  }) || {};
+  });
+
+  return hit || null;
 }
 
 const SCENARIO_IMAGE_RULE_ONLY_KEYWORDS = [
@@ -15280,15 +15285,22 @@ const extractUrlsFromConnectedInputValue = (value) => {
       const finalStoryboardScene = findScenarioRowByAnyId(scenarioPackageForImage?.final_storyboard?.scenes, lookupIds)
         || findScenarioRowByAnyId(scenarioPackageForImage?.final_storyboard?.segments, lookupIds)
         || {};
+      const hasAuthoritativeDataset =
+        hasEmbeddedRenderManifestRow
+        || Array.isArray(renderManifestRows)
+        || Array.isArray(renderManifestRowsAlt)
+        || Array.isArray(scenarioPackageForImage?.final_storyboard?.scenes)
+        || Array.isArray(scenarioPackageForImage?.final_storyboard?.segments);
       const renderManifestPrimaryRole = normalizeScenarioRoleName(renderManifestRow?.primaryRole || renderManifestRow?.primary_role || "");
       const finalStoryboardPrimaryRole = normalizeScenarioRoleName(finalStoryboardScene?.primaryRole || finalStoryboardScene?.primary_role || "");
       const embeddedPrimaryRole = normalizeScenarioRoleName(embeddedRenderManifestRow?.primaryRole || embeddedRenderManifestRow?.primary_role || "");
-      if (!renderManifestPrimaryRole && !finalStoryboardPrimaryRole && !embeddedPrimaryRole) {
+      if (hasAuthoritativeDataset && !renderManifestPrimaryRole && !finalStoryboardPrimaryRole && !embeddedPrimaryRole) {
         throw new Error(`image_request_missing_authoritative_scene_row:${sceneId}`);
       }
       console.info("[SCENARIO MANIFEST LOOKUP HARD DEBUG]", {
         sceneId,
         lookupIds,
+        hasAuthoritativeDataset,
         hasEmbeddedRenderManifestRow,
         renderManifestCount: Array.isArray(renderManifestRows) ? renderManifestRows.length : (Array.isArray(renderManifestRowsAlt) ? renderManifestRowsAlt.length : 0),
         finalStoryboardScenesCount: (Array.isArray(scenarioPackageForImage?.final_storyboard?.scenes) ? scenarioPackageForImage.final_storyboard.scenes.length : 0)
