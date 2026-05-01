@@ -15228,13 +15228,13 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         || "";
       const renderManifestRow = resolveStoryboardSceneBySegmentId(
         segmentLookupId,
-        scenarioPackageForImage?.final_storyboard,
         { render_manifest: scenarioPackageForImage?.final_storyboard?.render_manifest },
         { renderManifest: scenarioPackageForImage?.final_storyboard?.renderManifest },
       ) || {};
       const finalStoryboardScene = resolveStoryboardSceneBySegmentId(
         segmentLookupId,
-        scenarioPackageForImage?.final_storyboard,
+        { scenes: scenarioPackageForImage?.final_storyboard?.scenes },
+        { segments: scenarioPackageForImage?.final_storyboard?.segments },
       ) || {};
       const expectedRoleResolution = resolveScenarioExpectedImageRoleFromSources({
         targetScene,
