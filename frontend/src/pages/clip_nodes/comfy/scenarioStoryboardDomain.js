@@ -17,6 +17,14 @@ export function extractBaseSegmentId(value = "") {
 }
 
 export function resolveCanonicalSegmentId(scene = {}, idx = 0) {
+  if (typeof scene === "string" || typeof scene === "number") {
+    const raw = String(scene || "").trim();
+    if (raw) {
+      const direct = extractBaseSegmentId(raw);
+      if (direct) return direct;
+      return raw;
+    }
+  }
   const directSegment = String(scene?.segment_id || scene?.segmentId || "").trim();
   if (directSegment) return directSegment;
 
