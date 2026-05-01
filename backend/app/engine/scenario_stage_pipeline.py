@@ -2198,11 +2198,11 @@ def _final_video_prompt_dependency_payload_ok(package: dict[str, Any], dependenc
         return bool(role_plan) and bool(roster) and (bool(scene_casting) or bool(coverage_ok))
     if dependency_stage_id == "scene_plan":
         scene_plan = _safe_dict(pkg.get("scene_plan"))
-        storyboard = _safe_list(scene_plan.get("storyboard"))
+        scene_rows, _ = _get_scene_plan_rows(scene_plan, pkg)
         coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
         if isinstance(coverage_ok, bool):
-            return bool(scene_plan) and bool(storyboard) and coverage_ok
-        return bool(scene_plan) and bool(storyboard)
+            return bool(scene_plan) and bool(scene_rows) and coverage_ok
+        return bool(scene_plan) and bool(scene_rows)
     if dependency_stage_id == "scene_prompts":
         return _has_valid_scene_prompts_payload_for_final_video_prompt(pkg)
     return _can_reuse_stage_output(pkg, dependency_stage_id)
@@ -2285,8 +2285,8 @@ def _final_video_prompt_dependency_reason(package: dict[str, Any], dependency_st
         scene_plan = _safe_dict(pkg.get("scene_plan"))
         if not scene_plan:
             return "missing_scene_plan_payload"
-        storyboard = _safe_list(scene_plan.get("storyboard"))
-        if not storyboard:
+        scene_rows, _ = _get_scene_plan_rows(scene_plan, pkg)
+        if not scene_rows:
             return "empty_scene_plan_storyboard"
         coverage_ok = diagnostics.get("scene_plan_segment_coverage_ok")
         if isinstance(coverage_ok, bool) and not coverage_ok:
@@ -2398,6 +2398,19 @@ def _collect_final_video_prompt_dependency_gate_state(
     )
     diagnostics["final_video_prompt_dependency_scene_prompts_payload_valid"] = bool(scene_prompts_payload_valid)
     diagnostics["final_video_prompt_dependency_scene_prompts_segment_count"] = len(scene_prompts_segments)
+    scene_plan = _safe_dict(pkg.get("scene_plan"))
+    scene_plan_rows, scene_plan_rows_source = _get_scene_plan_rows(scene_plan, pkg)
+    used_legacy_storyboard = bool(scene_plan_rows) and scene_plan_rows_source == "scene_plan.storyboard"
+    used_new_scene_rows = bool(scene_plan_rows) and scene_plan_rows_source in {
+        "scene_plan.scenes",
+        "scene_plan.segments",
+        "scene_plan.rows",
+        "director_v2_package.draft_plan",
+    }
+    diagnostics["final_video_prompt_dependency_gate_scene_plan_rows_source"] = scene_plan_rows_source
+    diagnostics["final_video_prompt_dependency_gate_scene_plan_rows_count"] = len(scene_plan_rows)
+    diagnostics["final_video_prompt_dependency_gate_used_legacy_storyboard"] = bool(used_legacy_storyboard)
+    diagnostics["final_video_prompt_dependency_gate_used_new_scene_rows"] = bool(used_new_scene_rows)
     diagnostics["final_video_prompt_dependency_gate_recomputed_after_payload_overrides"] = True
     pkg["diagnostics"] = diagnostics
     return missing_reasons, payload_ok_by_stage, status_by_stage, false_positive_prevented
@@ -4129,10 +4142,39 @@ def _build_scene_plan_prompt_package(package: dict[str, Any]) -> dict[str, Any]:
 
 
 def _scene_plan_rows_for_validation(scene_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    scene_rows = [row for row in _safe_list(scene_plan.get("storyboard")) if isinstance(row, dict)]
+    if scene_rows:
+        return scene_rows
     scene_rows = [row for row in _safe_list(scene_plan.get("scenes")) if isinstance(row, dict)]
     if scene_rows:
         return scene_rows
-    return [row for row in _safe_list(scene_plan.get("storyboard")) if isinstance(row, dict)]
+    scene_rows = [row for row in _safe_list(scene_plan.get("segments")) if isinstance(row, dict)]
+    if scene_rows:
+        return scene_rows
+    scene_rows = [row for row in _safe_list(scene_plan.get("rows")) if isinstance(row, dict)]
+    if scene_rows:
+        return scene_rows
+    return []
+
+
+def _get_scene_plan_rows(scene_plan: dict[str, Any], package: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    storyboard_rows = [row for row in _safe_list(scene_plan.get("storyboard")) if isinstance(row, dict)]
+    if storyboard_rows:
+        return storyboard_rows, "scene_plan.storyboard"
+    normalized_rows = _scene_plan_rows_for_validation(scene_plan)
+    if normalized_rows:
+        if _safe_list(scene_plan.get("scenes")):
+            return normalized_rows, "scene_plan.scenes"
+        if _safe_list(scene_plan.get("segments")):
+            return normalized_rows, "scene_plan.segments"
+        if _safe_list(scene_plan.get("rows")):
+            return normalized_rows, "scene_plan.rows"
+    input_pkg = _safe_dict(_safe_dict(package).get("input"))
+    director_v2_pkg = _safe_dict(input_pkg.get("director_v2_package"))
+    draft_plan_rows = [row for row in _safe_list(director_v2_pkg.get("draft_plan")) if isinstance(row, dict)]
+    if draft_plan_rows and str(scene_plan.get("source") or "").strip() == "director_v2_draft_plan":
+        return draft_plan_rows, "director_v2_package.draft_plan"
+    return [], ""
 
 
 def _scene_plan_route_counts(scene_plan: dict[str, Any]) -> dict[str, int]:
@@ -18425,6 +18467,20 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
+    scene_plan = _safe_dict(package.get("scene_plan"))
+    scene_rows, scene_rows_source = _get_scene_plan_rows(scene_plan, package)
+    if (not _safe_list(scene_plan.get("storyboard"))) and scene_rows:
+        scene_plan["storyboard"] = scene_rows
+        package["scene_plan"] = scene_plan
+    diagnostics["final_video_prompt_dependency_gate_scene_plan_rows_source"] = scene_rows_source
+    diagnostics["final_video_prompt_dependency_gate_scene_plan_rows_count"] = len(scene_rows)
+    diagnostics["final_video_prompt_dependency_gate_used_legacy_storyboard"] = bool(
+        scene_rows and scene_rows_source == "scene_plan.storyboard"
+    )
+    diagnostics["final_video_prompt_dependency_gate_used_new_scene_rows"] = bool(
+        scene_rows
+        and scene_rows_source in {"scene_plan.scenes", "scene_plan.segments", "scene_plan.rows", "director_v2_package.draft_plan"}
+    )
     package["diagnostics"] = diagnostics
     gemini_api_key = _resolve_stage_gemini_api_key(package, stage_id="final_video_prompt")
 

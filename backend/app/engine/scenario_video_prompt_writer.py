@@ -1529,6 +1529,18 @@ def _canonical_segments(package: dict[str, Any]) -> list[dict[str, Any]]:
             for row in _safe_list(scene_plan.get("scenes"))
             if str(_safe_dict(row).get("scene_id") or "").strip()
         }
+    if not plan_by_id:
+        plan_by_id = {
+            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+            for row in _safe_list(scene_plan.get("storyboard"))
+            if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        }
+    if not plan_by_id:
+        plan_by_id = {
+            str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+            for row in _safe_list(scene_plan.get("rows"))
+            if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        }
 
     role_by_id = {
         str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
@@ -1570,7 +1582,10 @@ def _build_model_payload(package: dict[str, Any], segment_rows: list[dict[str, A
     story_core = _safe_dict(package.get("story_core"))
     role_plan = _safe_dict(package.get("role_plan"))
     scene_plan = _safe_dict(package.get("scene_plan"))
+    scene_detail = _safe_dict(package.get("scene_detail"))
     scene_prompts = _safe_dict(package.get("scene_prompts"))
+    director_contract = _get_merged_director_contract(package)
+    director_v2_package = _safe_dict(_safe_dict(package.get("input")).get("director_v2_package"))
     continuity_notes = story_guidance_to_notes_list(story_core.get("story_guidance"), max_items=8)
     if not continuity_notes:
         continuity_notes = _safe_list(role_plan.get("continuity_notes"))[:8]
@@ -1679,6 +1694,14 @@ def _build_model_payload(package: dict[str, Any], segment_rows: list[dict[str, A
                 "scene_prompts": {
                     "prompts_version": str(scene_prompts.get("prompts_version") or ""),
                     "global_style_anchor": str(scene_prompts.get("global_style_anchor") or "").strip(),
+                },
+                "scene_detail": {
+                    "scenes_count": len(_safe_list(scene_detail.get("scenes"))),
+                    "scenes": _safe_list(scene_detail.get("scenes"))[:12],
+                },
+                "director_contract": director_contract,
+                "director_v2_package": {
+                    "draft_plan": _safe_list(director_v2_package.get("draft_plan"))[:12],
                 },
             },
         },
