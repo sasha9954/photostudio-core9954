@@ -1,5 +1,17 @@
-.manualClipBoardNode .manualClipBoardNode_body { display:flex; flex-direction:column; gap:8px; min-width:760px; }
+.manualClipBoardNode .manualClipBoardNode_body { display:flex; flex-direction:column; gap:10px; min-width:1080px; }
+.manualLockedState { min-height:320px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+.manualHeaderRow, .manualActionsRow { display:flex; flex-wrap:wrap; gap:8px; }
+.manualChip { padding:6px 10px; border:1px solid #3c3c45; border-radius:999px; background:#1f1f28; font-size:12px; display:flex; gap:6px; align-items:center; }
+.manualSplitWorkspace { display:grid; grid-template-columns:280px 1fr 280px; gap:10px; align-items:start; }
+.manualPanel { border:1px solid #353544; border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#171720; }
+.manualPanel textarea { min-height:100px; }
+.manualAiSummary { padding:8px; border-radius:8px; background:#202030; }
+.manualSplitPlan { grid-column:1 / -1; }
+.manualPlanRows { display:flex; flex-direction:column; gap:4px; font-family:monospace; }
+.manualPlanRow { padding:6px 8px; background:#12121a; border-radius:6px; }
+
 .manualBoardLayout { display:grid; grid-template-columns:300px 1fr; gap:10px; }
-.manualSceneList { display:flex; flex-direction:column; gap:6px; max-height:420px; overflow:auto; }
+.manualSceneList { display:flex; flex-direction:column; gap:6px; max-height:520px; overflow:auto; }
 .manualSceneItem { text-align:left; }
 .manualSceneCard { display:flex; flex-direction:column; gap:8px; }
+.manualPreview { width:100%; max-height:180px; object-fit:cover; border-radius:8px; }
