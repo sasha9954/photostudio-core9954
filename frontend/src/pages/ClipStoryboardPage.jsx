@@ -15119,7 +15119,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         targetNode?.data?.connected_inputs,
       ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || connectedInputsFromContextFallback);
 const extractUrlsFromConnectedInputValue = (value) => {
-        if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+        if (Array.isArray(value)) return value.map(normalizeScenarioRefUrl).filter(Boolean);
         if (typeof value === "string") {
           const normalized = String(value || "").trim();
           return normalized ? [normalized] : [];
