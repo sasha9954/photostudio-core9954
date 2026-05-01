@@ -1754,6 +1754,7 @@ def _sanitize_segment(
     package: dict[str, Any],
     *,
     previous_i2v_variants: list[str],
+    segment_validation_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     row = _safe_dict(raw_row)
     segment_id = str(row.get("segment_id") or fallback_row.get("segment_id") or "").strip()
@@ -2300,7 +2301,15 @@ def _sanitize_segment(
     )
 
     if not segment_id or not positive_prompt or not negative_prompt:
-        raise RuntimeError(f"final_video_prompt_invalid_segment:{segment_id or 'unknown'}")
+        context = _safe_dict(segment_validation_context)
+        raise_payload = {
+            "function_name": "_sanitize_segment",
+            "incoming_segment_id": segment_id,
+            "incoming_scene_id": scene_id,
+            "expected_segment_ids_preview": _safe_list(context.get("expected_segment_ids"))[:20],
+            "scene_to_segment_map_preview": dict(list(_safe_dict(context.get("scene_to_segment_map")).items())[:20]),
+        }
+        raise RuntimeError(f"final_video_prompt_invalid_segment:{segment_id or 'unknown'}::{json.dumps(raise_payload, ensure_ascii=False)}")
     if route == "first_last" and (not first_frame or not last_frame):
         raise RuntimeError("FINAL_VIDEO_PROMPT_FIRST_LAST_INCOMPLETE")
     if route == "ia2v" and not positive_prompt:
@@ -2802,11 +2811,12 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
                 identity_ctx,
                 package,
                 previous_i2v_variants=previous_i2v_variants,
+                segment_validation_context=normalization_diag,
             )
         except RuntimeError as exc:
             if str(exc).startswith("final_video_prompt_invalid_segment:"):
                 rejected_ids = _safe_list(normalization_diag.get("final_video_prompt_segment_candidate_rejected_ids"))
-                rejected_ids.append(str(exc))
+                rejected_ids.append(str(exc).split("::", 1)[0])
                 normalization_diag["final_video_prompt_segment_candidate_rejected_ids"] = rejected_ids
                 normalization_diag["final_video_prompt_segment_candidate_rejected_count"] = int(
                     normalization_diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
@@ -2817,7 +2827,16 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
                     identity_ctx,
                     package,
                     previous_i2v_variants=previous_i2v_variants,
+                    segment_validation_context=normalization_diag,
                 )
+                diagnostics = _safe_list(normalization_diag.get("final_video_prompt_invalid_segment_diagnostics"))
+                details = str(exc).split("::", 1)
+                if len(details) == 2:
+                    try:
+                        diagnostics.append(json.loads(details[1]))
+                    except Exception:
+                        diagnostics.append({"function_name": "_sanitize_segment", "raw": details[1]})
+                normalization_diag["final_video_prompt_invalid_segment_diagnostics"] = diagnostics
             else:
                 raise
         if normalized:
@@ -2864,6 +2883,40 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
         normalization_diag.get("final_video_prompt_segment_candidate_rejected_ids")
     )
     return payload, normalization_diag
+
+
+def _normalize_segments_before_validation(
+    segments: list[dict[str, Any]],
+    canonical_segment_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    scene_to_segment_map = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): str(_safe_dict(row).get("segment_id") or "").strip()
+        for row in canonical_segment_rows
+        if str(_safe_dict(row).get("scene_id") or "").strip() and str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    segment_to_scene_map = {v: k for k, v in scene_to_segment_map.items()}
+    normalized_pairs: list[dict[str, str]] = []
+    normalized_segments: list[dict[str, Any]] = []
+    for seg_raw in segments:
+        seg = dict(_safe_dict(seg_raw))
+        segment_id = str(seg.get("segment_id") or "").strip()
+        scene_id = str(seg.get("scene_id") or "").strip()
+        if segment_id.startswith("sc_") and segment_id in scene_to_segment_map:
+            canonical_segment_id = scene_to_segment_map[segment_id]
+            normalized_pairs.append({"from": segment_id, "to": canonical_segment_id, "scene_id": scene_id or segment_id})
+            segment_id = canonical_segment_id
+            scene_id = scene_id or segment_to_scene_map.get(canonical_segment_id, "")
+        elif scene_id in scene_to_segment_map and segment_id != scene_to_segment_map[scene_id]:
+            canonical_segment_id = scene_to_segment_map[scene_id]
+            normalized_pairs.append({"from": segment_id or "<empty>", "to": canonical_segment_id, "scene_id": scene_id})
+            segment_id = canonical_segment_id
+        if segment_id and segment_id in segment_to_scene_map:
+            scene_id = segment_to_scene_map[segment_id]
+        seg["segment_id"] = segment_id
+        if scene_id:
+            seg["scene_id"] = scene_id
+        normalized_segments.append(seg)
+    return normalized_segments, normalized_pairs
 
 
 def _build_route_diagnostics(segments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3038,6 +3091,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
         "final_video_prompt_segment_candidate_rejected_ids": [],
         "final_video_prompt_raw_model_segment_ids_preview": [],
         "final_video_prompt_raw_model_scene_ids_preview": [],
+        "final_video_prompt_invalid_segment_diagnostics": [],
     }
     configured_timeout = get_scenario_stage_timeout("final_video_prompt")
     timed_out = False
@@ -3117,6 +3171,17 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     validation_error = ""
     validation_diag: dict[str, Any] = {}
     if ok:
+        pre_validation_segments, pre_validation_pairs = _normalize_segments_before_validation(
+            _safe_list(normalized_payload.get("segments")),
+            segment_rows,
+        )
+        normalized_payload["segments"] = pre_validation_segments
+        normalized_payload["scenes"] = [dict(row) for row in pre_validation_segments]
+        existing_pairs = _safe_list(normalization_diag.get("final_video_prompt_segment_id_normalized_pairs"))
+        normalization_diag["final_video_prompt_segment_id_normalized_pairs"] = [*existing_pairs, *pre_validation_pairs]
+        normalization_diag["final_video_prompt_segment_id_normalized_count"] = len(
+            _safe_list(normalization_diag.get("final_video_prompt_segment_id_normalized_pairs"))
+        )
         validation_error, validation_diag = _validate_final_video_prompt_identity_clean(normalized_payload, identity_ctx)
         if validation_error:
             ok = False
@@ -3255,6 +3320,9 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             ),
             "final_video_prompt_raw_model_scene_ids_preview": _safe_list(
                 normalization_diag.get("final_video_prompt_raw_model_scene_ids_preview")
+            ),
+            "final_video_prompt_invalid_segment_diagnostics": _safe_list(
+                normalization_diag.get("final_video_prompt_invalid_segment_diagnostics")
             ),
             "validation_error": validation_error,
             "error_code": validation_error,
