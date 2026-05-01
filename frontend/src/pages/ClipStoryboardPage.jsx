@@ -24058,6 +24058,105 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
             },
           };
         }
+        if (n.type === "manualClipBoard") {
+          const safeEdgesForConnections =
+            (typeof effectiveEdges !== "undefined" && Array.isArray(effectiveEdges))
+              ? effectiveEdges
+              : Array.isArray(edgesRef.current)
+                ? edgesRef.current
+                : [];
+
+          const nodesById = new Map(
+            (Array.isArray(effectiveNodes) ? effectiveNodes : [])
+              .map((nodeItem) => [nodeItem.id, nodeItem])
+          );
+
+          const connectedInputs = getNarrativeConnectedInputsSnapshot({
+            node: n,
+            nodesById,
+            edges: safeEdgesForConnections,
+          });
+
+          const audioInput = connectedInputs?.audio_in || null;
+
+          const audioUrl = String(audioInput?.url || audioInput?.value || "").trim();
+          const audioFilename = String(
+            audioInput?.fileName
+            || audioInput?.filename
+            || audioInput?.preview
+            || "audio"
+          ).trim();
+
+          const durationSecRaw = Number(
+            audioInput?.audioDurationSec
+            ?? audioInput?.durationSec
+            ?? audioInput?.duration
+            ?? audioInput?.meta?.audioDurationSec
+            ?? audioInput?.meta?.durationSec
+            ?? 0
+          );
+
+          const connectedAudio = audioUrl
+            ? {
+                url: audioUrl,
+                filename: audioFilename,
+                duration_sec: Number.isFinite(durationSecRaw) && durationSecRaw > 0
+                  ? Number(durationSecRaw.toFixed(3))
+                  : 0,
+                duration_ms: Number.isFinite(durationSecRaw) && durationSecRaw > 0
+                  ? Math.round(durationSecRaw * 1000)
+                  : 0,
+              }
+            : null;
+
+          const currentAudio = base?.data?.audio || {};
+          const connectedAudioChanged = !!connectedAudio && (
+            String(currentAudio?.url || "") !== connectedAudio.url
+            || Number(currentAudio?.duration_sec || 0) !== Number(connectedAudio.duration_sec || 0)
+            || String(currentAudio?.filename || "") !== connectedAudio.filename
+          );
+
+          const nextData = {
+            ...base.data,
+            connectedInputs,
+            connectedAudio: audioInput,
+            onPatchNodeData: (nodeId, patch = {}) => {
+              setNodes((prev) => bindHandlers(prev.map((nodeItem) => (
+                nodeItem.id === nodeId
+                  ? { ...nodeItem, data: { ...nodeItem.data, ...(patch || {}) } }
+                  : nodeItem
+              )), {
+                nodesNow: prev,
+                edgesNow: edgesRef.current || [],
+                traceReason: "manual-clip-board:patch",
+              }));
+            },
+          };
+
+          if (connectedAudio) {
+            nextData.audio = connectedAudio;
+            nextData.audio_source = "connected_audio_node";
+            if (!String(nextData.step || "").trim() || nextData.step === "empty" || connectedAudioChanged) {
+              nextData.step = "audio_loaded";
+            }
+          }
+
+          if (audioInput) {
+            console.info("[MANUAL CLIP BOARD AUDIO BIND]", {
+              nodeId: n.id,
+              audioInput,
+              connectedAudio,
+              stepBefore: base?.data?.step,
+              stepAfter: nextData.step,
+            });
+          }
+
+          return {
+            ...base,
+            data: nextData,
+          };
+        }
+
         if (n.type === "aiScenarioDirectorV2") {
           const safeEdgesForConnections =
             (typeof effectiveEdges !== "undefined" && Array.isArray(effectiveEdges))

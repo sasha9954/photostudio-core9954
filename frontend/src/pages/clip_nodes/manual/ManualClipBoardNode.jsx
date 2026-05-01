@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
@@ -63,15 +63,6 @@ export default function ManualClipBoardNode({ id, data }) {
   };
 
   const scenePreview = useMemo(() => buildMontageManifest(model), [model]);
-  useEffect(() => {
-    if (model.step === "empty" && normalizedConnectedAudio?.url) {
-      patch({
-        step: "audio_loaded",
-        audio: normalizedConnectedAudio,
-        audio_source: "connected_audio_node",
-      });
-    }
-  }, [model.step, normalizedConnectedAudio?.url]);
 
   const updateScene = (sceneId, patchScene) => {
     const next = scenes.map((s) => (s.scene_id === sceneId ? normalizeScene({ ...s, ...patchScene, status: resolveStatus({ ...s, ...patchScene }) }, s.index - 1) : s));
