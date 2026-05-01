@@ -3162,6 +3162,12 @@ function pickScenarioRuntimeSceneFields(sceneItem = {}) {
     visualFocusRole: scene?.visualFocusRole ?? scene?.visual_focus_role,
     sceneActiveRoles: scene?.sceneActiveRoles ?? scene?.scene_active_roles,
     refsUsedByRole: scene?.refsUsedByRole ?? scene?.refs_used_by_role,
+    refsUsed: scene?.refsUsed ?? scene?.refs_used,
+    refDirectives: scene?.refDirectives ?? scene?.ref_directives,
+    mustAppear: scene?.mustAppear ?? scene?.must_appear,
+    mustNotAppear: scene?.mustNotAppear ?? scene?.must_not_appear,
+    sourceImageRefs: scene?.sourceImageRefs ?? scene?.source_image_refs,
+    imageRefs: scene?.imageRefs ?? scene?.image_refs,
     imagePromptEn: scene?.imagePromptEn ?? scene?.image_prompt_en,
     videoPromptEn: scene?.videoPromptEn ?? scene?.video_prompt_en,
     negativePrompt: scene?.negativePrompt ?? scene?.negative_prompt,
@@ -20172,7 +20178,9 @@ onClipSec: (nodeId, value) => {
             const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
             const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
             const semanticChanged = !previousSceneSignature || previousSceneSignature !== nextSceneSignature;
-            const shouldPreserveAssets = Boolean(persistedScene) && !semanticChanged && !storyboardRunChanged;
+            const shouldPreserveAssets = Boolean(persistedScene)
+              && !semanticChanged
+              && (!storyboardRunChanged || isFinalizeOnlyStageApply);
             if (semanticChanged || storyboardRunChanged) {
               invalidatedSceneIds.add(sceneId);
             }
@@ -20274,6 +20282,12 @@ onClipSec: (nodeId, value) => {
               visualFocusRole: pickedRuntimeFields?.visualFocusRole || "",
               sceneActiveRoles: Array.isArray(pickedRuntimeFields?.sceneActiveRoles) ? pickedRuntimeFields.sceneActiveRoles : [],
               refsUsedByRole: pickedRuntimeFields?.refsUsedByRole && typeof pickedRuntimeFields.refsUsedByRole === "object" ? pickedRuntimeFields.refsUsedByRole : {},
+              refsUsed: Array.isArray(pickedRuntimeFields?.refsUsed) ? pickedRuntimeFields.refsUsed : [],
+              refDirectives: pickedRuntimeFields?.refDirectives && typeof pickedRuntimeFields.refDirectives === "object" ? pickedRuntimeFields.refDirectives : {},
+              mustAppear: Array.isArray(pickedRuntimeFields?.mustAppear) ? pickedRuntimeFields.mustAppear : [],
+              mustNotAppear: Array.isArray(pickedRuntimeFields?.mustNotAppear) ? pickedRuntimeFields.mustNotAppear : [],
+              sourceImageRefs: Array.isArray(pickedRuntimeFields?.sourceImageRefs) ? pickedRuntimeFields.sourceImageRefs : [],
+              imageRefs: Array.isArray(pickedRuntimeFields?.imageRefs) ? pickedRuntimeFields.imageRefs : [],
               imagePromptEn: pickedRuntimeFields?.imagePromptEn || "",
               videoPromptEn: pickedRuntimeFields?.videoPromptEn || "",
               negativePrompt: pickedRuntimeFields?.negativePrompt || "",
