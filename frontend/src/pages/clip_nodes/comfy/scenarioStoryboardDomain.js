@@ -2966,3 +2966,16 @@ export function buildScenarioPreviewInput({ storyboardOut = null, directorOutput
     format: resolvedFormat,
   };
 }
+
+export function shouldClearStoryboardRuntime({
+  reason = "",
+  semanticChanged = false,
+  explicitReset = false,
+  upstreamChanged = false,
+} = {}) {
+  if (explicitReset) return true;
+  if (semanticChanged || upstreamChanged) return true;
+  const normalizedReason = String(reason || "").trim().toLowerCase();
+  if (normalizedReason === "manual_reset" || normalizedReason === "upstream_semantic_change") return true;
+  return false;
+}

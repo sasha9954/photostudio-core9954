@@ -60,6 +60,7 @@ import {
   resolveScenarioExplicitModelKey,
   resolveScenarioExplicitWorkflowKey,
   resolveScenarioWorkflowKey,
+  shouldClearStoryboardRuntime,
 } from "./clip_nodes/comfy/scenarioStoryboardDomain";
 import ScenarioStoryboardEditor from "./clip_nodes/comfy/ScenarioStoryboardEditor";
 import ScenarioPipelineDebugEditor from "./clip_nodes/comfy/ScenarioPipelineDebugEditor";
@@ -10216,6 +10217,7 @@ export default function ClipStoryboardPage() {
   const WORKSPACE_STORE_KEY = useMemo(() => `ps:clipStoryboard:workspace:v2:${accountKey}`, [accountKey]);
   const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
   const COMFY_VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:comfyVideoJob:v1:${accountKey}`, [accountKey]);
+  const STORYBOARD_RUNTIME_STORE_KEY = useMemo(() => `ps:clipStoryboard:scenarioRuntime:v1:${accountKey}:${window.location.pathname}`, [accountKey]);
 
   const storageVersionRef = useRef(0);
   const plannerSignatureRef = useRef("");
@@ -10254,6 +10256,7 @@ export default function ClipStoryboardPage() {
   const renderTraceLastLogRef = useRef({ ts: 0, signature: "" });
   const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
+
 
   useEffect(() => {
     console.info("[BUILD MARKER] ClipStoryboardPage storyboard-video-parent-v3 active");
@@ -10613,6 +10616,40 @@ const scenarioFlowSourceNode = useMemo(() => {
   if (activeScenarioStoryboardNode?.id) return activeScenarioStoryboardNode;
   return scenarioNode;
 }, [activeScenarioStoryboardNode, scenarioNode]);
+const runtimeHydratedRef = useRef(false);
+const buildScenarioRuntimeSnapshot = useCallback((nodeData = {}, selectedSceneId = "") => {
+  const scenes = Array.isArray(nodeData?.scenes) ? nodeData.scenes : [];
+  const montageCount = scenes.filter((scene) => Boolean(scene?.montageReady || scene?.montageState)).length;
+  const generatedAssetCount = scenes.reduce((acc, scene) => acc
+    + (String(scene?.imageUrl || scene?.startImageUrl || scene?.endImageUrl || "").trim() ? 1 : 0)
+    + (String(scene?.videoUrl || "").trim() ? 1 : 0)
+    + (String(scene?.audioSliceUrl || "").trim() ? 1 : 0), 0);
+  return { scenes, selectedSceneId: String(selectedSceneId || "").trim(), diagnostics: { montageCount, generatedAssetCount } };
+}, []);
+useEffect(() => {
+  const activeNode = activeScenarioStoryboardNode;
+  if (!activeNode?.id) return;
+  const snapshot = buildScenarioRuntimeSnapshot(activeNode?.data || {}, scenarioEditor?.selectedSceneId || "");
+  safeSet(STORYBOARD_RUNTIME_STORE_KEY, JSON.stringify(snapshot));
+  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_persist_enabled: true, storyboard_runtime_persist_scene_count: snapshot.scenes.length, storyboard_runtime_persist_generated_asset_count: snapshot.diagnostics.generatedAssetCount, storyboard_runtime_persist_montage_saved: snapshot.diagnostics.montageCount > 0 });
+}, [STORYBOARD_RUNTIME_STORE_KEY, activeScenarioStoryboardNode, buildScenarioRuntimeSnapshot, scenarioEditor?.selectedSceneId]);
+useEffect(() => {
+  if (runtimeHydratedRef.current) return;
+  runtimeHydratedRef.current = true;
+  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_attempted: true, storyboard_runtime_restore_attempted: true, storyboard_runtime_hydrate_source: "runtime_persist" });
+  const raw = safeGet(STORYBOARD_RUNTIME_STORE_KEY);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    const persistedScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
+    const persistedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
+    setNodes((prev) => prev.map((node) => (node?.type === "scenarioStoryboard" ? { ...node, data: { ...(node?.data || {}), scenes: persistedScenes } } : node)));
+    if (persistedSelectedSceneId) setScenarioEditor((prev) => ({ ...prev, selectedSceneId: persistedSelectedSceneId }));
+    console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_scene_count: persistedScenes.length, storyboard_runtime_hydrate_selected_scene: persistedSelectedSceneId, storyboard_runtime_restore_success: true, storyboard_runtime_restore_scene_count: persistedScenes.length, storyboard_runtime_restore_generated_asset_count: Number(parsed?.diagnostics?.generatedAssetCount || 0), storyboard_runtime_restore_montage_restored: Number(parsed?.diagnostics?.montageCount || 0) > 0, storyboard_runtime_restore_source: "runtime_persist" });
+  } catch (error) {
+    console.warn("[SCENARIO RUNTIME] restore failed", error);
+  }
+}, [STORYBOARD_RUNTIME_STORE_KEY, setNodes]);
 
 const scenarioBrainRefs = useMemo(() => {
   if (!scenarioFlowSourceNode?.id) return { character: [], location: [], style: [], props: [], refsByRole: {} };
@@ -10965,6 +11002,13 @@ const isClipHydrationBlocked = useCallback(() => {
 }, [comfyScenes, scenarioScenes]);
 
 const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") => {
+  const allowStoryboardRuntimeClear = shouldClearStoryboardRuntime({
+    reason,
+    explicitReset: String(reason || "").includes("manual_reset"),
+    semanticChanged: String(reason || "").includes("semantic"),
+    upstreamChanged: String(reason || "").includes("downstream"),
+  });
+  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_cleared_reason: reason, allowed: allowStoryboardRuntimeClear });
   console.info("[CLIP STORAGE] clear account storage", {
     reason,
     accountKey,
@@ -10977,8 +11021,9 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
   safeDel(STORE_KEY);
   safeDel(VIDEO_JOB_STORE_KEY);
   safeDel(COMFY_VIDEO_JOB_STORE_KEY);
+  if (allowStoryboardRuntimeClear) safeDel(STORYBOARD_RUNTIME_STORE_KEY);
   storageVersionRef.current += 1;
-}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
+}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
 
 const stopScenarioVideoPolling = useCallback((sceneId = "") => {
   const key = String(sceneId || "").trim();
