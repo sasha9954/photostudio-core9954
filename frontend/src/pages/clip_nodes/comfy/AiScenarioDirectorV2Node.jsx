@@ -525,6 +525,12 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     const finalSceneRows = Array.isArray(finalStoryboard?.scenes) ? finalStoryboard.scenes : [];
     const finalizeDone = String(stageStatuses?.finalize?.status || "").trim().toLowerCase() === "done";
     const finalReady = finalManifestRows.length > 0 || finalSceneRows.length > 0;
+    console.info("[DIRECTOR V2 FINAL RELOAD]", {
+      final_reload_restore_attempted: true,
+      final_reload_has_final_storyboard: Boolean(packageData?.final_storyboard && typeof packageData.final_storyboard === "object"),
+      final_reload_finalize_status: String(stageStatuses?.finalize?.status || "").trim().toLowerCase(),
+      final_reload_render_manifest_count: finalManifestRows.length,
+    });
     const hasStageStatuses = Object.keys(stageStatuses).length > 0;
     if (!hasStageStatuses && !finalReady) return;
 
@@ -561,6 +567,10 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
         error: "",
         output: finalStoryboard,
       };
+      console.info("[DIRECTOR V2 FINAL RELOAD]", {
+        final_reload_restore_success: true,
+        final_stage_status: nextStages?.final?.status || "",
+      });
     }
     patchData({ stageStatuses, pipelineStages: nextStages });
   }, [packageData?.stage_statuses, packageData?.final_video_prompt, packageData?.final_storyboard, packageData?.updated_at]);

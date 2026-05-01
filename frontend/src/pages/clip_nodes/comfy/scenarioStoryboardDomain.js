@@ -2400,6 +2400,25 @@ export function normalizeScenarioStoryboardPackage({
     ?? safeStoryboardOut?.audio_duration_sec
     ?? 0
   ) || 0;
+  const persistedGeneratedFieldKeys = [
+    "imageUrl", "imageStatus", "imageReady",
+    "videoUrl", "videoStatus", "videoReady",
+    "startImageUrl", "endImageUrl",
+    "audioSliceUrl", "audioSliceKind", "audioSliceDurationSec",
+    "montageReady", "montageState",
+  ];
+  const persistedSceneBySegmentId = new Map();
+  const registerPersistedSceneRow = (row = {}) => {
+    const safeRow = row && typeof row === "object" ? row : {};
+    const segId = normalizeText(safeRow?.segment_id ?? safeRow?.segmentId);
+    const sceneId = normalizeText(safeRow?.sceneId ?? safeRow?.scene_id);
+    if (!segId && !sceneId) return;
+    const lookup = segId || sceneId;
+    if (!lookup) return;
+    persistedSceneBySegmentId.set(lookup, safeRow);
+  };
+  (Array.isArray(safeSourcePackage?.scenes) ? safeSourcePackage.scenes : []).forEach(registerPersistedSceneRow);
+  (Array.isArray(safeSourcePackage?.final_storyboard?.scenes) ? safeSourcePackage.final_storyboard.scenes : []).forEach(registerPersistedSceneRow);
   const finalStoryboardManifestById = finalStoryboardRenderManifestRows.reduce((acc, row) => {
     const safeRow = row && typeof row === "object" ? row : {};
     const segmentId = normalizeText(safeRow?.segment_id);
@@ -2522,6 +2541,8 @@ export function normalizeScenarioStoryboardPackage({
     {}
   );
 
+  let restoredGeneratedAssetsCount = 0;
+  let missingGeneratedAssetsAfterReloadCount = 0;
   const scenes = canonicalScenesRaw.map((scene, idx) => {
     const tracedSceneId = normalizeText(scene?.sceneId ?? scene?.scene_id) || `S${idx + 1}`;
     if (shouldTraceScenarioRoleScene(tracedSceneId)) {
@@ -2643,7 +2664,7 @@ export function normalizeScenarioStoryboardPackage({
       || resolvedAudioUrl
       || packageAudioUrl
     );
-    return {
+    const normalizedScene = {
       ...normalizedSceneBase,
       route: resolvedRoute,
       ltxMode: resolvedRoute,
@@ -2674,6 +2695,23 @@ export function normalizeScenarioStoryboardPackage({
       audioStartSec: resolvedStart,
       audioEndSec: resolvedEnd,
     };
+    const persistedScene = persistedSceneBySegmentId.get(canonicalSegmentId || segmentId || normalizedScene.sceneId || "");
+    if (persistedScene && typeof persistedScene === "object") {
+      persistedGeneratedFieldKeys.forEach((fieldKey) => {
+        const nextValue = normalizedScene?.[fieldKey];
+        const persistedValue = persistedScene?.[fieldKey];
+        const nextEmpty = nextValue == null || (typeof nextValue === "string" && !String(nextValue).trim());
+        const persistedHasValue = !(persistedValue == null || (typeof persistedValue === "string" && !String(persistedValue).trim()));
+        if (nextEmpty && persistedHasValue) {
+          normalizedScene[fieldKey] = persistedValue;
+          restoredGeneratedAssetsCount += 1;
+        }
+      });
+    }
+    if (!String(normalizedScene?.imageUrl || normalizedScene?.videoUrl || "").trim()) {
+      missingGeneratedAssetsAfterReloadCount += 1;
+    }
+    return normalizedScene;
   });
 
   const storySummary = normalizeDualField({
@@ -2827,6 +2865,11 @@ export function normalizeScenarioStoryboardPackage({
     outputSceneCount: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,
     inputKeys: storyboardInputKeys,
     firstSceneKeys: firstInputScene && typeof firstInputScene === "object" ? Object.keys(firstInputScene) : [],
+    storyboard_generated_assets_restored_count: restoredGeneratedAssetsCount,
+    storyboard_generated_assets_missing_after_reload_count: missingGeneratedAssetsAfterReloadCount,
+    montage_state_restore_attempted: true,
+    montage_state_restored: scenes.some((scene) => Boolean(scene?.montageReady || scene?.montageState)),
+    montage_segment_count: scenes.filter((scene) => Boolean(scene?.montageReady || scene?.montageState)).length,
   });
   console.debug("[SCENARIO STORYBOARD PACKAGE]", {
     status: "package normalized successfully",

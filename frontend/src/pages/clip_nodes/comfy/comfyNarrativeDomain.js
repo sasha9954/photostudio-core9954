@@ -935,6 +935,7 @@ const DIRECTOR_V2_PERSISTENT_PACKAGE_KEYS = new Set([
   "final_video_prompt",
   "final_payload",
   "final",
+  "final_storyboard",
 ]);
 
 export function normalizeDirectorV2RuntimeStateOnHydrate(nodeData = {}) {
