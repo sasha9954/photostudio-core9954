@@ -2491,23 +2491,60 @@ export function normalizeScenarioStoryboardPackage({
         chosenPrimaryRole: resolvedPrimaryRole,
       });
     }
+    const authoritativePrimaryRole = normalizeText(
+      manifestRow?.primaryRole
+      || manifestRow?.primary_role
+      || safeScene?.primaryRole
+      || safeScene?.primary_role
+    );
+    const authoritativeRefsUsed = manifestRow?.refsUsed || manifestRow?.refs_used || safeScene?.refsUsed || safeScene?.refs_used || [];
+    const authoritativeRefsByRole = manifestRow?.refsByRole || manifestRow?.refs_by_role || safeScene?.refsByRole || safeScene?.refs_by_role || {};
+    const authoritativeLinkedAssets = manifestRow?.linked_assets || safeScene?.linked_assets || {};
+    const authoritativeSourceImageRefs = manifestRow?.source_image_refs || manifestRow?.sourceImageRefs || safeScene?.source_image_refs || safeScene?.sourceImageRefs || [];
+    const roleFromManifest = normalizeText(authoritativePrimaryRole).toLowerCase();
+    const isCharacterRole = /^character_\d+$/i.test(roleFromManifest);
+    const refsLimit = /i2v|memory|cutaway/i.test(normalizeText(manifestRow?.route || safeScene?.route)) ? 1 : 2;
+    const selectedCharacterRefs = isCharacterRole
+      ? [...new Set([
+        ...normalizeStringList(authoritativeLinkedAssets?.character_refs_for_active_role?.[authoritativePrimaryRole]),
+        ...normalizeStringList(authoritativeRefsByRole?.[authoritativePrimaryRole]),
+        ...(normalizeStringList(authoritativeRefsUsed).includes(authoritativePrimaryRole)
+          ? normalizeStringList(authoritativeSourceImageRefs)
+          : []),
+      ].map((url) => normalizeText(url)).filter((url) => /^https?:\/\//i.test(url)))]
+        .slice(0, Math.max(1, refsLimit))
+      : [];
+    console.info("[SCENARIO NORMALIZE SELECTED SCENE REFS]", {
+      sceneId: sceneId || normalizeText(manifestRow?.scene_id || manifestRow?.sceneId),
+      segmentId: segmentId || normalizeText(manifestRow?.segment_id || manifestRow?.segmentId),
+      authoritativePrimaryRole,
+      selectedCharacterRole: authoritativePrimaryRole,
+      selectedCharacterRefsCount: selectedCharacterRefs.length,
+      selectedCharacterRefsPreview: selectedCharacterRefs.slice(0, 2),
+      manifestRefsByRoleCounts: Object.fromEntries(Object.entries(manifestRow?.refsByRole || manifestRow?.refs_by_role || {}).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])),
+      safeSceneRefsByRoleCounts: Object.fromEntries(Object.entries(safeScene?.refsByRole || safeScene?.refs_by_role || {}).map(([k, v]) => [k, Array.isArray(v) ? v.length : 0])),
+    });
     return {
       ...manifestRow,
       ...safeScene,
       render_manifest_row: manifestRow,
       renderManifestRow: manifestRow,
-      primaryRole: resolvedPrimaryRole,
-      primary_role: resolvedPrimaryRole,
+      primaryRole: authoritativePrimaryRole || resolvedPrimaryRole,
+      primary_role: authoritativePrimaryRole || resolvedPrimaryRole,
       visualFocusRole: normalizeText(manifestRow?.visualFocusRole || manifestRow?.visual_focus_role || safeScene?.visualFocusRole || safeScene?.visual_focus_role),
       visual_focus_role: normalizeText(manifestRow?.visualFocusRole || manifestRow?.visual_focus_role || safeScene?.visualFocusRole || safeScene?.visual_focus_role),
       sceneActiveRoles: manifestRow?.sceneActiveRoles || manifestRow?.scene_active_roles || safeScene?.sceneActiveRoles || safeScene?.scene_active_roles || [],
-      refsUsed: manifestRow?.refsUsed || manifestRow?.refs_used || safeScene?.refsUsed || safeScene?.refs_used || [],
+      refsUsed: isCharacterRole ? [authoritativePrimaryRole] : authoritativeRefsUsed,
       mustAppear: manifestRow?.mustAppear || manifestRow?.must_appear || safeScene?.mustAppear || safeScene?.must_appear || [],
-      refsByRole: manifestRow?.refsByRole || manifestRow?.refs_by_role || safeScene?.refsByRole || safeScene?.refs_by_role || {},
-      refsUsedByRole: manifestRow?.refsUsedByRole || manifestRow?.refs_used_by_role || safeScene?.refsUsedByRole || safeScene?.refs_used_by_role || {},
-      linked_assets: manifestRow?.linked_assets || safeScene?.linked_assets || {},
-      source_image_refs: manifestRow?.source_image_refs || manifestRow?.sourceImageRefs || safeScene?.source_image_refs || safeScene?.sourceImageRefs || [],
-      sourceImageRefs: manifestRow?.source_image_refs || manifestRow?.sourceImageRefs || safeScene?.source_image_refs || safeScene?.sourceImageRefs || [],
+      refsByRole: isCharacterRole ? { [authoritativePrimaryRole]: selectedCharacterRefs } : authoritativeRefsByRole,
+      refsUsedByRole: isCharacterRole ? { [authoritativePrimaryRole]: selectedCharacterRefs } : (manifestRow?.refsUsedByRole || manifestRow?.refs_used_by_role || safeScene?.refsUsedByRole || safeScene?.refs_used_by_role || {}),
+      linked_assets: authoritativeLinkedAssets,
+      source_image_refs: authoritativeSourceImageRefs,
+      sourceImageRefs: authoritativeSourceImageRefs,
+      selectedCharacterRefs,
+      selected_character_refs: selectedCharacterRefs,
+      selectedCharacterRole: authoritativePrimaryRole,
+      selected_character_role: authoritativePrimaryRole,
       route: normalizeText(manifestRow?.route)
         || normalizeText(safeScene?.route)
         || normalizeText(manifestRow?.video_metadata?.route_type ?? manifestRow?.video_metadata?.routeType)

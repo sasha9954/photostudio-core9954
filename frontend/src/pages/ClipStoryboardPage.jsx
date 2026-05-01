@@ -15195,6 +15195,17 @@ const extractUrlsFromConnectedInputValue = (value) => {
       let refsByRoleEffective = hasNonEmptyRefsByRole(refsForImageRequest?.refsByRole || {})
         ? mergeScenarioRefsByRole(refsForImageRequest.refsByRole, mergedRefsByRole)
         : mergedRefsByRole;
+      const sceneSelectedCharacterRole = normalizeScenarioRoleName(
+        targetScene?.selectedCharacterRole
+        || targetScene?.selected_character_role
+        || targetScene?.primaryRole
+        || targetScene?.primary_role
+        || ""
+      );
+      const sceneSelectedCharacterRefs = [...new Set([
+        ...(Array.isArray(targetScene?.selectedCharacterRefs) ? targetScene.selectedCharacterRefs : []),
+        ...(Array.isArray(targetScene?.selected_character_refs) ? targetScene.selected_character_refs : []),
+      ].map(normalizeScenarioRefUrl).filter(Boolean))].slice(0, 2);
       const universalDirectRefsByRole = Object.fromEntries(
         SCENARIO_IMAGE_ROLE_KEYS.map((role) => {
           const refKeys = Array.isArray(REF_INVENTORY_ROLE_MAP?.[role]) ? REF_INVENTORY_ROLE_MAP[role] : [];
@@ -15339,6 +15350,25 @@ const extractUrlsFromConnectedInputValue = (value) => {
         chosenExpectedRoleSource,
       });
       const requestedPrimaryRole = normalizeScenarioRoleName(expectedRole || refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "");
+      const hasSceneSelectedContract = Boolean(sceneSelectedCharacterRole && sceneSelectedCharacterRefs.length > 0);
+      if (hasSceneSelectedContract) {
+        expectedRole = sceneSelectedCharacterRole;
+        refsByRoleEffective = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
+        refsUsedByRoleEffective = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
+        const selectedHandle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[sceneSelectedCharacterRole];
+        connectedInputsEffective = {
+          ...(selectedHandle ? {
+            [selectedHandle]: {
+              count: sceneSelectedCharacterRefs.length,
+              refs: sceneSelectedCharacterRefs,
+              value: sceneSelectedCharacterRefs[0] || "",
+              source: "scene_selected_character_refs",
+            },
+          } : {}),
+        };
+        ensuredMustAppear = [sceneSelectedCharacterRole];
+        sceneActiveRolesEffective = [sceneSelectedCharacterRole];
+      }
       const authoritativeRole = normalizeScenarioRoleName(
         renderManifestRow.primaryRole
         || renderManifestRow.primary_role
@@ -15531,6 +15561,32 @@ const extractUrlsFromConnectedInputValue = (value) => {
         refsPayloadForRequest.expectedRole = expectedRole;
         refsPayloadForRequest.expected_role = expectedRole;
         refsPayloadForRequest.character = expectedRefs;
+      }
+      if (hasSceneSelectedContract) {
+        finalRequestBody.expectedRole = sceneSelectedCharacterRole;
+        finalRequestBody.expected_role = sceneSelectedCharacterRole;
+        finalRequestBody.primaryRole = sceneSelectedCharacterRole;
+        finalRequestBody.heroEntityId = sceneSelectedCharacterRole;
+        finalRequestBody.sceneActiveRoles = [sceneSelectedCharacterRole];
+        finalRequestBody.refsUsed = [sceneSelectedCharacterRole];
+        finalRequestBody.mustAppear = [sceneSelectedCharacterRole];
+        finalRequestBody.refsByRole = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
+        finalRequestBody.refsUsedByRole = { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs };
+        finalRequestBody.connectedInputs = connectedInputsEffective;
+        finalRequestBody.refs = {
+          ...(finalRequestBody.refs || {}),
+          expectedRole: sceneSelectedCharacterRole,
+          expected_role: sceneSelectedCharacterRole,
+          primaryRole: sceneSelectedCharacterRole,
+          heroEntityId: sceneSelectedCharacterRole,
+          sceneActiveRoles: [sceneSelectedCharacterRole],
+          refsUsed: [sceneSelectedCharacterRole],
+          mustAppear: [sceneSelectedCharacterRole],
+          refsByRole: { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs },
+          refsUsedByRole: { [sceneSelectedCharacterRole]: sceneSelectedCharacterRefs },
+          connectedInputs: connectedInputsEffective,
+          character: sceneSelectedCharacterRefs,
+        };
       }
       const sceneGoalEffective = String(
         targetScene?.sceneGoalRu
@@ -15995,7 +16051,32 @@ Aspect ratio: ${imageFormat}`,
         refsByRoleCounts: summarizeRefsByRole(refsByRoleEffective || {}),
         connectedInputsKeys: Object.keys(connectedInputsEffective || {}),
       });
+      console.info("[SCENARIO IMAGE SELECTED REF CONTRACT]", {
+        sceneId,
+        sceneSelectedCharacterRole,
+        sceneSelectedCharacterRefsCount: sceneSelectedCharacterRefs.length,
+        expectedRole,
+        primaryRoleEffective,
+        heroEntityIdEffective,
+        refsByRoleCounts: summarizeRefsByRole(finalRequestBody?.refsByRole || {}),
+        connectedInputsRoleCounts: Object.fromEntries(
+          Object.entries(finalRequestBody?.connectedInputs || {}).map(([k, v]) => [k, Array.isArray(v?.refs) ? v.refs.length : 0])
+        ),
+        source: hasSceneSelectedContract ? "scene_selected_character_refs" : "fallback",
+      });
       const finalCounts = summarizeRefsByRole(finalRequestBody?.refsByRole || {});
+      if (sceneSelectedCharacterRole) {
+        if (finalRequestBody.expectedRole !== sceneSelectedCharacterRole) {
+          throw new Error(`image_request_selected_role_mismatch:${sceneId}`);
+        }
+        if (Number(finalCounts?.[sceneSelectedCharacterRole] || 0) <= 0) {
+          throw new Error(`image_request_selected_refs_missing:${sceneId}:${sceneSelectedCharacterRole}`);
+        }
+        const wrongCharacterRole = Object.entries(finalCounts || {}).find(([role, count]) => /^character_\d+$/i.test(role) && role !== sceneSelectedCharacterRole && Number(count || 0) > 0)?.[0];
+        if (wrongCharacterRole) {
+          throw new Error(`image_request_selected_refs_wrong_extra_role:${sceneId}:expected=${sceneSelectedCharacterRole}:found=${wrongCharacterRole}`);
+        }
+      }
       if (authoritativeRole && finalRequestBody.expectedRole !== authoritativeRole) {
         throw new Error(`image_request_final_role_mismatch:${sceneId}:authoritative=${authoritativeRole}:final=${finalRequestBody.expectedRole}`);
       }
