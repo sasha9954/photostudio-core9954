@@ -300,17 +300,23 @@ def _has_physical_character1_in_i2v_text(text: str) -> bool:
     src = str(text or "")
     if not src.strip():
         return False
-    safe = re.search(r"(?i)(offscreen|voiceover only|not physically visible|memory voiceover)", src)
-    physical = re.search(
-        r"(?i)("
-        r"older\s+character_1|"
-        r"character_1.{0,160}(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)|"
-        r"older\s+(man|hero|vocalist|version).{0,160}(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)|"
-        r"present[- ]day\s+(vocalist|hero|man).{0,160}(visible|seen|stands|standing|watches|observing|presence|silhouette|figure)"
-        r")",
-        src,
-    )
-    return bool(physical and not safe)
+    chunks = re.split(r"(?<=[.!?;])\s+", src)
+    physical_patterns = [
+        r"(?i)\bolder\s+character_1\b",
+        r"(?i)\bcharacter_1\b.{0,160}\b(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)\b",
+        r"(?i)\bolder\s+(man|hero|vocalist|version)\b.{0,160}\b(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)\b",
+        r"(?i)\bpresent[- ]day\s+(vocalist|hero|man)\b.{0,160}\b(visible|seen|stands|standing|watches|observing|presence|silhouette|figure)\b",
+    ]
+    safe_patterns = [r"(?i)\boffscreen\b", r"(?i)\bvoiceover only\b", r"(?i)\bnot physically visible\b", r"(?i)\bmemory voiceover\b"]
+    for chunk in chunks:
+        c = chunk.strip()
+        if not c:
+            continue
+        has_physical = any(re.search(p, c) for p in physical_patterns)
+        is_safe = any(re.search(p, c) for p in safe_patterns)
+        if has_physical and not is_safe:
+            return True
+    return False
 
 
 def _final_split_timeline_post_cleanup(
@@ -5501,17 +5507,21 @@ def _validate_prompts_v11(prompts_v11: dict[str, Any], prompt_rows: list[dict[st
                 "negative_prompt",
                 "first_frame_prompt",
                 "last_frame_prompt",
+                "negative_video_prompt",
+                "image_prompt",
+                "start_image_prompt",
+                "end_image_prompt",
             ):
                 field_text = str(row.get(field) or "")
-                if any(p.search(field_text) for p in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS):
+                if _has_physical_character1_in_i2v_text(field_text):
                     split_timeline_visible_character1_remaining_segments.append(segment_id)
                     split_timeline_visible_character1_remaining_fields.append(f"{segment_id}:{field}")
             prompt_notes = _safe_dict(row.get("prompt_notes"))
             for idx, note in enumerate(_safe_list(prompt_notes.get("notes"))):
-                if any(p.search(str(note or "")) for p in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS):
+                if _has_physical_character1_in_i2v_text(str(note or "")):
                     split_timeline_visible_character1_remaining_segments.append(segment_id)
                     split_timeline_visible_character1_remaining_fields.append(f"{segment_id}:prompt_notes.notes[{idx}]")
-            if any(p.search(str(prompt_notes.get("world_anchor") or "")) for p in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS):
+            if _has_physical_character1_in_i2v_text(str(prompt_notes.get("world_anchor") or "")):
                 split_timeline_visible_character1_remaining_segments.append(segment_id)
                 split_timeline_visible_character1_remaining_fields.append(f"{segment_id}:prompt_notes.world_anchor")
         if split_timeline_contract and route == "ia2v" and "present" in timeline_role_value:
