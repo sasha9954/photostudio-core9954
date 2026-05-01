@@ -12728,12 +12728,19 @@ def clip_image(payload: ClipImageIn):
     connected_inputs_payload = getattr(refs_obj, "connectedInputs", None)
     connected_inputs_payload = connected_inputs_payload if isinstance(connected_inputs_payload, dict) else {}
     if expected_role:
+        def _guard_url_list(value):
+            if isinstance(value, list):
+                return [str(item or "").strip() for item in value if str(item or "").strip()]
+            if isinstance(value, str):
+                return [value.strip()] if value.strip() else []
+            return []
+
         expected_handle = f"ref_{expected_role}"
         for handle in ("ref_character_1", "ref_character_2", "ref_character_3"):
             if handle == expected_handle:
                 continue
             handle_payload = connected_inputs_payload.get(handle) if isinstance(connected_inputs_payload.get(handle), dict) else {}
-            handle_refs = _ensure_url_list(
+            handle_refs = _guard_url_list(
                 handle_payload.get("refs")
                 or handle_payload.get("value")
                 or handle_payload.get("url")
