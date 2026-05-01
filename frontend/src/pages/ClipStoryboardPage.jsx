@@ -46,7 +46,7 @@ import {
   PROMPT_SYNC_STATUS,
 } from "./clip_nodes/comfy/comfyBrainDomain";
 import { formatRefProfileDetails } from "./clip_nodes/comfy/refProfileDetails";
-import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, buildDirectorV2DraftPayload, getDefaultNarrativeNodeData, normalizeScenarioDirectorApiResponse, resolveDirectorV2ContentType, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
+import { buildLeanRuntimeStoryboardContract, buildScenarioDirectorRequestPayload, buildScenarioStageManualPayload, buildDirectorV2DraftPayload, getDefaultNarrativeNodeData, normalizeDirectorV2RuntimeStateOnHydrate, normalizeScenarioDirectorApiResponse, resolveDirectorV2ContentType, resolveNarrativeSource } from "./clip_nodes/comfy/comfyNarrativeDomain";
 import {
   buildScenarioHumanVisualAnchors,
   buildScenarioPreviewInput,
@@ -23488,7 +23488,7 @@ onClipSec: (nodeId, value) => {
                 if (!response?.ok) return { ok: false, error: response?.error || "Gemini Director V2 не ответил" };
                 return { ok: true, assistantReply: String(response?.assistant_reply || ""), directorMemory: response?.director_memory || {}, knowledgeVersion: String(response?.knowledge_version || "") };
               },
-              onRunDirectorV2PipelineStage: async (nodeId, stageKey) => {
+              onRunDirectorV2PipelineStage: async (nodeId, stageKey, runtime = {}) => {
                 try {
                   const stageMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
                   const packageKeyMap = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
@@ -23518,7 +23518,7 @@ onClipSec: (nodeId, value) => {
                     if (packageKey && stage?.editedOutput) effectiveStoryboardPackage[packageKey] = stage.editedOutput;
                   });
                   const payload = buildScenarioStageManualPayload({ sourceState, targetState: nodeItem?.data || {}, stageId, autoRun: false, storyboardPackage: effectiveStoryboardPackage, requestSource: `ai_scenario_director_v2:${stageId}` });
-                  const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload });
+                  const response = await fetchJson('/api/clip/comfy/scenario-director/generate', { method: 'POST', body: payload, signal: runtime?.signal });
                   if (!response?.ok) return { ok: false, error: response?.detail || "Ошибка генерации этапа" };
                   const storyboardPackage = response?.storyboardPackage || {};
                   const keyMap = { core: 'story_core', roles: 'role_plan', scenes: 'scene_plan', scene_detail: 'scene_detail', prompts: 'scene_prompts', final_video_prompt: 'final_video_prompt', final: 'final_payload' };
@@ -23800,7 +23800,14 @@ const hydrate = useCallback((source = "unknown") => {
         .filter((n) => n && typeof n.id === "string" && typeof n.type === "string" && n.position)
         .filter((n) => !REMOVED_LEGACY_NODE_TYPES.has(String(n?.type || "")))
         .map((n) => {
-          const data = { ...(n.data || {}) };
+          let data = { ...(n.data || {}) };
+          if (
+            (n.type === "comfyNarrative" || n.type === "aiScenarioDirectorV2")
+            && data
+            && (data?.directorViewMode === "pipeline" || data?.pipelineStages)
+          ) {
+            data = normalizeDirectorV2RuntimeStateOnHydrate(data);
+          }
 
           if (n.type === "scenarioStoryboard") {
             data.scenes = normalizeSceneCollectionWithSceneId(data.scenes, "scene").map((sceneItem) => {

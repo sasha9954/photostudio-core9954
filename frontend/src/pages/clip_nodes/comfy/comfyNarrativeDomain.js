@@ -925,6 +925,79 @@ export function getDefaultNarrativeNodeData() {
   };
 }
 
+const DIRECTOR_V2_PERSISTENT_PACKAGE_KEYS = new Set([
+  "audio_map",
+  "story_core",
+  "role_plan",
+  "scene_plan",
+  "scene_detail",
+  "scene_prompts",
+  "final_video_prompt",
+  "final_payload",
+  "final",
+]);
+
+export function normalizeDirectorV2RuntimeStateOnHydrate(nodeData = {}) {
+  const source = nodeData && typeof nodeData === "object" ? nodeData : {};
+  const next = { ...source };
+  const pipelineStages = source?.pipelineStages && typeof source.pipelineStages === "object" ? source.pipelineStages : {};
+  const storyboardPackage = source?.storyboardPackage && typeof source.storyboardPackage === "object" ? source.storyboardPackage : {};
+  let mutated = false;
+
+  const normalizedStages = Object.entries(pipelineStages).reduce((acc, [stageId, stage]) => {
+    const current = stage && typeof stage === "object" ? { ...stage } : {};
+    const status = String(current?.status || "");
+    if (status !== "running") {
+      acc[stageId] = current;
+      return acc;
+    }
+    const packageKey = stageId === "final" ? "final_payload" : ({
+      core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt",
+    }[stageId] || "");
+    const stageOutput = current?.editedOutput ?? current?.output;
+    const packageOutput = packageKey ? storyboardPackage?.[packageKey] : null;
+    const hasOutput = Boolean(stageOutput) || Boolean(packageOutput);
+    acc[stageId] = { ...current, status: hasOutput ? "done" : "idle" };
+    mutated = true;
+    console.info("[DIRECTOR V2 HYDRATE] cleared stale running state", { stageId, nextStatus: hasOutput ? "done" : "idle" });
+    return acc;
+  }, {});
+
+  if (Object.keys(normalizedStages).length) {
+    next.pipelineStages = normalizedStages;
+  }
+  next.selectedPipelineStage = String(source?.selectedPipelineStage || source?.activePipelineStage || "core");
+  if (next.activePipelineStage !== next.selectedPipelineStage) {
+    next.activePipelineStage = next.selectedPipelineStage;
+    mutated = true;
+  }
+  [
+    "isRunning", "runningStage", "activeRunningStage", "stageRunning", "isStageRunning", "pipelineRunning",
+    "requestInFlight", "activeRequestId", "activeRunId", "abortController", "buttonsLocked",
+  ].forEach((key) => {
+    if (key in next) {
+      delete next[key];
+      mutated = true;
+    }
+  });
+  if (next?.stageLocks && typeof next.stageLocks === "object" && next.stageLocks.running) {
+    next.stageLocks = { ...next.stageLocks, running: false };
+    mutated = true;
+  }
+  if (String(next?.status || "").toLowerCase() === "running") {
+    next.status = "idle";
+    mutated = true;
+  }
+  if (next?.directorV2Package && typeof next.directorV2Package === "object") {
+    const preserved = {};
+    Object.entries(next.directorV2Package).forEach(([k, v]) => {
+      if (DIRECTOR_V2_PERSISTENT_PACKAGE_KEYS.has(k) || !String(k).toLowerCase().includes("running")) preserved[k] = v;
+    });
+    next.directorV2Package = preserved;
+  }
+  return mutated ? next : source;
+}
+
 export function resolveNarrativeSource(state = {}) {
   const connectedInputs = state?.connectedInputs && typeof state.connectedInputs === "object" ? state.connectedInputs : {};
   const connectedOption = NARRATIVE_SOURCE_INPUT_HANDLES.find((item) => getConnectedInputSignal(connectedInputs?.[item.id]));
