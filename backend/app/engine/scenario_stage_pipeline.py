@@ -2452,6 +2452,18 @@ def _collect_finalize_dependency_gate_state(
     audio_map = _safe_dict(pkg.get("audio_map"))
     audio_segments = _safe_list(audio_map.get("segments"))
     audio_map_payload_valid = _has_valid_audio_map_payload_for_finalize(pkg)
+    final_video_prompt = _safe_dict(pkg.get("final_video_prompt"))
+    scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+    final_video_prompt_segments = _safe_list(final_video_prompt.get("segments")) or _safe_list(final_video_prompt.get("scenes"))
+    scene_prompts_segments = _safe_list(scene_prompts.get("segments")) or _safe_list(scene_prompts.get("scenes"))
+    scene_plan_ok_before_override = bool(payload_ok_by_stage.get("scene_plan"))
+    final_video_prompt_valid = bool(payload_ok_by_stage.get("final_video_prompt"))
+    scene_plan_false_ignored = bool(
+        "scene_plan" in dependencies and not scene_plan_ok_before_override and final_video_prompt_valid
+    )
+    if scene_plan_false_ignored:
+        payload_ok_by_stage["scene_plan"] = True
+        false_positive_prevented = True
     payload_ok_by_stage["audio_map"] = bool(audio_map_payload_valid)
     missing_reasons = [
         _finalize_dependency_reason(pkg, dep_stage) or f"missing_{dep_stage}_payload"
@@ -2462,6 +2474,13 @@ def _collect_finalize_dependency_gate_state(
     diagnostics["finalize_dependency_audio_map_payload_valid"] = bool(audio_map_payload_valid)
     diagnostics["finalize_dependency_audio_map_segment_count"] = len(audio_segments)
     diagnostics["finalize_dependency_audio_map_coverage_ok"] = bool(_safe_dict(audio_map.get("diagnostics")).get("coverage_ok"))
+    diagnostics["finalize_dependency_gate_uses_final_video_prompt_as_source_of_truth"] = True
+    diagnostics["finalize_dependency_gate_scene_plan_payload_ok_before_override"] = bool(scene_plan_ok_before_override)
+    diagnostics["finalize_dependency_gate_scene_plan_false_ignored_because_final_video_prompt_valid"] = bool(
+        scene_plan_false_ignored
+    )
+    diagnostics["finalize_final_video_prompt_segment_count"] = len(final_video_prompt_segments)
+    diagnostics["finalize_scene_prompts_segment_count"] = len(scene_prompts_segments)
     diagnostics["finalize_dependency_gate_recomputed_after_payload_overrides"] = True
     pkg["diagnostics"] = diagnostics
     return missing_reasons, payload_ok_by_stage, status_by_stage, false_positive_prevented
@@ -12194,11 +12213,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             if str(_safe_dict(row).get("scene_id") or "").strip()
         }
 
-    final_segments = [
-        _safe_dict(row)
-        for row in _safe_list(final_video_prompt.get("segments"))
-        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
-    ]
+    final_segments, finalize_segments_source = _resolve_finalize_segments(package)
     beat_rows = [_safe_dict(row) for row in _safe_list(_safe_dict(story_core.get("beat_map")).get("beats"))]
     beat_timing_by_segment: dict[str, tuple[float, float]] = {}
     for beat in beat_rows:
@@ -12648,10 +12663,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         final_video_prompt_text = str(
             route_payload.get("video_prompt")
             or route_payload.get("positive_prompt")
+            or segment.get("positive_video_prompt")
+            or segment.get("video_prompt")
             or prompts_row.get("video_prompt")
             or ""
         ).strip()
         final_video_prompt_text = _strip_literal_quoted_dialogue(final_video_prompt_text)
+        if not final_video_prompt_text:
+            raise RuntimeError(f"finalize_missing_video_prompt:{segment_id}")
         final_negative_prompt = str(route_payload.get("negative_prompt") or prompts_row.get("negative_prompt") or "").strip()
         if route == "ia2v":
             final_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
@@ -12815,6 +12834,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_scene_count"] = len(compat_scenes)
     diagnostics["finalize_render_manifest_count"] = len(render_manifest)
     diagnostics["finalize_used_final_video_prompt_segments"] = bool(final_segments)
+    diagnostics["finalize_segments_source"] = finalize_segments_source
     diagnostics["finalize_integrity_hash"] = integrity_hash
     diagnostics["finalize_creative_rewrite_applied"] = False
     diagnostics["final_video_prompt_linked_refs_by_role"] = final_refs_summary_by_role
@@ -12826,6 +12846,32 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     package["diagnostics"] = diagnostics
     _append_diag_event(package, f"final_storyboard built manifest={len(render_manifest)}", stage_id="finalize")
     return package
+
+
+def _resolve_finalize_segments(package: dict[str, Any]) -> tuple[list[dict[str, Any]], str]:
+    pkg = _safe_dict(package)
+    final_video_prompt = _safe_dict(pkg.get("final_video_prompt"))
+    scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+    scene_plan = _safe_dict(pkg.get("scene_plan"))
+    candidates: list[tuple[str, list[Any]]] = [
+        ("final_video_prompt.segments", _safe_list(final_video_prompt.get("segments"))),
+        ("final_video_prompt.scenes", _safe_list(final_video_prompt.get("scenes"))),
+        ("scene_prompts.segments", _safe_list(scene_prompts.get("segments"))),
+        ("scene_prompts.scenes", _safe_list(scene_prompts.get("scenes"))),
+        (
+            "scene_plan.rows",
+            _safe_list(scene_plan.get("segments")) or _safe_list(scene_plan.get("scenes")) or _safe_list(scene_plan.get("storyboard")),
+        ),
+    ]
+    for source, rows in candidates:
+        normalized = [
+            _safe_dict(row)
+            for row in rows
+            if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+        ]
+        if normalized:
+            return normalized, source
+    return [], "empty"
 
 
 def _run_story_core_stage(package: dict[str, Any]) -> dict[str, Any]:
