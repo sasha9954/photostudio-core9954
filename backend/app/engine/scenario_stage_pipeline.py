@@ -12317,6 +12317,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     final_refs_summary_by_role = {role: len(final_refs_by_role.get(role) or []) for role in final_refs_roles}
     final_missing_character_ref_segments: list[str] = []
     final_segments_with_source_image_refs = 0
+    finalize_missing_plan_row_count = 0
+    finalize_used_segment_as_plan_row_count = 0
     connected_summary = _safe_dict(input_pkg.get("connected_context_summary"))
     refs_inventory = _safe_dict(package.get("refs_inventory"))
 
@@ -12616,7 +12618,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     for idx, segment in enumerate(final_segments, start=1):
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
         scene_id = str(segment_id or segment.get("scene_id") or "").strip()
-        plan_row = _safe_dict(plan_by_id.get(segment_id) or plan_by_id.get(scene_id))
+        plan_row = _safe_dict(plan_by_id.get(segment_id) or plan_by_id.get(scene_id) or {})
+        if not plan_row:
+            finalize_missing_plan_row_count += 1
+            plan_row = segment
+            finalize_used_segment_as_plan_row_count += 1
         prompts_row = _safe_dict(prompts_by_id.get(segment_id) or prompts_by_id.get(scene_id))
         role_casting_row = _safe_dict(role_casting_by_id.get(segment_id) or role_casting_by_id.get(scene_id))
 
@@ -12637,11 +12643,20 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         if _safe_list(linked_assets.get("source_image_refs")):
             final_segments_with_source_image_refs += 1
 
-        t0 = _to_float(plan_row.get("t0"), 0.0)
-        t1 = _to_float(plan_row.get("t1"), t0)
+        t0 = _to_float(
+            plan_row.get("t0", plan_row.get("start_sec", segment.get("start_sec"))),
+            _to_float(segment.get("start_sec"), 0.0),
+        )
+        t1 = _to_float(
+            plan_row.get("t1", plan_row.get("end_sec", segment.get("end_sec"))),
+            t0,
+        )
         if t1 < t0:
             t1 = t0
-        duration_sec = _to_float(plan_row.get("duration_sec"), max(0.0, t1 - t0))
+        duration_sec = _to_float(
+            plan_row.get("duration_sec", segment.get("duration_sec")),
+            max(0.0, t1 - t0),
+        )
 
         beat_timing = beat_timing_by_segment.get(segment_id)
         if beat_timing is not None:
@@ -12835,6 +12850,8 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_render_manifest_count"] = len(render_manifest)
     diagnostics["finalize_used_final_video_prompt_segments"] = bool(final_segments)
     diagnostics["finalize_segments_source"] = finalize_segments_source
+    diagnostics["finalize_missing_plan_row_count"] = finalize_missing_plan_row_count
+    diagnostics["finalize_used_segment_as_plan_row_count"] = finalize_used_segment_as_plan_row_count
     diagnostics["finalize_integrity_hash"] = integrity_hash
     diagnostics["finalize_creative_rewrite_applied"] = False
     diagnostics["final_video_prompt_linked_refs_by_role"] = final_refs_summary_by_role
