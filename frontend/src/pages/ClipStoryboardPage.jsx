@@ -1048,7 +1048,7 @@ function extractScenarioRefsByRoleFromSource(source = null) {
   const roleMap = Object.fromEntries(SCENARIO_IMAGE_ROLE_KEYS.map((role) => [role, []]));
   const appendRoleUrls = (role, urls = []) => {
     if (!SCENARIO_IMAGE_ROLE_KEYS.includes(role)) return;
-    const normalizedUrls = Array.isArray(urls) ? urls.map((value) => String(value || "").trim()).filter(Boolean) : [];
+    const normalizedUrls = Array.isArray(urls) ? urls.map(normalizeScenarioRefUrl).filter(Boolean) : [];
     if (!normalizedUrls.length) return;
     roleMap[role] = [...new Set([...(roleMap[role] || []), ...normalizedUrls])];
   };
@@ -1221,7 +1221,7 @@ function buildScenarioConnectedInputsSummaryFromRefs(...sources) {
   );
   const connectedInputs = {};
   Object.entries(SCENARIO_IMAGE_ROLE_TO_HANDLE).forEach(([role, handle]) => {
-    const urls = Array.isArray(mergedRefs?.[role]) ? mergedRefs[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+    const urls = Array.isArray(mergedRefs?.[role]) ? mergedRefs[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
     if (!urls.length) return;
     connectedInputs[handle] = {
       count: urls.length,
@@ -1462,7 +1462,7 @@ function collectScenarioImageRefsByRole({
     LIVE_REF_URL_CANDIDATE_PATHS.forEach((path) => {
       result.push(...toUrlList(getByPath(nodeData, path)));
     });
-    return [...new Set(result.map((value) => String(value || "").trim()).filter(Boolean))];
+    return [...new Set(result.map(normalizeScenarioRefUrl).filter(Boolean))];
   };
   const resolveProfileFallbackText = (nodeData = {}) => PROFILE_FALLBACK_KEYS
     .map((key) => nodeData?.[key])
@@ -2106,6 +2106,14 @@ function handleStyle(kind, extra = {}) {
 
 function normalizeLinkUrl(value = "") {
   return String(value || "").trim();
+}
+
+function normalizeScenarioRefUrl(value) {
+  if (typeof value === "string") return value.trim();
+  if (value && typeof value === "object") {
+    return String(value.url || value.src || value.value || value.preview || "").trim();
+  }
+  return "";
 }
 
 function parseLinkUrl(value = "") {
@@ -4405,7 +4413,7 @@ function buildScenarioScenePackageSignature(scene = {}) {
       ...(Array.isArray(source?.connectedContextSummary?.active_connected_character_roles)
         ? source.connectedContextSummary.active_connected_character_roles
         : []),
-    ].map((value) => String(value || "").trim()).filter(Boolean)
+    ].map(normalizeScenarioRefUrl).filter(Boolean)
   )).sort();
   const connectedRefNodeIdsByRole = source?.connectedRefNodeIdsByRole && typeof source.connectedRefNodeIdsByRole === "object"
     ? source.connectedRefNodeIdsByRole
@@ -7008,7 +7016,7 @@ function extractIntroRefUrlsFromNode(node = null, role = "") {
   }
   return (Array.isArray(node?.data?.refs) ? node.data.refs : [])
     .map((item) => (typeof item === "string" ? item : item?.url))
-    .map((value) => String(value || "").trim())
+    .map(normalizeScenarioRefUrl)
     .filter(Boolean);
 }
 
@@ -14051,7 +14059,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         sceneItem?.segmentId,
         sceneItem?.id,
         `S${idx + 1}`,
-      ].map((value) => String(value || "").trim()).filter(Boolean);
+      ].map(normalizeScenarioRefUrl).filter(Boolean);
       return (
         candidates.includes(normalizedTarget)
         || candidates.some((value) => value.toLowerCase() === loweredTarget)
@@ -15110,7 +15118,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         targetNode?.data?.connectedInputs,
         targetNode?.data?.connected_inputs,
       ].find((candidate) => candidate && typeof candidate === "object" && Object.keys(candidate).length > 0) || connectedInputsFromContextFallback);
-      const extractUrlsFromConnectedInputValue = (value) => {
+const extractUrlsFromConnectedInputValue = (value) => {
         if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
         if (typeof value === "string") {
           const normalized = String(value || "").trim();
@@ -15173,7 +15181,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           collected.push(...toUrlList(scenarioPackageForImage?.input?.connected_context_summary?.connectedRefsPresentByRole?.[role]));
           collected.push(...toUrlList(scenarioPackageForImage?.input?.connected_context_summary?.refsByRole?.[role]));
           collected.push(...toUrlList(scenarioPackageForImage?.final_storyboard?.source_package_snapshot?.connected_context_summary?.connectedRefsPresentByRole?.[role]));
-          return [role, [...new Set(collected.map((value) => String(value || "").trim()).filter(Boolean))]];
+          return [role, [...new Set(collected.map(normalizeScenarioRefUrl).filter(Boolean))]];
         })
       );
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
@@ -15187,7 +15195,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
         const handle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[role];
         if (!handle) return;
-        const urls = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        const urls = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
         if (!urls.length) return;
         const existingUrls = extractUrlsFromConnectedInputValue(connectedInputsEffective?.[handle]);
         if (existingUrls.length > 0) return;
@@ -15202,7 +15210,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
         const urls = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].filter(Boolean) : [];
         if (!urls.length) return;
-        const existing = Array.isArray(refsUsedByRoleEffective?.[role]) ? refsUsedByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        const existing = Array.isArray(refsUsedByRoleEffective?.[role]) ? refsUsedByRoleEffective[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
         refsUsedByRoleEffective[role] = existing.length ? existing : urls;
       });
       const mustAppearEffective = Array.isArray(refsForImageRequest?.mustAppear)
@@ -15332,14 +15340,14 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         });
       }
       const ensuredCharacter1Refs = Array.isArray(refsByRoleEffective?.character_1)
-        ? refsByRoleEffective.character_1.map((value) => String(value || "").trim()).filter(Boolean)
+        ? refsByRoleEffective.character_1.map(normalizeScenarioRefUrl).filter(Boolean)
         : [];
       if (ensuredCharacter1Refs.length > 0) {
         refsByRoleEffective.character_1 = [...new Set(ensuredCharacter1Refs)];
       }
       if (expectedRole) {
         let expectedOnlyRefs = Array.isArray(refsByRoleEffective?.[expectedRole])
-          ? refsByRoleEffective[expectedRole].map((value) => String(value || "").trim()).filter(Boolean)
+          ? refsByRoleEffective[expectedRole].map(normalizeScenarioRefUrl).filter(Boolean)
           : [];
         const includesRole = (source = {}, role = "") => {
           const refsUsed = Array.isArray(source?.refsUsed) ? source.refsUsed : (Array.isArray(source?.refs_used) ? source.refs_used : []);
@@ -15379,7 +15387,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
           const recovered = [];
           recoverySources.forEach(({ label, values }) => {
             const normalizedValues = (Array.isArray(values) ? values : [])
-              .map((value) => String(value || "").trim())
+              .map(normalizeScenarioRefUrl)
               .filter(Boolean);
             if (normalizedValues.length) recoveredFrom.push(label);
             recovered.push(...normalizedValues);
@@ -15594,7 +15602,7 @@ Aspect ratio: ${comfyScenarioFormat}`.trim(),
         prompt_notes: promptNotesEffective,
       };
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
-        const roleRefs = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        const roleRefs = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
         if (!roleRefs.length) return;
         const handle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[role];
         sceneContractForRequest.refsByRole = {
@@ -15741,7 +15749,7 @@ Aspect ratio: ${imageFormat}`,
         finalRequestBody.mustAppear = [...new Set([...(Array.isArray(finalRequestBody.mustAppear) ? finalRequestBody.mustAppear : []), "character_1"])];
       }
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
-        const roleRefs = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        const roleRefs = Array.isArray(refsByRoleEffective?.[role]) ? refsByRoleEffective[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
         if (!roleRefs.length) return;
         finalRequestBody.refsByRole = {
           ...(finalRequestBody.refsByRole || {}),
@@ -15781,7 +15789,7 @@ Aspect ratio: ${imageFormat}`,
         connectedInputs: { ...((finalRequestBody.refs || {}).connectedInputs || {}) },
       };
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
-        const roleRefs = Array.isArray(finalRequestBody?.refsByRole?.[role]) ? finalRequestBody.refsByRole[role].map((value) => String(value || "").trim()).filter(Boolean) : [];
+        const roleRefs = Array.isArray(finalRequestBody?.refsByRole?.[role]) ? finalRequestBody.refsByRole[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
         if (!roleRefs.length) return;
         const handle = SCENARIO_IMAGE_ROLE_TO_HANDLE?.[role];
         finalRequestBody.refs.refsByRole[role] = roleRefs;
