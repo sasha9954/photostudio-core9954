@@ -15,10 +15,35 @@ export default function ManualClipBoardNode({ id, data }) {
   const onAudioUpload = (file) => {
     if (!file) return;
     const url = URL.createObjectURL(file);
-    patch({
-      step: "audio_loaded",
-      audio: { url, filename: file.name, duration_sec: Number(model?.audio?.duration_sec || 0), duration_ms: Number(model?.audio?.duration_ms || 0) },
-    });
+    const audioEl = new Audio();
+    audioEl.preload = "metadata";
+
+    audioEl.onloadedmetadata = () => {
+      const durationSec = Number(audioEl.duration || 0);
+      patch({
+        step: "audio_loaded",
+        audio: {
+          url,
+          filename: file.name,
+          duration_sec: Number(durationSec.toFixed(3)),
+          duration_ms: Math.round(durationSec * 1000),
+        },
+      });
+    };
+
+    audioEl.onerror = () => {
+      patch({
+        step: "audio_loaded",
+        audio: {
+          url,
+          filename: file.name,
+          duration_sec: 0,
+          duration_ms: 0,
+        },
+      });
+    };
+
+    audioEl.src = url;
   };
 
   const onAskSplit = () => patch({ step: "split_chat_ready" });
@@ -56,7 +81,7 @@ export default function ManualClipBoardNode({ id, data }) {
           Загрузить аудио
           <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} hidden />
         </label>
-      </div> : model.step === "director_board" && selectedScene ? <div className="manualBoardLayout"><div className="manualSceneList">{scenes.map((s) => <button key={s.scene_id} className="manualSceneItem" onClick={() => patch({ selectedSceneId: s.scene_id })}>{s.scene_id} · {s.start_sec}-{s.end_sec} · {s.status}</button>)}</div><div className="manualSceneCard"><input value={selectedScene.drama_hint} onChange={(e) => updateScene(selectedScene.scene_id, { drama_hint: e.target.value })} /><select value={selectedScene.route} onChange={(e) => updateScene(selectedScene.scene_id, { route: e.target.value })}>{ROUTES.map((r) => <option key={r} value={r}>{r}</option>)}</select><textarea placeholder="video_prompt" value={selectedScene.video_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { video_prompt: e.target.value })} /><textarea placeholder="negative_prompt" value={selectedScene.negative_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { negative_prompt: e.target.value })} />{selectedScene.route === "i2v_sound" ? <textarea placeholder="sound_prompt" value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /> : null}<input type="file" accept="image/*" onChange={(e) => updateScene(selectedScene.scene_id, { image_url: URL.createObjectURL(e.target.files?.[0]) })} /><div>{selectedScene.image_url ? <img alt="scene" src={selectedScene.image_url} className="manualPreview" /> : "Нет превью"}</div><div>{selectedScene.video_url ? <video src={selectedScene.video_url} controls className="manualPreview" /> : "Видео не создано"}</div><button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { status: "video_ready", video_url: selectedScene.image_url || "mock://video" })}>Создать видео</button><pre>{JSON.stringify(scenePreview, null, 2)}</pre></div></div> : <div>
+      </div> : model.step === "director_board" && selectedScene ? <div className="manualBoardLayout"><div className="manualSceneList">{scenes.map((s) => <button key={s.scene_id} className="manualSceneItem" onClick={() => patch({ selectedSceneId: s.scene_id })}>{s.scene_id.toUpperCase()} · {s.start_sec}-{s.end_sec} · {s.status}</button>)}</div><div className="manualSceneCard"><input value={selectedScene.drama_hint} onChange={(e) => updateScene(selectedScene.scene_id, { drama_hint: e.target.value })} /><select value={selectedScene.route} onChange={(e) => updateScene(selectedScene.scene_id, { route: e.target.value })}>{ROUTES.map((r) => <option key={r} value={r}>{r}</option>)}</select><textarea placeholder="video_prompt" value={selectedScene.video_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { video_prompt: e.target.value })} /><textarea placeholder="negative_prompt" value={selectedScene.negative_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { negative_prompt: e.target.value })} />{selectedScene.route === "i2v_sound" ? <textarea placeholder="sound_prompt" value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /> : null}<input type="file" accept="image/*" onChange={(e) => updateScene(selectedScene.scene_id, { image_url: URL.createObjectURL(e.target.files?.[0]) })} /><div>{selectedScene.image_url ? <img alt="scene" src={selectedScene.image_url} className="manualPreview" /> : "Нет превью"}</div><div>{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div>Mock video ready</div> : <video src={selectedScene.video_url} controls className="manualPreview" />) : "Видео не создано"}</div><button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { status: "video_ready", video_url: "mock://manual-video-ready" })}>Создать видео</button><pre>{JSON.stringify(scenePreview, null, 2)}</pre></div></div> : <div>
         <div className="manualHeaderRow">
           <div className="manualChip">Аудио: {model.audio?.url ? "готово" : "пусто"}</div>
           <div className="manualChip">Разбивка: {model.split_chat?.raw_ai_json ? "готово" : "пусто"}</div>
@@ -111,7 +136,7 @@ export default function ManualClipBoardNode({ id, data }) {
 
           <section className="manualPanel manualSplitPlan">
             <h4>План клипа</h4>
-            {aiScenes.length === 0 ? <div>План клипа появится здесь после AI-разбивки.</div> : <div className="manualPlanRows">{aiScenes.map((s, idx) => <div key={`${s.scene_id || idx}-${idx}`} className="manualPlanRow">{s.scene_id || `SEG_${String(idx + 1).padStart(2, "0")}`} | {Number(s.start_sec || 0).toFixed(2)}–{Number(s.end_sec || 0).toFixed(2)} | {s.route || "ia2v"} | {s.quality || "check"} | {s.drama_hint || "—"}</div>)}</div>}
+            {aiScenes.length === 0 ? <div>План клипа появится здесь после AI-разбивки.</div> : <div className="manualPlanRows">{aiScenes.map((s, idx) => <div key={`${s.scene_id || idx}-${idx}`} className="manualPlanRow">{(s.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`).toUpperCase()} | {Number(s.start_sec || 0).toFixed(2)}–{Number(s.end_sec || 0).toFixed(2)} | {s.route || "ia2v"} | {s.quality || "check"} | {s.drama_hint || "—"}</div>)}</div>}
             <div className="manualActionsRow">
               <button className="clipSB_btn" onClick={onBuildScenes} disabled={!canBuildScenes}>Собрать сцены</button>
               <button className="clipSB_btn" onClick={() => patch({ step: "director_board" })} disabled={!canOpenBoard}>Открыть режиссёрскую доску</button>
