@@ -1795,6 +1795,26 @@ function resolveStoryboardSceneBySegmentId(segmentId = "", ...sources) {
   return null;
 }
 
+function findScenarioRowByAnyId(rows = [], ids = []) {
+  const idSet = new Set((Array.isArray(ids) ? ids : [])
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean));
+  return (Array.isArray(rows) ? rows : []).find((row) => {
+    const candidates = [
+      row?.segment_id,
+      row?.segmentId,
+      row?.scene_id,
+      row?.sceneId,
+      row?.id,
+      extractBaseSegmentId(row?.scene_id),
+      extractBaseSegmentId(row?.sceneId),
+      extractBaseSegmentId(row?.segment_id),
+      extractBaseSegmentId(row?.segmentId),
+    ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+    return candidates.some((value) => idSet.has(value));
+  }) || {};
+}
+
 const SCENARIO_IMAGE_RULE_ONLY_KEYWORDS = [
   "RULES STRICT",
   "Forbidden:",
@@ -15229,28 +15249,58 @@ const extractUrlsFromConnectedInputValue = (value) => {
       const sceneFinalPayload = targetScene?.final_payload && typeof targetScene.final_payload === "object"
         ? targetScene.final_payload
         : (targetScene?.finalPayload && typeof targetScene.finalPayload === "object" ? targetScene.finalPayload : {});
-      const segmentLookupId = targetScene?.segment_id
-        || targetScene?.segmentId
-        || targetScene?.scene_id
-        || targetScene?.sceneId
-        || sceneId
-        || "";
-      const renderManifestRow = resolveStoryboardSceneBySegmentId(
-        segmentLookupId,
-        { render_manifest: scenarioPackageForImage?.final_storyboard?.render_manifest },
-        { renderManifest: scenarioPackageForImage?.final_storyboard?.renderManifest },
-      ) || {};
-      const finalStoryboardScene = resolveStoryboardSceneBySegmentId(
-        segmentLookupId,
-        { scenes: scenarioPackageForImage?.final_storyboard?.scenes },
-        { segments: scenarioPackageForImage?.final_storyboard?.segments },
-      ) || {};
       const embeddedRenderManifestRow =
         targetScene?.render_manifest_row && typeof targetScene.render_manifest_row === "object"
           ? targetScene.render_manifest_row
           : (targetScene?.renderManifestRow && typeof targetScene.renderManifestRow === "object"
             ? targetScene.renderManifestRow
             : {});
+      const lookupIdsRaw = [
+        targetScene?.segment_id,
+        targetScene?.segmentId,
+        targetScene?.scene_id,
+        targetScene?.sceneId,
+        sceneId,
+        extractBaseSegmentId(targetScene?.segment_id),
+        extractBaseSegmentId(targetScene?.segmentId),
+        extractBaseSegmentId(targetScene?.scene_id),
+        extractBaseSegmentId(targetScene?.sceneId),
+        extractBaseSegmentId(sceneId),
+        resolveCanonicalSegmentId(sceneId),
+      ].map((value) => String(value || "").trim()).filter(Boolean);
+      const lookupIds = [...new Map(lookupIdsRaw.map((value) => [value.toLowerCase(), value])).values()];
+      const hasEmbeddedRenderManifestRow = Object.keys(embeddedRenderManifestRow || {}).length > 0;
+      const renderManifestRows = scenarioPackageForImage?.final_storyboard?.render_manifest;
+      const renderManifestRowsAlt = scenarioPackageForImage?.final_storyboard?.renderManifest;
+      const renderManifestRow = hasEmbeddedRenderManifestRow
+        ? embeddedRenderManifestRow
+        : (findScenarioRowByAnyId(renderManifestRows, lookupIds)
+          || findScenarioRowByAnyId(renderManifestRowsAlt, lookupIds)
+          || {});
+      const finalStoryboardScene = findScenarioRowByAnyId(scenarioPackageForImage?.final_storyboard?.scenes, lookupIds)
+        || findScenarioRowByAnyId(scenarioPackageForImage?.final_storyboard?.segments, lookupIds)
+        || {};
+      const renderManifestPrimaryRole = normalizeScenarioRoleName(renderManifestRow?.primaryRole || renderManifestRow?.primary_role || "");
+      const finalStoryboardPrimaryRole = normalizeScenarioRoleName(finalStoryboardScene?.primaryRole || finalStoryboardScene?.primary_role || "");
+      const embeddedPrimaryRole = normalizeScenarioRoleName(embeddedRenderManifestRow?.primaryRole || embeddedRenderManifestRow?.primary_role || "");
+      if (!renderManifestPrimaryRole && !finalStoryboardPrimaryRole && !embeddedPrimaryRole) {
+        throw new Error(`image_request_missing_authoritative_scene_row:${sceneId}`);
+      }
+      console.info("[SCENARIO MANIFEST LOOKUP HARD DEBUG]", {
+        sceneId,
+        lookupIds,
+        hasEmbeddedRenderManifestRow,
+        renderManifestCount: Array.isArray(renderManifestRows) ? renderManifestRows.length : (Array.isArray(renderManifestRowsAlt) ? renderManifestRowsAlt.length : 0),
+        finalStoryboardScenesCount: (Array.isArray(scenarioPackageForImage?.final_storyboard?.scenes) ? scenarioPackageForImage.final_storyboard.scenes.length : 0)
+          + (Array.isArray(scenarioPackageForImage?.final_storyboard?.segments) ? scenarioPackageForImage.final_storyboard.segments.length : 0),
+        foundRenderManifestRow: Boolean(renderManifestRow.segment_id || renderManifestRow.scene_id || renderManifestRow.primaryRole || renderManifestRow.primary_role),
+        foundFinalStoryboardScene: Boolean(finalStoryboardScene.segment_id || finalStoryboardScene.scene_id || finalStoryboardScene.primaryRole || finalStoryboardScene.primary_role),
+        embeddedPrimaryRole,
+        renderManifestPrimaryRole,
+        finalStoryboardPrimaryRole,
+        targetScenePrimaryRole: normalizeScenarioRoleName(targetScene?.primaryRole || targetScene?.primary_role || ""),
+        refsForImageRequestPrimaryRole: normalizeScenarioRoleName(refsForImageRequest?.primaryRole || refsForImageRequest?.primary_role || ""),
+      });
       const expectedRoleResolution = resolveScenarioExpectedImageRoleFromSources({
         embeddedRenderManifestRow,
         targetScene,
@@ -15259,7 +15309,7 @@ const extractUrlsFromConnectedInputValue = (value) => {
         finalStoryboardScene,
         refsForImageRequest,
       });
-      const expectedRole = expectedRoleResolution?.role
+      let expectedRole = expectedRoleResolution?.role
         || resolveScenarioExpectedImageRole(refsForImageRequest || {});
       const chosenExpectedRoleSource = expectedRoleResolution?.source || "refsForImageRequest.fallback";
       console.info("[SCENARIO EXPECTED ROLE RESOLUTION]", {
@@ -15277,14 +15327,20 @@ const extractUrlsFromConnectedInputValue = (value) => {
         chosenExpectedRoleSource,
       });
       const requestedPrimaryRole = normalizeScenarioRoleName(expectedRole || refsForImageRequest?.primaryRole || derivedRoleContract?.primaryRole || "");
-      const manifestChosenRole = normalizeScenarioRoleName(
-        embeddedRenderManifestRow?.primaryRole
-        || embeddedRenderManifestRow?.primary_role
-        || renderManifestRow?.primaryRole
-        || renderManifestRow?.primary_role
+      const authoritativeRole = normalizeScenarioRoleName(
+        renderManifestRow.primaryRole
+        || renderManifestRow.primary_role
+        || finalStoryboardScene.primaryRole
+        || finalStoryboardScene.primary_role
+        || embeddedRenderManifestRow.primaryRole
+        || embeddedRenderManifestRow.primary_role
         || ""
       );
-      if (manifestChosenRole === "character_2" && expectedRole === "character_1") {
+      if (authoritativeRole && expectedRole && authoritativeRole !== expectedRole) {
+        throw new Error(`image_request_authoritative_role_mismatch:${sceneId}:authoritative=${authoritativeRole}:expected=${expectedRole}`);
+      }
+      if (authoritativeRole && !expectedRole) expectedRole = authoritativeRole;
+      if (authoritativeRole === "character_2" && expectedRole === "character_1") {
         throw new Error(`image_request_stale_runtime_role_override:${sceneId}:manifest=character_2:chosen=character_1`);
       }
       let primaryRoleEffective = SCENARIO_IMAGE_WORLD_ROLE_KEYS.includes(requestedPrimaryRole) ? "" : String(requestedPrimaryRole || "").trim();
@@ -15311,6 +15367,9 @@ const extractUrlsFromConnectedInputValue = (value) => {
         finalSceneDelta = `${finalSceneDelta}\n\n${profileClause}`.trim();
       }
       let shouldUseCharacter1 = primaryRoleEffective === "character_1";
+      if (expectedRole && expectedRole !== "character_1") {
+        shouldUseCharacter1 = false;
+      }
       if (!hasCharacter1Ref && (sameWomanByReferenceRequested || roleContractRequiresCharacter1 || primaryRoleEffective === "character_1")) {
         if (!character1ProfileFallbackText) {
           const hardBlockReason = sameWomanByReferenceRequested
@@ -15671,6 +15730,10 @@ const extractUrlsFromConnectedInputValue = (value) => {
         || targetScene?.resolved_workflow_key
         || ""
       ).trim();
+      if (expectedRole) {
+        primaryRoleEffective = expectedRole;
+        heroEntityIdEffective = expectedRole;
+      }
       const finalRequestBody = {
         ...scenarioContractPayload,
         ...(sceneFinalPayload ? { finalPayload: sceneFinalPayload, final_payload: sceneFinalPayload } : {}),
@@ -15746,7 +15809,7 @@ Aspect ratio: ${imageFormat}`,
         expectedRole,
         expected_role: expectedRole,
       };
-      if (shouldUseCharacter1) {
+      if (shouldUseCharacter1 && expectedRole === "character_1") {
         finalRequestBody.sceneActiveRoles = [...new Set([...(Array.isArray(finalRequestBody.sceneActiveRoles) ? finalRequestBody.sceneActiveRoles : []), "character_1"])];
         finalRequestBody.refsUsed = [...new Set([...(Array.isArray(finalRequestBody.refsUsed) ? finalRequestBody.refsUsed : []), "character_1"])];
         finalRequestBody.mustAppear = [...new Set([...(Array.isArray(finalRequestBody.mustAppear) ? finalRequestBody.mustAppear : []), "character_1"])];
@@ -15772,7 +15835,7 @@ Aspect ratio: ${imageFormat}`,
           },
         };
       });
-      if (shouldUseCharacter1 && Array.isArray(finalRequestBody?.refsByRole?.character_1) && finalRequestBody.refsByRole.character_1.length > 0) {
+      if (shouldUseCharacter1 && expectedRole === "character_1" && Array.isArray(finalRequestBody?.refsByRole?.character_1) && finalRequestBody.refsByRole.character_1.length > 0) {
         finalRequestBody.sceneContract = {
           ...(finalRequestBody.sceneContract || {}),
           refDirectives: {
@@ -15920,6 +15983,16 @@ Aspect ratio: ${imageFormat}`,
         refsByRoleCounts: summarizeRefsByRole(refsByRoleEffective || {}),
         connectedInputsKeys: Object.keys(connectedInputsEffective || {}),
       });
+      const finalCounts = summarizeRefsByRole(finalRequestBody?.refsByRole || {});
+      if (authoritativeRole && finalRequestBody.expectedRole !== authoritativeRole) {
+        throw new Error(`image_request_final_role_mismatch:${sceneId}:authoritative=${authoritativeRole}:final=${finalRequestBody.expectedRole}`);
+      }
+      if (authoritativeRole && Number(finalCounts?.[authoritativeRole] || 0) <= 0) {
+        throw new Error(`image_request_final_missing_authoritative_refs:${sceneId}:${authoritativeRole}`);
+      }
+      if (authoritativeRole === "character_2" && Number(finalCounts?.character_1 || 0) > 0) {
+        throw new Error(`image_request_final_wrong_character_refs:${sceneId}:character_1_present_for_character_2`);
+      }
       const out = await withTimeoutGuard(fetchJson(`/api/clip/image`, {
         method: "POST",
         timeoutMs: IMAGE_GENERATION_TIMEOUT_MS,
