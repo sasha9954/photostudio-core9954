@@ -12409,8 +12409,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
 
         return {
             "audio_url": project_audio_url or None,
-            "character_refs": character_refs,
-            "refs": deepcopy(final_refs_by_role),
+            "character_refs_for_active_role": character_refs,
             "source_image_refs": source_image_refs,
             "start_frame_asset": segment_row.get("start_frame_asset"),
             "end_frame_asset": segment_row.get("end_frame_asset"),
@@ -12644,6 +12643,46 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "continuityFixApplied": continuity_fix_applied,
         }
 
+    scene_detail = _safe_dict(package.get("scene_detail"))
+    scene_detail_by_id = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(scene_detail.get("scenes"))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("scene_id") or "").strip()
+    }
+    audio_map_by_id = {
+        str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("id") or "").strip(): _safe_dict(row)
+        for row in _safe_list(audio_map.get("segments"))
+        if str(_safe_dict(row).get("segment_id") or _safe_dict(row).get("id") or "").strip()
+    }
+    finalize_timing_source_by_segment: dict[str, str] = {}
+    finalize_zero_timing_segments: list[str] = []
+    finalize_timing_recovered_from_scene_plan_count = 0
+    finalize_timing_recovered_from_audio_map_count = 0
+
+    def _valid_timing(a: float, b: float) -> bool:
+        return math.isfinite(a) and math.isfinite(b) and b >= a and (a != 0.0 or b != 0.0)
+
+    def _resolve_timing(segment_id: str, scene_id: str, segment_row: dict[str, Any], plan_row_data: dict[str, Any]) -> tuple[float, float, float, str]:
+        detail_row = _safe_dict(scene_detail_by_id.get(segment_id) or scene_detail_by_id.get(scene_id))
+        fvp_t0 = _to_float(segment_row.get("start_sec", segment_row.get("t0")), 0.0)
+        fvp_t1 = _to_float(segment_row.get("end_sec", segment_row.get("t1")), fvp_t0)
+        am_row = _safe_dict(audio_map_by_id.get(segment_id) or audio_map_by_id.get(scene_id))
+        candidates = [
+            ("scene_plan", _to_float(plan_row_data.get("t0", plan_row_data.get("start_sec")), 0.0), _to_float(plan_row_data.get("t1", plan_row_data.get("end_sec")), 0.0)),
+            ("scene_detail", _to_float(detail_row.get("t0", detail_row.get("start_sec")), 0.0), _to_float(detail_row.get("t1", detail_row.get("end_sec")), 0.0)),
+            ("final_video_prompt", fvp_t0, fvp_t1),
+            ("audio_map", _to_float(am_row.get("start_sec", am_row.get("t0")), 0.0), _to_float(am_row.get("end_sec", am_row.get("t1")), 0.0)),
+        ]
+        for source, t0_v, t1_v in candidates:
+            if _valid_timing(t0_v, t1_v):
+                return t0_v, t1_v, max(0.0, t1_v - t0_v), source
+        # fallback
+        t0_v = _to_float(plan_row_data.get("t0", plan_row_data.get("start_sec", fvp_t0)), 0.0)
+        t1_v = _to_float(plan_row_data.get("t1", plan_row_data.get("end_sec", fvp_t1)), t0_v)
+        if t1_v < t0_v:
+            t1_v = t0_v
+        return t0_v, t1_v, max(0.0, t1_v - t0_v), "fallback"
+
     for idx, segment in enumerate(final_segments, start=1):
         segment_id = str(segment.get("segment_id") or segment.get("scene_id") or f"seg_{idx}").strip()
         scene_id = str(segment_id or segment.get("scene_id") or "").strip()
@@ -12672,27 +12711,14 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         if _safe_list(linked_assets.get("source_image_refs")):
             final_segments_with_source_image_refs += 1
 
-        t0 = _to_float(
-            plan_row.get("t0", plan_row.get("start_sec", segment.get("start_sec"))),
-            _to_float(segment.get("start_sec"), 0.0),
-        )
-        t1 = _to_float(
-            plan_row.get("t1", plan_row.get("end_sec", segment.get("end_sec"))),
-            t0,
-        )
-        if t1 < t0:
-            t1 = t0
-        duration_sec = _to_float(
-            plan_row.get("duration_sec", segment.get("duration_sec")),
-            max(0.0, t1 - t0),
-        )
-
-        beat_timing = beat_timing_by_segment.get(segment_id)
-        if beat_timing is not None:
-            t0, t1 = beat_timing
-            duration_sec = max(0.0, t1 - t0)
-        else:
-            logger.warning("[scenario_stage_pipeline] finalize_stage missing beat timing for segment_id=%s", segment_id)
+        t0, t1, duration_sec, timing_source = _resolve_timing(segment_id, scene_id, segment, plan_row)
+        finalize_timing_source_by_segment[segment_id] = timing_source
+        if timing_source == "scene_plan":
+            finalize_timing_recovered_from_scene_plan_count += 1
+        elif timing_source == "audio_map":
+            finalize_timing_recovered_from_audio_map_count += 1
+        if duration_sec <= 0.0:
+            finalize_zero_timing_segments.append(segment_id)
 
         segment["t0"] = t0
         segment["t1"] = t1
@@ -12732,7 +12758,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "heroEntityId": continuity_fields.get("heroEntityId"),
             "mustAppear": list(_safe_list(continuity_fields.get("mustAppear"))),
             "refsUsed": list(_safe_list(continuity_fields.get("refsUsed"))),
-            "refsByRole": _safe_dict(continuity_fields.get("refsByRole")),
+            "refsByRole": {str(continuity_fields.get("primaryRole") or ""): _safe_list(_safe_dict(continuity_fields.get("refsByRole")).get(str(continuity_fields.get("primaryRole") or "")))} if str(continuity_fields.get("primaryRole") or "") else {},
             "previousSceneImageUrl": continuity_fields.get("previousSceneImageUrl"),
             "identityLockApplied": bool(continuity_fields.get("identityLockApplied")),
             "bodyLockApplied": bool(continuity_fields.get("bodyLockApplied")),
@@ -12753,24 +12779,27 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "duration_sec": duration_sec,
             },
             "route": route,
+            "renderMode": str(video_metadata.get("render_mode") or route_payload.get("render_mode") or "").strip(),
+            "resolvedWorkflowKey": str(segment.get("resolved_workflow_key") or video_metadata.get("resolved_workflow_key") or "").strip(),
+            "ltxMode": str(video_metadata.get("ltx_mode") or route_payload.get("ltx_mode") or "").strip(),
+            "lipSync": bool(video_metadata.get("lip_sync") or route == "ia2v"),
+            "requiresAudioSensitiveVideo": bool(segment.get("requires_audio_sensitive_video") or route == "ia2v"),
+            "image_prompt": final_image_prompt,
+            "video_prompt": final_video_prompt_text,
+            "negative_prompt": final_negative_prompt,
             "route_payload": {
+                "image_prompt": final_image_prompt,
                 "positive_prompt": final_route_positive_prompt,
                 "negative_prompt": final_negative_prompt,
-                "negative_video_prompt": final_negative_prompt,
-                "image_prompt": final_image_prompt,
                 "video_prompt": final_video_prompt_text,
-                "first_frame_prompt": route_payload.get("first_frame_prompt"),
-                "last_frame_prompt": route_payload.get("last_frame_prompt"),
             },
             "engine_hints": engine_hints,
-            "video_metadata": video_metadata,
             "linked_assets": linked_assets,
-            "audio_behavior_hints": str(segment.get("audio_behavior_hints") or "").strip(),
             "primaryRole": continuity_fields.get("primaryRole"),
             "heroEntityId": continuity_fields.get("heroEntityId"),
             "mustAppear": list(_safe_list(continuity_fields.get("mustAppear"))),
             "refsUsed": list(_safe_list(continuity_fields.get("refsUsed"))),
-            "refsByRole": _safe_dict(continuity_fields.get("refsByRole")),
+            "refsByRole": {str(continuity_fields.get("primaryRole") or ""): _safe_list(_safe_dict(continuity_fields.get("refsByRole")).get(str(continuity_fields.get("primaryRole") or "")))} if str(continuity_fields.get("primaryRole") or "") else {},
             "previousSceneImageUrl": continuity_fields.get("previousSceneImageUrl"),
             "identityLockApplied": bool(continuity_fields.get("identityLockApplied")),
             "bodyLockApplied": bool(continuity_fields.get("bodyLockApplied")),
@@ -12799,7 +12828,7 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             if str(value or "").strip()
         )
         active_warning_roles = list(dict.fromkeys([role for role in active_warning_roles if role]))
-        if "character_1" in active_warning_roles and not _safe_list(_safe_dict(linked_assets.get("character_refs")).get("character_1")):
+        if "character_1" in active_warning_roles and not _safe_list(_safe_dict(linked_assets.get("character_refs_for_active_role")).get("character_1")):
             final_missing_character_ref_segments.append(segment_id)
 
         compat_scenes.append(
@@ -12810,17 +12839,9 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
                 "final_payload": final_payload,
                 "image_prompt": final_payload["image_prompt"],
                 "video_prompt": final_payload["video_prompt"],
-                "negative_video_prompt": final_payload["negative_prompt"],
-                "first_frame_prompt": manifest_row["route_payload"].get("first_frame_prompt"),
-                "last_frame_prompt": manifest_row["route_payload"].get("last_frame_prompt"),
-                "video_metadata": video_metadata,
-                "engine_hints": engine_hints,
+                "negative_prompt": final_payload["negative_prompt"],
                 "linked_assets": linked_assets,
-                "audio_behavior_hints": manifest_row["audio_behavior_hints"],
                 "prompt_source": manifest_row["prompt_source"],
-                "scene_plan": plan_row,
-                "scene_prompt": prompts_row,
-                "role_plan": role_casting_row,
                 "t0": t0,
                 "t1": t1,
                 "duration_sec": duration_sec,
@@ -12856,14 +12877,13 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         "render_manifest": render_manifest,
         "integrity_hash": integrity_hash,
         "scenes": compat_scenes,
-        "source_package_snapshot": {
-            "input": input_pkg,
-            "audio_map": audio_map,
-            "story_core": story_core,
-            "role_plan": role_plan,
-            "scene_plan": scene_plan,
-            "scene_prompts": scene_prompts,
-            "final_video_prompt": final_video_prompt,
+        "diagnostics": {
+            "debug_snapshot_preview": {
+                "segments_source": finalize_segments_source,
+                "segment_count": len(final_segments),
+            },
+            "final_storyboard_compacted": True,
+            "final_storyboard_debug_snapshot_omitted": True,
         },
         "meta": {
             "final_video_prompt_linked_refs_by_role": final_refs_summary_by_role,
@@ -12871,7 +12891,11 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
             "final_video_prompt_missing_character_ref_segments": final_missing_character_ref_segments,
         },
     }
+    final_storyboard_size_before_chars = len(json.dumps(final_storyboard, ensure_ascii=False, default=str))
     final_storyboard = _attach_downstream_mode_metadata(final_storyboard, package)
+    final_storyboard_size_after_chars = len(json.dumps(final_storyboard, ensure_ascii=False, default=str))
+    final_storyboard["diagnostics"]["final_storyboard_size_before_chars"] = final_storyboard_size_before_chars
+    final_storyboard["diagnostics"]["final_storyboard_size_after_chars"] = final_storyboard_size_after_chars
     package["final_storyboard"] = final_storyboard
 
     diagnostics = _safe_dict(package.get("diagnostics"))
@@ -12882,6 +12906,10 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["finalize_missing_plan_row_count"] = finalize_missing_plan_row_count
     diagnostics["finalize_used_segment_as_plan_row_count"] = finalize_used_segment_as_plan_row_count
     diagnostics["finalize_integrity_hash"] = integrity_hash
+    diagnostics["finalize_timing_source_by_segment"] = finalize_timing_source_by_segment
+    diagnostics["finalize_zero_timing_segments"] = finalize_zero_timing_segments
+    diagnostics["finalize_timing_recovered_from_scene_plan_count"] = finalize_timing_recovered_from_scene_plan_count
+    diagnostics["finalize_timing_recovered_from_audio_map_count"] = finalize_timing_recovered_from_audio_map_count
     diagnostics["finalize_creative_rewrite_applied"] = False
     diagnostics["final_video_prompt_linked_refs_by_role"] = final_refs_summary_by_role
     diagnostics["final_video_prompt_segments_with_source_image_refs"] = final_segments_with_source_image_refs
