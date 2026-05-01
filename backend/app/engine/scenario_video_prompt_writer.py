@@ -2702,51 +2702,80 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
                 return cand
         raise RuntimeError(f"final_video_prompt_invalid_timing:{segment_id or scene_id or 'unknown'}")
 
+    def _normalize_model_segment_ids(
+        model_segments: list[dict[str, Any]],
+        canonical_segment_rows: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        expected_segment_ids = {
+            str(_safe_dict(row).get("segment_id") or "").strip()
+            for row in canonical_segment_rows
+            if str(_safe_dict(row).get("segment_id") or "").strip()
+        }
+        scene_to_segment_map = {
+            str(_safe_dict(row).get("scene_id") or "").strip(): str(_safe_dict(row).get("segment_id") or "").strip()
+            for row in canonical_segment_rows
+            if str(_safe_dict(row).get("scene_id") or "").strip() and str(_safe_dict(row).get("segment_id") or "").strip()
+        }
+        segment_to_scene_map = {v: k for k, v in scene_to_segment_map.items()}
+        invalid_before: list[str] = []
+        invalid_after: list[str] = []
+        normalized_pairs: list[dict[str, str]] = []
+        normalized_count = 0
+        normalized_rows = [_safe_dict(item) for item in model_segments]
+        for row in normalized_rows:
+            raw_segment_id = str(row.get("segment_id") or "").strip()
+            raw_scene_id = str(row.get("scene_id") or "").strip()
+            if raw_segment_id and raw_segment_id not in expected_segment_ids:
+                invalid_before.append(raw_segment_id)
+            elif not raw_segment_id and raw_scene_id:
+                invalid_before.append(f"<empty>:{raw_scene_id}")
+
+            resolved_segment_id = raw_segment_id
+            resolved_scene_id = raw_scene_id
+            mapped_segment_from_scene = scene_to_segment_map.get(resolved_scene_id) if resolved_scene_id else ""
+            mapped_segment_from_segment_as_scene = scene_to_segment_map.get(resolved_segment_id) if resolved_segment_id else ""
+            if (not resolved_segment_id or resolved_segment_id not in expected_segment_ids):
+                if mapped_segment_from_scene:
+                    if mapped_segment_from_scene != resolved_segment_id:
+                        normalized_pairs.append({"from": resolved_segment_id or resolved_scene_id, "to": mapped_segment_from_scene, "scene_id": resolved_scene_id})
+                        normalized_count += 1
+                    resolved_segment_id = mapped_segment_from_scene
+                elif mapped_segment_from_segment_as_scene:
+                    if mapped_segment_from_segment_as_scene != resolved_segment_id:
+                        normalized_pairs.append({"from": resolved_segment_id, "to": mapped_segment_from_segment_as_scene, "scene_id": resolved_segment_id})
+                        normalized_count += 1
+                    resolved_scene_id = resolved_segment_id
+                    resolved_segment_id = mapped_segment_from_segment_as_scene
+
+            if resolved_segment_id in segment_to_scene_map and not resolved_scene_id:
+                resolved_scene_id = segment_to_scene_map[resolved_segment_id]
+            if resolved_segment_id in segment_to_scene_map and resolved_scene_id != segment_to_scene_map[resolved_segment_id]:
+                resolved_scene_id = segment_to_scene_map[resolved_segment_id]
+
+            row["segment_id"] = resolved_segment_id
+            if resolved_scene_id:
+                row["scene_id"] = resolved_scene_id
+
+            if resolved_segment_id and resolved_segment_id not in expected_segment_ids:
+                invalid_after.append(resolved_segment_id)
+            elif not resolved_segment_id:
+                invalid_after.append(f"<empty>:{resolved_scene_id or 'unknown'}")
+
+        return normalized_rows, {
+            "expected_segment_ids": sorted(expected_segment_ids),
+            "scene_to_segment_map": scene_to_segment_map,
+            "segment_to_scene_map": segment_to_scene_map,
+            "final_video_prompt_segment_id_normalized_count": normalized_count,
+            "final_video_prompt_segment_id_normalized_pairs": normalized_pairs,
+            "final_video_prompt_invalid_segment_ids_before_normalization": list(dict.fromkeys(invalid_before)),
+            "final_video_prompt_invalid_segment_ids_after_normalization": list(dict.fromkeys(invalid_after)),
+        }
+
     data = _safe_dict(raw)
     model_segments = [_safe_dict(item) for item in _safe_list(data.get("segments"))]
-    expected_segment_ids = {
-        str(_safe_dict(row).get("segment_id") or "").strip() for row in segment_rows if str(_safe_dict(row).get("segment_id") or "").strip()
-    }
-    scene_to_segment_map = {
-        str(_safe_dict(row).get("scene_id") or "").strip(): str(_safe_dict(row).get("segment_id") or "").strip()
-        for row in segment_rows
-        if str(_safe_dict(row).get("scene_id") or "").strip() and str(_safe_dict(row).get("segment_id") or "").strip()
-    }
-    segment_to_scene_map = {v: k for k, v in scene_to_segment_map.items()}
-    invalid_before: list[str] = []
-    invalid_after: list[str] = []
-    normalized_pairs: list[dict[str, str]] = []
-    normalized_count = 0
-    for row in model_segments:
-        raw_segment_id = str(row.get("segment_id") or "").strip()
-        raw_scene_id = str(row.get("scene_id") or "").strip()
-        if raw_segment_id and raw_segment_id not in expected_segment_ids:
-            invalid_before.append(raw_segment_id)
-        elif not raw_segment_id and raw_scene_id:
-            invalid_before.append(f"<empty>:{raw_scene_id}")
-        resolved_segment_id = raw_segment_id
-        resolved_scene_id = raw_scene_id
-        scene_id_candidate = ""
-        if resolved_scene_id in scene_to_segment_map:
-            scene_id_candidate = resolved_scene_id
-        elif resolved_segment_id in scene_to_segment_map:
-            scene_id_candidate = resolved_segment_id
-        if (not resolved_segment_id or resolved_segment_id not in expected_segment_ids) and scene_id_candidate:
-            mapped_segment_id = scene_to_segment_map[scene_id_candidate]
-            if mapped_segment_id and mapped_segment_id != resolved_segment_id:
-                normalized_pairs.append({"from": resolved_segment_id or resolved_scene_id, "to": mapped_segment_id, "scene_id": scene_id_candidate})
-                normalized_count += 1
-            resolved_segment_id = mapped_segment_id
-            resolved_scene_id = scene_id_candidate
-        if resolved_segment_id in segment_to_scene_map and not resolved_scene_id:
-            resolved_scene_id = segment_to_scene_map[resolved_segment_id]
-        row["segment_id"] = resolved_segment_id
-        if resolved_scene_id:
-            row["scene_id"] = resolved_scene_id
-        if resolved_segment_id and resolved_segment_id not in expected_segment_ids:
-            invalid_after.append(resolved_segment_id)
-        elif not resolved_segment_id:
-            invalid_after.append(f"<empty>:{resolved_scene_id or 'unknown'}")
+    raw_model_segment_ids_preview = [str(_safe_dict(item).get("segment_id") or "").strip() for item in model_segments[:20]]
+    raw_model_scene_ids_preview = [str(_safe_dict(item).get("scene_id") or "").strip() for item in model_segments[:20]]
+    model_segments, normalization_diag = _normalize_model_segment_ids(model_segments, segment_rows)
 
     by_segment_id = {
         str(_safe_dict(item).get("segment_id") or "").strip(): _safe_dict(item)
@@ -2766,13 +2795,31 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
             if str(_safe_dict(prev).get("route") or "").strip().lower() == "i2v"
             and str(_safe_dict(prev).get("i2v_camera_variant") or "").strip()
         ]
-        seg = _sanitize_segment(
-            by_segment_id.get(segment_id),
-            fallback_row,
-            identity_ctx,
-            package,
-            previous_i2v_variants=previous_i2v_variants,
-        )
+        try:
+            seg = _sanitize_segment(
+                by_segment_id.get(segment_id),
+                fallback_row,
+                identity_ctx,
+                package,
+                previous_i2v_variants=previous_i2v_variants,
+            )
+        except RuntimeError as exc:
+            if str(exc).startswith("final_video_prompt_invalid_segment:"):
+                rejected_ids = _safe_list(normalization_diag.get("final_video_prompt_segment_candidate_rejected_ids"))
+                rejected_ids.append(str(exc))
+                normalization_diag["final_video_prompt_segment_candidate_rejected_ids"] = rejected_ids
+                normalization_diag["final_video_prompt_segment_candidate_rejected_count"] = int(
+                    normalization_diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
+                ) + 1
+                seg = _sanitize_segment(
+                    {},
+                    fallback_row,
+                    identity_ctx,
+                    package,
+                    previous_i2v_variants=previous_i2v_variants,
+                )
+            else:
+                raise
         if normalized:
             _rewire_shadow_continuity(normalized[-1], seg)
         if str(seg.get("video_metadata", {}).get("route_type") or "") == "ia2v":
@@ -2808,12 +2855,14 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
         "segments": normalized,
         "scenes": [dict(row) for row in normalized],
     }
-    normalization_diag = {
-        "final_video_prompt_segment_id_normalized_count": normalized_count,
-        "final_video_prompt_segment_id_normalized_pairs": normalized_pairs,
-        "final_video_prompt_invalid_segment_ids_before_normalization": list(dict.fromkeys(invalid_before)),
-        "final_video_prompt_invalid_segment_ids_after_normalization": list(dict.fromkeys(invalid_after)),
-    }
+    normalization_diag["final_video_prompt_raw_model_segment_ids_preview"] = raw_model_segment_ids_preview
+    normalization_diag["final_video_prompt_raw_model_scene_ids_preview"] = raw_model_scene_ids_preview
+    normalization_diag["final_video_prompt_segment_candidate_rejected_count"] = int(
+        normalization_diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
+    )
+    normalization_diag["final_video_prompt_segment_candidate_rejected_ids"] = _safe_list(
+        normalization_diag.get("final_video_prompt_segment_candidate_rejected_ids")
+    )
     return payload, normalization_diag
 
 
@@ -2985,6 +3034,10 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
         "final_video_prompt_segment_id_normalized_pairs": [],
         "final_video_prompt_invalid_segment_ids_before_normalization": [],
         "final_video_prompt_invalid_segment_ids_after_normalization": [],
+        "final_video_prompt_segment_candidate_rejected_count": 0,
+        "final_video_prompt_segment_candidate_rejected_ids": [],
+        "final_video_prompt_raw_model_segment_ids_preview": [],
+        "final_video_prompt_raw_model_scene_ids_preview": [],
     }
     configured_timeout = get_scenario_stage_timeout("final_video_prompt")
     timed_out = False
@@ -3190,6 +3243,18 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             ),
             "final_video_prompt_invalid_segment_ids_after_normalization": _safe_list(
                 normalization_diag.get("final_video_prompt_invalid_segment_ids_after_normalization")
+            ),
+            "final_video_prompt_segment_candidate_rejected_count": int(
+                normalization_diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
+            ),
+            "final_video_prompt_segment_candidate_rejected_ids": _safe_list(
+                normalization_diag.get("final_video_prompt_segment_candidate_rejected_ids")
+            ),
+            "final_video_prompt_raw_model_segment_ids_preview": _safe_list(
+                normalization_diag.get("final_video_prompt_raw_model_segment_ids_preview")
+            ),
+            "final_video_prompt_raw_model_scene_ids_preview": _safe_list(
+                normalization_diag.get("final_video_prompt_raw_model_scene_ids_preview")
             ),
             "validation_error": validation_error,
             "error_code": validation_error,
