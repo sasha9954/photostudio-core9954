@@ -3072,6 +3072,84 @@ def _validate_final_video_prompt_identity_clean(
     }
 
 
+
+
+def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reason: str = "") -> dict[str, Any]:
+    pkg = _safe_dict(package)
+    scene_prompts = _safe_dict(pkg.get("scene_prompts"))
+
+    source_rows = _safe_list(scene_prompts.get("segments")) or _safe_list(scene_prompts.get("scenes"))
+
+    segments: list[dict[str, Any]] = []
+    scenes: list[dict[str, Any]] = []
+
+    for idx, raw_row in enumerate(source_rows):
+        row = _safe_dict(raw_row)
+
+        segment_id = str(row.get("segment_id") or row.get("scene_id") or f"seg_{idx + 1:02d}").strip()
+        scene_id = str(row.get("scene_id") or segment_id).strip()
+
+        route = str(row.get("route") or "i2v").strip().lower()
+        if route not in _ALLOWED_ROUTES:
+            route = "i2v"
+
+        positive = str(
+            row.get("positive_video_prompt")
+            or row.get("video_prompt")
+            or row.get("ltx_video_prompt")
+            or row.get("prompt")
+            or ""
+        ).strip()
+        negative = str(row.get("negative_video_prompt") or row.get("negative_prompt") or "").strip()
+
+        if not positive:
+            raise RuntimeError(f"final_video_prompt_timeout_fallback_missing_positive_prompt:{segment_id}")
+
+        if not negative:
+            negative = "severe identity drift, duplicate main subject, severe facial deformation, on-screen text, UI elements, watermarks"
+
+        segment = {
+            "segment_id": segment_id,
+            "scene_id": scene_id,
+            "route": route,
+            "positive_video_prompt": positive,
+            "negative_video_prompt": negative,
+            "primary_role": str(row.get("primary_role") or "").strip(),
+            "visual_focus_role": str(row.get("visual_focus_role") or "").strip(),
+            "vocal_owner_role": str(row.get("vocal_owner_role") or row.get("speaker_role") or "").strip(),
+            "start_sec": row.get("start_sec", row.get("t0")),
+            "end_sec": row.get("end_sec", row.get("t1")),
+            "duration_sec": row.get("duration_sec", row.get("duration")),
+            "engine_hints": {
+                "frame_strategy": "start_end" if route == "first_last" else "single_init",
+                "audio_sync": "phrase_sensitive" if route == "ia2v" else "beat_sensitive",
+                "motion_strength": "medium",
+                "augmentation": "medium",
+                "transition_kind": "controlled" if route == "first_last" else "none",
+            },
+            "fallback_source": "scene_prompts",
+            "fallback_reason": reason or "final_video_prompt_timeout",
+        }
+
+        if route == "first_last":
+            segment["start_image_prompt"] = str(row.get("start_image_prompt") or row.get("first_frame_prompt") or "").strip()
+            segment["end_image_prompt"] = str(row.get("end_image_prompt") or row.get("last_frame_prompt") or "").strip()
+
+        segments.append(segment)
+        scenes.append(dict(segment))
+
+    return {
+        "delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION,
+        "segments": segments,
+        "scenes": scenes,
+        "fallback": {
+            "used": True,
+            "source": "scene_prompts_existing_gemini_output",
+            "reason": reason or "final_video_prompt_timeout",
+            "creative_author": "upstream_gemini_scene_prompts",
+            "backend_role": "deterministic_transport_only",
+        },
+    }
 def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     segment_rows = _canonical_segments(package)
     identity_ctx = _character_1_context(package)
@@ -3149,6 +3227,20 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             normalized_payload = {}
 
     ok = bool(normalized_payload and _safe_list(normalized_payload.get("segments")))
+    used_fallback = False
+    fallback_reason = ""
+    if not ok and timed_out and response_was_empty_after_timeout:
+        fallback_payload = _build_final_video_prompt_timeout_fallback(
+            package,
+            reason="gemini_timeout_empty_response",
+        )
+        fallback_segments = _safe_list(fallback_payload.get("segments"))
+        if fallback_segments:
+            normalized_payload = fallback_payload
+            ok = True
+            used_fallback = True
+            fallback_reason = "gemini_timeout_empty_response"
+            last_error = ""
     scene_contract_logs = []
     segment_debug_logs = []
     route_diagnostics: dict[str, Any] = {
@@ -3276,8 +3368,10 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_segment_count": len(_safe_list(normalized_payload.get("segments"))) if ok else 0,
             "final_video_prompt_backend": "gemini",
             "final_video_prompt_attempts": attempts,
-            "final_video_prompt_used_fallback": False,
+            "final_video_prompt_used_fallback": used_fallback,
             "final_video_prompt_error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
+            "final_video_prompt_fallback_source": "scene_prompts_existing_gemini_output" if used_fallback else "",
+            "final_video_prompt_fallback_reason": fallback_reason,
             "final_video_prompt_segment_ids": [str(_safe_dict(row).get("segment_id") or "") for row in segment_rows],
             "final_video_prompt_configured_timeout_sec": configured_timeout,
             "final_video_prompt_timeout_stage_policy_name": scenario_timeout_policy_name("final_video_prompt"),
