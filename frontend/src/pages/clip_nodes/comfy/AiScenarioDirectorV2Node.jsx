@@ -45,8 +45,18 @@ const fmt = (v) => Number(v || 0).toFixed(2);
 const isObject = (v) => !!v && typeof v === "object";
 const STAGE_ORDER = ["core", "roles", "scenes", "scene_detail", "prompts", "final_video_prompt", "final"];
 const STAGE_TO_PACKAGE_KEY = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "final_payload" };
+const STAGE_TO_BACKEND_STAGE_ID = { core: "story_core", roles: "role_plan", scenes: "scene_plan", scene_detail: "scene_detail", prompts: "scene_prompts", final_video_prompt: "final_video_prompt", final: "finalize" };
 const STAGE_META = { core: { title: "CORE — смысловой позвоночник", description: "Базовая смысловая структура и опорные идеи ролика." }, roles: { title: "ROLES — роли и присутствие", description: "Распределение ролей, появлений и эмоционального фокуса." }, scenes: { title: "SCENES — план сцен", description: "Покомпонентный план сцен и переходов." }, scene_detail: { title: "SCENE DETAIL — режиссёрская проработка", description: "Детальная постановка сцен без изменения locked scaffold." }, prompts: { title: "PROMPTS — фото/видео промты", description: "Генерация промтов для визуальных и видео-сцен." }, final_video_prompt: { title: "FINAL VIDEO PROMPT — финальные видео-промты", description: "Финализация видео-промтов для рендера." }, final: { title: "FINAL — manifest сборки", description: "Финальный manifest/payload для передачи в storyboard." } };
 const renderValue = (value) => (value == null || value === "" ? "—" : String(value));
+const mapBackendStatusToPipelineStageStatus = (status = "") => {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "done") return "confirmed";
+  if (["running", "queued", "in_progress"].includes(normalized)) return "running";
+  if (normalized === "error") return "error";
+  if (normalized === "stale") return "stale";
+  if (["ready", "idle", "locked"].includes(normalized)) return normalized;
+  return "idle";
+};
 
 const CONTRACT_SECTIONS = [
   ["mode_understanding", "Понимание режима"],
@@ -501,6 +511,51 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
     hasStageOutputsSceneDetail: Boolean(sourceState?.stageOutputs?.scene_detail),
     lastBackendPackageHasSceneDetail: Boolean(lastBackendPackage?.scene_detail),
   };
+
+  useEffect(() => {
+    const stageStatuses = packageData?.stage_statuses && typeof packageData.stage_statuses === "object" ? packageData.stage_statuses : {};
+    const finalVideoPrompt = packageData?.final_video_prompt && typeof packageData.final_video_prompt === "object" ? packageData.final_video_prompt : {};
+    const finalVideoPromptSegments = Array.isArray(finalVideoPrompt?.segments)
+      ? finalVideoPrompt.segments
+      : (Array.isArray(finalVideoPrompt?.scenes) ? finalVideoPrompt.scenes : []);
+    const finalVideoPromptDone = String(stageStatuses?.final_video_prompt?.status || "").trim().toLowerCase() === "done";
+    const finalReady = finalVideoPromptDone && finalVideoPromptSegments.length > 0;
+    const hasStageStatuses = Object.keys(stageStatuses).length > 0;
+    if (!hasStageStatuses && !finalReady) return;
+
+    const nextStages = buildInitialPipelineStages();
+    STAGE_ORDER.forEach((stageKey) => {
+      const backendStageId = STAGE_TO_BACKEND_STAGE_ID[stageKey];
+      const row = backendStageId ? (stageStatuses?.[backendStageId] || {}) : {};
+      const mappedStatus = mapBackendStatusToPipelineStageStatus(row?.status);
+      nextStages[stageKey] = {
+        ...nextStages[stageKey],
+        status: mappedStatus,
+        confirmed: mappedStatus === "confirmed",
+        stale: mappedStatus === "stale",
+        error: String(row?.error || "").trim(),
+        output: packageData?.[STAGE_TO_PACKAGE_KEY[stageKey]] || null,
+      };
+    });
+    if (finalVideoPromptDone) {
+      nextStages.final_video_prompt = {
+        ...nextStages.final_video_prompt,
+        status: "confirmed",
+        confirmed: true,
+        stale: false,
+        error: "",
+        output: finalVideoPrompt,
+      };
+    }
+    if (finalReady) {
+      nextStages.final = {
+        ...nextStages.final,
+        status: "ready",
+        stale: false,
+      };
+    }
+    patchData({ stageStatuses, pipelineStages: nextStages });
+  }, [packageData?.stage_statuses, packageData?.final_video_prompt, packageData?.updated_at]);
 
   const renderSceneDetailPanel = () => {
     if (!sceneDetail) {
