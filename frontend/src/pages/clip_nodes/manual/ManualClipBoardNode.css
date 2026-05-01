@@ -1,0 +1,5 @@
+.manualClipBoardNode .manualClipBoardNode_body { display:flex; flex-direction:column; gap:8px; min-width:760px; }
+.manualBoardLayout { display:grid; grid-template-columns:300px 1fr; gap:10px; }
+.manualSceneList { display:flex; flex-direction:column; gap:6px; max-height:420px; overflow:auto; }
+.manualSceneItem { text-align:left; }
+.manualSceneCard { display:flex; flex-direction:column; gap:8px; }
