@@ -2308,6 +2308,9 @@ def _sanitize_segment(
             "incoming_scene_id": scene_id,
             "expected_segment_ids_preview": _safe_list(context.get("expected_segment_ids"))[:20],
             "scene_to_segment_map_preview": dict(list(_safe_dict(context.get("scene_to_segment_map")).items())[:20]),
+            "missing_segment_id": not bool(segment_id),
+            "missing_positive_prompt": not bool(positive_prompt),
+            "missing_negative_prompt": not bool(negative_prompt),
         }
         raise RuntimeError(f"final_video_prompt_invalid_segment:{segment_id or 'unknown'}::{json.dumps(raise_payload, ensure_ascii=False)}")
     if route == "first_last" and (not first_frame or not last_frame):
@@ -2821,14 +2824,6 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
                 normalization_diag["final_video_prompt_segment_candidate_rejected_count"] = int(
                     normalization_diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
                 ) + 1
-                seg = _sanitize_segment(
-                    {},
-                    fallback_row,
-                    identity_ctx,
-                    package,
-                    previous_i2v_variants=previous_i2v_variants,
-                    segment_validation_context=normalization_diag,
-                )
                 diagnostics = _safe_list(normalization_diag.get("final_video_prompt_invalid_segment_diagnostics"))
                 details = str(exc).split("::", 1)
                 if len(details) == 2:
@@ -2836,7 +2831,38 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
                         diagnostics.append(json.loads(details[1]))
                     except Exception:
                         diagnostics.append({"function_name": "_sanitize_segment", "raw": details[1]})
+                else:
+                    diagnostics.append({"function_name": "_sanitize_segment", "raw": str(exc)})
                 normalization_diag["final_video_prompt_invalid_segment_diagnostics"] = diagnostics
+                try:
+                    seg = _sanitize_segment(
+                        {},
+                        fallback_row,
+                        identity_ctx,
+                        package,
+                        previous_i2v_variants=previous_i2v_variants,
+                        segment_validation_context=normalization_diag,
+                    )
+                except RuntimeError as fallback_exc:
+                    if str(fallback_exc).startswith("final_video_prompt_invalid_segment:"):
+                        rejected_ids = _safe_list(normalization_diag.get("final_video_prompt_segment_candidate_rejected_ids"))
+                        rejected_ids.append(str(fallback_exc).split("::", 1)[0])
+                        normalization_diag["final_video_prompt_segment_candidate_rejected_ids"] = rejected_ids
+                        normalization_diag["final_video_prompt_segment_candidate_rejected_count"] = int(
+                            normalization_diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
+                        ) + 1
+                        fallback_diagnostics = _safe_list(normalization_diag.get("final_video_prompt_invalid_segment_diagnostics"))
+                        fallback_details = str(fallback_exc).split("::", 1)
+                        if len(fallback_details) == 2:
+                            try:
+                                fallback_diagnostics.append(json.loads(fallback_details[1]))
+                            except Exception:
+                                fallback_diagnostics.append({"function_name": "_sanitize_segment", "raw": fallback_details[1]})
+                        else:
+                            fallback_diagnostics.append({"function_name": "_sanitize_segment", "raw": str(fallback_exc)})
+                        normalization_diag["final_video_prompt_invalid_segment_diagnostics"] = fallback_diagnostics
+                        raise
+                    raise
             else:
                 raise
         if normalized:
