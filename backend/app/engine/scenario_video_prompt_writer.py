@@ -2726,12 +2726,18 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
             invalid_before.append(f"<empty>:{raw_scene_id}")
         resolved_segment_id = raw_segment_id
         resolved_scene_id = raw_scene_id
-        if (not resolved_segment_id or resolved_segment_id not in expected_segment_ids) and resolved_scene_id in scene_to_segment_map:
-            mapped_segment_id = scene_to_segment_map[resolved_scene_id]
+        scene_id_candidate = ""
+        if resolved_scene_id in scene_to_segment_map:
+            scene_id_candidate = resolved_scene_id
+        elif resolved_segment_id in scene_to_segment_map:
+            scene_id_candidate = resolved_segment_id
+        if (not resolved_segment_id or resolved_segment_id not in expected_segment_ids) and scene_id_candidate:
+            mapped_segment_id = scene_to_segment_map[scene_id_candidate]
             if mapped_segment_id and mapped_segment_id != resolved_segment_id:
-                normalized_pairs.append({"from": resolved_segment_id or resolved_scene_id, "to": mapped_segment_id, "scene_id": resolved_scene_id})
+                normalized_pairs.append({"from": resolved_segment_id or resolved_scene_id, "to": mapped_segment_id, "scene_id": scene_id_candidate})
                 normalized_count += 1
             resolved_segment_id = mapped_segment_id
+            resolved_scene_id = scene_id_candidate
         if resolved_segment_id in segment_to_scene_map and not resolved_scene_id:
             resolved_scene_id = segment_to_scene_map[resolved_segment_id]
         row["segment_id"] = resolved_segment_id
