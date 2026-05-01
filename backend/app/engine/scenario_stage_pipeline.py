@@ -2213,6 +2213,8 @@ def _final_video_prompt_dependency_payload_ok(package: dict[str, Any], dependenc
 def _finalize_dependency_payload_ok(package: dict[str, Any], dependency_stage_id: str) -> bool:
     pkg = _safe_dict(package)
     diagnostics = _safe_dict(pkg.get("diagnostics"))
+    finalize_segments, _ = _resolve_finalize_segments(pkg)
+    has_finalize_segments = bool(finalize_segments)
     if dependency_stage_id == "input_package":
         return bool(_safe_dict(pkg.get("input")))
     if dependency_stage_id == "audio_map":
@@ -2230,6 +2232,8 @@ def _finalize_dependency_payload_ok(package: dict[str, Any], dependency_stage_id
         coverage_ok = diagnostics.get("role_plan_segment_coverage_ok")
         return bool(role_plan) and bool(roster) and (bool(scene_casting) or bool(coverage_ok))
     if dependency_stage_id == "scene_plan":
+        if has_finalize_segments:
+            return True
         scene_plan = _safe_dict(pkg.get("scene_plan"))
         storyboard = _safe_list(scene_plan.get("storyboard"))
         scenes = _safe_list(scene_plan.get("scenes"))
@@ -2306,6 +2310,8 @@ def _final_video_prompt_dependency_reason(package: dict[str, Any], dependency_st
 def _finalize_dependency_reason(package: dict[str, Any], dependency_stage_id: str) -> str:
     pkg = _safe_dict(package)
     diagnostics = _safe_dict(pkg.get("diagnostics"))
+    finalize_segments, _ = _resolve_finalize_segments(pkg)
+    has_finalize_segments = bool(finalize_segments)
     if dependency_stage_id == "input_package":
         return "" if bool(_safe_dict(pkg.get("input"))) else "missing_input_package_payload"
     if dependency_stage_id == "audio_map":
@@ -2328,6 +2334,8 @@ def _finalize_dependency_reason(package: dict[str, Any], dependency_stage_id: st
         has_coverage = bool(diagnostics.get("role_plan_segment_coverage_ok"))
         return "" if (has_scene_casting or has_coverage) else "empty_role_plan_scene_casting"
     if dependency_stage_id == "scene_plan":
+        if has_finalize_segments:
+            return ""
         scene_plan = _safe_dict(pkg.get("scene_plan"))
         if not scene_plan:
             return "missing_scene_plan_payload"
@@ -12214,6 +12222,27 @@ def _run_finalize_stage(package: dict[str, Any]) -> dict[str, Any]:
         }
 
     final_segments, finalize_segments_source = _resolve_finalize_segments(package)
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    final_video_prompt_segments = _safe_list(final_video_prompt.get("segments"))
+    final_video_prompt_scenes = _safe_list(final_video_prompt.get("scenes"))
+    scene_prompts_segments = _safe_list(scene_prompts.get("segments"))
+    scene_prompts_scenes = _safe_list(scene_prompts.get("scenes"))
+    scene_plan_storyboard = _safe_list(scene_plan.get("storyboard"))
+    diagnostics["finalize_has_final_video_prompt_segments"] = bool(final_video_prompt_segments or final_video_prompt_scenes)
+    diagnostics["finalize_final_video_prompt_segment_count"] = len(final_video_prompt_segments) or len(final_video_prompt_scenes)
+    diagnostics["finalize_has_scene_prompts_segments"] = bool(scene_prompts_segments or scene_prompts_scenes)
+    diagnostics["finalize_scene_prompts_segment_count"] = len(scene_prompts_segments) or len(scene_prompts_scenes)
+    diagnostics["finalize_scene_plan_storyboard_count"] = len(scene_plan_storyboard)
+    diagnostics["finalize_segments_source"] = finalize_segments_source
+    diagnostics["finalize_internal_prefight_used_finalize_segments"] = bool(final_segments)
+    diagnostics["finalize_internal_prefight_segments_source"] = finalize_segments_source
+    diagnostics["finalize_internal_prefight_scene_plan_storyboard_missing_ignored"] = bool(
+        final_segments and not scene_plan_storyboard
+    )
+    diagnostics["finalize_internal_prefight_segment_count"] = len(final_segments)
+    package["diagnostics"] = diagnostics
+    if not final_segments:
+        raise RuntimeError("finalize_incomplete_dependencies:empty_final_video_prompt_segments")
     beat_rows = [_safe_dict(row) for row in _safe_list(_safe_dict(story_core.get("beat_map")).get("beats"))]
     beat_timing_by_segment: dict[str, tuple[float, float]] = {}
     for beat in beat_rows:
