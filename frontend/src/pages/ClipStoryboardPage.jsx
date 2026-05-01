@@ -191,6 +191,7 @@ const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
 const CLIP_TRACE_SCENARIO_IMAGE_E2E = false;
 const CLIP_TRACE_SC2_GHOST_IMAGE = true;
 const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
+const SCENARIO_IMAGE_ROLE_FIX_MARKER = "role_fix_2g_manifest_authority_2026_05_01";
 console.warn("[CLIP PIPELINE FRONTEND BUILD MARKER] v=clip_pipeline_debug_01");
 
 function shouldTraceRoleContractScene(sceneId = "") {
@@ -15539,6 +15540,7 @@ const extractUrlsFromConnectedInputValue = (value) => {
       refsPayloadForRequest.video_prompt = videoPromptEffective;
       refsPayloadForRequest.negative_prompt = imageNegativePromptEffective;
       refsPayloadForRequest.prompt_notes = promptNotesEffective;
+      refsPayloadForRequest.debugRoleFixMarker = SCENARIO_IMAGE_ROLE_FIX_MARKER;
       console.debug("[SCENARIO IMAGE REQUEST PAYLOAD]", {
         sceneId,
         refsByRoleCounts: summarizeRefsByRole(refsPayloadForRequest?.refsByRole || {}),
@@ -15740,6 +15742,7 @@ Aspect ratio: ${imageFormat}`,
         video_prompt: videoPromptEffective,
         prompt_notes: promptNotesEffective,
         refs: refsPayloadForRequest,
+        debugRoleFixMarker: SCENARIO_IMAGE_ROLE_FIX_MARKER,
         expectedRole,
         expected_role: expectedRole,
       };
@@ -15788,6 +15791,7 @@ Aspect ratio: ${imageFormat}`,
         context_refs: { ...((finalRequestBody.refs || {}).context_refs || {}) },
         connectedInputs: { ...((finalRequestBody.refs || {}).connectedInputs || {}) },
       };
+      finalRequestBody.refs.debugRoleFixMarker = SCENARIO_IMAGE_ROLE_FIX_MARKER;
       SCENARIO_IMAGE_ROLE_KEYS.forEach((role) => {
         const roleRefs = Array.isArray(finalRequestBody?.refsByRole?.[role]) ? finalRequestBody.refsByRole[role].map(normalizeScenarioRefUrl).filter(Boolean) : [];
         if (!roleRefs.length) return;
@@ -15906,6 +15910,15 @@ Aspect ratio: ${imageFormat}`,
         isHardcodedFallback,
         usedDanceMotionSafetyOnly,
         hasNightclubWorldAnchor: String(finalRequestBody?.imagePrompt || finalRequestBody?.prompt || "").toLowerCase().includes("nightclub"),
+      });
+      console.info("[SCENARIO IMAGE ROLE FIX MARKER]", {
+        marker: SCENARIO_IMAGE_ROLE_FIX_MARKER,
+        sceneId,
+        expectedRole,
+        primaryRoleEffective,
+        heroEntityIdEffective,
+        refsByRoleCounts: summarizeRefsByRole(refsByRoleEffective || {}),
+        connectedInputsKeys: Object.keys(connectedInputsEffective || {}),
       });
       const out = await withTimeoutGuard(fetchJson(`/api/clip/image`, {
         method: "POST",

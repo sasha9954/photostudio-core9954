@@ -12725,6 +12725,14 @@ def clip_image(payload: ClipImageIn):
         or payload_map.get("expected_role")
     )
     expected_role = str(expected_role_raw or "").strip()
+    debug_role_fix_marker = (
+        payload_map.get("debugRoleFixMarker")
+        or payload_map.get("debug_role_fix_marker")
+        or getattr(refs_obj, "debugRoleFixMarker", None)
+        or getattr(refs_obj, "debug_role_fix_marker", None)
+    )
+    if str(scene_id or "").lower().startswith("sc_") and not str(debug_role_fix_marker or "").strip():
+        print("[CLIP IMAGE WARNING] missing debugRoleFixMarker: frontend may be stale or different request path")
     connected_inputs_payload = getattr(refs_obj, "connectedInputs", None)
     connected_inputs_payload = connected_inputs_payload if isinstance(connected_inputs_payload, dict) else {}
     if expected_role:
@@ -12768,6 +12776,7 @@ def clip_image(payload: ClipImageIn):
         "route": route_value,
         "workflowKey": workflow_key,
         "expectedRole": expected_role,
+        "debugRoleFixMarker": debug_role_fix_marker,
         "refsByRoleCounts": {role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
         "hasCharacter1Ref": bool(len(comfy_refs_by_role.get("character_1") or []) > 0),
         "rawRefCandidatesByRole": canonical_ref_diagnostics.get("rawRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
@@ -13582,6 +13591,7 @@ def clip_image(payload: ClipImageIn):
         "allowedRolesForImage": sorted(list(allowed_roles_for_image)),
         "filteredOutBySceneContract": filtered_out_by_scene_contract,
         "incomingRefsByRoleCounts": {role: len(comfy_refs_by_role_merged.get(role) or []) for role in comfy_roles},
+        "debugRoleFixMarker": debug_role_fix_marker,
         "canonicalRefCountByRole": canonical_ref_diagnostics.get("canonicalRefCountByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
         "rejectedRefCandidatesByRole": canonical_ref_diagnostics.get("rejectedRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
         "rawRefCandidatesByRole": canonical_ref_diagnostics.get("rawRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
