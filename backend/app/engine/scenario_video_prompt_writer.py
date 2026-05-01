@@ -3120,6 +3120,9 @@ def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reaso
         if not negative_prompt:
             negative_prompt = "severe identity drift, duplicate main subject, severe facial deformation, on-screen text, UI elements, watermarks"
 
+        render_mode = "lip_sync_music" if route == "ia2v" else "image_to_video"
+        workflow_key = "lip_sync_music" if route == "ia2v" else "image_to_video"
+
         segment = {
             "segment_id": segment_id,
             "scene_id": scene_id,
@@ -3148,9 +3151,14 @@ def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reaso
             },
             "video_metadata": {
                 "route_type": route,
-                "renderMode": "lip_sync_music" if route == "ia2v" else "image_to_video",
-                "resolvedWorkflowKey": "lip_sync_music" if route == "ia2v" else "image_to_video",
+                "renderMode": render_mode,
+                "resolvedWorkflowKey": workflow_key,
             },
+            "renderMode": render_mode,
+            "resolvedWorkflowKey": workflow_key,
+            "ltxMode": workflow_key,
+            "lipSync": route == "ia2v",
+            "requiresAudioSensitiveVideo": route == "ia2v",
             "engine_hints": {
                 "frame_strategy": "start_end" if route == "first_last" else "single_init",
                 "audio_sync": "phrase_sensitive" if route == "ia2v" else "beat_sensitive",
@@ -3442,7 +3450,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_used_fallback": used_fallback,
             "final_video_prompt_error": "" if used_fallback else ("" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed"))),
             "final_video_prompt_timeout_fallback_sanitized": bool(
-                normalization_diag.get("final_video_prompt_timeout_fallback_sanitized") or used_fallback
+                normalization_diag.get("final_video_prompt_timeout_fallback_sanitized")
             ),
             "final_video_prompt_fallback_source": "scene_prompts_existing_gemini_output" if used_fallback else "",
             "final_video_prompt_fallback_reason": fallback_reason,
