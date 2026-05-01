@@ -18517,6 +18517,10 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["final_video_prompt_identity_gender_conflict_segments"] = []
     diagnostics["final_video_prompt_validation_checked_after_sanitizer"] = False
     diagnostics["final_video_prompt_stale_identity_remaining_segments"] = []
+    diagnostics["final_video_prompt_segment_id_normalized_count"] = 0
+    diagnostics["final_video_prompt_segment_id_normalized_pairs"] = []
+    diagnostics["final_video_prompt_invalid_segment_ids_before_normalization"] = []
+    diagnostics["final_video_prompt_invalid_segment_ids_after_normalization"] = []
     diagnostics["gemini_api_key_source"] = "missing"
     diagnostics["gemini_api_key_valid"] = False
     diagnostics["gemini_api_key_error"] = "empty"
@@ -18577,6 +18581,18 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         local_diagnostics["final_video_prompt_stale_identity_remaining_segments"] = _safe_list(
             diag.get("final_video_prompt_stale_identity_remaining_segments")
+        )
+        local_diagnostics["final_video_prompt_segment_id_normalized_count"] = int(
+            diag.get("final_video_prompt_segment_id_normalized_count") or 0
+        )
+        local_diagnostics["final_video_prompt_segment_id_normalized_pairs"] = _safe_list(
+            diag.get("final_video_prompt_segment_id_normalized_pairs")
+        )
+        local_diagnostics["final_video_prompt_invalid_segment_ids_before_normalization"] = _safe_list(
+            diag.get("final_video_prompt_invalid_segment_ids_before_normalization")
+        )
+        local_diagnostics["final_video_prompt_invalid_segment_ids_after_normalization"] = _safe_list(
+            diag.get("final_video_prompt_invalid_segment_ids_after_normalization")
         )
         local_diagnostics["current_character_1_gender_hint"] = str(current_character_ctx.get("gender_hint") or "")
         local_diagnostics["current_character_1_identity_label"] = str(current_character_ctx.get("identity_label") or "")
