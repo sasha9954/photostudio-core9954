@@ -24,9 +24,9 @@ export function getDefaultManualClipNodeData() {
 export function buildMockSplitJson(durationSec = 24) {
   const total = Math.max(12, Number(durationSec) || 24);
   const scenes = [
-    { scene_id: "SEG_01", index: 1, start_sec: 0, end_sec: Math.min(3.65, total), route: "ia2v", energy: "soft", quality: "good", boundary_reason: "end_of_vocal_phrase", transition_out: "soft_cut_after_tail", drama_hint: "Вступление", short_note: "Задаём эмоциональный тон." },
-    { scene_id: "SEG_02", index: 2, start_sec: Math.min(3.65, total), end_sec: Math.min(8.2, total), route: "i2v", energy: "mid", quality: "check", boundary_reason: "music_accent", transition_out: "cut_on_music_accent", drama_hint: "Первый конфликт", short_note: "Сюжетная перебивка." },
-    { scene_id: "SEG_03", index: 3, start_sec: Math.min(8.2, total), end_sec: Math.min(12.8, total), route: "i2v_sound", energy: "high", quality: "good", boundary_reason: "phrase_tail_and_music_breath", transition_out: "hard_cut_on_phrase_end", drama_hint: "Эскалация", short_note: "Рост напряжения." },
+    { scene_id: "seg_01", index: 1, start_sec: 0, end_sec: Math.min(3.65, total), route: "ia2v", energy: "soft", quality: "good", boundary_reason: "end_of_vocal_phrase", transition_out: "soft_cut_after_tail", drama_hint: "Вступление", short_note: "Задаём эмоциональный тон." },
+    { scene_id: "seg_02", index: 2, start_sec: Math.min(3.65, total), end_sec: Math.min(8.2, total), route: "i2v", energy: "mid", quality: "check", boundary_reason: "music_accent", transition_out: "cut_on_music_accent", drama_hint: "Первый конфликт", short_note: "Сюжетная перебивка." },
+    { scene_id: "seg_03", index: 3, start_sec: Math.min(8.2, total), end_sec: Math.min(12.8, total), route: "i2v_sound", energy: "high", quality: "good", boundary_reason: "phrase_tail_and_music_breath", transition_out: "hard_cut_on_phrase_end", drama_hint: "Эскалация", short_note: "Рост напряжения." },
   ].map((s) => ({ ...s, duration_sec: Math.max(0, Number((s.end_sec - s.start_sec).toFixed(3))), image_url: "", video_prompt: "", negative_prompt: "", sound_prompt: "", audio_slice_url: "", video_url: "", status: "draft", error: "" }));
 
   return { mode: MANUAL_CLIP_MODE, split_type: "phrase_based", audio_duration_sec: total, global_hint: "Фразовая разбивка с опорой на паузы и акценты.", scenes };
@@ -37,7 +37,7 @@ export function normalizeScene(scene, idx) {
   const end = Number(scene?.end_sec || start);
   const route = ROUTES.includes(scene?.route) ? scene.route : "ia2v";
   return {
-    scene_id: String(scene?.scene_id || `SEG_${String(idx + 1).padStart(2, "0")}`),
+    scene_id: String(scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(scene?.index || idx + 1),
     start_sec: start,
     end_sec: end,
