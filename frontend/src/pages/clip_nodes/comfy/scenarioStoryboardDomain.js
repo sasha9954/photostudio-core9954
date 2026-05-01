@@ -2464,11 +2464,42 @@ export function normalizeScenarioStoryboardPackage({
       || finalStoryboardManifestById[`scene:${sceneId}`]
       || null;
     if (!manifestRow) return safeScene;
+    const resolvedPrimaryRole = normalizeText(
+      manifestRow?.primaryRole
+      || manifestRow?.primary_role
+      || safeScene?.primaryRole
+      || safeScene?.primary_role
+    );
+    if (
+      normalizeText(manifestRow?.primaryRole || manifestRow?.primary_role)
+      && normalizeText(safeScene?.primaryRole || safeScene?.primary_role)
+      && normalizeText(manifestRow?.primaryRole || manifestRow?.primary_role) !== normalizeText(safeScene?.primaryRole || safeScene?.primary_role)
+    ) {
+      console.info("[SCENARIO MANIFEST ROLE MERGE CONFLICT]", {
+        sceneId: sceneId || normalizeText(manifestRow?.scene_id || manifestRow?.sceneId),
+        segmentId: segmentId || normalizeText(manifestRow?.segment_id || manifestRow?.segmentId),
+        manifestPrimaryRole: normalizeText(manifestRow?.primaryRole || manifestRow?.primary_role),
+        safeScenePrimaryRole: normalizeText(safeScene?.primaryRole || safeScene?.primary_role),
+        chosenPrimaryRole: resolvedPrimaryRole,
+      });
+    }
     return {
       ...manifestRow,
       ...safeScene,
       render_manifest_row: manifestRow,
       renderManifestRow: manifestRow,
+      primaryRole: resolvedPrimaryRole,
+      primary_role: resolvedPrimaryRole,
+      visualFocusRole: normalizeText(manifestRow?.visualFocusRole || manifestRow?.visual_focus_role || safeScene?.visualFocusRole || safeScene?.visual_focus_role),
+      visual_focus_role: normalizeText(manifestRow?.visualFocusRole || manifestRow?.visual_focus_role || safeScene?.visualFocusRole || safeScene?.visual_focus_role),
+      sceneActiveRoles: manifestRow?.sceneActiveRoles || manifestRow?.scene_active_roles || safeScene?.sceneActiveRoles || safeScene?.scene_active_roles || [],
+      refsUsed: manifestRow?.refsUsed || manifestRow?.refs_used || safeScene?.refsUsed || safeScene?.refs_used || [],
+      mustAppear: manifestRow?.mustAppear || manifestRow?.must_appear || safeScene?.mustAppear || safeScene?.must_appear || [],
+      refsByRole: manifestRow?.refsByRole || manifestRow?.refs_by_role || safeScene?.refsByRole || safeScene?.refs_by_role || {},
+      refsUsedByRole: manifestRow?.refsUsedByRole || manifestRow?.refs_used_by_role || safeScene?.refsUsedByRole || safeScene?.refs_used_by_role || {},
+      linked_assets: manifestRow?.linked_assets || safeScene?.linked_assets || {},
+      source_image_refs: manifestRow?.source_image_refs || manifestRow?.sourceImageRefs || safeScene?.source_image_refs || safeScene?.sourceImageRefs || [],
+      sourceImageRefs: manifestRow?.source_image_refs || manifestRow?.sourceImageRefs || safeScene?.source_image_refs || safeScene?.sourceImageRefs || [],
       route: normalizeText(manifestRow?.route)
         || normalizeText(safeScene?.route)
         || normalizeText(manifestRow?.video_metadata?.route_type ?? manifestRow?.video_metadata?.routeType)
@@ -2482,9 +2513,6 @@ export function normalizeScenarioStoryboardPackage({
       engine_hints: (safeScene?.engine_hints && typeof safeScene.engine_hints === "object")
         ? safeScene.engine_hints
         : (manifestRow?.engine_hints && typeof manifestRow.engine_hints === "object" ? manifestRow.engine_hints : {}),
-      linked_assets: (safeScene?.linked_assets && typeof safeScene.linked_assets === "object")
-        ? safeScene.linked_assets
-        : (manifestRow?.linked_assets && typeof manifestRow.linked_assets === "object" ? manifestRow.linked_assets : {}),
     };
   });
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
@@ -3018,10 +3046,11 @@ export function shouldClearStoryboardRuntime({
 }
 
 export function resolveScenarioExpectedImageRoleFromSources({
-  targetScene = {},
-  sceneFinalPayload = {},
+  embeddedRenderManifestRow = {},
   renderManifestRow = {},
   finalStoryboardScene = {},
+  sceneFinalPayload = {},
+  targetScene = {},
   refsForImageRequest = {},
 } = {}) {
   const normalizeRole = (value) => {
@@ -3044,6 +3073,7 @@ export function resolveScenarioExpectedImageRoleFromSources({
   );
 
   const orderedSources = [
+    { label: "embeddedRenderManifestRow", source: embeddedRenderManifestRow },
     { label: "renderManifestRow", source: renderManifestRow },
     { label: "finalStoryboardScene", source: finalStoryboardScene },
     { label: "sceneFinalPayload", source: sceneFinalPayload },
@@ -3052,6 +3082,12 @@ export function resolveScenarioExpectedImageRoleFromSources({
   for (const entry of orderedSources) {
     const role = pickRoleFromSource(entry.source);
     if (role) return { role, source: entry.label };
+  }
+  const hasAuthoritativeManifestSource = [embeddedRenderManifestRow, renderManifestRow, finalStoryboardScene, sceneFinalPayload]
+    .some((source) => Boolean(pickRoleFromSource(source)));
+  if (!hasAuthoritativeManifestSource) {
+    const fallbackRole = pickRoleFromSource(refsForImageRequest);
+    if (fallbackRole) return { role: fallbackRole, source: "refsForImageRequest.fallback" };
   }
   return { role: "", source: "" };
 }
