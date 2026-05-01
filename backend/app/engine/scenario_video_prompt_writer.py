@@ -3156,6 +3156,25 @@ def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reaso
             "backend_role": "deterministic_transport_only",
         },
     }
+
+
+def _should_use_scene_prompts_fallback_after_generation_failure(error_text: str) -> bool:
+    text = str(error_text or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "final_video_prompt_invalid_segment",
+            "invalid_segment",
+            "missing_positive_prompt",
+            "missing_negative_prompt",
+            "empty_segments",
+            "empty segments",
+            "segment_candidate_rejected",
+        )
+    )
+
 def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any]) -> dict[str, Any]:
     segment_rows = _canonical_segments(package)
     identity_ctx = _character_1_context(package)
@@ -3225,27 +3244,43 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     ok = bool(normalized_payload and _safe_list(normalized_payload.get("segments")))
     used_fallback = False
     fallback_reason = ""
-    if not ok and timed_out and response_was_empty_after_timeout:
+    original_last_error_before_fallback = ""
+
+    fallback_after_timeout = bool(timed_out and response_was_empty_after_timeout)
+    fallback_after_sanitizer_failure = _should_use_scene_prompts_fallback_after_generation_failure(last_error)
+
+    if not ok and (fallback_after_timeout or fallback_after_sanitizer_failure):
         try:
+            fallback_reason = (
+                "gemini_timeout_empty_response"
+                if fallback_after_timeout
+                else "gemini_sanitizer_failure_scene_prompts_fallback"
+            )
+
             fallback_payload = _build_final_video_prompt_timeout_fallback(
                 package,
-                reason="gemini_timeout_empty_response",
+                reason=fallback_reason,
             )
+
             fallback_normalized, fallback_norm_diag = _sanitize_output(fallback_payload, segment_rows, package)
             fallback_segments = _safe_list(fallback_normalized.get("segments"))
+
             if fallback_segments:
                 normalized_payload = fallback_normalized
                 ok = True
                 used_fallback = True
-                fallback_reason = "gemini_timeout_empty_response"
+                original_last_error_before_fallback = last_error
                 last_error = ""
                 normalization_diag.update(_safe_dict(fallback_norm_diag))
-                normalization_diag["final_video_prompt_timeout_fallback_sanitized"] = True
+                normalization_diag["final_video_prompt_timeout_fallback_sanitized"] = bool(fallback_after_timeout)
+                normalization_diag["final_video_prompt_scene_prompts_fallback_sanitized"] = True
+                normalization_diag["final_video_prompt_fallback_trigger"] = fallback_reason
+
         except Exception as fallback_exc:
-            last_error = str(fallback_exc)[:220] or "final_video_prompt_timeout_fallback_failed"
+            last_error = str(fallback_exc)[:500] or "final_video_prompt_scene_prompts_fallback_failed"
             ok = False
             used_fallback = False
-            fallback_reason = "gemini_timeout_fallback_failed"
+            fallback_reason = "scene_prompts_fallback_failed"
     scene_contract_logs = []
     segment_debug_logs = []
     route_diagnostics: dict[str, Any] = {
@@ -3374,12 +3409,17 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_backend": "gemini",
             "final_video_prompt_attempts": attempts,
             "final_video_prompt_used_fallback": used_fallback,
-            "final_video_prompt_error": "" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed")),
+            "final_video_prompt_error": "" if used_fallback else ("" if ok else ("final_video_prompt_timeout" if timed_out else (last_error or "final_video_prompt_generation_failed"))),
             "final_video_prompt_timeout_fallback_sanitized": bool(
                 normalization_diag.get("final_video_prompt_timeout_fallback_sanitized") or used_fallback
             ),
             "final_video_prompt_fallback_source": "scene_prompts_existing_gemini_output" if used_fallback else "",
             "final_video_prompt_fallback_reason": fallback_reason,
+            "final_video_prompt_fallback_trigger": normalization_diag.get("final_video_prompt_fallback_trigger", ""),
+            "final_video_prompt_scene_prompts_fallback_sanitized": bool(
+                normalization_diag.get("final_video_prompt_scene_prompts_fallback_sanitized")
+            ),
+            "final_video_prompt_last_generation_error_before_fallback": "" if not used_fallback else original_last_error_before_fallback,
             "final_video_prompt_segment_ids": [str(_safe_dict(row).get("segment_id") or "") for row in segment_rows],
             "final_video_prompt_configured_timeout_sec": configured_timeout,
             "final_video_prompt_timeout_stage_policy_name": scenario_timeout_policy_name("final_video_prompt"),
