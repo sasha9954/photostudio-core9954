@@ -23523,26 +23523,6 @@ onClipSec: (nodeId, value) => {
                   const storyboardPackage = response?.storyboardPackage || {};
                   const keyMap = { core: 'story_core', roles: 'role_plan', scenes: 'scene_plan', scene_detail: 'scene_detail', prompts: 'scene_prompts', final_video_prompt: 'final_video_prompt', final: 'final_payload' };
                   const output = storyboardPackage?.[keyMap[stageKey]] || storyboardPackage?.render_manifest || storyboardPackage?.finalize || null;
-                  setNodes((prev) => bindHandlers(prev.map((x) => {
-                    if (x.id !== nodeId) return x;
-                    const prevData = x?.data || {};
-                    const prevDirectorV2Package = prevData?.directorV2Package && typeof prevData.directorV2Package === "object" ? prevData.directorV2Package : {};
-                    const prevStageOutputs = prevData?.stageOutputs && typeof prevData.stageOutputs === "object" ? prevData.stageOutputs : {};
-                    const sceneDetailPayload = storyboardPackage?.scene_detail || null;
-                    return {
-                      ...x,
-                      data: {
-                        ...prevData,
-                        storyboardPackage,
-                        stageStatuses: storyboardPackage?.stage_statuses || {},
-                        ...(sceneDetailPayload ? {
-                          scene_detail: sceneDetailPayload,
-                          directorV2Package: { ...prevDirectorV2Package, scene_detail: sceneDetailPayload },
-                          stageOutputs: { ...prevStageOutputs, scene_detail: sceneDetailPayload },
-                        } : {}),
-                      },
-                    };
-                  })));
                   return { ok: true, output, storyboardPackage, stageStatuses: storyboardPackage?.stage_statuses || {} };
                 } catch (error) {
                   return { ok: false, error: String(error?.message || error || 'stage_failed') };
