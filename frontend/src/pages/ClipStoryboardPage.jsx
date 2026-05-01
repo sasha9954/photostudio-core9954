@@ -3147,6 +3147,56 @@ function preserveScenarioCanonicalResult(prevScene = {}, nextScene = {}) {
   return canonicalAudioResult.scene;
 }
 
+function pickScenarioRuntimeSceneFields(sceneItem = {}) {
+  const scene = sceneItem && typeof sceneItem === "object" ? sceneItem : {};
+  return {
+    segment_id: scene?.segment_id,
+    scene_id: scene?.scene_id,
+    sceneId: scene?.sceneId,
+    route: scene?.route,
+    timeline_role: scene?.timeline_role ?? scene?.timelineRole,
+    startSec: scene?.startSec ?? scene?.t0,
+    endSec: scene?.endSec ?? scene?.t1,
+    durationSec: scene?.durationSec,
+    primaryRole: scene?.primaryRole ?? scene?.primary_role,
+    visualFocusRole: scene?.visualFocusRole ?? scene?.visual_focus_role,
+    sceneActiveRoles: scene?.sceneActiveRoles ?? scene?.scene_active_roles,
+    refsUsedByRole: scene?.refsUsedByRole ?? scene?.refs_used_by_role,
+    imagePromptEn: scene?.imagePromptEn ?? scene?.image_prompt_en,
+    videoPromptEn: scene?.videoPromptEn ?? scene?.video_prompt_en,
+    negativePrompt: scene?.negativePrompt ?? scene?.negative_prompt,
+    photo_prompt: scene?.photo_prompt,
+    image_prompt: scene?.image_prompt,
+    video_prompt: scene?.video_prompt,
+    positive_video_prompt: scene?.positive_video_prompt,
+    negative_video_prompt: scene?.negative_video_prompt,
+    route_payload: scene?.route_payload,
+    routePayload: scene?.routePayload,
+    finalVideoPrompt: scene?.finalVideoPrompt,
+    renderMode: scene?.renderMode,
+    resolvedWorkflowKey: scene?.resolvedWorkflowKey,
+    ltxMode: scene?.ltxMode,
+    resolvedModelKey: scene?.resolvedModelKey,
+    sceneRenderProvider: scene?.sceneRenderProvider,
+    lipSync: scene?.lipSync,
+    requiresAudioSensitiveVideo: scene?.requiresAudioSensitiveVideo,
+    audioUrl: scene?.audioUrl,
+    audioStartSec: scene?.audioStartSec,
+    audioEndSec: scene?.audioEndSec,
+    audioSliceUrl: scene?.audioSliceUrl,
+    audioSliceKind: scene?.audioSliceKind,
+    audioSliceDurationSec: scene?.audioSliceDurationSec,
+    imageUrl: scene?.imageUrl,
+    videoUrl: scene?.videoUrl,
+    startImageUrl: scene?.startImageUrl ?? scene?.startFrameImageUrl,
+    endImageUrl: scene?.endImageUrl ?? scene?.endFrameImageUrl,
+    imageStatus: scene?.imageStatus,
+    videoStatus: scene?.videoStatus,
+    imageReady: scene?.imageReady,
+    videoReady: scene?.videoReady,
+  };
+}
+
 function normalizeLipSyncSceneStatePatch(scene = {}, patch = {}) {
   const nextPatch = patch && typeof patch === "object" ? { ...patch } : {};
   const protectedSourceFields = SCENARIO_VIDEO_SOURCE_FIELDS;
@@ -20122,7 +20172,7 @@ onClipSec: (nodeId, value) => {
             const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
             const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
             const semanticChanged = !previousSceneSignature || previousSceneSignature !== nextSceneSignature;
-            const shouldPreserveAssets = Boolean(persistedScene);
+            const shouldPreserveAssets = Boolean(persistedScene) && !semanticChanged && !storyboardRunChanged;
             if (semanticChanged || storyboardRunChanged) {
               invalidatedSceneIds.add(sceneId);
             }
@@ -20136,6 +20186,8 @@ onClipSec: (nodeId, value) => {
                 nextSceneSignature,
                 sceneId,
                 preservedAssets: shouldPreserveAssets,
+                semanticChanged,
+                storyboardRunChanged,
                 hardResetBeforeApply: shouldHardResetStoryboardRuntime,
               });
             }
@@ -20207,34 +20259,36 @@ onClipSec: (nodeId, value) => {
           const scenes = baseScenes.map((sceneItem, idx) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
             const phraseMatch = getScenePhrasesByTime(sceneItem, timelineTranscriptPhrases, timelineSemanticPhrases, 0);
+            const pickedRuntimeFields = pickScenarioRuntimeSceneFields(sceneItem);
             const nextScene = {
-              segment_id: sceneItem?.segment_id || sceneItem?.segmentId || sceneId,
-              scene_id: sceneItem?.scene_id || sceneItem?.sceneId || sceneId,
-              sceneId,
-              route: sceneItem?.route || "",
-              timeline_role: sceneItem?.timeline_role || sceneItem?.timelineRole || "",
-              startSec: sceneItem?.startSec ?? sceneItem?.t0 ?? 0,
-              endSec: sceneItem?.endSec ?? sceneItem?.t1 ?? 0,
-              durationSec: sceneItem?.durationSec ?? Math.max(0, Number(sceneItem?.endSec ?? sceneItem?.t1 ?? 0) - Number(sceneItem?.startSec ?? sceneItem?.t0 ?? 0)),
-              primaryRole: sceneItem?.primaryRole || sceneItem?.primary_role || "",
-              visualFocusRole: sceneItem?.visualFocusRole || sceneItem?.visual_focus_role || "",
-              sceneActiveRoles: sceneItem?.sceneActiveRoles || sceneItem?.scene_active_roles || [],
-              refsUsedByRole: sceneItem?.refsUsedByRole || sceneItem?.refs_used_by_role || {},
-              imagePromptEn: sceneItem?.imagePromptEn || sceneItem?.image_prompt_en || "",
-              videoPromptEn: sceneItem?.videoPromptEn || sceneItem?.video_prompt_en || "",
-              negativePrompt: sceneItem?.negativePrompt || sceneItem?.negative_prompt || "",
-              renderMode: sceneItem?.renderMode || "",
-              resolvedWorkflowKey: sceneItem?.resolvedWorkflowKey || "",
-              ltxMode: sceneItem?.ltxMode || "",
-              lipSync: Boolean(sceneItem?.lipSync),
-              requiresAudioSensitiveVideo: Boolean(sceneItem?.requiresAudioSensitiveVideo),
-              audioUrl: sceneItem?.audioUrl || "",
-              audioStartSec: sceneItem?.audioStartSec ?? sceneItem?.startSec ?? sceneItem?.t0 ?? 0,
-              audioEndSec: sceneItem?.audioEndSec ?? sceneItem?.endSec ?? sceneItem?.t1 ?? 0,
-              imageUrl: sceneItem?.imageUrl || "",
-              videoUrl: sceneItem?.videoUrl || "",
-              startImageUrl: sceneItem?.startImageUrl || sceneItem?.startFrameImageUrl || "",
-              endImageUrl: sceneItem?.endImageUrl || sceneItem?.endFrameImageUrl || "",
+              ...pickedRuntimeFields,
+              segment_id: pickedRuntimeFields?.segment_id || sceneItem?.segmentId || sceneId,
+              scene_id: pickedRuntimeFields?.scene_id || pickedRuntimeFields?.sceneId || sceneId,
+              sceneId: pickedRuntimeFields?.sceneId || sceneId,
+              route: pickedRuntimeFields?.route || "",
+              timeline_role: pickedRuntimeFields?.timeline_role || "",
+              startSec: pickedRuntimeFields?.startSec ?? 0,
+              endSec: pickedRuntimeFields?.endSec ?? 0,
+              durationSec: pickedRuntimeFields?.durationSec ?? Math.max(0, Number(pickedRuntimeFields?.endSec ?? 0) - Number(pickedRuntimeFields?.startSec ?? 0)),
+              primaryRole: pickedRuntimeFields?.primaryRole || "",
+              visualFocusRole: pickedRuntimeFields?.visualFocusRole || "",
+              sceneActiveRoles: Array.isArray(pickedRuntimeFields?.sceneActiveRoles) ? pickedRuntimeFields.sceneActiveRoles : [],
+              refsUsedByRole: pickedRuntimeFields?.refsUsedByRole && typeof pickedRuntimeFields.refsUsedByRole === "object" ? pickedRuntimeFields.refsUsedByRole : {},
+              imagePromptEn: pickedRuntimeFields?.imagePromptEn || "",
+              videoPromptEn: pickedRuntimeFields?.videoPromptEn || "",
+              negativePrompt: pickedRuntimeFields?.negativePrompt || "",
+              renderMode: pickedRuntimeFields?.renderMode || "",
+              resolvedWorkflowKey: pickedRuntimeFields?.resolvedWorkflowKey || "",
+              ltxMode: pickedRuntimeFields?.ltxMode || "",
+              lipSync: Boolean(pickedRuntimeFields?.lipSync),
+              requiresAudioSensitiveVideo: Boolean(pickedRuntimeFields?.requiresAudioSensitiveVideo),
+              audioUrl: pickedRuntimeFields?.audioUrl || "",
+              audioStartSec: pickedRuntimeFields?.audioStartSec ?? pickedRuntimeFields?.startSec ?? 0,
+              audioEndSec: pickedRuntimeFields?.audioEndSec ?? pickedRuntimeFields?.endSec ?? 0,
+              imageUrl: pickedRuntimeFields?.imageUrl || "",
+              videoUrl: pickedRuntimeFields?.videoUrl || "",
+              startImageUrl: pickedRuntimeFields?.startImageUrl || "",
+              endImageUrl: pickedRuntimeFields?.endImageUrl || "",
               localPhrase: phraseMatch.primaryPhrase || String(sceneItem?.localPhrase || "").trim(),
               scenePhraseTexts: phraseMatch.matchedPhraseTexts,
               matchedPhraseTexts: phraseMatch.matchedPhraseTexts,

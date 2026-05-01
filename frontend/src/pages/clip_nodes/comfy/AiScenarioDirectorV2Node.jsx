@@ -563,7 +563,7 @@ export default function AiScenarioDirectorV2Node({ id, data }) {
       };
     }
     patchData({ stageStatuses, pipelineStages: nextStages });
-  }, [packageData?.stage_statuses, packageData?.final_video_prompt, packageData?.updated_at]);
+  }, [packageData?.stage_statuses, packageData?.final_video_prompt, packageData?.final_storyboard, packageData?.updated_at]);
 
   const renderSceneDetailPanel = () => {
     if (!sceneDetail) {
