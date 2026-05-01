@@ -18,7 +18,7 @@ from app.engine.scenario_stage_timeout_policy import (
 )
 from app.engine.scenario_story_guidance import story_guidance_to_notes_list
 
-FINAL_VIDEO_PROMPT_STAGE_VERSION = "gemini_final_video_prompt_v11"
+FINAL_VIDEO_PROMPT_STAGE_VERSION = "gemini_final_video_prompt_v12"
 FINAL_VIDEO_PROMPT_MODEL = "gemini-2.5-flash"
 FINAL_VIDEO_PROMPT_DELIVERY_VERSION = "1.1"
 
@@ -1716,6 +1716,9 @@ def _build_instruction(payload: dict[str, Any]) -> str:
             "Output strict JSON only.",
             "Do not add wrappers, markdown, or explanations.",
             "Do not invent extra segments and do not drop any provided segment_id.",
+            "Use segment_id exactly as provided: seg_01, seg_02, ...",
+            "Do not use scene_id such as sc_01 as segment_id.",
+            "Keep scene_id in scene_id field only.",
             "Use route semantics exactly: i2v, ia2v, first_last.",
             "GLOBAL HERO IDENTITY CONTRACT for non-ia2v human scenes must be enforced; keep lock clauses in positive and only real negative tokens in negative.",
             "For ia2v, use IA2V_BASE_PROMPT_V1 performer-first canon and avoid wardrobe/body continuity walls in positive prompt.",
@@ -2666,7 +2669,7 @@ def _sanitize_segment(
     }
 
 
-def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     def _build_audio_window_map() -> dict[str, dict[str, float]]:
         windows = [row for row in _safe_list(_safe_dict(package.get("audio_map")).get("scene_candidate_windows")) if isinstance(row, dict)]
         mapped: dict[str, dict[str, float]] = {}
@@ -2700,7 +2703,45 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
         raise RuntimeError(f"final_video_prompt_invalid_timing:{segment_id or scene_id or 'unknown'}")
 
     data = _safe_dict(raw)
-    model_segments = _safe_list(data.get("segments"))
+    model_segments = [_safe_dict(item) for item in _safe_list(data.get("segments"))]
+    expected_segment_ids = {
+        str(_safe_dict(row).get("segment_id") or "").strip() for row in segment_rows if str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    scene_to_segment_map = {
+        str(_safe_dict(row).get("scene_id") or "").strip(): str(_safe_dict(row).get("segment_id") or "").strip()
+        for row in segment_rows
+        if str(_safe_dict(row).get("scene_id") or "").strip() and str(_safe_dict(row).get("segment_id") or "").strip()
+    }
+    segment_to_scene_map = {v: k for k, v in scene_to_segment_map.items()}
+    invalid_before: list[str] = []
+    invalid_after: list[str] = []
+    normalized_pairs: list[dict[str, str]] = []
+    normalized_count = 0
+    for row in model_segments:
+        raw_segment_id = str(row.get("segment_id") or "").strip()
+        raw_scene_id = str(row.get("scene_id") or "").strip()
+        if raw_segment_id and raw_segment_id not in expected_segment_ids:
+            invalid_before.append(raw_segment_id)
+        elif not raw_segment_id and raw_scene_id:
+            invalid_before.append(f"<empty>:{raw_scene_id}")
+        resolved_segment_id = raw_segment_id
+        resolved_scene_id = raw_scene_id
+        if (not resolved_segment_id or resolved_segment_id not in expected_segment_ids) and resolved_scene_id in scene_to_segment_map:
+            mapped_segment_id = scene_to_segment_map[resolved_scene_id]
+            if mapped_segment_id and mapped_segment_id != resolved_segment_id:
+                normalized_pairs.append({"from": resolved_segment_id or resolved_scene_id, "to": mapped_segment_id, "scene_id": resolved_scene_id})
+                normalized_count += 1
+            resolved_segment_id = mapped_segment_id
+        if resolved_segment_id in segment_to_scene_map and not resolved_scene_id:
+            resolved_scene_id = segment_to_scene_map[resolved_segment_id]
+        row["segment_id"] = resolved_segment_id
+        if resolved_scene_id:
+            row["scene_id"] = resolved_scene_id
+        if resolved_segment_id and resolved_segment_id not in expected_segment_ids:
+            invalid_after.append(resolved_segment_id)
+        elif not resolved_segment_id:
+            invalid_after.append(f"<empty>:{resolved_scene_id or 'unknown'}")
+
     by_segment_id = {
         str(_safe_dict(item).get("segment_id") or "").strip(): _safe_dict(item)
         for item in model_segments
@@ -2756,11 +2797,18 @@ def _sanitize_output(raw: Any, segment_rows: list[dict[str, Any]], package: dict
             normalized[idx - 1]["duplicate_prompt_segments"] = duplicate_segments
             normalized[idx]["duplicate_prompt_segments"] = duplicate_segments
 
-    return {
+    payload = {
         "delivery_version": FINAL_VIDEO_PROMPT_DELIVERY_VERSION,
         "segments": normalized,
         "scenes": [dict(row) for row in normalized],
     }
+    normalization_diag = {
+        "final_video_prompt_segment_id_normalized_count": normalized_count,
+        "final_video_prompt_segment_id_normalized_pairs": normalized_pairs,
+        "final_video_prompt_invalid_segment_ids_before_normalization": list(dict.fromkeys(invalid_before)),
+        "final_video_prompt_invalid_segment_ids_after_normalization": list(dict.fromkeys(invalid_after)),
+    }
+    return payload, normalization_diag
 
 
 def _build_route_diagnostics(segments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2926,6 +2974,12 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
     last_error = ""
     attempts = 0
     normalized_payload: dict[str, Any] = {}
+    normalization_diag: dict[str, Any] = {
+        "final_video_prompt_segment_id_normalized_count": 0,
+        "final_video_prompt_segment_id_normalized_pairs": [],
+        "final_video_prompt_invalid_segment_ids_before_normalization": [],
+        "final_video_prompt_invalid_segment_ids_after_normalization": [],
+    }
     configured_timeout = get_scenario_stage_timeout("final_video_prompt")
     timed_out = False
     response_was_empty_after_timeout = False
@@ -2945,7 +2999,7 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             if isinstance(response, dict) and response.get("__http_error__"):
                 raise RuntimeError(f"gemini_http_error:{response.get('status')}:{response.get('text')}")
             parsed = _extract_json_obj(_extract_gemini_text(response))
-            normalized_payload = _sanitize_output(parsed, segment_rows, package)
+            normalized_payload, normalization_diag = _sanitize_output(parsed, segment_rows, package)
             last_error = ""
             break
         except Exception as exc:
@@ -3118,6 +3172,18 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             ),
             "final_video_prompt_stale_identity_remaining_segments": _safe_list(
                 validation_diag.get("final_video_prompt_stale_identity_remaining_segments")
+            ),
+            "final_video_prompt_segment_id_normalized_count": int(
+                normalization_diag.get("final_video_prompt_segment_id_normalized_count") or 0
+            ),
+            "final_video_prompt_segment_id_normalized_pairs": _safe_list(
+                normalization_diag.get("final_video_prompt_segment_id_normalized_pairs")
+            ),
+            "final_video_prompt_invalid_segment_ids_before_normalization": _safe_list(
+                normalization_diag.get("final_video_prompt_invalid_segment_ids_before_normalization")
+            ),
+            "final_video_prompt_invalid_segment_ids_after_normalization": _safe_list(
+                normalization_diag.get("final_video_prompt_invalid_segment_ids_after_normalization")
             ),
             "validation_error": validation_error,
             "error_code": validation_error,
