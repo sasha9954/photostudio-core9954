@@ -12725,7 +12725,25 @@ def clip_image(payload: ClipImageIn):
         or payload_map.get("expected_role")
     )
     expected_role = str(expected_role_raw or "").strip()
+    connected_inputs_payload = getattr(refs_obj, "connectedInputs", None)
+    connected_inputs_payload = connected_inputs_payload if isinstance(connected_inputs_payload, dict) else {}
     if expected_role:
+        expected_handle = f"ref_{expected_role}"
+        for handle in ("ref_character_1", "ref_character_2", "ref_character_3"):
+            if handle == expected_handle:
+                continue
+            handle_payload = connected_inputs_payload.get(handle) if isinstance(connected_inputs_payload.get(handle), dict) else {}
+            handle_refs = _ensure_url_list(
+                handle_payload.get("refs")
+                or handle_payload.get("value")
+                or handle_payload.get("url")
+                or handle_payload.get("preview")
+            )
+            if handle_refs:
+                return JSONResponse({
+                    "ok": False,
+                    "detail": f"image_request_wrong_connected_input_ref:{scene_id}:expected={expected_role}:found={handle}",
+                }, status_code=400)
         expected_refs = comfy_refs_by_role.get(expected_role) or []
         if len(expected_refs) == 0:
             return JSONResponse({
@@ -12742,6 +12760,7 @@ def clip_image(payload: ClipImageIn):
         "sceneId": scene_id,
         "route": route_value,
         "workflowKey": workflow_key,
+        "expectedRole": expected_role,
         "refsByRoleCounts": {role: len(comfy_refs_by_role.get(role) or []) for role in COMFY_REF_ROLES},
         "hasCharacter1Ref": bool(len(comfy_refs_by_role.get("character_1") or []) > 0),
         "rawRefCandidatesByRole": canonical_ref_diagnostics.get("rawRefCandidatesByRole") if isinstance(canonical_ref_diagnostics, dict) else {},
