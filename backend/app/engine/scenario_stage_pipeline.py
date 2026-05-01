@@ -18562,7 +18562,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         local_diagnostics["final_video_prompt_segment_count"] = int(diag.get("final_video_prompt_segment_count") or 0)
         local_diagnostics["final_video_prompt_used_fallback"] = bool(diag.get("final_video_prompt_used_fallback"))
-        local_diagnostics["final_video_prompt_error"] = str(result_payload.get("error") or "")
+        local_diagnostics["final_video_prompt_error"] = str(diag.get("final_video_prompt_error") or str(result_payload.get("error") or ""))
         local_diagnostics["final_video_prompt_configured_timeout_sec"] = int(
             diag.get("final_video_prompt_configured_timeout_sec") or local_diagnostics.get("final_video_prompt_configured_timeout_sec") or 0
         )
@@ -18612,6 +18612,21 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         )
         local_diagnostics["final_video_prompt_raw_model_scene_ids_preview"] = _safe_list(
             diag.get("final_video_prompt_raw_model_scene_ids_preview")
+        )
+        local_diagnostics["final_video_prompt_fallback_source"] = str(diag.get("final_video_prompt_fallback_source") or "")
+        local_diagnostics["final_video_prompt_fallback_reason"] = str(diag.get("final_video_prompt_fallback_reason") or "")
+        local_diagnostics["final_video_prompt_fallback_trigger"] = str(diag.get("final_video_prompt_fallback_trigger") or "")
+        local_diagnostics["final_video_prompt_scene_prompts_fallback_sanitized"] = bool(
+            diag.get("final_video_prompt_scene_prompts_fallback_sanitized")
+        )
+        local_diagnostics["final_video_prompt_scene_prompts_fallback_bypassed_sanitizer"] = bool(
+            diag.get("final_video_prompt_scene_prompts_fallback_bypassed_sanitizer")
+        )
+        local_diagnostics["final_video_prompt_last_generation_error_before_fallback"] = str(
+            diag.get("final_video_prompt_last_generation_error_before_fallback") or ""
+        )
+        local_diagnostics["final_video_prompt_fallback_segment_count"] = int(
+            diag.get("final_video_prompt_fallback_segment_count") or 0
         )
         local_diagnostics["current_character_1_gender_hint"] = str(current_character_ctx.get("gender_hint") or "")
         local_diagnostics["current_character_1_identity_label"] = str(current_character_ctx.get("identity_label") or "")
