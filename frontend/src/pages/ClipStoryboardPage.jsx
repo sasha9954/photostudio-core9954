@@ -25377,6 +25377,32 @@ const hydrate = useCallback((source = "unknown") => {
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:ai-scenario-director-v2");
           return nextEdges;
         }
+        if (dst.type === "manualClipBoard") {
+          const h = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
+          const ok =
+            h === "audio_in"
+            && src.type === "audioNode"
+            && sourceHandle === "audio";
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === params.target && (e.targetHandle || "") === h));
+          const presentation = getEdgePresentation({
+            sourceHandle,
+            targetHandle: h,
+            sourceType: src.type,
+            targetType: dst.type,
+          });
+          nextEdges = addEdge({
+            ...params,
+            type: "smoothstep",
+            className: presentation.className,
+            animated: presentation.animated,
+            style: presentation.style,
+            data: { kind: presentation.kind },
+          }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:manual-clip-board");
+          return nextEdges;
+        }
 
         if (src.type === "aiScenarioDirectorV2" && (params.sourceHandle || "") === "scenario_out_v2") {
           const targetHandle = params.targetHandle || "";
