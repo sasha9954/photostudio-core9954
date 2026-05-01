@@ -18546,6 +18546,13 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     current_snapshot_meta = _collect_final_video_prompt_snapshot_meta(package)
     current_character_ctx = _final_video_prompt_character_1_context(package)
 
+    prompts_package = deepcopy(package)
+    diagnostics = _safe_dict(package.get("diagnostics"))
+    diagnostics["final_video_prompt_generation_package_source"] = "prompts_package"
+    diagnostics["final_video_prompt_retry_package_source"] = "prompts_package"
+    diagnostics["final_video_prompt_blocked_snapshot_retry_used"] = False
+    package["diagnostics"] = diagnostics
+
     def _apply_result_diagnostics(result_payload: dict[str, Any]) -> None:
         diag = _safe_dict(result_payload.get("diagnostics"))
         local_diagnostics = _safe_dict(package.get("diagnostics"))
@@ -18594,6 +18601,18 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
         local_diagnostics["final_video_prompt_invalid_segment_ids_after_normalization"] = _safe_list(
             diag.get("final_video_prompt_invalid_segment_ids_after_normalization")
         )
+        local_diagnostics["final_video_prompt_segment_candidate_rejected_count"] = int(
+            diag.get("final_video_prompt_segment_candidate_rejected_count") or 0
+        )
+        local_diagnostics["final_video_prompt_segment_candidate_rejected_ids"] = _safe_list(
+            diag.get("final_video_prompt_segment_candidate_rejected_ids")
+        )
+        local_diagnostics["final_video_prompt_raw_model_segment_ids_preview"] = _safe_list(
+            diag.get("final_video_prompt_raw_model_segment_ids_preview")
+        )
+        local_diagnostics["final_video_prompt_raw_model_scene_ids_preview"] = _safe_list(
+            diag.get("final_video_prompt_raw_model_scene_ids_preview")
+        )
         local_diagnostics["current_character_1_gender_hint"] = str(current_character_ctx.get("gender_hint") or "")
         local_diagnostics["current_character_1_identity_label"] = str(current_character_ctx.get("identity_label") or "")
         local_diagnostics["current_character_1_ref_signature"] = str(current_character_ctx.get("ref_signature") or "")
@@ -18601,7 +18620,7 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
 
     result = generate_ltx_video_prompt_metadata(
         api_key=gemini_api_key,
-        package=package,
+        package=prompts_package,
     )
     _apply_result_diagnostics(result)
 
@@ -18662,10 +18681,15 @@ def _run_final_video_prompt_stage(package: dict[str, Any]) -> dict[str, Any]:
     diagnostics["current_character_1_ref_signature"] = str(current_character_ctx.get("ref_signature") or "")
     package["diagnostics"] = diagnostics
     if previous_payload and not can_restore_snapshot:
+        diagnostics = _safe_dict(package.get("diagnostics"))
+        diagnostics["final_video_prompt_blocked_snapshot_retry_used"] = True
+        diagnostics["final_video_prompt_retry_package_source"] = "prompts_package"
+        package["diagnostics"] = diagnostics
         package["final_video_prompt"] = STAGE_SECTION_RESETTERS["final_video_prompt"]()
+        prompts_package["final_video_prompt"] = STAGE_SECTION_RESETTERS["final_video_prompt"]()
         retry_result = generate_ltx_video_prompt_metadata(
             api_key=gemini_api_key,
-            package=package,
+            package=prompts_package,
         )
         _apply_result_diagnostics(retry_result)
         retry_payload = _safe_dict(retry_result.get("final_video_prompt"))
