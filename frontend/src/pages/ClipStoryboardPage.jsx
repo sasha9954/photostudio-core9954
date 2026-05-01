@@ -20122,7 +20122,7 @@ onClipSec: (nodeId, value) => {
             const previousSceneSignature = String(previousSceneSignatureById.get(sceneId) || "");
             const nextSceneSignature = buildScenarioScenePackageSignature(cleanedScene);
             const semanticChanged = !previousSceneSignature || previousSceneSignature !== nextSceneSignature;
-            const shouldPreserveAssets = false;
+            const shouldPreserveAssets = Boolean(persistedScene);
             if (semanticChanged || storyboardRunChanged) {
               invalidatedSceneIds.add(sceneId);
             }
@@ -20208,7 +20208,33 @@ onClipSec: (nodeId, value) => {
             const sceneId = String(sceneItem?.sceneId || `S${idx + 1}`).trim() || `S${idx + 1}`;
             const phraseMatch = getScenePhrasesByTime(sceneItem, timelineTranscriptPhrases, timelineSemanticPhrases, 0);
             const nextScene = {
-              ...sceneItem,
+              segment_id: sceneItem?.segment_id || sceneItem?.segmentId || sceneId,
+              scene_id: sceneItem?.scene_id || sceneItem?.sceneId || sceneId,
+              sceneId,
+              route: sceneItem?.route || "",
+              timeline_role: sceneItem?.timeline_role || sceneItem?.timelineRole || "",
+              startSec: sceneItem?.startSec ?? sceneItem?.t0 ?? 0,
+              endSec: sceneItem?.endSec ?? sceneItem?.t1 ?? 0,
+              durationSec: sceneItem?.durationSec ?? Math.max(0, Number(sceneItem?.endSec ?? sceneItem?.t1 ?? 0) - Number(sceneItem?.startSec ?? sceneItem?.t0 ?? 0)),
+              primaryRole: sceneItem?.primaryRole || sceneItem?.primary_role || "",
+              visualFocusRole: sceneItem?.visualFocusRole || sceneItem?.visual_focus_role || "",
+              sceneActiveRoles: sceneItem?.sceneActiveRoles || sceneItem?.scene_active_roles || [],
+              refsUsedByRole: sceneItem?.refsUsedByRole || sceneItem?.refs_used_by_role || {},
+              imagePromptEn: sceneItem?.imagePromptEn || sceneItem?.image_prompt_en || "",
+              videoPromptEn: sceneItem?.videoPromptEn || sceneItem?.video_prompt_en || "",
+              negativePrompt: sceneItem?.negativePrompt || sceneItem?.negative_prompt || "",
+              renderMode: sceneItem?.renderMode || "",
+              resolvedWorkflowKey: sceneItem?.resolvedWorkflowKey || "",
+              ltxMode: sceneItem?.ltxMode || "",
+              lipSync: Boolean(sceneItem?.lipSync),
+              requiresAudioSensitiveVideo: Boolean(sceneItem?.requiresAudioSensitiveVideo),
+              audioUrl: sceneItem?.audioUrl || "",
+              audioStartSec: sceneItem?.audioStartSec ?? sceneItem?.startSec ?? sceneItem?.t0 ?? 0,
+              audioEndSec: sceneItem?.audioEndSec ?? sceneItem?.endSec ?? sceneItem?.t1 ?? 0,
+              imageUrl: sceneItem?.imageUrl || "",
+              videoUrl: sceneItem?.videoUrl || "",
+              startImageUrl: sceneItem?.startImageUrl || sceneItem?.startFrameImageUrl || "",
+              endImageUrl: sceneItem?.endImageUrl || sceneItem?.endFrameImageUrl || "",
               localPhrase: phraseMatch.primaryPhrase || String(sceneItem?.localPhrase || "").trim(),
               scenePhraseTexts: phraseMatch.matchedPhraseTexts,
               matchedPhraseTexts: phraseMatch.matchedPhraseTexts,
@@ -20276,7 +20302,17 @@ onClipSec: (nodeId, value) => {
             stopScenarioVideoPolling();
             safeDel(VIDEO_JOB_STORE_KEY);
           }
-          console.debug("[SCENARIO APPLY RESPONSE]", {
+          console.debug("[SCENARIO FINAL UI DIAGNOSTICS]", {
+            final_ui_compact_mode: true,
+            final_ui_full_json_render_disabled: true,
+            final_ui_render_manifest_count: Array.isArray(normalizedPackage?.final_storyboard?.render_manifest) ? normalizedPackage.final_storyboard.render_manifest.length : 0,
+            final_ui_scene_count: scenes.length,
+            final_ui_payload_size_estimate: JSON.stringify(normalizedPackage?.final_storyboard || {}).length,
+            final_manual_confirmation_required: true,
+            generated_assets_preserved_on_pipeline_refresh_count: baseScenes.filter((x) => String(x?.imageUrl || x?.videoUrl || "").trim()).length,
+            montage_state_preserved_on_pipeline_refresh: baseScenes.every((x, idx) => { const prev = previousScenes[idx] || {}; return !Object.prototype.hasOwnProperty.call(prev, "montageReady") || prev.montageReady === x.montageReady; }),
+          });
+console.debug("[SCENARIO APPLY RESPONSE]", {
             generateSuccess: validScenarioSource && !!sourceScenarioRevision,
             targetNodeId: String(n?.id || ""),
             hadStoryboardOut: !!storyboardOut,
