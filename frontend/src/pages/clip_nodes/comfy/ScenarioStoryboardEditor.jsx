@@ -1593,7 +1593,7 @@ export default function ScenarioStoryboardEditor({
                 <ContractField label="secondaryRoles" value={scene?.secondaryRoles || []} />
                 <ContractField label="mustAppear" value={scene?.mustAppear || []} />
                 <ScenarioReadonlyTextField label="imagePrompt" value={scene?.imagePromptRu || scene?.imagePromptEn} minRows={4} />
-                <ScenarioReadonlyTextField label="videoPrompt" value={scene?.videoPromptRu || scene?.videoPromptEn} minRows={4} />
+                <ScenarioReadonlyTextField label="videoPrompt" value={scene?.videoPromptRu || scene?.videoPromptEn || scene?.video_prompt || scene?.videoPrompt || ""} minRows={4} />
                 <ContractField label="lipSync" value={String(Boolean(scene?.lipSync))} />
                 <ContractField label="audioSliceUrl" value={scene?.audioSliceUrl} />
                 <ContractField label="renderMode / ltxMode / model" value={`${scene?.renderMode || "—"} / ${scene?.ltxMode || "—"} / ${scene?.resolvedModelKey || "—"}`} />
@@ -2285,9 +2285,9 @@ export default function ScenarioStoryboardEditor({
                       <textarea
                         className="clipSB_textarea"
                         rows={3}
-                        value={String(selectedScene?.videoPromptRu || "")}
+                        value={String(selectedScene?.videoPromptRu || selectedScene?.videoPromptEn || selectedScene?.video_prompt || selectedScene?.videoPrompt || "")}
                         onChange={(event) => onUpdateScene?.(nodeId, selectedSceneId, { videoPromptRu: event.target.value })}
-                        placeholder="videoPromptRu"
+                        placeholder="videoPromptRu / videoPromptEn / video_prompt"
                       />
                       <details>
                         <summary>EN</summary>

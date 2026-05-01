@@ -2658,6 +2658,24 @@ export function normalizeScenarioStoryboardPackage({
       || normalizedSceneBase?.audio_url
       || packageAudioUrl
     );
+    const manifestRow = normalizedSceneBase?.render_manifest_row && typeof normalizedSceneBase.render_manifest_row === "object"
+      ? normalizedSceneBase.render_manifest_row
+      : normalizedSceneBase?.renderManifestRow && typeof normalizedSceneBase.renderManifestRow === "object"
+        ? normalizedSceneBase.renderManifestRow
+        : {};
+    const routePayload = manifestRow?.route_payload && typeof manifestRow.route_payload === "object"
+      ? manifestRow.route_payload
+      : {};
+    const videoPromptCandidates = [
+      ["scene.video_prompt", normalizedSceneBase?.video_prompt],
+      ["scene.videoPrompt", normalizedSceneBase?.videoPrompt],
+      ["render_manifest_row.video_prompt", manifestRow?.video_prompt],
+      ["render_manifest_row.route_payload.video_prompt", routePayload?.video_prompt],
+      ["render_manifest_row.route_payload.positive_prompt", routePayload?.positive_prompt],
+      ["scene.positive_video_prompt", normalizedSceneBase?.positive_video_prompt],
+    ];
+    const chosenVideoPromptEntry = videoPromptCandidates.find(([, value]) => normalizeText(value));
+    const resolvedVideoPrompt = normalizeText(chosenVideoPromptEntry?.[1]);
     const resolvedOriginalAudioUrl = normalizeText(
       normalizedSceneBase?.originalAudioUrl
       || resolvedAudioUrl
@@ -2693,7 +2711,19 @@ export function normalizeScenarioStoryboardPackage({
       originalAudioUrl: resolvedOriginalAudioUrl,
       audioStartSec: resolvedStart,
       audioEndSec: resolvedEnd,
+      video_prompt: normalizeText(normalizedSceneBase?.video_prompt) || resolvedVideoPrompt,
+      videoPrompt: normalizeText(normalizedSceneBase?.videoPrompt) || resolvedVideoPrompt,
+      videoPromptEn: normalizeText(normalizedSceneBase?.videoPromptEn) || resolvedVideoPrompt,
+      videoPromptRu: normalizeText(normalizedSceneBase?.videoPromptRu) || resolvedVideoPrompt,
     };
+    console.debug("[SCENARIO VIDEO PROMPT RESOLVE]", {
+      segment_id: canonicalSegmentId || segmentId || "",
+      scene_id: normalizeText(normalizedScene.scene_id || normalizedScene.sceneId),
+      has_render_manifest_video_prompt: Boolean(normalizeText(manifestRow?.video_prompt)),
+      has_route_payload_video_prompt: Boolean(normalizeText(routePayload?.video_prompt)),
+      chosen_video_prompt_source: chosenVideoPromptEntry?.[0] || "none",
+      chosen_video_prompt_preview: resolvedVideoPrompt ? `${resolvedVideoPrompt.slice(0, 160)}${resolvedVideoPrompt.length > 160 ? "…" : ""}` : "",
+    });
     const persistedScene = persistedSceneBySegmentId.get(canonicalSegmentId || segmentId || normalizedScene.sceneId || "");
     if (persistedScene && typeof persistedScene === "object") {
       persistedGeneratedFieldKeys.forEach((fieldKey) => {
