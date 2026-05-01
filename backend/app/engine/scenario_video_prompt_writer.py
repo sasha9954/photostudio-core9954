@@ -3099,33 +3099,58 @@ def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reaso
         if route not in _ALLOWED_ROUTES:
             route = "i2v"
 
-        positive = str(
+        photo_prompt = str(
+            row.get("photo_prompt")
+            or row.get("image_prompt")
+            or row.get("positive_image_prompt")
+            or ""
+        ).strip()
+        video_prompt = str(
             row.get("positive_video_prompt")
             or row.get("video_prompt")
             or row.get("ltx_video_prompt")
             or row.get("prompt")
             or ""
         ).strip()
-        negative = str(row.get("negative_video_prompt") or row.get("negative_prompt") or "").strip()
+        negative_prompt = str(row.get("negative_video_prompt") or row.get("negative_prompt") or "").strip()
 
-        if not positive:
-            raise RuntimeError(f"final_video_prompt_timeout_fallback_missing_positive_prompt:{segment_id}")
+        if not video_prompt:
+            raise RuntimeError(f"final_video_prompt_scene_prompts_fallback_missing_video_prompt:{segment_id}")
 
-        if not negative:
-            negative = "severe identity drift, duplicate main subject, severe facial deformation, on-screen text, UI elements, watermarks"
+        if not negative_prompt:
+            negative_prompt = "severe identity drift, duplicate main subject, severe facial deformation, on-screen text, UI elements, watermarks"
 
         segment = {
             "segment_id": segment_id,
             "scene_id": scene_id,
             "route": route,
-            "positive_video_prompt": positive,
-            "negative_video_prompt": negative,
+            "photo_prompt": photo_prompt,
+            "image_prompt": photo_prompt,
+            "video_prompt": video_prompt,
+            "positive_video_prompt": video_prompt,
+            "negative_prompt": negative_prompt,
+            "negative_video_prompt": negative_prompt,
             "primary_role": str(row.get("primary_role") or "").strip(),
             "visual_focus_role": str(row.get("visual_focus_role") or "").strip(),
             "vocal_owner_role": str(row.get("vocal_owner_role") or row.get("speaker_role") or "").strip(),
+            "speaker_role": str(row.get("speaker_role") or row.get("vocal_owner_role") or "").strip(),
             "start_sec": row.get("start_sec", row.get("t0")),
             "end_sec": row.get("end_sec", row.get("t1")),
             "duration_sec": row.get("duration_sec", row.get("duration")),
+            "route_payload": {
+                "route": route,
+                "positive_prompt": video_prompt,
+                "negative_prompt": negative_prompt,
+                "negative_video_prompt": negative_prompt,
+                "image_prompt": photo_prompt,
+                "photo_prompt": photo_prompt,
+                "video_prompt": video_prompt,
+            },
+            "video_metadata": {
+                "route_type": route,
+                "renderMode": "lip_sync_music" if route == "ia2v" else "image_to_video",
+                "resolvedWorkflowKey": "lip_sync_music" if route == "ia2v" else "image_to_video",
+            },
             "engine_hints": {
                 "frame_strategy": "start_end" if route == "first_last" else "single_init",
                 "audio_sync": "phrase_sensitive" if route == "ia2v" else "beat_sensitive",
@@ -3133,13 +3158,18 @@ def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reaso
                 "augmentation": "medium",
                 "transition_kind": "controlled" if route == "first_last" else "none",
             },
+            "prompt_source": "scene_prompts_existing_gemini_output_fallback",
             "fallback_source": "scene_prompts",
-            "fallback_reason": reason or "final_video_prompt_timeout",
+            "fallback_reason": reason or "scene_prompts_fallback",
         }
 
         if route == "first_last":
-            segment["start_image_prompt"] = str(row.get("start_image_prompt") or row.get("first_frame_prompt") or "").strip()
-            segment["end_image_prompt"] = str(row.get("end_image_prompt") or row.get("last_frame_prompt") or "").strip()
+            start_image_prompt = str(row.get("start_image_prompt") or row.get("first_frame_prompt") or photo_prompt).strip()
+            end_image_prompt = str(row.get("end_image_prompt") or row.get("last_frame_prompt") or photo_prompt).strip()
+            segment["start_image_prompt"] = start_image_prompt
+            segment["end_image_prompt"] = end_image_prompt
+            segment["route_payload"]["first_frame_prompt"] = start_image_prompt
+            segment["route_payload"]["last_frame_prompt"] = end_image_prompt
 
         segments.append(segment)
         scenes.append(dict(segment))
@@ -3151,9 +3181,10 @@ def _build_final_video_prompt_timeout_fallback(package: dict[str, Any], *, reaso
         "fallback": {
             "used": True,
             "source": "scene_prompts_existing_gemini_output",
-            "reason": reason or "final_video_prompt_timeout",
+            "reason": reason or "scene_prompts_fallback",
             "creative_author": "upstream_gemini_scene_prompts",
             "backend_role": "deterministic_transport_only",
+            "bypassed_sanitizer": True,
         },
     }
 
@@ -3262,19 +3293,19 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
                 reason=fallback_reason,
             )
 
-            fallback_normalized, fallback_norm_diag = _sanitize_output(fallback_payload, segment_rows, package)
-            fallback_segments = _safe_list(fallback_normalized.get("segments"))
+            fallback_segments = _safe_list(fallback_payload.get("segments"))
 
             if fallback_segments:
-                normalized_payload = fallback_normalized
+                normalized_payload = fallback_payload
                 ok = True
                 used_fallback = True
                 original_last_error_before_fallback = last_error
                 last_error = ""
-                normalization_diag.update(_safe_dict(fallback_norm_diag))
                 normalization_diag["final_video_prompt_timeout_fallback_sanitized"] = bool(fallback_after_timeout)
-                normalization_diag["final_video_prompt_scene_prompts_fallback_sanitized"] = True
+                normalization_diag["final_video_prompt_scene_prompts_fallback_sanitized"] = False
+                normalization_diag["final_video_prompt_scene_prompts_fallback_bypassed_sanitizer"] = True
                 normalization_diag["final_video_prompt_fallback_trigger"] = fallback_reason
+                normalization_diag["final_video_prompt_fallback_segment_count"] = len(fallback_segments)
 
         except Exception as fallback_exc:
             last_error = str(fallback_exc)[:500] or "final_video_prompt_scene_prompts_fallback_failed"
@@ -3419,7 +3450,13 @@ def generate_ltx_video_prompt_metadata(*, api_key: str, package: dict[str, Any])
             "final_video_prompt_scene_prompts_fallback_sanitized": bool(
                 normalization_diag.get("final_video_prompt_scene_prompts_fallback_sanitized")
             ),
+            "final_video_prompt_scene_prompts_fallback_bypassed_sanitizer": bool(
+                normalization_diag.get("final_video_prompt_scene_prompts_fallback_bypassed_sanitizer")
+            ),
             "final_video_prompt_last_generation_error_before_fallback": "" if not used_fallback else original_last_error_before_fallback,
+            "final_video_prompt_fallback_segment_count": int(
+                normalization_diag.get("final_video_prompt_fallback_segment_count") or 0
+            ),
             "final_video_prompt_segment_ids": [str(_safe_dict(row).get("segment_id") or "") for row in segment_rows],
             "final_video_prompt_configured_timeout_sec": configured_timeout,
             "final_video_prompt_timeout_stage_policy_name": scenario_timeout_policy_name("final_video_prompt"),
