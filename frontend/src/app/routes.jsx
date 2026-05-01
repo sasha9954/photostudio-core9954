@@ -11,6 +11,7 @@ import PrintsPage from "../pages/PrintsPage.jsx";
 import StudiosPage from "../pages/StudiosPage.jsx";
 import StudioHostPage from "../pages/StudioHostPage.jsx";
 import AccountPage from "../pages/AccountPage.jsx";
+import ManualClipDirectorPage from "../pages/manual_clip/ManualClipDirectorPage.jsx";
 import { useAuth } from "./AuthContext.jsx";
 
 const Placeholder = ({ title }) => (
@@ -56,6 +57,7 @@ export default function AppRoutes() {
 
         <Route path="/credits" element={<RequireAuth><CreditsPage /></RequireAuth>} />
         <Route path="/account" element={<RequireAuth><AccountPage /></RequireAuth>} />
+        <Route path="/studio/manual-clip-board" element={<RequireAuth><ManualClipDirectorPage /></RequireAuth>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

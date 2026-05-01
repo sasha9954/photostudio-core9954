@@ -1,5 +1,5 @@
 export const MANUAL_CLIP_MODE = "manual_clip_board";
-export const MANUAL_CLIP_STEPS = ["empty", "audio_loaded", "split_chat_ready", "scene_plan_ready", "director_board"];
+export const MANUAL_CLIP_STEPS = ["empty", "audio_loaded", "split_chat_ready", "scene_plan_ready"];
 export const ROUTES = ["ia2v", "i2v", "i2v_sound"];
 
 export function getDefaultManualClipNodeData() {
