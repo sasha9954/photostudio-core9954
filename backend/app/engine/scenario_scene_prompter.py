@@ -171,6 +171,30 @@ _LIP_SYNC_ONLY_I2V_IDENTITY_ANCHOR_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\blip[- ]?sync\b"),
     re.compile(r"(?i)\bperformer-first\b"),
 )
+_SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bolder\s+character_1\s+watches\b"),
+    re.compile(r"(?i)\bcharacter_1\s+is\s+seen\b"),
+    re.compile(r"(?i)\bcharacter_1\s+is\s+visible\b"),
+    re.compile(r"(?i)\bcharacter_1\s+stands\b"),
+    re.compile(r"(?i)\bcharacter_1\s+sits\b"),
+    re.compile(r"(?i)\bcharacter_1\s+in\s+foreground\b"),
+    re.compile(r"(?i)\bcharacter_1\s+in\s+doorway\b"),
+    re.compile(r"(?i)\bcharacter_1\s+on\s+crate\b"),
+    re.compile(r"(?i)\bcharacter_1\s+across\s+the\s+fence\b"),
+    re.compile(r"(?i)\bshared\s+same\s+space\s+with\s+character_2\b"),
+)
+_SPLIT_TIMELINE_SAFE_I2V_OFFSCREEN_CLAUSE = (
+    "The older vocalist remains offscreen as memory voiceover only; he is not physically visible in the past scene."
+)
+_SPLIT_TIMELINE_IA2V_CHARACTER2_PHYSICAL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)\bcharacter_2\b.{0,40}\b(stands|standing|sits|seated|walks|running|visible|present)\b"),
+    re.compile(r"(?i)\bwith\s+character_2\b"),
+    re.compile(r"(?i)\balongside\s+character_2\b"),
+    re.compile(r"(?i)\bcharacter_2\s+beside\b"),
+)
+_SPLIT_TIMELINE_IA2V_CHARACTER2_SAFE_CLAUSE = (
+    "If character_2 appears, keep it non-physical only: reflection, old photo, vague memory impression, or ghostly reflection in glass."
+)
 _GENERIC_MEMORY_BEAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\bmemory beat\b"),
     re.compile(r"(?i)\batmospheric world\b"),
@@ -5370,6 +5394,7 @@ def _sanitize_identity_and_visibility_conflicts(
     out = dict(payload)
     rows_by_id = {str(_safe_dict(r).get("segment_id") or "").strip(): _safe_dict(r) for r in prompt_rows}
     lip_sync_only = _is_lip_sync_only_character_1(package)
+    split_timeline_contract = _is_split_timeline_contract_from_sources(story_core=story_core, scene_rows=prompt_rows)
     stale_identity_removed = 0
     repaired_segments: list[str] = []
     i2v_visual_removed = 0
@@ -5377,6 +5402,8 @@ def _sanitize_identity_and_visibility_conflicts(
     lip_sync_only_i2v_rebuilt_segments: list[str] = []
     lip_sync_only_i2v_sanitized_segments: list[str] = []
     lip_sync_only_i2v_character2_preserved_segments: list[str] = []
+    split_timeline_visible_character1_removed_from_i2v_segments: list[str] = []
+    split_timeline_visible_character2_downgraded_in_ia2v_segments: list[str] = []
     gender_conflict_segments: list[str] = []
     gender_terms_removed: set[str] = set()
     gender_conflict_matches: list[dict[str, str]] = []
@@ -5413,6 +5440,13 @@ def _sanitize_identity_and_visibility_conflicts(
             or ""
         ).strip().lower()
         prompt_row = _safe_dict(rows_by_id.get(segment_id))
+        timeline_role_value = str(
+            seg.get("timeline_role")
+            or seg.get("timeline")
+            or prompt_row.get("timeline_role")
+            or prompt_row.get("timeline")
+            or ""
+        ).strip().lower()
         world_context = _build_current_world_context_for_fallback(
             package=package,
             story_core=story_core,
@@ -5455,6 +5489,44 @@ def _sanitize_identity_and_visibility_conflicts(
         if lip_sync_only and route == "i2v" and primary_role_value == "character_2":
             if segment_id:
                 lip_sync_only_i2v_character2_preserved_segments.append(segment_id)
+        if split_timeline_contract and route == "i2v" and ("past" in timeline_role_value or "flashback" in timeline_role_value):
+            removed_visible_character1 = False
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+                field_value = str(seg.get(field) or "")
+                if not field_value:
+                    continue
+                cleaned_value = field_value
+                for pattern in _SPLIT_TIMELINE_VISIBLE_CHARACTER1_PATTERNS:
+                    cleaned_value = pattern.sub(" ", cleaned_value)
+                cleaned_value = re.sub(r"\s{2,}", " ", cleaned_value).strip(" .")
+                if cleaned_value != field_value:
+                    removed_visible_character1 = True
+                seg[field] = _append_prompt_clause(cleaned_value, _SPLIT_TIMELINE_SAFE_I2V_OFFSCREEN_CLAUSE)
+            if removed_visible_character1 and segment_id:
+                split_timeline_visible_character1_removed_from_i2v_segments.append(segment_id)
+        if split_timeline_contract and route == "ia2v" and ("present" in timeline_role_value):
+            downgraded_character2 = False
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+                field_value = str(seg.get(field) or "")
+                if not field_value:
+                    continue
+                cleaned_value = field_value
+                for pattern in _SPLIT_TIMELINE_IA2V_CHARACTER2_PHYSICAL_PATTERNS:
+                    cleaned_value = pattern.sub(" ", cleaned_value)
+                cleaned_value = re.sub(r"\s{2,}", " ", cleaned_value).strip(" .")
+                if cleaned_value != field_value:
+                    downgraded_character2 = True
+                    seg[field] = cleaned_value
+            if downgraded_character2:
+                seg["photo_prompt"] = _append_prompt_clause(str(seg.get("photo_prompt") or ""), _SPLIT_TIMELINE_IA2V_CHARACTER2_SAFE_CLAUSE)
+                seg["video_prompt"] = _append_prompt_clause(str(seg.get("video_prompt") or ""), _SPLIT_TIMELINE_IA2V_CHARACTER2_SAFE_CLAUSE)
+                seg["positive_video_prompt"] = _append_prompt_clause(
+                    str(seg.get("positive_video_prompt") or seg.get("video_prompt") or ""),
+                    _SPLIT_TIMELINE_IA2V_CHARACTER2_SAFE_CLAUSE,
+                )
+                if segment_id:
+                    split_timeline_visible_character2_downgraded_in_ia2v_segments.append(segment_id)
+                mutated = True
 
         def _rebuild_bad_cleanup_field(field_name: str) -> str:
             if lip_sync_only and route == "i2v" and primary_role_value != "character_2":
@@ -5643,6 +5715,12 @@ def _sanitize_identity_and_visibility_conflicts(
         "lip_sync_only_i2v_rebuilt_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_rebuilt_segments if seg])),
         "scene_prompts_lip_sync_only_i2v_sanitized_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_sanitized_segments if seg])),
         "scene_prompts_lip_sync_only_i2v_character2_preserved_segments": list(dict.fromkeys([seg for seg in lip_sync_only_i2v_character2_preserved_segments if seg])),
+        "scene_prompts_split_timeline_visible_character1_removed_from_i2v_segments": list(
+            dict.fromkeys([seg for seg in split_timeline_visible_character1_removed_from_i2v_segments if seg])
+        ),
+        "scene_prompts_split_timeline_visible_character2_downgraded_in_ia2v_segments": list(
+            dict.fromkeys([seg for seg in split_timeline_visible_character2_downgraded_in_ia2v_segments if seg])
+        ),
         "lip_sync_only_policy_applied": bool(lip_sync_only),
     }
 
