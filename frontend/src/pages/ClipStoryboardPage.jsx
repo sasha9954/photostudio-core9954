@@ -16065,26 +16065,77 @@ Aspect ratio: ${imageFormat}`,
         ),
         source: hasSceneSelectedContract ? "scene_selected_character_refs" : "fallback",
       });
-      const finalCounts = summarizeRefsByRole(finalRequestBody?.refsByRole || {});
-      if (sceneSelectedCharacterRole) {
-        if (finalRequestBody.expectedRole !== sceneSelectedCharacterRole) {
-          throw new Error(`image_request_selected_role_mismatch:${sceneId}`);
+      const preflightRefsCounts = summarizeRefsByRole(finalRequestBody?.refsByRole || {});
+      const preflightExpectedRole = normalizeScenarioRoleName(
+        finalRequestBody?.expectedRole
+        || finalRequestBody?.expected_role
+        || finalRequestBody?.primaryRole
+        || finalRequestBody?.primary_role
+        || ""
+      );
+      const isScenarioStoryboardImage =
+        Boolean(SCENARIO_IMAGE_ROLE_FIX_MARKER)
+        && String(sceneId || "").trim();
+      const hasSceneSelectedRefs =
+        Boolean(sceneSelectedCharacterRole && sceneSelectedCharacterRefs.length > 0);
+
+      console.info("[SCENARIO IMAGE PREFLIGHT SUMMARY]", {
+        sceneId,
+        sceneSelectedCharacterRole,
+        sceneSelectedCharacterRefsCount: sceneSelectedCharacterRefs.length,
+        preflightExpectedRole,
+        primaryRole: finalRequestBody?.primaryRole,
+        heroEntityId: finalRequestBody?.heroEntityId,
+        sceneActiveRoles: finalRequestBody?.sceneActiveRoles,
+        refsUsed: finalRequestBody?.refsUsed,
+        mustAppear: finalRequestBody?.mustAppear,
+        refsByRoleCounts: preflightRefsCounts,
+        connectedInputsKeys: Object.keys(finalRequestBody?.connectedInputs || {}),
+        refsConnectedInputsKeys: Object.keys(finalRequestBody?.refs?.connectedInputs || {}),
+      });
+
+      if (isScenarioStoryboardImage) {
+        if (!hasSceneSelectedRefs) {
+          console.error("[SCENARIO IMAGE PREFLIGHT BLOCK]", {
+            sceneId,
+            reason: "missing_scene_selected_refs",
+            sceneSelectedCharacterRole,
+            sceneSelectedCharacterRefsCount: sceneSelectedCharacterRefs.length,
+            expectedRole,
+            preflightExpectedRole,
+            refsByRoleCounts: preflightRefsCounts,
+            targetScenePrimaryRole: targetScene?.primaryRole || targetScene?.primary_role || "",
+            targetSceneSelectedCharacterRole: targetScene?.selectedCharacterRole || targetScene?.selected_character_role || "",
+            targetSceneSelectedCharacterRefsCount: Array.isArray(targetScene?.selectedCharacterRefs) ? targetScene.selectedCharacterRefs.length : 0,
+          });
+          throw new Error(`image_request_missing_scene_selected_refs:${sceneId}`);
         }
-        if (Number(finalCounts?.[sceneSelectedCharacterRole] || 0) <= 0) {
-          throw new Error(`image_request_selected_refs_missing:${sceneId}:${sceneSelectedCharacterRole}`);
+
+        if (preflightExpectedRole !== sceneSelectedCharacterRole) {
+          throw new Error(`image_request_preflight_role_mismatch:${sceneId}:selected=${sceneSelectedCharacterRole}:expected=${preflightExpectedRole}`);
         }
-        const wrongCharacterRole = Object.entries(finalCounts || {}).find(([role, count]) => /^character_\d+$/i.test(role) && role !== sceneSelectedCharacterRole && Number(count || 0) > 0)?.[0];
-        if (wrongCharacterRole) {
-          throw new Error(`image_request_selected_refs_wrong_extra_role:${sceneId}:expected=${sceneSelectedCharacterRole}:found=${wrongCharacterRole}`);
+
+        if (Number(preflightRefsCounts?.[sceneSelectedCharacterRole] || 0) <= 0) {
+          throw new Error(`image_request_preflight_selected_refs_missing:${sceneId}:${sceneSelectedCharacterRole}`);
+        }
+
+        const wrongRole = Object.entries(preflightRefsCounts || {}).find(([role, count]) =>
+          /^character_\d+$/i.test(role)
+          && role !== sceneSelectedCharacterRole
+          && Number(count || 0) > 0
+        )?.[0];
+
+        if (wrongRole) {
+          throw new Error(`image_request_preflight_wrong_character_refs:${sceneId}:expected=${sceneSelectedCharacterRole}:found=${wrongRole}`);
         }
       }
       if (authoritativeRole && finalRequestBody.expectedRole !== authoritativeRole) {
         throw new Error(`image_request_final_role_mismatch:${sceneId}:authoritative=${authoritativeRole}:final=${finalRequestBody.expectedRole}`);
       }
-      if (authoritativeRole && Number(finalCounts?.[authoritativeRole] || 0) <= 0) {
+      if (authoritativeRole && Number(preflightRefsCounts?.[authoritativeRole] || 0) <= 0) {
         throw new Error(`image_request_final_missing_authoritative_refs:${sceneId}:${authoritativeRole}`);
       }
-      if (authoritativeRole === "character_2" && Number(finalCounts?.character_1 || 0) > 0) {
+      if (authoritativeRole === "character_2" && Number(preflightRefsCounts?.character_1 || 0) > 0) {
         throw new Error(`image_request_final_wrong_character_refs:${sceneId}:character_1_present_for_character_2`);
       }
       const out = await withTimeoutGuard(fetchJson(`/api/clip/image`, {
