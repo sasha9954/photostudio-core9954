@@ -294,6 +294,119 @@ def _remove_physical_character1_from_i2v_text(text: str) -> tuple[str, bool]:
     return " ".join(kept).strip(), removed
 
 
+
+
+def _has_physical_character1_in_i2v_text(text: str) -> bool:
+    src = str(text or "")
+    if not src.strip():
+        return False
+    safe = re.search(r"(?i)(offscreen|voiceover only|not physically visible|memory voiceover)", src)
+    physical = re.search(
+        r"(?i)("
+        r"older\s+character_1|"
+        r"character_1.{0,160}(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)|"
+        r"older\s+(man|hero|vocalist|version).{0,160}(visible|seen|stands|standing|sits|seated|watches|observing|presence|foreground|background|doorway|crate|fence|behind|outside|nearby|beside|silhouette|spectral|ghost|figure)|"
+        r"present[- ]day\s+(vocalist|hero|man).{0,160}(visible|seen|stands|standing|watches|observing|presence|silhouette|figure)"
+        r")",
+        src,
+    )
+    return bool(physical and not safe)
+
+
+def _final_split_timeline_post_cleanup(
+    scene_prompts: dict[str, Any], *, prompt_rows: list[dict[str, Any]], story_core: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    out = dict(scene_prompts)
+    segments_out: list[dict[str, Any]] = []
+    removed_segments: list[str] = []
+    remaining_segments: list[str] = []
+    remaining_fields: list[str] = []
+    split_timeline_contract = _is_split_timeline_contract_from_sources(story_core=story_core, scene_rows=prompt_rows)
+    rows_by_id = {str(_safe_dict(r).get("segment_id") or "").strip(): _safe_dict(r) for r in prompt_rows}
+    target_fields = (
+        "photo_prompt",
+        "video_prompt",
+        "positive_video_prompt",
+        "negative_prompt",
+        "first_frame_prompt",
+        "last_frame_prompt",
+        "negative_video_prompt",
+        "image_prompt",
+        "start_image_prompt",
+        "end_image_prompt",
+    )
+    for raw_seg in _safe_list(out.get("segments")):
+        seg = dict(_safe_dict(raw_seg))
+        segment_id = str(seg.get("segment_id") or "").strip()
+        route = str(seg.get("route") or "").strip().lower()
+        prompt_row = _safe_dict(rows_by_id.get(segment_id))
+        timeline_role_value = str(seg.get("timeline_role") or seg.get("timeline") or prompt_row.get("timeline_role") or prompt_row.get("timeline") or "").strip().lower()
+        if split_timeline_contract and route == "i2v" and ("past" in timeline_role_value or "flashback" in timeline_role_value):
+            removed_visible_character1 = False
+            for field in target_fields:
+                value = str(seg.get(field) or "")
+                if not value:
+                    continue
+                cleaned, was_removed = _remove_physical_character1_from_i2v_text(value)
+                seg[field] = cleaned
+                removed_visible_character1 = removed_visible_character1 or was_removed
+            prompt_notes = dict(_safe_dict(seg.get("prompt_notes")))
+            world_anchor = str(prompt_notes.get("world_anchor") or "")
+            if world_anchor:
+                cleaned_anchor, removed_anchor = _remove_physical_character1_from_i2v_text(world_anchor)
+                prompt_notes["world_anchor"] = cleaned_anchor
+                removed_visible_character1 = removed_visible_character1 or removed_anchor
+            notes = [str(v or "") for v in _safe_list(prompt_notes.get("notes"))]
+            notes_changed = False
+            for idx, note in enumerate(notes):
+                cleaned_note, removed_note = _remove_physical_character1_from_i2v_text(note)
+                if cleaned_note != note:
+                    notes[idx] = cleaned_note
+                    notes_changed = True
+                removed_visible_character1 = removed_visible_character1 or removed_note
+            if notes_changed:
+                prompt_notes["notes"] = notes
+            if prompt_notes:
+                seg["prompt_notes"] = prompt_notes
+            for field in ("photo_prompt", "video_prompt", "positive_video_prompt"):
+                seg[field] = _append_prompt_clause(str(seg.get(field) or ""), _SPLIT_TIMELINE_SAFE_I2V_OFFSCREEN_CLAUSE)
+            if removed_visible_character1 and segment_id:
+                removed_segments.append(segment_id)
+        segments_out.append(seg)
+    out["segments"] = segments_out
+
+    for seg in _safe_list(out.get("segments")):
+        segment = _safe_dict(seg)
+        segment_id = str(segment.get("segment_id") or "").strip()
+        route = str(segment.get("route") or "").strip().lower()
+        prompt_row = _safe_dict(rows_by_id.get(segment_id))
+        timeline_role_value = str(segment.get("timeline_role") or segment.get("timeline") or prompt_row.get("timeline_role") or prompt_row.get("timeline") or "").strip().lower()
+        if not (split_timeline_contract and route == "i2v" and ("past" in timeline_role_value or "flashback" in timeline_role_value)):
+            continue
+        for field in target_fields:
+            if _has_physical_character1_in_i2v_text(str(segment.get(field) or "")):
+                remaining_segments.append(segment_id)
+                remaining_fields.append(f"{segment_id}:{field}")
+        prompt_notes = _safe_dict(segment.get("prompt_notes"))
+        if _has_physical_character1_in_i2v_text(str(prompt_notes.get("world_anchor") or "")):
+            remaining_segments.append(segment_id)
+            remaining_fields.append(f"{segment_id}:prompt_notes.world_anchor")
+        for idx, note in enumerate(_safe_list(prompt_notes.get("notes"))):
+            if _has_physical_character1_in_i2v_text(str(note or "")):
+                remaining_segments.append(segment_id)
+                remaining_fields.append(f"{segment_id}:prompt_notes.notes[{idx}]")
+
+    diag = {
+        "scene_prompts_final_split_timeline_post_cleanup_applied": True,
+        "scene_prompts_final_split_timeline_post_cleanup_source": "final_scene_prompts_output",
+        "scene_prompts_split_timeline_visible_character1_removed_from_i2v_segments": list(dict.fromkeys([s for s in removed_segments if s])),
+        "scene_prompts_split_timeline_visible_character1_remaining_segments": list(dict.fromkeys([s for s in remaining_segments if s])),
+        "scene_prompts_split_timeline_visible_character1_remaining_fields": list(dict.fromkeys([f for f in remaining_fields if f])),
+    }
+    if remaining_segments:
+        diag["scene_prompts_error_code"] = "PROMPTS_SPLIT_TIMELINE_VISIBLE_CHARACTER1_IN_I2V"
+        diag["scene_prompts_validation_error"] = "split_timeline_visible_character1_in_i2v"
+    return out, diag
 def _remove_physical_character2_from_ia2v_text(text: str) -> tuple[str, bool]:
     src = str(text or "")
     if not src.strip():
@@ -6061,6 +6174,12 @@ def build_gemini_scene_prompts(
     diagnostics.update(identity_sanitize_diag)
     raw_payload, route_aware_diag = _postprocess_prompts_v11_route_aware(raw_payload, package, prompt_rows, story_core)
     diagnostics.update(route_aware_diag)
+    raw_payload, final_split_timeline_diag = _final_split_timeline_post_cleanup(
+        raw_payload,
+        prompt_rows=prompt_rows,
+        story_core=story_core,
+    )
+    diagnostics.update(final_split_timeline_diag)
 
     error_code, validation_error, validation_diag = _validate_prompts_v11(raw_payload, prompt_rows, package)
     if shared_space_validation_errors:
