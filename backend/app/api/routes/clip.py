@@ -14849,11 +14849,35 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         "- Keep route/timing/scene purpose clear.\n"
         "- drama_hint and short_note must be in Russian.\n"
         "- scene_goal_ru, prompt_hint_ru, story_position_ru must be in Russian.\n"
-        "- video_prompt must be an empty string by default.\n"
-        "- negative_prompt must be an empty string by default.\n"
-        "- sound_prompt must stay empty string.\n"
+        "- Never write English scene descriptions in drama_hint/short_note.\n"
+        "- Do not fill video_prompt.\n"
+        "- Do not fill negative_prompt.\n"
+        "- Do not fill sound_prompt.\n"
+        "- The AI is only planning scene timing/route/dramaturgy and RU guidance.\n"
+        "- The user will write final prompt manually after uploading a scene image.\n"
         "- Do not generate full final video prompts unless explicitly requested.\n"
         "- Return only JSON.\n\n"
+        "Example scene object:\n"
+        "{\n"
+        '  "scene_id": "seg_01",\n'
+        '  "index": 1,\n'
+        '  "start_sec": 0.0,\n'
+        '  "end_sec": 4.0,\n'
+        '  "duration_sec": 4.0,\n'
+        '  "route": "ia2v",\n'
+        '  "energy": "mid",\n'
+        '  "quality": "good",\n'
+        '  "boundary_reason": "конец вокальной фразы",\n'
+        '  "transition_out": "cut",\n'
+        '  "drama_hint": "Настоящее: герой в купе поезда впервые начинает петь.",\n'
+        '  "short_note": "Первое появление взрослого героя.",\n'
+        '  "scene_goal_ru": "Открыть героя и сразу задать тяжёлое чувство возвращения домой.",\n'
+        '  "prompt_hint_ru": "В ручном prompt покажи взрослого сурового мужчину у окна купе, тёплый грустный свет, крупный план лица.",\n'
+        '  "story_position_ru": "начало / настоящее / lip-sync",\n'
+        '  "video_prompt": "",\n'
+        '  "negative_prompt": "",\n'
+        '  "sound_prompt": ""\n'
+        "}\n\n"
         f"Input payload:\n{json.dumps({'audio_duration_sec': payload.audio_duration_sec, 'project_kind': payload.project_kind, 'format': payload.format, 'split_settings': payload.split_settings, 'user_request': payload.user_request, 'audio_filename': payload.audio_filename, 'audio_attached': audio_attached}, ensure_ascii=False)}\n"
         f"DIRECTOR CONTRACT:\n{json.dumps(payload.director_contract or {}, ensure_ascii=False)}\n"
         + ("Audio is attached as inlineData. Use real phrase boundaries from audio." if audio_attached else "Audio is not attached. Infer boundaries from duration + request.")
@@ -14918,6 +14942,27 @@ def _validate_manual_clip_split_json(split_json: dict, expected_duration: float)
             return None, f"scene_{idx + 1}_timing_not_finite"
         if end_sec <= start_sec:
             return None, f"scene_{idx + 1}_end_not_greater_than_start"
+        drama_hint = str(raw_scene.get("drama_hint") or "")
+        short_note = str(raw_scene.get("short_note") or "")
+        scene_goal_ru = str(raw_scene.get("scene_goal_ru") or "")
+        prompt_hint_ru = str(raw_scene.get("prompt_hint_ru") or "")
+        story_position_ru = str(raw_scene.get("story_position_ru") or "")
+        route = str(raw_scene.get("route") or "")
+
+        if not scene_goal_ru:
+            scene_goal_ru = drama_hint or short_note
+        if not prompt_hint_ru:
+            prompt_hint_ru = "Сформируйте ручной prompt по смыслу сцены и выбранному изображению."
+        if not story_position_ru:
+            if idx == 0:
+                story_position_ru = "начало"
+            elif idx == len(scenes) - 1:
+                story_position_ru = "финал"
+            elif route == "ia2v":
+                story_position_ru = "настоящее / lip-sync"
+            else:
+                story_position_ru = "развитие / визуальная сцена"
+
         normalized.append({
             **raw_scene,
             "scene_id": str(raw_scene.get("scene_id") or f"seg_{idx + 1:02d}"),
@@ -14925,13 +14970,13 @@ def _validate_manual_clip_split_json(split_json: dict, expected_duration: float)
             "start_sec": round(start_sec, 3),
             "end_sec": round(end_sec, 3),
             "duration_sec": round(end_sec - start_sec, 3),
-            "drama_hint": str(raw_scene.get("drama_hint") or ""),
-            "short_note": str(raw_scene.get("short_note") or ""),
-            "scene_goal_ru": str(raw_scene.get("scene_goal_ru") or ""),
-            "prompt_hint_ru": str(raw_scene.get("prompt_hint_ru") or ""),
-            "story_position_ru": str(raw_scene.get("story_position_ru") or ""),
-            "video_prompt": str(raw_scene.get("video_prompt") or ""),
-            "negative_prompt": str(raw_scene.get("negative_prompt") or ""),
+            "drama_hint": drama_hint,
+            "short_note": short_note,
+            "scene_goal_ru": scene_goal_ru,
+            "prompt_hint_ru": prompt_hint_ru,
+            "story_position_ru": story_position_ru,
+            "video_prompt": "",
+            "negative_prompt": "",
             "sound_prompt": "",
         })
     normalized.sort(key=lambda s: (float(s["start_sec"]), int(s["index"])))

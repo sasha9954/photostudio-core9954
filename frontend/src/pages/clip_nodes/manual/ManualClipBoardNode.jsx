@@ -279,7 +279,18 @@ export default function ManualClipBoardNode({ id, data }) {
   const onBuildScenes = async () => {
     const splitJson = model?.split_chat?.raw_ai_json;
     const rawScenes = Array.isArray(splitJson?.scenes) ? splitJson.scenes : [];
-    const normalized = rawScenes.map((s, idx) => normalizeScene(s, idx));
+    const normalized = rawScenes.map((s, idx) => {
+      const scene = normalizeScene(s, idx);
+      if (model.last_split_source === "ai") {
+        return {
+          ...scene,
+          video_prompt: "",
+          negative_prompt: "",
+          sound_prompt: "",
+        };
+      }
+      return scene;
+    });
     let mergedScenes = normalized;
     let splitAudioError = "";
     let splitAudioStatus = "idle";

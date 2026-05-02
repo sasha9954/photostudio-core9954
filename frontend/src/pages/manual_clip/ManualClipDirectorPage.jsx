@@ -52,6 +52,13 @@ function normalizeScene(scene = {}, idx = 0) {
   };
 }
 
+function buildStoryPositionFallback(scene = {}, idx = 0, total = 0) {
+  if (idx === 0) return "начало";
+  if (idx === total - 1) return "финал";
+  if (scene?.route === "ia2v") return "настоящее / lip-sync";
+  return "развитие / визуальная сцена";
+}
+
 export default function ManualClipDirectorPage() {
   const navigate = useNavigate();
   const [project, setProject] = useState(null);
@@ -77,6 +84,15 @@ export default function ManualClipDirectorPage() {
 
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
+  const selectedSceneIndex = useMemo(() => scenes.findIndex((s) => s.scene_id === selectedScene?.scene_id), [scenes, selectedScene]);
+  const storyPositionText = selectedScene
+    ? (selectedScene.story_position_ru || buildStoryPositionFallback(selectedScene, selectedSceneIndex >= 0 ? selectedSceneIndex : 0, scenes.length))
+    : "";
+  const dramaturgyText = selectedScene ? (selectedScene.drama_hint || selectedScene.short_note || "—") : "—";
+  const sceneGoalText = selectedScene ? (selectedScene.scene_goal_ru || selectedScene.drama_hint || selectedScene.short_note || "—") : "—";
+  const promptHintText = selectedScene
+    ? (selectedScene.prompt_hint_ru || "Напишите prompt вручную под выбранное изображение.")
+    : "Напишите prompt вручную под выбранное изображение.";
 
   const updateScene = (sceneId, patch) => {
     const nextScenes = scenes.map((s) => (s.scene_id !== sceneId ? s : { ...s, ...patch }));
@@ -132,11 +148,10 @@ export default function ManualClipDirectorPage() {
 
         <div className="manualSceneGuidance">
           <strong>Подсказка сцены</strong>
-          <div>Позиция: {selectedScene.story_position_ru || "—"}</div>
-          <div>Драматургия: {selectedScene.drama_hint || "—"}</div>
-          <div>Заметка: {selectedScene.short_note || "—"}</div>
-          <div>Смысл: {selectedScene.scene_goal_ru || "—"}</div>
-          <div>Что учесть в prompt: {selectedScene.prompt_hint_ru || "—"}</div>
+          <div>Позиция: {storyPositionText}</div>
+          <div>Драматургия: {dramaturgyText}</div>
+          <div>Смысл: {sceneGoalText}</div>
+          <div>Что учесть в prompt: {promptHintText}</div>
         </div>
 
         <label className="manualPromptBlock">Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
