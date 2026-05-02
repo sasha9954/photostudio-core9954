@@ -3,7 +3,7 @@ import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
-import { buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene } from "./manualClipBoardDomain";
+import { buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson } from "./manualClipBoardDomain";
 
 export default function ManualClipBoardNode({ id, data }) {
   const navigate = useNavigate();
@@ -15,6 +15,7 @@ export default function ManualClipBoardNode({ id, data }) {
   const normalizedConnectedAudio = normalizeManualAudio(connectedAudio);
   const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : model.audio;
   const aiScenes = Array.isArray(model?.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : [];
+  const planKind = model.project_kind === "story" ? "истории" : "клипа";
 
   const onAudioUpload = (file) => {
     if (!file) return;
@@ -53,9 +54,50 @@ export default function ManualClipBoardNode({ id, data }) {
   };
 
   const onRunMockSplit = () => {
-    const ai = buildMockSplitJson(effectiveAudio?.duration_sec || 24);
-    patch({ step: "split_chat_ready", split_chat: { user_request: splitInput, ai_summary: ai.global_hint, raw_ai_json: ai } });
+    const ai = buildMockSplitJson({
+      projectKind: model.project_kind,
+      splitSettings: model.split_settings,
+      format: model.format,
+      durationSec: effectiveAudio?.duration_sec || 24,
+    });
+    patch({
+      step: "split_chat_ready",
+      last_split_source: "ai",
+      split_chat: { user_request: splitInput, ai_summary: ai.global_hint, raw_ai_json: ai },
+      json_error: "",
+    });
   };
+
+  const onRunJsonSplit = () => {
+    const parsed = parseManualSplitJson(model.json_input);
+    if (!parsed.ok) {
+      patch({ json_error: parsed.error });
+      return;
+    }
+
+    patch({
+      step: "split_chat_ready",
+      last_split_source: "json",
+      project_kind: parsed.splitJson.project_kind || model.project_kind,
+      format: parsed.splitJson.format || model.format,
+      split_chat: {
+        user_request: "JSON import",
+        ai_summary: parsed.splitJson.global_hint || "Разбивка загружена из JSON.",
+        raw_ai_json: parsed.splitJson,
+      },
+      json_error: "",
+    });
+  };
+
+  const onInsertSampleJson = () => {
+    const sample = buildManualClipSampleJson({
+      projectKind: model.project_kind,
+      durationSec: effectiveAudio?.duration_sec || 56,
+      format: model.format,
+    });
+    patch({ json_input: JSON.stringify(sample, null, 2), json_error: "" });
+  };
+
   const onBuildScenes = () => {
     const rawScenes = Array.isArray(model?.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : [];
     const normalized = rawScenes.map((s, idx) => normalizeScene(s, idx));
@@ -95,7 +137,7 @@ export default function ManualClipBoardNode({ id, data }) {
           <div className="manualChip">Аудио: {model.audio_source === "connected_audio_node" ? "подключено" : model.audio_source === "local_upload" ? "локальное" : effectiveAudio?.url ? "готово" : "пусто"}</div>
           <div className="manualChip">Разбивка: {model.split_chat?.raw_ai_json ? "готово" : "пусто"}</div>
           <div className="manualChip">Сцен: {scenes.length}</div>
-          <div className="manualChip">Режим: Клип</div>
+          <div className="manualChip">Режим: {model.project_kind === "story" ? "История" : "Клип"}</div>
           <div className="manualChip">Формат:
             <select value={model.format} onChange={(e) => patch({ format: e.target.value })}><option>9:16</option><option>16:9</option><option>1:1</option></select>
           </div>
@@ -104,24 +146,33 @@ export default function ManualClipBoardNode({ id, data }) {
         </div>
 
         <div className="manualSplitWorkspace">
-          <section className="manualPanel">
+          <section className="manualPanel manualPanelDraft">
             <h4>Черновик разбивки</h4>
             <p>Здесь хранится мини-задача для AI-разбивщика.</p>
+            <label>Тип проекта<select value={model.project_kind} onChange={(e) => patch({ project_kind: e.target.value })}><option value="clip">Клип</option><option value="story">История</option></select></label>
             <label>Формат<select value={model.format} onChange={(e) => patch({ format: e.target.value })}><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
             <label>Цель сцен<select value={model.split_settings?.target_scene_count || "auto"} onChange={(e) => updateSplitSettings("target_scene_count", e.target.value)}><option value="auto">auto</option><option value="8">8</option><option value="10">10</option><option value="12">12</option><option value="16">16</option></select></label>
             <label>Lip-sync<select value={model.split_settings?.lipsync_ratio || "auto"} onChange={(e) => updateSplitSettings("lipsync_ratio", e.target.value)}><option value="auto">auto</option><option value="30%">30%</option><option value="50%">50%</option><option value="70%">70%</option></select></label>
             <label>Маршрут<select value={model.split_settings?.route_preference || "mixed"} onChange={(e) => updateSplitSettings("route_preference", e.target.value)}><option value="mixed">mixed</option><option value="mostly_i2v">mostly_i2v</option><option value="mostly_ia2v">mostly_ia2v</option></select></label>
           </section>
 
-          <section className="manualPanel">
-            <h4>AI-чат / обсуждение клипа</h4>
-            <textarea value={splitInput} onChange={(e) => setSplitInput(e.target.value)} placeholder="Например: Разбей по вокальным фразам. Криминальная драма Одесса 90-х. 30% lip-sync, остальное сюжетные сцены. Не режь слова, переходы на концах строк." />
-            <button className="clipSB_btn" onClick={onRunMockSplit}>Отправить</button>
-            <div className="manualAiSummary">{model.split_chat?.ai_summary || "AI-ответ появится после запроса."}</div>
-            <small>AI создаёт только фразовую разбивку и краткую драматургию. Промты и фото пользователь добавляет вручную.</small>
+          <section className="manualPanel manualPanelAi">
+            <h4>AI/JSON разбивка</h4>
+            <label>Способ разбора<select value={model.split_source} onChange={(e) => patch({ split_source: e.target.value })}><option value="ai">AI</option><option value="json">JSON</option></select></label>
+            {model.split_source === "ai" ? <>
+              <textarea className="manualAiTextarea" value={splitInput} onChange={(e) => setSplitInput(e.target.value)} placeholder="Например: Разбей по вокальным фразам. Криминальная драма Одесса 90-х. 30% lip-sync, остальное сюжетные сцены. Не режь слова, переходы на концах строк." />
+              <button className="clipSB_btn" onClick={onRunMockSplit}>Разобрать при помощи AI</button>
+              <div className="manualAiSummary">{model.split_chat?.ai_summary || "AI-ответ появится после запроса."}</div>
+              <small>AI создаёт только фразовую разбивку и краткую драматургию. Промты и фото пользователь добавляет вручную.</small>
+            </> : <>
+              <button className="clipSB_btn" onClick={onInsertSampleJson}>Вставить образец JSON</button>
+              <textarea className="manualJsonTextarea" value={model.json_input || ""} onChange={(e) => patch({ json_input: e.target.value })} placeholder="Вставьте JSON разбивки..." />
+              <button className="clipSB_btn" onClick={onRunJsonSplit}>Разобрать при помощи JSON</button>
+              {model.json_error ? <div className="manualJsonError">{model.json_error}</div> : null}
+            </>}
           </section>
 
-          <section className="manualPanel">
+          <section className="manualPanel manualPanelAudio">
             <h4>Аудио-разбор</h4>
             <div>filename: {effectiveAudio?.filename || "—"}</div>
             <div>duration_sec: {Number(effectiveAudio?.duration_sec || 0).toFixed(2)}</div>
@@ -130,9 +181,9 @@ export default function ManualClipBoardNode({ id, data }) {
             <div>Анализ будет подключен позже</div>
           </section>
 
-          <section className="manualPanel manualSplitPlan">
-            <h4>План клипа</h4>
-            {aiScenes.length === 0 ? <div>План клипа появится здесь после AI-разбивки.</div> : <>
+          <section className="manualPanel manualPanelPlan manualSplitPlan">
+            <h4>План {planKind}</h4>
+            {aiScenes.length === 0 ? <div>План появится после AI-разбивки или разбора JSON.</div> : <>
               <div className="manualPlanRows">{aiScenes.map((s, idx) => <div key={`${s.scene_id || idx}-${idx}`} className="manualPlanRow">{(s.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`).toUpperCase()} | {Number(s.start_sec || 0).toFixed(2)}–{Number(s.end_sec || 0).toFixed(2)} | {s.route || "ia2v"} | {s.quality || "check"} | {s.drama_hint || "—"}</div>)}</div>
               <div className="manualActionsRow">
                 <button className="clipSB_btn" onClick={onBuildScenes} disabled={!canBuildScenes}>Собрать сцены</button>
