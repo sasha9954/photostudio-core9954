@@ -176,11 +176,14 @@ export default function ManualClipDirectorPage() {
           }}>{selectedScene.video_url ? "Удалить видео" : "Видео нет"}</button>
         </div>
         {selectedScene.error ? <div className="manualError">{selectedScene.error}</div> : null}
+        <section className="manualDirectorAudio">
+          <div className="manualAudioMeta">Аудио: {selectedScene.audio_slice_url ? "готово" : "не готово"} | {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>
+          {selectedScene.audio_slice_url ? <audio controls src={selectedScene.audio_slice_url} /> : <div>Аудио сцены ещё не нарезано</div>}
+        </section>
       </section> : null}
 
       {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3><label className="clipSB_btn manualUploadBtn">Upload image<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0])} /></label><div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video controls src={selectedScene.video_url} />) : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div></section> : null}
 
-      {selectedScene ? <section className="manualDirectorAudio"><div className="manualAudioMeta">Аудио: {selectedScene.audio_slice_url ? "готово" : "не готово"} | {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>{selectedScene.audio_slice_url ? <audio controls src={selectedScene.audio_slice_url} /> : <div>Аудио сцены ещё не нарезано</div>}</section> : null}
     </div>
   </div>;
 }

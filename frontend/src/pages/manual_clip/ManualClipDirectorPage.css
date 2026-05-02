@@ -1,8 +1,10 @@
 .manualDirectorPage {
   padding: 12px 16px;
   color: #e6e8f2;
-  height: calc(100vh - 90px);
-  overflow: hidden;
+  min-height: calc(100vh - 90px);
+  height: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -20,11 +22,8 @@
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr) minmax(340px, 420px);
   gap: 12px;
-  align-items: stretch;
-  grid-template-areas:
-    "left center right"
-    "left bottom right";
-  height: calc(100% - 52px);
+  align-items: start;
+  grid-template-areas: "left center right";
   min-height: 0;
 }
 
@@ -38,7 +37,7 @@
   gap: 8px;
   min-height: 0;
   overflow: auto;
-  max-height: none;
+  max-height: calc(100vh - 160px);
   min-width: 0;
   box-sizing: border-box;
 }
@@ -59,7 +58,6 @@
   gap: 10px;
   background: #141722;
   min-width: 0;
-  min-height: 0;
   box-sizing: border-box;
   overflow: visible;
 }
@@ -99,9 +97,10 @@
   gap: 10px;
   background: #141722;
   min-width: 0;
-  min-height: 0;
+  min-height: 520px;
   box-sizing: border-box;
   overflow: hidden;
+  align-self: start;
 }
 
 .manualUploadBtn {
@@ -115,7 +114,7 @@
   width: 100%;
   min-width: 0;
   flex: 1 1 auto;
-  min-height: 220px;
+  min-height: 420px;
   box-sizing: border-box;
   border: 1px dashed #4a4d61;
   border-radius: 10px;
@@ -134,14 +133,12 @@
 }
 
 .manualDirectorAudio {
-  grid-area: bottom;
   border: 1px solid #313341;
   border-radius: 10px;
   padding: 8px 10px;
-  background: #141722;
+  background: #10131b;
   min-width: 0;
   box-sizing: border-box;
-  max-height: 72px;
   overflow: hidden;
 }
 
@@ -191,9 +188,11 @@
 .manualPromptBlock textarea {
   min-height: 105px;
   max-height: 165px;
+  overflow: auto;
 }
 
 .manualNegativePromptBlock textarea {
   min-height: 85px;
   max-height: 125px;
+  overflow: auto;
 }
