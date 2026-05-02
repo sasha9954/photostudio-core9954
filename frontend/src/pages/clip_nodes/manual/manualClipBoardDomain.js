@@ -151,6 +151,7 @@ export function normalizeScene(scene, idx) {
     video_url: String(scene?.video_url || ""),
     status: String(scene?.status || "draft"),
     error: String(scene?.error || ""),
+    audio_extracted: Boolean(scene?.audio_extracted),
   };
 }
 
