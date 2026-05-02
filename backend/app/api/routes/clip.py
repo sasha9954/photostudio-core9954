@@ -14838,6 +14838,7 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         "- Do not change intro/outro intent from director_contract.\n"
         "- Do not invent characters not implied by director_contract.\n"
         "- If director_contract says cutaways/memories/city, use them.\n"
+        "- If director_contract is empty, produce a neutral technical split only and avoid inventing detailed story specifics.\n"
         "- video_prompt may be empty or short draft.\n"
         "- sound_prompt must stay empty; for i2v_sound sound is described in video_prompt.\n"
         "- Return only JSON.\n\n"
