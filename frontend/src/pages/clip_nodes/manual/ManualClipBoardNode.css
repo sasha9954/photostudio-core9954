@@ -54,7 +54,11 @@
   align-items: start;
 }
 
-.manualPanel { border:1px solid #353544; border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#171720; min-width: 0; }
+.manualPanel { border:1px solid #353544; border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:8px; background:#171720; min-width: 0; border-top-width: 3px; }
+.manualPanelDraft { border-top-color: #3e9dff; box-shadow: 0 0 0 1px rgba(62, 157, 255, 0.12); }
+.manualPanelAi { border-top-color: #9069ff; box-shadow: 0 0 0 1px rgba(144, 105, 255, 0.12); }
+.manualPanelAudio { border-top-color: #8abf3f; box-shadow: 0 0 0 1px rgba(138, 191, 63, 0.12); }
+.manualPanelPlan { border-top-color: #26a6a6; box-shadow: 0 0 0 1px rgba(38, 166, 166, 0.12); }
 
 .manualPanel textarea,
 .manualPanel input,
@@ -63,8 +67,18 @@
   max-width: 100%;
 }
 
+.manualPanel textarea,
+.manualJsonTextarea,
+.manualAiTextarea {
+  background: #111722;
+  color: #e8edf7;
+  border: 1px solid #354057;
+  border-radius: 8px;
+}
+
 .manualPanel textarea { min-height:100px; }
 .manualAiSummary { padding:8px; border-radius:8px; background:#202030; }
+.manualJsonError { padding:8px; border-radius:8px; background:#3b1b25; border:1px solid #80364a; color:#ffd2de; }
 .manualSplitPlan {
   grid-column: 1 / -1;
   min-width: 0;
