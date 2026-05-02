@@ -22,6 +22,7 @@ function normalizeScene(scene = {}, idx = 0) {
     image_url: String(scene.image_url || ""),
     video_url: String(scene.video_url || ""),
     audio_slice_url: String(scene.audio_slice_url || ""),
+    audio_slice_duration_sec: Number(scene.audio_slice_duration_sec || 0),
     status: String(scene.status || "draft"),
     error: String(scene.error || ""),
   };
@@ -120,7 +121,7 @@ export default function ManualClipDirectorPage() {
         {selectedScene.route === "i2v_sound" ? <label>Sound prompt<textarea value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /></label> : null}
 
         <div className="manualDirectorButtons">
-          <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { audio_slice_url: project?.audio?.url || "", status: "audio_ready" })}>Привязать аудио трека</button>
+          <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { audio_slice_url: project?.audio?.url || "", status: "audio_ready" })}>Fallback: привязать полный трек</button>
           <button className="clipSB_btn" onClick={() => onCreateVideo(selectedScene)}>Создать видео</button>
           <button className="clipSB_btn" onClick={() => {
             const nextScenes = scenes.filter((s) => s.scene_id !== selectedScene.scene_id);
@@ -148,7 +149,7 @@ export default function ManualClipDirectorPage() {
         <h3>Аудио отображение</h3>
         <div>scene_audio: {selectedScene.audio_slice_url ? "готово" : "placeholder"}</div>
         <div>duration: {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>
-        {selectedScene.audio_slice_url ? <audio controls src={selectedScene.audio_slice_url} /> : <div>Play scene audio placeholder</div>}
+        {selectedScene.audio_slice_url ? <><div>Аудио сцены</div><audio controls src={selectedScene.audio_slice_url} /></> : <div>Аудио сцены ещё не нарезано</div>}
       </section> : null}
     </div>
   </div>;

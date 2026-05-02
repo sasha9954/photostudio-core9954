@@ -3,7 +3,23 @@ import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
-import { buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson } from "./manualClipBoardDomain";
+import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson } from "./manualClipBoardDomain";
+
+
+
+async function sliceManualClipAudio(payload) {
+  const res = await fetch("/api/manual-clip/slice-audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.ok === false) {
+    const detail = String(data?.detail || `http_${res.status}`);
+    throw new Error(detail);
+  }
+  return data;
+}
 
 export default function ManualClipBoardNode({ id, data }) {
   const navigate = useNavigate();
@@ -107,10 +123,46 @@ export default function ManualClipBoardNode({ id, data }) {
     navigator.clipboard?.writeText(JSON.stringify(sample, null, 2));
   };
 
-  const onBuildScenes = () => {
-    const rawScenes = Array.isArray(model?.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : [];
+  const onBuildScenes = async () => {
+    const splitJson = model?.split_chat?.raw_ai_json;
+    const rawScenes = Array.isArray(splitJson?.scenes) ? splitJson.scenes : [];
     const normalized = rawScenes.map((s, idx) => normalizeScene(s, idx));
-    patch({ step: "scene_plan_ready", scenes: normalized, selectedSceneId: normalized[0]?.scene_id || "" });
+    let mergedScenes = normalized;
+    let splitAudioError = "";
+    let splitAudioStatus = "idle";
+    let splitAudioCount = 0;
+
+    if (effectiveAudio?.url) {
+      splitAudioStatus = "slicing";
+      try {
+        const payload = buildManualAudioSlicePayload({ audio: effectiveAudio, splitJson });
+        const sliced = await sliceManualClipAudio(payload);
+        const byId = new Map((Array.isArray(sliced?.scenes) ? sliced.scenes : []).map((scene) => [String(scene?.scene_id || ""), scene]));
+        mergedScenes = normalized.map((scene) => {
+          const fromBackend = byId.get(scene.scene_id);
+          if (!fromBackend) return scene;
+          return {
+            ...scene,
+            audio_slice_url: String(fromBackend.audio_slice_url || ""),
+            audio_slice_duration_sec: Number(fromBackend.audio_slice_duration_sec || 0),
+          };
+        });
+        splitAudioStatus = "done";
+        splitAudioCount = mergedScenes.filter((scene) => !!scene.audio_slice_url).length;
+      } catch (error) {
+        splitAudioStatus = "error";
+        splitAudioError = String(error?.message || "audio_slice_failed");
+      }
+    }
+
+    patch({
+      step: "scene_plan_ready",
+      scenes: mergedScenes,
+      selectedSceneId: mergedScenes[0]?.scene_id || "",
+      split_audio_status: splitAudioStatus,
+      split_audio_error: splitAudioError,
+      split_audio_count: splitAudioCount,
+    });
   };
 
   const canBuildScenes = !!model?.split_chat?.raw_ai_json;
@@ -204,6 +256,8 @@ export default function ManualClipBoardNode({ id, data }) {
                 <button className="clipSB_btn" onClick={onBuildScenes} disabled={!canBuildScenes}>Собрать сцены</button>
               </div>
             </>}
+            {model.split_audio_error ? <div className="manualJsonError">Сцены собраны, но аудио-нарезка не удалась: {model.split_audio_error}</div> : null}
+            {model.split_audio_status === "done" ? <div>Аудио сцен нарезано: {Number(model.split_audio_count || 0)}</div> : null}
             {scenes.length > 0 ? <div className="manualActionsRow">
               <button className="clipSB_btn" onClick={onOpenDirectorBoard} disabled={!canOpenBoard}>Перейти в режиссёрскую доску</button>
             </div> : null}

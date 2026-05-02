@@ -16,6 +16,9 @@ export function getDefaultManualClipNodeData() {
     json_input: "",
     json_error: "",
     last_split_source: "",
+    split_audio_status: "idle",
+    split_audio_error: "",
+    split_audio_count: 0,
     audio: { url: "", filename: "", duration_sec: 0, duration_ms: 0 },
     split_chat: { user_request: "", ai_summary: "", raw_ai_json: null },
     split_settings: {
@@ -144,6 +147,7 @@ export function normalizeScene(scene, idx) {
     negative_prompt: String(scene?.negative_prompt || ""),
     sound_prompt: String(scene?.sound_prompt || ""),
     audio_slice_url: String(scene?.audio_slice_url || ""),
+    audio_slice_duration_sec: Number(scene?.audio_slice_duration_sec || 0),
     video_url: String(scene?.video_url || ""),
     status: String(scene?.status || "draft"),
     error: String(scene?.error || ""),

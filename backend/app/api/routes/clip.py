@@ -21,6 +21,7 @@ from uuid import uuid4
 from typing import Any
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
+from pydub import AudioSegment
 
 from app.core.config import settings
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
@@ -404,6 +405,20 @@ class AudioSliceIn(BaseModel):
     ltxMode: str | None = None
     resolvedWorkflowKey: str | None = None
     requiresAudioSensitiveVideo: bool | None = None
+
+
+class ManualClipSceneIn(BaseModel):
+    scene_id: str
+    start_sec: float
+    end_sec: float
+
+
+class ManualClipAudioSliceIn(BaseModel):
+    audio_url: str
+    audio_filename: str | None = None
+    project_kind: str = "clip"
+    format: str = "9:16"
+    scenes: list[ManualClipSceneIn] = Field(default_factory=list)
 
 
 def _resolve_audio_slice_compatibility(payload: AudioSliceIn) -> tuple[str, bool, bool, str]:
@@ -14726,6 +14741,104 @@ def clip_audio_slice(payload: AudioSliceIn):
 @router.post("/clip/audio/slice")
 def clip_audio_slice_v2(payload: AudioSliceIn):
     return _clip_audio_slice_response(payload)
+
+
+def _resolve_local_static_audio_path(audio_url: str) -> str | None:
+    raw = str(audio_url or "").strip()
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    static_path = ""
+    if raw.startswith("/static/"):
+        static_path = raw
+    elif parsed.scheme and parsed.path.startswith("/static/"):
+        static_path = parsed.path
+    if not static_path:
+        return None
+    rel = static_path[len("/static/"):].strip("/")
+    if not rel:
+        return None
+    local_path = os.path.normpath(os.path.join(str(settings.BACKEND_DIR), "static", rel))
+    static_root = os.path.normpath(os.path.join(str(settings.BACKEND_DIR), "static"))
+    if not local_path.startswith(static_root + os.sep):
+        return None
+    return local_path
+
+
+@router.post("/manual-clip/slice-audio")
+def manual_clip_slice_audio(payload: ManualClipAudioSliceIn):
+    if not str(payload.audio_url or "").strip():
+        return JSONResponse({"ok": False, "detail": "audio_url_required"}, status_code=400)
+    if not payload.scenes:
+        return JSONResponse({"ok": False, "detail": "scenes_required"}, status_code=400)
+
+    source_path = _resolve_local_static_audio_path(payload.audio_url)
+    if not source_path:
+        return JSONResponse({"ok": False, "detail": "audio_url_not_local_static"}, status_code=400)
+    if not os.path.isfile(source_path):
+        return JSONResponse({"ok": False, "detail": "audio_file_not_found"}, status_code=404)
+
+    try:
+        audio = AudioSegment.from_file(source_path)
+    except Exception:
+        return JSONResponse(
+            {"ok": False, "detail": "audio_slice_failed", "hint": "Check ffmpeg/pydub and source audio format"},
+            status_code=500,
+        )
+
+    ensure_static_dirs()
+    output_dir = os.path.join(str(ASSETS_DIR), "manual_clip_audio")
+    os.makedirs(output_dir, exist_ok=True)
+    audio_len_ms = len(audio)
+    safe_base = re.sub(r"[^a-zA-Z0-9_-]+", "_", os.path.splitext(os.path.basename(source_path))[0]).strip("_") or "audio"
+    sliced_scenes = []
+
+    for idx, scene in enumerate(payload.scenes):
+        scene_id = str(scene.scene_id or "").strip() or f"seg_{idx + 1:02d}"
+        try:
+            start_sec = float(scene.start_sec)
+            end_sec = float(scene.end_sec)
+        except Exception:
+            return JSONResponse({"ok": False, "detail": f"invalid_scene_timing:{scene_id}"}, status_code=400)
+        if end_sec <= start_sec:
+            return JSONResponse({"ok": False, "detail": f"invalid_scene_timing:{scene_id}"}, status_code=400)
+
+        start_ms = max(0, min(audio_len_ms, round(start_sec * 1000)))
+        end_ms = max(0, min(audio_len_ms, round(end_sec * 1000)))
+        if end_ms <= start_ms:
+            return JSONResponse({"ok": False, "detail": f"invalid_scene_timing:{scene_id}"}, status_code=400)
+
+        safe_scene_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", scene_id).strip("_") or f"seg_{idx + 1:02d}"
+        out_name = f"{safe_base}_{safe_scene_id}_{start_ms}_{end_ms}.mp3"
+        out_path = os.path.join(output_dir, out_name)
+        out_url = f"/static/assets/manual_clip_audio/{out_name}"
+
+        try:
+            audio[start_ms:end_ms].export(out_path, format="mp3")
+        except Exception:
+            return JSONResponse(
+                {"ok": False, "detail": "audio_slice_failed", "hint": "Check ffmpeg/pydub and source audio format"},
+                status_code=500,
+            )
+
+        slice_duration_sec = round(max(0, end_ms - start_ms) / 1000, 3)
+        sliced_scenes.append({
+            "scene_id": scene_id,
+            "start_sec": round(start_ms / 1000, 3),
+            "end_sec": round(end_ms / 1000, 3),
+            "duration_sec": slice_duration_sec,
+            "audio_slice_url": out_url,
+            "audio_slice_duration_sec": slice_duration_sec,
+        })
+
+    return {
+        "ok": True,
+        "source": "manual_clip_board",
+        "audio_url": payload.audio_url,
+        "project_kind": payload.project_kind,
+        "format": payload.format,
+        "scenes": sliced_scenes,
+    }
 
 
 
