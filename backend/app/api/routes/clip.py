@@ -14811,7 +14811,8 @@ def manual_clip_slice_audio(payload: ManualClipAudioSliceIn):
         safe_scene_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", scene_id).strip("_") or f"seg_{idx + 1:02d}"
         out_name = f"{safe_base}_{safe_scene_id}_{start_ms}_{end_ms}.mp3"
         out_path = os.path.join(output_dir, out_name)
-        out_url = f"/static/assets/manual_clip_audio/{out_name}"
+        relative_url = f"/static/assets/manual_clip_audio/{out_name}"
+        out_url = asset_url(f"manual_clip_audio/{out_name}") or relative_url
 
         try:
             audio[start_ms:end_ms].export(out_path, format="mp3")
