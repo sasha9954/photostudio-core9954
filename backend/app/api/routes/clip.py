@@ -24,7 +24,7 @@ from PIL import Image, ImageColor, ImageDraw, ImageFont
 from pydub import AudioSegment
 
 from app.core.config import settings
-from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url
+from app.core.static_paths import STATIC_DIR, ASSETS_DIR, ensure_static_dirs, asset_url
 from app.engine.video_engine import _download_image_from_source
 from app.engine.gemini_rest import post_generate_content
 from app.engine.comfy_reference_profile import build_reference_profiles, resolve_reference_role_type, summarize_profiles
@@ -14758,9 +14758,9 @@ def _resolve_local_static_audio_path(audio_url: str) -> str | None:
     rel = static_path[len("/static/"):].strip("/")
     if not rel:
         return None
-    local_path = os.path.normpath(os.path.join(str(settings.BACKEND_DIR), "static", rel))
-    static_root = os.path.normpath(os.path.join(str(settings.BACKEND_DIR), "static"))
-    if not local_path.startswith(static_root + os.sep):
+    local_path = os.path.normpath(os.path.join(str(STATIC_DIR), rel))
+    static_root = os.path.normpath(str(STATIC_DIR))
+    if not (local_path == static_root or local_path.startswith(static_root + os.sep)):
         return None
     return local_path
 
