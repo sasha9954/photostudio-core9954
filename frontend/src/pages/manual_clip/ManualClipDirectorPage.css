@@ -1,8 +1,7 @@
 .manualDirectorPage {
-  padding: 16px;
+  padding: 12px 16px;
   color: #e6e8f2;
-  height: calc(100vh - 32px);
-  min-height: calc(100vh - 32px);
+  height: calc(100vh - 90px);
   overflow: hidden;
   box-sizing: border-box;
   display: flex;
@@ -19,15 +18,14 @@
 
 .manualDirectorGrid {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) minmax(300px, 380px);
+  grid-template-columns: 300px minmax(0, 1fr) minmax(340px, 420px);
   gap: 12px;
   align-items: stretch;
   grid-template-areas:
     "left center right"
     "left bottom right";
-  flex: 1 1 auto;
+  height: calc(100% - 52px);
   min-height: 0;
-  overflow: hidden;
 }
 
 .manualDirectorScenes {
@@ -40,6 +38,7 @@
   gap: 8px;
   min-height: 0;
   overflow: auto;
+  max-height: none;
   min-width: 0;
   box-sizing: border-box;
 }
@@ -61,8 +60,8 @@
   background: #141722;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
   box-sizing: border-box;
+  overflow: visible;
 }
 
 .manualDirectorCenter select,
@@ -74,16 +73,17 @@
 }
 
 .manualDirectorCenter textarea {
-  min-height: 90px;
-  max-height: 150px;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   resize: vertical;
   overflow: auto;
-  background:#11141d;
-  color:#ebedf8;
-  border:1px solid #3a3f58;
-  border-radius:8px;
-  padding:10px 12px;
-  line-height:1.45;
+  background: #11141d;
+  color: #ebedf8;
+  border: 1px solid #3a3f58;
+  border-radius: 8px;
+  padding: 10px 12px;
+  line-height: 1.45;
 }
 
 .manualDirectorCenter select { background:#11141d; color:#ebedf8; border:1px solid #3a3f58; border-radius:8px; padding:8px; }
@@ -108,23 +108,22 @@
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  display: inline-flex;
-  justify-content: center;
+  flex-shrink: 0;
 }
 
 .manualMediaWindow {
   width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  min-height: 220px;
   box-sizing: border-box;
   border: 1px dashed #4a4d61;
   border-radius: 10px;
-  min-height: 220px;
-  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   background: #10131b;
-  min-width: 0;
 }
 
 .manualMediaWindow img,
@@ -142,23 +141,23 @@
   background: #141722;
   min-width: 0;
   box-sizing: border-box;
-  align-self: end;
-  max-height: 90px;
+  max-height: 72px;
   overflow: hidden;
 }
 
 .manualAudioMeta {
   font-size: 13px;
   color: #cfd5ee;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .manualDirectorAudio audio {
   width: 100%;
-  height: 30px;
+  height: 28px;
 }
 
-.manualDirectorButtons { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.manualDirectorButtons { display:flex; gap:8px; flex-wrap:wrap; align-items:center; flex-shrink:0; }
+.manualDirectorButtons .clipSB_btn { min-height: 36px; }
 .manualAudioReady { color:#9ee28f; font-size:13px; }
 .manualMockReady { font-weight:600; }
 .manualError { color:#ff8f8f; }
@@ -178,19 +177,23 @@
 .manualSceneGuidance {
   border: 1px solid #34374a;
   border-radius: 8px;
-  padding: 10px;
+  padding: 8px 10px;
   background: #10131b;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   color: #cfd5ee;
   font-size: 13px;
+  max-height: 125px;
+  overflow: auto;
 }
 
 .manualPromptBlock textarea {
-  max-height: 170px;
+  min-height: 105px;
+  max-height: 165px;
 }
 
 .manualNegativePromptBlock textarea {
-  max-height: 120px;
+  min-height: 85px;
+  max-height: 125px;
 }
