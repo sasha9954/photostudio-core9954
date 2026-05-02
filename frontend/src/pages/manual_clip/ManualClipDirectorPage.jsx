@@ -120,7 +120,7 @@ export default function ManualClipDirectorPage() {
         {selectedScene.route === "i2v_sound" ? <label>Sound prompt<textarea value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /></label> : null}
 
         <div className="manualDirectorButtons">
-          <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { audio_slice_url: project?.audio?.url || "", status: "audio_ready" })}>Взять аудио сцены</button>
+          <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { audio_slice_url: project?.audio?.url || "", status: "audio_ready" })}>Привязать аудио трека</button>
           <button className="clipSB_btn" onClick={() => onCreateVideo(selectedScene)}>Создать видео</button>
           <button className="clipSB_btn" onClick={() => {
             const nextScenes = scenes.filter((s) => s.scene_id !== selectedScene.scene_id);
