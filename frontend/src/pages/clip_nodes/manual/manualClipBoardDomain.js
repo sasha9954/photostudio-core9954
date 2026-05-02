@@ -101,13 +101,17 @@ export function parseManualSplitJson(rawText) {
       if (scene.end_sec <= scene.start_sec) return { ok: false, error: `Сцена ${scene.scene_id}: end_sec должен быть больше start_sec.` };
     }
 
+    const inferredDuration = scenes.length
+      ? Number(scenes[scenes.length - 1]?.end_sec || 0)
+      : 0;
+
     const project_kind = PROJECT_KINDS.includes(container?.project_kind) ? container.project_kind : "clip";
     const splitJson = {
       mode: MANUAL_CLIP_MODE,
       project_kind,
       format: String(container?.format || "9:16"),
       split_type: String(container?.split_type || "phrase_based"),
-      audio_duration_sec: Number(container?.audio_duration_sec || 0),
+      audio_duration_sec: Number(container?.audio_duration_sec || inferredDuration || 0),
       global_hint: String(container?.global_hint || ""),
       scenes,
     };
