@@ -8,6 +8,37 @@ import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplit
 
 
 
+function getSceneContractKey(scene = {}) {
+  return [
+    String(scene.scene_id || ""),
+    Number(scene.start_sec || 0).toFixed(3),
+    Number(scene.end_sec || 0).toFixed(3),
+    String(scene.route || ""),
+  ].join("|");
+}
+
+function mergeDirectorSceneWork(currentScenes = [], existingScenes = []) {
+  const existingByKey = new Map(existingScenes.map((scene) => [getSceneContractKey(scene), scene]));
+  return currentScenes.map((scene) => {
+    const old = existingByKey.get(getSceneContractKey(scene));
+    if (!old) return scene;
+    return {
+      ...scene,
+      image_url: old.image_url || scene.image_url || "",
+      video_url: old.video_url || scene.video_url || "",
+      video_prompt: old.video_prompt || scene.video_prompt || "",
+      negative_prompt: old.negative_prompt || scene.negative_prompt || "",
+      sound_prompt: old.sound_prompt || scene.sound_prompt || "",
+      audio_slice_url: old.audio_slice_url || scene.audio_slice_url || "",
+      audio_slice_duration_sec: old.audio_slice_duration_sec || scene.audio_slice_duration_sec || 0,
+      audio_extracted: Boolean(old.audio_extracted || scene.audio_extracted),
+      status: old.status || scene.status || "draft",
+      error: old.error || scene.error || "",
+    };
+  });
+}
+
+
 async function sliceManualClipAudio(payload) {
   const data = await fetchJson("/api/manual-clip/slice-audio", { method: "POST", body: payload });
   if (data?.ok === false) {
@@ -168,6 +199,23 @@ export default function ManualClipBoardNode({ id, data }) {
   };
 
   const onOpenDirectorBoard = () => {
+    let nextScenes = scenes;
+    try {
+      const raw = localStorage.getItem("manual_clip_board_active_project");
+      const existingProject = raw ? JSON.parse(raw) : null;
+      if (existingProject?.nodeId === id) {
+        const existingScenes = Array.isArray(existingProject?.scenes) ? existingProject.scenes : [];
+        const currentKeys = scenes.map(getSceneContractKey);
+        const existingKeys = existingScenes.map(getSceneContractKey);
+        const isSameContract = currentKeys.length === existingKeys.length && currentKeys.every((key, idx) => key === existingKeys[idx]);
+        if (isSameContract) {
+          nextScenes = mergeDirectorSceneWork(scenes, existingScenes);
+        }
+      }
+    } catch {
+      nextScenes = scenes;
+    }
+
     const payload = {
       nodeId: id,
       mode: model.mode,
@@ -176,7 +224,7 @@ export default function ManualClipBoardNode({ id, data }) {
       split_chat: model.split_chat,
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
-      scenes,
+      scenes: nextScenes,
     };
     localStorage.setItem("manual_clip_board_active_project", JSON.stringify(payload));
     navigate("/studio/manual-clip-board");
