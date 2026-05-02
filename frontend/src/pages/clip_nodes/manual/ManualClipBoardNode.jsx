@@ -50,18 +50,63 @@ async function sliceManualClipAudio(payload) {
 async function runManualClipAiSplit(payload) {
   return fetchJson("/api/manual-clip/ai-split", { method: "POST", body: payload });
 }
+async function runManualClipDirectorChat(payload) {
+  return fetchJson("/api/manual-clip/director-chat", { method: "POST", body: payload });
+}
 
 export default function ManualClipBoardNode({ id, data }) {
   const navigate = useNavigate();
   const patch = (p) => data?.onPatchNodeData?.(id, p);
   const model = { ...getDefaultManualClipNodeData(), ...(data || {}) };
   const [splitInput, setSplitInput] = useState(model?.split_chat?.user_request || "");
+  const [directorUserMessage, setDirectorUserMessage] = useState("");
   const scenes = Array.isArray(model.scenes) ? model.scenes : [];
   const connectedAudio = data?.connectedInputs?.audio_in || data?.connectedAudio || data?.audioInput || null;
   const normalizedConnectedAudio = normalizeManualAudio(connectedAudio);
   const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : model.audio;
   const aiScenes = Array.isArray(model?.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : [];
   const planKind = model.project_kind === "story" ? "истории" : "клипа";
+  const directorChat = model.manual_director_chat || {};
+  const directorContractMissing = model.split_source === "ai" && model.manual_director_required === true && directorChat.done !== true;
+
+  const onRunDirectorChat = async (forceFinalize = false) => {
+    patch({ manual_director_chat: { ...directorChat, status: "running", error: "" } });
+    try {
+      const payload = {
+        audio_url: effectiveAudio?.url || "",
+        audio_filename: effectiveAudio?.filename || "",
+        audio_duration_sec: Number(effectiveAudio?.duration_sec || 0),
+        project_kind: model.project_kind,
+        format: model.format,
+        split_settings: model.split_settings || {},
+        user_message: forceFinalize ? "__finalize__" : directorUserMessage,
+        messages: Array.isArray(directorChat.messages) ? directorChat.messages : [],
+        answers: directorChat.answers || {},
+      };
+      const response = await runManualClipDirectorChat(payload);
+      if (response?.ok === false) throw new Error(String(response?.detail || "director_chat_failed"));
+      const updatedMessages = [
+        ...(Array.isArray(directorChat.messages) ? directorChat.messages : []),
+        ...(directorUserMessage ? [{ role: "user", content: directorUserMessage }] : []),
+        ...(response?.assistant_message ? [{ role: "assistant", content: response.assistant_message }] : []),
+      ];
+      patch({
+        manual_director_chat: {
+          messages: updatedMessages,
+          answers: response?.answers || {},
+          questions: Array.isArray(response?.questions) ? response.questions : [],
+          done: Boolean(response?.done),
+          summary: String(response?.summary || ""),
+          contract: response?.contract || null,
+          status: "done",
+          error: "",
+        },
+      });
+      setDirectorUserMessage("");
+    } catch (error) {
+      patch({ manual_director_chat: { ...directorChat, status: "error", error: String(error?.message || "director_chat_failed") } });
+    }
+  };
 
   const onAudioUpload = (file) => {
     if (!file) return;
@@ -110,6 +155,7 @@ export default function ManualClipBoardNode({ id, data }) {
         format: model.format,
         split_settings: model.split_settings || {},
         user_request: splitInput || "",
+        director_contract: model?.manual_director_chat?.contract || {},
       };
       const data = await runManualClipAiSplit(payload);
       if (data?.ok === false || !data?.split_json) {
@@ -286,8 +332,26 @@ export default function ManualClipBoardNode({ id, data }) {
             <h4>AI/JSON разбивка</h4>
             <label>Способ разбора<select value={model.split_source} onChange={(e) => patch({ split_source: e.target.value })}><option value="ai">AI</option><option value="json">JSON</option></select></label>
             {model.split_source === "ai" ? <>
+              <div className="manualAiSummary">
+                <strong>AI-консультация</strong>
+                <div>{directorChat?.messages?.[directorChat.messages.length - 1]?.content || "Опишите задумку, и AI уточнит детали для режиссёрского контракта."}</div>
+                {Array.isArray(directorChat.questions) && directorChat.questions.length > 0 ? <div>
+                  {directorChat.questions.map((q) => <div key={q.id}>• {q.label}</div>)}
+                </div> : null}
+                <textarea className="manualAiTextarea" value={directorUserMessage} onChange={(e) => setDirectorUserMessage(e.target.value)} placeholder="Ответьте на вопросы AI-консультации..." />
+                <div className="manualActionsRow">
+                  <button className="clipSB_btn" onClick={() => onRunDirectorChat(false)} disabled={directorChat.status === "running"}>Отправить AI</button>
+                  <button className="clipSB_btn" onClick={() => onRunDirectorChat(true)} disabled={directorChat.status === "running"}>Собрать режиссёрский контракт</button>
+                </div>
+                {directorChat.error ? <div className="manualJsonError">{directorChat.error}</div> : null}
+                {directorChat.done ? <div>
+                  <div><strong>Контракт собран</strong></div>
+                  <div>{directorChat.summary || "Режиссёрский контракт готов."}</div>
+                </div> : <small>Сначала соберите режиссёрский контракт, чтобы AI не придумывал сценарий сам.</small>}
+              </div>
               <textarea className="manualAiTextarea" value={splitInput} onChange={(e) => setSplitInput(e.target.value)} placeholder="Например: Разбей по вокальным фразам. Криминальная драма Одесса 90-х. 30% lip-sync, остальное сюжетные сцены. Не режь слова, переходы на концах строк." />
-              <button className="clipSB_btn" onClick={onRunAiSplit} disabled={model.ai_split_status === "running"}>Разобрать при помощи AI</button>
+              <button className="clipSB_btn" onClick={onRunAiSplit} disabled={model.ai_split_status === "running" || directorContractMissing}>Разобрать при помощи AI</button>
+              {directorContractMissing ? <small>AI-разбивка станет доступна после режиссёрского контракта.</small> : null}
               {model.ai_split_status === "running" ? <div>AI разбирает аудио...</div> : null}
               {model.ai_split_error ? <div className="manualJsonError">{model.ai_split_error}</div> : null}
               <div className="manualAiSummary">{model.split_chat?.ai_summary || "AI-ответ появится после запроса."}</div>

@@ -429,6 +429,19 @@ class ManualClipAiSplitIn(BaseModel):
     format: str = "9:16"
     split_settings: dict = Field(default_factory=dict)
     user_request: str | None = ""
+    director_contract: dict = Field(default_factory=dict)
+
+
+class ManualClipDirectorChatIn(BaseModel):
+    audio_url: str | None = ""
+    audio_filename: str | None = ""
+    audio_duration_sec: float | None = 0
+    project_kind: str = "clip"
+    format: str = "9:16"
+    split_settings: dict = Field(default_factory=dict)
+    user_message: str | None = ""
+    messages: list[dict] = Field(default_factory=list)
+    answers: dict = Field(default_factory=dict)
 
 
 def _resolve_audio_slice_compatibility(payload: AudioSliceIn) -> tuple[str, bool, bool, str]:
@@ -14819,12 +14832,25 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         "- Respect target_scene_count if provided.\n"
         "- Respect lipsync_ratio if provided.\n"
         "- Respect route_preference if provided.\n"
+        "- Follow director_contract as hard guidance.\n"
+        "- Do not invent a different story than in director_contract.\n"
+        "- Do not change lip-sync density intent from director_contract.\n"
+        "- Do not change intro/outro intent from director_contract.\n"
+        "- Do not invent characters not implied by director_contract.\n"
+        "- If director_contract says cutaways/memories/city, use them.\n"
         "- video_prompt may be empty or short draft.\n"
         "- sound_prompt must stay empty; for i2v_sound sound is described in video_prompt.\n"
         "- Return only JSON.\n\n"
         f"Input payload:\n{json.dumps({'audio_duration_sec': payload.audio_duration_sec, 'project_kind': payload.project_kind, 'format': payload.format, 'split_settings': payload.split_settings, 'user_request': payload.user_request, 'audio_filename': payload.audio_filename, 'audio_attached': audio_attached}, ensure_ascii=False)}\n"
+        f"DIRECTOR CONTRACT:\n{json.dumps(payload.director_contract or {}, ensure_ascii=False)}\n"
         + ("Audio is attached as inlineData. Use real phrase boundaries from audio." if audio_attached else "Audio is not attached. Infer boundaries from duration + request.")
     )
+
+
+def _manual_director_required_fields(project_kind: str) -> list[str]:
+    if str(project_kind or "clip") == "story":
+        return ["story_intent", "main_character", "conflict_or_event", "visual_style", "narration_mode", "turning_point", "ending", "camera_style"]
+    return ["story_intent", "main_performer", "lip_sync_density", "performance_place", "cutaway_strategy", "intro_plan", "outro_plan", "camera_style"]
 
 
 def _validate_manual_clip_split_json(split_json: dict, expected_duration: float) -> tuple[dict | None, str]:
@@ -14922,6 +14948,57 @@ def manual_clip_ai_split(payload: ManualClipAiSplitIn):
         raw, normalized = raw_retry, normalized_retry
 
     return {"ok": True, "split_json": normalized, "audio_attached": audio_attached}
+
+
+@router.post("/manual-clip/director-chat")
+def manual_clip_director_chat(payload: ManualClipDirectorChatIn):
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    if not api_key:
+        return JSONResponse({"ok": False, "detail": "gemini_api_key_missing"}, status_code=400)
+
+    required_fields = _manual_director_required_fields(payload.project_kind)
+    user_message = str(payload.user_message or "").strip()
+    answers = dict(payload.answers or {})
+    if user_message and user_message != "__finalize__":
+        answers["user_last_message"] = user_message
+
+    prompt = (
+        "You are a Manual Clip AI Director.\n"
+        "Your job is NOT to split the audio yet.\n"
+        "Your job is to understand the user's intended clip/story before splitting.\n"
+        "Return ONLY JSON.\n"
+        "If enough info is known, return done=true and contract.\n"
+        "If not enough info, return done=false and questions.\n"
+        "Ask only missing important questions (3-5 questions max in one reply).\n"
+        f"Required fields: {json.dumps(required_fields, ensure_ascii=False)}\n"
+        "JSON schema:\n"
+        '{"done": boolean, "assistant_message": string, "questions":[{"id":string,"label":string,"type":"text"}], "answers": object, "summary": string, "contract": object|null}\n'
+        f"Input payload: {json.dumps(payload.model_dump(mode='json'), ensure_ascii=False)}"
+    )
+    model_name = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-2.5-flash").strip()
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2}}
+    resp = post_generate_content(api_key, model_name, body, timeout=120)
+    raw = _extract_gemini_text(resp if isinstance(resp, dict) else {})
+    parsed = _parse_json_from_text(raw)
+    if not isinstance(parsed, dict):
+        return JSONResponse({"ok": False, "detail": "director_chat_invalid_json"}, status_code=422)
+
+    result_answers = parsed.get("answers") if isinstance(parsed.get("answers"), dict) else answers
+    done = bool(parsed.get("done"))
+    contract = parsed.get("contract") if isinstance(parsed.get("contract"), dict) else None
+    questions = parsed.get("questions") if isinstance(parsed.get("questions"), list) else []
+    if done and not contract:
+        contract = {"project_kind": payload.project_kind, **result_answers}
+
+    return {
+        "ok": True,
+        "done": done,
+        "assistant_message": str(parsed.get("assistant_message") or ("Режиссёрский контракт собран." if done else "Уточните детали для режиссёрского контракта.")),
+        "questions": questions,
+        "answers": result_answers,
+        "summary": str(parsed.get("summary") or ""),
+        "contract": contract,
+    }
 
 
 @router.post("/manual-clip/slice-audio")
