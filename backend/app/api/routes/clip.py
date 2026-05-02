@@ -14853,6 +14853,41 @@ def _manual_director_required_fields(project_kind: str) -> list[str]:
     return ["story_intent", "main_performer", "lip_sync_density", "performance_place", "cutaway_strategy", "intro_plan", "outro_plan", "camera_style"]
 
 
+def _manual_director_contract_missing_fields(contract: dict, project_kind: str) -> list[str]:
+    required = _manual_director_required_fields(project_kind)
+    missing = []
+    for key in required:
+        value = contract.get(key)
+        if value is None or str(value).strip() == "":
+            missing.append(key)
+    return missing
+
+
+def _manual_director_question_label(project_kind: str, field: str) -> str:
+    clip_labels = {
+        "story_intent": "Какой общий сюжет и настроение клипа?",
+        "main_performer": "Кто поёт или главный герой в кадре?",
+        "lip_sync_density": "Сколько lip-sync нужно: 30%, 50%, 70% или почти весь клип?",
+        "performance_place": "Где герой поёт: одно место или разные локации?",
+        "cutaway_strategy": "Что показывать между пением: воспоминания, город, конфликт, дорога, люди?",
+        "intro_plan": "Как должен начаться клип?",
+        "outro_plan": "Какой финал нужен?",
+        "camera_style": "Какой стиль камеры: живой, кино, клиповый, спокойный?",
+    }
+    story_labels = {
+        "story_intent": "О чём история и какое настроение?",
+        "main_character": "Кто главный герой?",
+        "conflict_or_event": "Какой конфликт или главное событие?",
+        "visual_style": "Какой визуальный стиль?",
+        "narration_mode": "История буквальная, метафорическая или через воспоминания?",
+        "turning_point": "Какой поворот в середине?",
+        "ending": "Какой финал?",
+        "camera_style": "Какой стиль камеры?",
+    }
+    labels = story_labels if str(project_kind or "clip") == "story" else clip_labels
+    return labels.get(field) or field
+
+
 def _validate_manual_clip_split_json(split_json: dict, expected_duration: float) -> tuple[dict | None, str]:
     scenes = split_json.get("scenes")
     if not isinstance(scenes, list) or not scenes:
@@ -14930,7 +14965,7 @@ def manual_clip_ai_split(payload: ManualClipAiSplitIn):
         parts = [{"text": prompt + (f"\n\nFix previous error: {extra_feedback}" if extra_feedback else "")}]
         if audio_inline:
             parts.append(audio_inline)
-        body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"temperature": 0.2}}
+        body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
         resp = post_generate_content(api_key, model_name, body, timeout=120)
         raw = _extract_gemini_text(resp if isinstance(resp, dict) else {})
         parsed = _parse_json_from_text(raw)
@@ -14976,7 +15011,7 @@ def manual_clip_director_chat(payload: ManualClipDirectorChatIn):
         f"Input payload: {json.dumps(payload.model_dump(mode='json'), ensure_ascii=False)}"
     )
     model_name = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-2.5-flash").strip()
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2}}
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
     resp = post_generate_content(api_key, model_name, body, timeout=120)
     raw = _extract_gemini_text(resp if isinstance(resp, dict) else {})
     parsed = _parse_json_from_text(raw)
@@ -14990,10 +15025,21 @@ def manual_clip_director_chat(payload: ManualClipDirectorChatIn):
     if done and not contract:
         contract = {"project_kind": payload.project_kind, **result_answers}
 
+    missing = _manual_director_contract_missing_fields(contract or {}, payload.project_kind)
+    if missing:
+        done = False
+        contract = None
+        if not questions:
+            questions = [{"id": field, "label": _manual_director_question_label(payload.project_kind, field), "type": "text"} for field in missing]
+
+    assistant_message = str(parsed.get("assistant_message") or ("Режиссёрский контракт собран." if done else "Уточните детали для режиссёрского контракта."))
+    if missing:
+        assistant_message = "Нужно уточнить ещё несколько пунктов перед разбивкой."
+
     return {
         "ok": True,
         "done": done,
-        "assistant_message": str(parsed.get("assistant_message") or ("Режиссёрский контракт собран." if done else "Уточните детали для режиссёрского контракта.")),
+        "assistant_message": assistant_message,
         "questions": questions,
         "answers": result_answers,
         "summary": str(parsed.get("summary") or ""),
