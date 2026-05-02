@@ -55,13 +55,7 @@ export default function ManualClipDirectorPage() {
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
 
   const updateScene = (sceneId, patch) => {
-    const nextScenes = scenes.map((s) => {
-      if (s.scene_id !== sceneId) return s;
-      const next = { ...s, ...patch };
-      const start = Number(next.start_sec || 0);
-      const end = Number(next.end_sec || start);
-      return { ...next, duration_sec: Number((Math.max(0, end - start)).toFixed(3)) };
-    });
+    const nextScenes = scenes.map((s) => (s.scene_id !== sceneId ? s : { ...s, ...patch }));
     persistProject({ ...project, scenes: nextScenes });
   };
 
@@ -82,38 +76,28 @@ export default function ManualClipDirectorPage() {
     }, 350);
   };
 
-  if (!project) {
-    return <div className="manualDirectorPage"><div className="manualDirectorEmpty">
-      <h2>Проект режиссёрской доски не найден</h2>
-      <p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску».</p>
-      <button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button>
-    </div></div>;
-  }
+  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску».</p><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button></div></div>;
 
   return <div className="manualDirectorPage">
+    <div className="manualDirectorTopbar">
+      <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
+    </div>
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">
         {scenes.map((scene, idx) => <button key={scene.scene_id} className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""}`} onClick={() => setSelectedSceneId(scene.scene_id)}>
-          <strong>{idx + 1} сцена</strong>
-          <span>{scene.route}</span>
-          <span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span>
-          <span className="manualStatusBadge">{scene.status}</span>
-          <small>{scene.drama_hint || "—"}</small>
+          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className="manualStatusBadge">{scene.status}</span><small>{scene.drama_hint || "—"}</small>
         </button>)}
       </aside>
 
       {selectedScene ? <section className="manualDirectorCenter">
         <h2>Сцена {selectedScene.index}</h2>
         <label>Route
-          <select value={selectedScene.route} onChange={(e) => updateScene(selectedScene.scene_id, { route: e.target.value })}>
-            {ROUTES.map((route) => <option key={route} value={route}>{route}</option>)}
-          </select>
+          <select value={selectedScene.route} onChange={(e) => updateScene(selectedScene.scene_id, { route: e.target.value })}>{ROUTES.map((route) => <option key={route} value={route}>{route}</option>)}</select>
         </label>
 
-        <div className="manualTimingRow">
-          <label>start_sec<input type="number" value={selectedScene.start_sec} onChange={(e) => updateScene(selectedScene.scene_id, { start_sec: Number(e.target.value || 0) })} /></label>
-          <label>end_sec<input type="number" value={selectedScene.end_sec} onChange={(e) => updateScene(selectedScene.scene_id, { end_sec: Number(e.target.value || 0) })} /></label>
-          <label>duration_sec<input type="number" value={selectedScene.duration_sec} readOnly /></label>
+        <div className="manualTimingReadonly">
+          <div>Тайминг сцены: {Number(selectedScene.start_sec).toFixed(2)} – {Number(selectedScene.end_sec).toFixed(2)} c</div>
+          <div>Длительность: {Number(selectedScene.duration_sec).toFixed(2)} c</div>
         </div>
 
         <label>Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { video_prompt: e.target.value })} /></label>
@@ -121,7 +105,8 @@ export default function ManualClipDirectorPage() {
         {selectedScene.route === "i2v_sound" ? <label>Sound prompt<textarea value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /></label> : null}
 
         <div className="manualDirectorButtons">
-          <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { audio_slice_url: project?.audio?.url || "", status: "audio_ready" })}>Fallback: привязать полный трек</button>
+          {selectedScene.route === "ia2v" ? <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { status: selectedScene.audio_slice_url ? "audio_ready" : selectedScene.status, error: selectedScene.audio_slice_url ? "" : "Аудио сцены ещё не нарезано" })}>Изъять аудио</button> : null}
+          {selectedScene.route === "ia2v" && selectedScene.audio_slice_url ? <span className="manualAudioReady">Аудио сцены готово</span> : null}
           <button className="clipSB_btn" onClick={() => onCreateVideo(selectedScene)}>Создать видео</button>
           <button className="clipSB_btn" onClick={() => {
             const nextScenes = scenes.filter((s) => s.scene_id !== selectedScene.scene_id);
@@ -132,25 +117,9 @@ export default function ManualClipDirectorPage() {
         {selectedScene.error ? <div className="manualError">{selectedScene.error}</div> : null}
       </section> : null}
 
-      {selectedScene ? <section className="manualDirectorMedia">
-        <h3>Media preview</h3>
-        <label className="clipSB_btn">Upload image
-          <input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0])} />
-        </label>
+      {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3><label className="clipSB_btn">Upload image<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0])} /></label><div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video controls src={selectedScene.video_url} />) : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div></section> : null}
 
-        <div className="manualMediaWindow">
-          {selectedScene.video_url ? (
-            selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video controls src={selectedScene.video_url} />
-          ) : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}
-        </div>
-      </section> : null}
-
-      {selectedScene ? <section className="manualDirectorAudio">
-        <h3>Аудио отображение</h3>
-        <div>scene_audio: {selectedScene.audio_slice_url ? "готово" : "placeholder"}</div>
-        <div>duration: {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>
-        {selectedScene.audio_slice_url ? <><div>Аудио сцены</div><audio controls src={selectedScene.audio_slice_url} /></> : <div>Аудио сцены ещё не нарезано</div>}
-      </section> : null}
+      {selectedScene ? <section className="manualDirectorAudio"><h3>Аудио отображение</h3><div>scene_audio: {selectedScene.audio_slice_url ? "готово" : "не готово"}</div><div>duration: {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>{selectedScene.audio_slice_url ? <><div>Аудио сцены</div><audio controls src={selectedScene.audio_slice_url} /></> : <div>Аудио сцены ещё не нарезано</div>}</section> : null}
     </div>
   </div>;
 }
