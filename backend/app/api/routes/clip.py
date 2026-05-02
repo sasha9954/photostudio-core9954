@@ -421,6 +421,16 @@ class ManualClipAudioSliceIn(BaseModel):
     scenes: list[ManualClipSceneIn] = Field(default_factory=list)
 
 
+class ManualClipAiSplitIn(BaseModel):
+    audio_url: str | None = ""
+    audio_filename: str | None = ""
+    audio_duration_sec: float | None = 0
+    project_kind: str = "clip"
+    format: str = "9:16"
+    split_settings: dict = Field(default_factory=dict)
+    user_request: str | None = ""
+
+
 def _resolve_audio_slice_compatibility(payload: AudioSliceIn) -> tuple[str, bool, bool, str]:
     raw_render_mode = str(payload.renderMode or "").strip().lower()
     raw_ltx_mode = str(payload.ltxMode or "").strip()
@@ -14763,6 +14773,155 @@ def _resolve_local_static_audio_path(audio_url: str) -> str | None:
     if not (local_path == static_root or local_path.startswith(static_root + os.sep)):
         return None
     return local_path
+
+
+def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: bool) -> str:
+    return (
+        "You are an AI splitter for manual clip/story editing.\n"
+        "Return ONLY valid JSON.\n"
+        "No markdown.\n"
+        "No prose outside JSON.\n\n"
+        "The JSON schema is:\n"
+        "{\n"
+        '  "mode": "manual_clip_board",\n'
+        '  "project_kind": "clip|story",\n'
+        '  "format": "9:16|16:9|1:1",\n'
+        '  "split_type": "phrase_based",\n'
+        '  "audio_duration_sec": number,\n'
+        '  "global_hint": string,\n'
+        '  "scenes": [\n'
+        "    {\n"
+        '      "scene_id": "seg_01",\n'
+        '      "index": 1,\n'
+        '      "start_sec": number,\n'
+        '      "end_sec": number,\n'
+        '      "duration_sec": number,\n'
+        '      "route": "ia2v|i2v|i2v_sound",\n'
+        '      "energy": "soft|mid|high",\n'
+        '      "quality": "good|check",\n'
+        '      "boundary_reason": string,\n'
+        '      "transition_out": string,\n'
+        '      "drama_hint": string,\n'
+        '      "short_note": string,\n'
+        '      "video_prompt": string,\n'
+        '      "negative_prompt": string,\n'
+        '      "sound_prompt": ""\n'
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- Cover the full audio duration from 0 to audio_duration_sec.\n"
+        "- Do not create gaps.\n"
+        "- Do not create overlaps.\n"
+        "- Prefer scene duration 4–7 sec.\n"
+        "- For clip mode: split by vocal phrases / music accents; use ia2v for lip-sync/performance moments; use i2v for visual story/cutaways; use i2v_sound only when sound atmosphere matters.\n"
+        "- For story mode: use mostly i2v and i2v_sound; route ia2v only if direct speech/lip-sync is needed.\n"
+        "- Respect target_scene_count if provided.\n"
+        "- Respect lipsync_ratio if provided.\n"
+        "- Respect route_preference if provided.\n"
+        "- video_prompt may be empty or short draft.\n"
+        "- sound_prompt must stay empty; for i2v_sound sound is described in video_prompt.\n"
+        "- Return only JSON.\n\n"
+        f"Input payload:\n{json.dumps({'audio_duration_sec': payload.audio_duration_sec, 'project_kind': payload.project_kind, 'format': payload.format, 'split_settings': payload.split_settings, 'user_request': payload.user_request, 'audio_filename': payload.audio_filename, 'audio_attached': audio_attached}, ensure_ascii=False)}\n"
+        + ("Audio is attached as inlineData. Use real phrase boundaries from audio." if audio_attached else "Audio is not attached. Infer boundaries from duration + request.")
+    )
+
+
+def _validate_manual_clip_split_json(split_json: dict, expected_duration: float) -> tuple[dict | None, str]:
+    scenes = split_json.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        return None, "scenes_required"
+    normalized = []
+    for idx, raw_scene in enumerate(scenes):
+        if not isinstance(raw_scene, dict):
+            return None, f"scene_{idx + 1}_not_object"
+        try:
+            start_sec = float(raw_scene.get("start_sec"))
+            end_sec = float(raw_scene.get("end_sec"))
+        except Exception:
+            return None, f"scene_{idx + 1}_timing_not_numeric"
+        if not math.isfinite(start_sec) or not math.isfinite(end_sec):
+            return None, f"scene_{idx + 1}_timing_not_finite"
+        if end_sec <= start_sec:
+            return None, f"scene_{idx + 1}_end_not_greater_than_start"
+        normalized.append({
+            **raw_scene,
+            "scene_id": str(raw_scene.get("scene_id") or f"seg_{idx + 1:02d}"),
+            "index": int(raw_scene.get("index") or idx + 1),
+            "start_sec": round(start_sec, 3),
+            "end_sec": round(end_sec, 3),
+            "duration_sec": round(end_sec - start_sec, 3),
+        })
+    normalized.sort(key=lambda s: (float(s["start_sec"]), int(s["index"])))
+    if normalized[0]["start_sec"] > 0.35:
+        return None, "first_scene_not_starting_near_zero"
+    for idx in range(1, len(normalized)):
+        gap = normalized[idx]["start_sec"] - normalized[idx - 1]["end_sec"]
+        if gap > 0.35:
+            return None, f"major_gap_before_scene_{idx + 1}"
+        if gap < -0.35:
+            return None, f"major_overlap_before_scene_{idx + 1}"
+    if expected_duration > 0 and abs(float(normalized[-1]["end_sec"]) - expected_duration) > 0.6:
+        return None, "last_scene_not_matching_audio_duration"
+    return {
+        "mode": "manual_clip_board",
+        "project_kind": str(split_json.get("project_kind") or "clip"),
+        "format": str(split_json.get("format") or "9:16"),
+        "split_type": "phrase_based",
+        "audio_duration_sec": round(float(expected_duration or split_json.get("audio_duration_sec") or 0), 3),
+        "global_hint": str(split_json.get("global_hint") or ""),
+        "scenes": normalized,
+    }, ""
+
+
+@router.post("/manual-clip/ai-split")
+def manual_clip_ai_split(payload: ManualClipAiSplitIn):
+    api_key = (settings.GEMINI_API_KEY or "").strip()
+    if not api_key:
+        return JSONResponse({"ok": False, "detail": "gemini_api_key_missing"}, status_code=400)
+    duration = float(payload.audio_duration_sec or 0)
+    if not math.isfinite(duration) or duration <= 0:
+        return JSONResponse({"ok": False, "detail": "audio_duration_sec_required"}, status_code=400)
+    audio_inline = None
+    audio_attached = False
+    local_audio = _resolve_local_static_audio_path(str(payload.audio_url or "").strip())
+    if local_audio and os.path.isfile(local_audio):
+        try:
+            with open(local_audio, "rb") as f:
+                raw = f.read()
+            if raw:
+                ext = os.path.splitext(local_audio)[1].lower()
+                mime = "audio/mpeg" if ext in {".mp3"} else ("audio/wav" if ext in {".wav"} else "audio/mp4")
+                audio_inline = {"inlineData": {"mimeType": mime, "data": base64.b64encode(raw).decode("ascii")}}
+                audio_attached = True
+        except Exception:
+            audio_attached = False
+
+    prompt = _manual_clip_split_prompt(payload, audio_attached=audio_attached)
+    model_name = (getattr(settings, "GEMINI_TEXT_MODEL", None) or "gemini-2.5-flash").strip()
+
+    def _ask_once(extra_feedback: str = "") -> tuple[str, dict | None, str]:
+        parts = [{"text": prompt + (f"\n\nFix previous error: {extra_feedback}" if extra_feedback else "")}]
+        if audio_inline:
+            parts.append(audio_inline)
+        body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"temperature": 0.2}}
+        resp = post_generate_content(api_key, model_name, body, timeout=120)
+        raw = _extract_gemini_text(resp if isinstance(resp, dict) else {})
+        parsed = _parse_json_from_text(raw)
+        if not isinstance(parsed, dict):
+            return raw, None, "json_parse_failed"
+        normalized, err = _validate_manual_clip_split_json(parsed, duration)
+        return raw, normalized, err
+
+    raw, normalized, err = _ask_once("")
+    if err:
+        raw_retry, normalized_retry, err_retry = _ask_once(err)
+        if err_retry:
+            preview = (raw_retry or raw or "")[:600]
+            return JSONResponse({"ok": False, "detail": "manual_clip_ai_split_invalid_json", "hint": err_retry, "raw": preview}, status_code=422)
+        raw, normalized = raw_retry, normalized_retry
+
+    return {"ok": True, "split_json": normalized, "audio_attached": audio_attached}
 
 
 @router.post("/manual-clip/slice-audio")

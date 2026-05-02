@@ -19,6 +19,8 @@ export function getDefaultManualClipNodeData() {
     split_audio_status: "idle",
     split_audio_error: "",
     split_audio_count: 0,
+    ai_split_status: "idle",
+    ai_split_error: "",
     audio: { url: "", filename: "", duration_sec: 0, duration_ms: 0 },
     split_chat: { user_request: "", ai_summary: "", raw_ai_json: null },
     split_settings: {
