@@ -61,6 +61,28 @@ async function getManualSceneVideoStatus(jobId) {
   return fetchJson(`/api/clip/video/status/${encodeURIComponent(jobId)}`, { method: "GET", timeoutMs: 60000 });
 }
 
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("file_read_failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadManualSceneImage(file) {
+  const dataUrl = await fileToDataUrl(file);
+  const out = await fetchJson("/api/assets/fromDataUrl", {
+    method: "POST",
+    body: { dataUrl },
+  });
+
+  const url = String(out?.url || out?.asset_url || out?.public_url || "").trim();
+  if (!url) throw new Error("image_upload_failed");
+
+  return url;
+}
+
 function resolveVideoStartJobId(out = {}) {
   return String(out.jobId || out.job_id || out.id || "").trim();
 }
@@ -105,6 +127,9 @@ function normalizeScene(scene = {}, idx = 0) {
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
     image_url: String(scene.image_url || ""),
+    image_preview_url: String(scene.image_preview_url || ""),
+    image_upload_status: String(scene.image_upload_status || ""),
+    image_upload_error: String(scene.image_upload_error || ""),
     video_url: String(scene.video_url || ""),
     audio_slice_url: String(scene.audio_slice_url || ""),
     audio_slice_duration_sec: Number(scene.audio_slice_duration_sec || 0),
@@ -168,11 +193,36 @@ export default function ManualClipDirectorPage() {
     persistProject({ ...project, scenes: nextScenes });
   };
 
-  const onUploadImage = (sceneId, file) => {
+  const onUploadImage = async (sceneId, file) => {
     if (!file) return;
-    const imageUrl = URL.createObjectURL(file);
-    const nextScene = { ...(scenes.find((s) => s.scene_id === sceneId) || {}), image_url: imageUrl };
-    updateScene(sceneId, { image_url: imageUrl, status: resolveManualSceneStatus(nextScene) });
+    const previewUrl = URL.createObjectURL(file);
+
+    updateScene(sceneId, {
+      image_preview_url: previewUrl,
+      image_upload_status: "uploading",
+      image_upload_error: "",
+    });
+
+    try {
+      const imageUrl = await uploadManualSceneImage(file);
+      const currentScene = scenes.find((s) => s.scene_id === sceneId) || {};
+      const nextScene = { ...currentScene, image_url: imageUrl };
+
+      updateScene(sceneId, {
+        image_url: imageUrl,
+        image_preview_url: previewUrl,
+        image_upload_status: "done",
+        image_upload_error: "",
+        status: resolveManualSceneStatus(nextScene),
+        error: "",
+      });
+    } catch (err) {
+      updateScene(sceneId, {
+        image_upload_status: "error",
+        image_upload_error: String(err?.message || "image_upload_failed"),
+        error: String(err?.message || "image_upload_failed"),
+      });
+    }
   };
 
   async function pollManualSceneVideo(sceneId, jobId, attempt = 0) {
@@ -202,12 +252,20 @@ export default function ManualClipDirectorPage() {
 
   const onCreateVideo = async (scene) => {
     if (!scene.image_url || !scene.video_prompt.trim()) { updateScene(scene.scene_id, { error: "Добавьте image_url и video_prompt", status: "draft" }); return; }
+    const safeImageUrl = String(scene.image_url || "").trim();
+    if (!safeImageUrl || safeImageUrl.startsWith("blob:")) {
+      updateScene(scene.scene_id, {
+        error: "Фото ещё не сохранено на сервер. Загрузите фото заново или дождитесь сохранения.",
+        status: scene.status || "draft",
+      });
+      return;
+    }
     if (scene.route === "ia2v" && (!scene.audio_slice_url || !scene.audio_extracted)) { updateScene(scene.scene_id, { error: "Для ia2v сначала нажмите «Изъять аудио»", status: scene.status || "draft" }); return; }
     const routePayload = resolveManualVideoRoutePayload(scene);
     const requestedDurationSec = Number(scene.duration_sec || scene.audio_slice_duration_sec || 5);
     updateScene(scene.scene_id, { status: "video_queued", video_error: "", error: "", video_job_id: "" });
     try {
-      const payload = { sceneId: scene.scene_id, imageUrl: scene.image_url, videoPrompt: scene.video_prompt, videoNegativePrompt: scene.negative_prompt || "", video_negative_prompt: scene.negative_prompt || "", requestedDurationSec, sceneStartSec: Number(scene.start_sec || 0), sceneEndSec: Number(scene.end_sec || 0), sceneDurationSec: Number(scene.duration_sec || requestedDurationSec), format: project?.format || "9:16", provider: "comfy_remote", ...routePayload, manualClip: true, manual_clip: true, source: "manual_clip_board", project_kind: project?.project_kind || "clip", generatedAudioPolicy: routePayload.generatedAudioPolicy, generatedAudioGainDb: routePayload.generatedAudioGainDb };
+      const payload = { sceneId: scene.scene_id, imageUrl: safeImageUrl, videoPrompt: scene.video_prompt, videoNegativePrompt: scene.negative_prompt || "", video_negative_prompt: scene.negative_prompt || "", requestedDurationSec, sceneStartSec: Number(scene.start_sec || 0), sceneEndSec: Number(scene.end_sec || 0), sceneDurationSec: Number(scene.duration_sec || requestedDurationSec), format: project?.format || "9:16", provider: "comfy_remote", ...routePayload, manualClip: true, manual_clip: true, source: "manual_clip_board", project_kind: project?.project_kind || "clip", generatedAudioPolicy: routePayload.generatedAudioPolicy, generatedAudioGainDb: routePayload.generatedAudioGainDb };
       const out = await startManualSceneVideo(payload);
       const jobId = resolveVideoStartJobId(out);
       if (out?.ok === false || !jobId) throw new Error(String(out?.detail || out?.error || "video_start_failed"));
@@ -300,7 +358,7 @@ export default function ManualClipDirectorPage() {
         </section>
       </section> : null}
 
-      {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3><label className="clipSB_btn manualUploadBtn">Upload image<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0])} /></label><div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video controls src={selectedScene.video_url} />) : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>{selectedScene.route === "i2v_sound" && selectedScene.video_url ? <div className="manualVideoInfo">Видео содержит сценический звук. В монтаже звук будет приглушён под основную музыку.</div> : null}{selectedScene.route === "ia2v" ? <div className="manualVideoInfo">Lip-sync сцена: в финальном монтаже используем основной аудиотрек, звук видео можно игнорировать.</div> : null}</section> : null}
+      {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3><label className="clipSB_btn manualUploadBtn">Upload image<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0])} /></label><div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video controls src={selectedScene.video_url} />) : selectedScene.image_preview_url ? <img src={selectedScene.image_preview_url} alt="Scene preview" /> : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>{selectedScene.route === "i2v_sound" && selectedScene.video_url ? <div className="manualVideoInfo">Видео содержит сценический звук. В монтаже звук будет приглушён под основную музыку.</div> : null}{selectedScene.route === "ia2v" ? <div className="manualVideoInfo">Lip-sync сцена: в финальном монтаже используем основной аудиотрек, звук видео можно игнорировать.</div> : null}</section> : null}
 
     </div>
   </div>;

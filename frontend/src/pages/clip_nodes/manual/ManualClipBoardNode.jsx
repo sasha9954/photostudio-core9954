@@ -25,6 +25,9 @@ function mergeDirectorSceneWork(currentScenes = [], existingScenes = []) {
     return {
       ...scene,
       image_url: old.image_url || scene.image_url || "",
+      image_preview_url: old.image_preview_url || scene.image_preview_url || "",
+      image_upload_status: old.image_upload_status || scene.image_upload_status || "",
+      image_upload_error: old.image_upload_error || scene.image_upload_error || "",
       video_url: old.video_url || scene.video_url || "",
       video_prompt: old.video_prompt || scene.video_prompt || "",
       negative_prompt: old.negative_prompt || scene.negative_prompt || "",
