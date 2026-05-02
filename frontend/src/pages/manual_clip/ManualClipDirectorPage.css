@@ -196,3 +196,8 @@
   max-height: 125px;
   overflow: auto;
 }
+
+.manualStatusBadge.running { color: #ffd36a; font-weight: 600; opacity: 1; }
+.manualStatusBadge.error { color: #ff7b7b; font-weight: 600; opacity: 1; }
+.manualVideoDebug { font-size: 12px; color: #b8bfd9; background: #0f1320; border: 1px solid #303650; border-radius: 8px; padding: 6px 8px; }
+.manualVideoInfo { font-size: 12px; color: #b8bfd9; }

@@ -34,6 +34,13 @@ function mergeDirectorSceneWork(currentScenes = [], existingScenes = []) {
       audio_extracted: Boolean(old.audio_extracted || scene.audio_extracted),
       status: old.status || scene.status || "draft",
       error: old.error || scene.error || "",
+      video_job_id: old.video_job_id || scene.video_job_id || "",
+      video_error: old.video_error || scene.video_error || "",
+      video_has_audio: Boolean(old.video_has_audio || scene.video_has_audio),
+      generated_audio_policy: old.generated_audio_policy || scene.generated_audio_policy || "",
+      generated_audio_gain_db: Number(old.generated_audio_gain_db ?? scene.generated_audio_gain_db ?? -16),
+      keep_generated_audio: Boolean(old.keep_generated_audio || scene.keep_generated_audio),
+      video_request_payload_preview: old.video_request_payload_preview || scene.video_request_payload_preview || null,
     };
   });
 }

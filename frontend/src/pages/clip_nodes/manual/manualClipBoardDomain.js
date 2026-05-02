@@ -168,6 +168,13 @@ export function normalizeScene(scene, idx) {
     status: String(scene?.status || "draft"),
     error: String(scene?.error || ""),
     audio_extracted: Boolean(scene?.audio_extracted),
+    video_job_id: String(scene?.video_job_id || ""),
+    video_error: String(scene?.video_error || ""),
+    video_has_audio: Boolean(scene?.video_has_audio),
+    generated_audio_policy: String(scene?.generated_audio_policy || ""),
+    generated_audio_gain_db: Number(scene?.generated_audio_gain_db ?? -16),
+    keep_generated_audio: Boolean(scene?.keep_generated_audio),
+    video_request_payload_preview: scene?.video_request_payload_preview || null,
   };
 }
 
