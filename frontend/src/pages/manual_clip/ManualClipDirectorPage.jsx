@@ -35,6 +35,10 @@ function normalizeScene(scene = {}, idx = 0) {
     end_sec: end,
     duration_sec: Number((Math.max(0, end - start)).toFixed(3)),
     drama_hint: String(scene.drama_hint || ""),
+    short_note: String(scene.short_note || ""),
+    scene_goal_ru: String(scene.scene_goal_ru || ""),
+    prompt_hint_ru: String(scene.prompt_hint_ru || ""),
+    story_position_ru: String(scene.story_position_ru || ""),
     video_prompt: String(scene.video_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
@@ -111,7 +115,7 @@ export default function ManualClipDirectorPage() {
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">
         {scenes.map((scene, idx) => <button key={scene.scene_id} className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`} onClick={() => setSelectedSceneId(scene.scene_id)}>
-          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}>{getSceneStatusLabel(scene)}</span><small>{scene.drama_hint || "—"}</small>
+          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}>{getSceneStatusLabel(scene)}</span><small>{scene.drama_hint || scene.short_note || scene.scene_goal_ru || "—"}</small>
         </button>)}
       </aside>
 
@@ -126,11 +130,20 @@ export default function ManualClipDirectorPage() {
           <div>Длительность: {Number(selectedScene.duration_sec).toFixed(2)} c</div>
         </div>
 
-        <label>Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
+        <div className="manualSceneGuidance">
+          <strong>Подсказка сцены</strong>
+          <div>Позиция: {selectedScene.story_position_ru || "—"}</div>
+          <div>Драматургия: {selectedScene.drama_hint || "—"}</div>
+          <div>Заметка: {selectedScene.short_note || "—"}</div>
+          <div>Смысл: {selectedScene.scene_goal_ru || "—"}</div>
+          <div>Что учесть в prompt: {selectedScene.prompt_hint_ru || "—"}</div>
+        </div>
+
+        <label className="manualPromptBlock">Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
           const nextScene = { ...selectedScene, video_prompt: e.target.value };
           updateScene(selectedScene.scene_id, { video_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
         }} /></label>
-        <label>Negative prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => {
+        <label className="manualNegativePromptBlock">Negative prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => {
           const nextScene = { ...selectedScene, negative_prompt: e.target.value };
           updateScene(selectedScene.scene_id, { negative_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
         }} /></label>
@@ -167,7 +180,7 @@ export default function ManualClipDirectorPage() {
 
       {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3><label className="clipSB_btn manualUploadBtn">Upload image<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0])} /></label><div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video controls src={selectedScene.video_url} />) : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div></section> : null}
 
-      {selectedScene ? <section className="manualDirectorAudio"><h3>Аудио отображение</h3><div className="manualAudioMeta">scene_audio: {selectedScene.audio_slice_url ? "готово" : "не готово"} | duration: {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>{selectedScene.audio_slice_url ? <audio controls src={selectedScene.audio_slice_url} /> : <div>Аудио сцены ещё не нарезано</div>}</section> : null}
+      {selectedScene ? <section className="manualDirectorAudio"><div className="manualAudioMeta">Аудио: {selectedScene.audio_slice_url ? "готово" : "не готово"} | {Number(selectedScene.duration_sec || 0).toFixed(2)} c</div>{selectedScene.audio_slice_url ? <audio controls src={selectedScene.audio_slice_url} /> : <div>Аудио сцены ещё не нарезано</div>}</section> : null}
     </div>
   </div>;
 }

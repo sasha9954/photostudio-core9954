@@ -14816,6 +14816,9 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         '      "transition_out": string,\n'
         '      "drama_hint": string,\n'
         '      "short_note": string,\n'
+        '      "scene_goal_ru": string,\n'
+        '      "prompt_hint_ru": string,\n'
+        '      "story_position_ru": string,\n'
         '      "video_prompt": string,\n'
         '      "negative_prompt": string,\n'
         '      "sound_prompt": ""\n'
@@ -14839,8 +14842,17 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         "- Do not invent characters not implied by director_contract.\n"
         "- If director_contract says cutaways/memories/city, use them.\n"
         "- If director_contract is empty, produce a neutral technical split only and avoid inventing detailed story specifics.\n"
-        "- video_prompt may be empty or short draft.\n"
-        "- sound_prompt must stay empty; for i2v_sound sound is described in video_prompt.\n"
+        "- This is a manual workflow.\n"
+        "- The AI is not the final prompt writer.\n"
+        "- The AI only explains scene meaning and gives short RU guidance.\n"
+        "- The user writes final video_prompt manually in director board.\n"
+        "- Keep route/timing/scene purpose clear.\n"
+        "- drama_hint and short_note must be in Russian.\n"
+        "- scene_goal_ru, prompt_hint_ru, story_position_ru must be in Russian.\n"
+        "- video_prompt must be an empty string by default.\n"
+        "- negative_prompt must be an empty string by default.\n"
+        "- sound_prompt must stay empty string.\n"
+        "- Do not generate full final video prompts unless explicitly requested.\n"
         "- Return only JSON.\n\n"
         f"Input payload:\n{json.dumps({'audio_duration_sec': payload.audio_duration_sec, 'project_kind': payload.project_kind, 'format': payload.format, 'split_settings': payload.split_settings, 'user_request': payload.user_request, 'audio_filename': payload.audio_filename, 'audio_attached': audio_attached}, ensure_ascii=False)}\n"
         f"DIRECTOR CONTRACT:\n{json.dumps(payload.director_contract or {}, ensure_ascii=False)}\n"
@@ -14913,6 +14925,14 @@ def _validate_manual_clip_split_json(split_json: dict, expected_duration: float)
             "start_sec": round(start_sec, 3),
             "end_sec": round(end_sec, 3),
             "duration_sec": round(end_sec - start_sec, 3),
+            "drama_hint": str(raw_scene.get("drama_hint") or ""),
+            "short_note": str(raw_scene.get("short_note") or ""),
+            "scene_goal_ru": str(raw_scene.get("scene_goal_ru") or ""),
+            "prompt_hint_ru": str(raw_scene.get("prompt_hint_ru") or ""),
+            "story_position_ru": str(raw_scene.get("story_position_ru") or ""),
+            "video_prompt": str(raw_scene.get("video_prompt") or ""),
+            "negative_prompt": str(raw_scene.get("negative_prompt") or ""),
+            "sound_prompt": "",
         })
     normalized.sort(key=lambda s: (float(s["start_sec"]), int(s["index"])))
     if normalized[0]["start_sec"] > 0.35:
