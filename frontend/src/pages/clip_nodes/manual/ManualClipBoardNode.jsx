@@ -38,6 +38,47 @@ function mergeDirectorSceneWork(currentScenes = [], existingScenes = []) {
   });
 }
 
+function clearManualDirectorProjectForNode(nodeId) {
+  try {
+    const raw = localStorage.getItem("manual_clip_board_active_project");
+    const existing = raw ? JSON.parse(raw) : null;
+    if (existing?.nodeId === nodeId) {
+      localStorage.removeItem("manual_clip_board_active_project");
+    }
+  } catch {}
+}
+
+function buildManualDirectorChatResetState() {
+  return {
+    messages: [],
+    answers: {},
+    questions: [],
+    done: false,
+    summary: "",
+    contract: null,
+    status: "idle",
+    error: "",
+  };
+}
+
+function buildManualSplitResetPatch(splitInputValue = "") {
+  return {
+    split_chat: {
+      user_request: splitInputValue || "",
+      ai_summary: "",
+      raw_ai_json: null,
+    },
+    scenes: [],
+    selectedSceneId: "",
+    last_split_source: "",
+    split_audio_status: "idle",
+    split_audio_error: "",
+    split_audio_count: 0,
+    ai_split_status: "idle",
+    ai_split_error: "",
+    json_error: "",
+  };
+}
 
 async function sliceManualClipAudio(payload) {
   const data = await fetchJson("/api/manual-clip/slice-audio", { method: "POST", body: payload });
@@ -70,6 +111,13 @@ export default function ManualClipBoardNode({ id, data }) {
   const directorContractMissing = model.split_source === "ai" && model.manual_director_required === true && directorChat.done !== true;
 
   const onRunDirectorChat = async (forceFinalize = false) => {
+    const isStartingNewDirectorDialog = !forceFinalize
+      && String(directorUserMessage || "").trim()
+      && (!Array.isArray(directorChat.messages) || directorChat.messages.length === 0);
+    if (isStartingNewDirectorDialog) {
+      clearManualDirectorProjectForNode(id);
+      patch(buildManualSplitResetPatch(splitInput));
+    }
     patch({ manual_director_chat: { ...directorChat, status: "running", error: "" } });
     try {
       const payload = {
@@ -90,6 +138,10 @@ export default function ManualClipBoardNode({ id, data }) {
         ...(directorUserMessage ? [{ role: "user", content: directorUserMessage }] : []),
         ...(response?.assistant_message ? [{ role: "assistant", content: response.assistant_message }] : []),
       ];
+      const prevContract = directorChat?.contract || null;
+      const nextContract = response?.contract || null;
+      const nextDone = Boolean(response?.done);
+      const contractChanged = nextDone && JSON.stringify(prevContract) !== JSON.stringify(nextContract);
       patch({
         manual_director_chat: {
           messages: updatedMessages,
@@ -101,6 +153,7 @@ export default function ManualClipBoardNode({ id, data }) {
           status: "done",
           error: "",
         },
+        ...(contractChanged ? buildManualSplitResetPatch(splitInput) : {}),
       });
       setDirectorUserMessage("");
     } catch (error) {
@@ -145,6 +198,14 @@ export default function ManualClipBoardNode({ id, data }) {
   };
 
   const onRunAiSplit = async () => {
+    if (model.manual_director_required && (!directorChat.done || !directorChat.contract)) {
+      patch({
+        ai_split_status: "error",
+        ai_split_error: "Сначала соберите режиссёрский контракт.",
+        json_error: "Сначала соберите режиссёрский контракт.",
+      });
+      return;
+    }
     patch({ ai_split_status: "running", ai_split_error: "" });
     try {
       const payload = {
@@ -165,7 +226,7 @@ export default function ManualClipBoardNode({ id, data }) {
       patch({
         step: "split_chat_ready",
         last_split_source: "ai",
-        split_chat: { user_request: splitInput, ai_summary: splitJson.global_hint, raw_ai_json: splitJson },
+        split_chat: { user_request: splitInput, ai_summary: splitJson.global_hint || directorChat.summary || "", raw_ai_json: splitJson },
         json_error: "",
         ai_split_status: "done",
         ai_split_error: "",
@@ -342,6 +403,15 @@ export default function ManualClipBoardNode({ id, data }) {
                 <div className="manualActionsRow">
                   <button className="clipSB_btn" onClick={() => onRunDirectorChat(false)} disabled={directorChat.status === "running"}>Отправить AI</button>
                   <button className="clipSB_btn" onClick={() => onRunDirectorChat(true)} disabled={directorChat.status === "running"}>Собрать режиссёрский контракт</button>
+                  <button className="clipSB_btn" onClick={() => {
+                    clearManualDirectorProjectForNode(id);
+                    patch({
+                      manual_director_chat: buildManualDirectorChatResetState(),
+                      ...buildManualSplitResetPatch(""),
+                    });
+                    setSplitInput("");
+                    setDirectorUserMessage("");
+                  }} disabled={directorChat.status === "running"}>Новая AI-консультация</button>
                 </div>
                 {directorChat.error ? <div className="manualJsonError">{directorChat.error}</div> : null}
                 {directorChat.done ? <div>
@@ -354,7 +424,7 @@ export default function ManualClipBoardNode({ id, data }) {
               {directorContractMissing ? <small>AI-разбивка станет доступна после режиссёрского контракта.</small> : null}
               {model.ai_split_status === "running" ? <div>AI разбирает аудио...</div> : null}
               {model.ai_split_error ? <div className="manualJsonError">{model.ai_split_error}</div> : null}
-              <div className="manualAiSummary">{model.split_chat?.ai_summary || "AI-ответ появится после запроса."}</div>
+              {model.split_chat?.raw_ai_json ? <div className="manualAiSummary">{model.split_chat?.ai_summary}</div> : <div className="manualAiSummary">AI-разбивка появится после запуска по контракту.</div>}
               <small>AI создаёт только фразовую разбивку и краткую драматургию. Промты и фото пользователь добавляет вручную.</small>
               <button className="clipSB_btn" onClick={() => {
                 const ai = buildMockSplitJson({ projectKind: model.project_kind, splitSettings: model.split_settings, format: model.format, durationSec: effectiveAudio?.duration_sec || 24 });
