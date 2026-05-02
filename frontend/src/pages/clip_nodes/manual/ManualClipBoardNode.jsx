@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { fetchJson } from "../../../services/api.js";
 import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
@@ -8,15 +9,9 @@ import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplit
 
 
 async function sliceManualClipAudio(payload) {
-  const res = await fetch("/api/manual-clip/slice-audio", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data?.ok === false) {
-    const detail = String(data?.detail || `http_${res.status}`);
-    throw new Error(detail);
+  const data = await fetchJson("/api/manual-clip/slice-audio", { method: "POST", body: payload });
+  if (data?.ok === false) {
+    throw new Error(String(data?.detail || "audio_slice_failed"));
   }
   return data;
 }
