@@ -98,6 +98,15 @@ export default function ManualClipBoardNode({ id, data }) {
     patch({ json_input: JSON.stringify(sample, null, 2), json_error: "" });
   };
 
+  const onCopySampleJson = () => {
+    const sample = buildManualClipSampleJson({
+      projectKind: model.project_kind,
+      durationSec: effectiveAudio?.duration_sec || 56,
+      format: model.format,
+    });
+    navigator.clipboard?.writeText(JSON.stringify(sample, null, 2));
+  };
+
   const onBuildScenes = () => {
     const rawScenes = Array.isArray(model?.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : [];
     const normalized = rawScenes.map((s, idx) => normalizeScene(s, idx));
@@ -118,6 +127,8 @@ export default function ManualClipBoardNode({ id, data }) {
       format: model.format,
       audio: effectiveAudio,
       split_chat: model.split_chat,
+      project_kind: model.project_kind,
+      last_split_source: model.last_split_source,
       scenes,
     };
     localStorage.setItem("manual_clip_board_active_project", JSON.stringify(payload));
@@ -164,8 +175,12 @@ export default function ManualClipBoardNode({ id, data }) {
               <button className="clipSB_btn" onClick={onRunMockSplit}>Разобрать при помощи AI</button>
               <div className="manualAiSummary">{model.split_chat?.ai_summary || "AI-ответ появится после запроса."}</div>
               <small>AI создаёт только фразовую разбивку и краткую драматургию. Промты и фото пользователь добавляет вручную.</small>
-            </> : <>
-              <button className="clipSB_btn" onClick={onInsertSampleJson}>Вставить образец JSON</button>
+</> : <>
+              <div className="manualActionsRow">
+                <button className="clipSB_btn" onClick={onInsertSampleJson}>Вставить образец JSON</button>
+                <button className="clipSB_btn" onClick={onCopySampleJson}>Скопировать образец JSON</button>
+              </div>
+              <small>Образец показывает структуру. Для реального клипа/истории заполните scenes на всю длину аудио.</small>
               <textarea className="manualJsonTextarea" value={model.json_input || ""} onChange={(e) => patch({ json_input: e.target.value })} placeholder="Вставьте JSON разбивки..." />
               <button className="clipSB_btn" onClick={onRunJsonSplit}>Разобрать при помощи JSON</button>
               {model.json_error ? <div className="manualJsonError">{model.json_error}</div> : null}
