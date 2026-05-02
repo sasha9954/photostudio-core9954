@@ -47,6 +47,10 @@ async function sliceManualClipAudio(payload) {
   return data;
 }
 
+async function runManualClipAiSplit(payload) {
+  return fetchJson("/api/manual-clip/ai-split", { method: "POST", body: payload });
+}
+
 export default function ManualClipBoardNode({ id, data }) {
   const navigate = useNavigate();
   const patch = (p) => data?.onPatchNodeData?.(id, p);
@@ -95,19 +99,35 @@ export default function ManualClipBoardNode({ id, data }) {
     audioEl.src = url;
   };
 
-  const onRunMockSplit = () => {
-    const ai = buildMockSplitJson({
-      projectKind: model.project_kind,
-      splitSettings: model.split_settings,
-      format: model.format,
-      durationSec: effectiveAudio?.duration_sec || 24,
-    });
-    patch({
-      step: "split_chat_ready",
-      last_split_source: "ai",
-      split_chat: { user_request: splitInput, ai_summary: ai.global_hint, raw_ai_json: ai },
-      json_error: "",
-    });
+  const onRunAiSplit = async () => {
+    patch({ ai_split_status: "running", ai_split_error: "" });
+    try {
+      const payload = {
+        audio_url: effectiveAudio?.url || "",
+        audio_filename: effectiveAudio?.filename || "",
+        audio_duration_sec: Number(effectiveAudio?.duration_sec || 0),
+        project_kind: model.project_kind,
+        format: model.format,
+        split_settings: model.split_settings || {},
+        user_request: splitInput || "",
+      };
+      const data = await runManualClipAiSplit(payload);
+      if (data?.ok === false || !data?.split_json) {
+        throw new Error(String(data?.detail || data?.hint || "ai_split_failed"));
+      }
+      const splitJson = data.split_json;
+      patch({
+        step: "split_chat_ready",
+        last_split_source: "ai",
+        split_chat: { user_request: splitInput, ai_summary: splitJson.global_hint, raw_ai_json: splitJson },
+        json_error: "",
+        ai_split_status: "done",
+        ai_split_error: "",
+      });
+    } catch (error) {
+      const msg = `AI-разбивка не удалась: ${String(error?.message || "unknown_error")}`;
+      patch({ ai_split_status: "error", ai_split_error: msg, json_error: msg });
+    }
   };
 
   const onRunJsonSplit = () => {
@@ -267,9 +287,15 @@ export default function ManualClipBoardNode({ id, data }) {
             <label>Способ разбора<select value={model.split_source} onChange={(e) => patch({ split_source: e.target.value })}><option value="ai">AI</option><option value="json">JSON</option></select></label>
             {model.split_source === "ai" ? <>
               <textarea className="manualAiTextarea" value={splitInput} onChange={(e) => setSplitInput(e.target.value)} placeholder="Например: Разбей по вокальным фразам. Криминальная драма Одесса 90-х. 30% lip-sync, остальное сюжетные сцены. Не режь слова, переходы на концах строк." />
-              <button className="clipSB_btn" onClick={onRunMockSplit}>Разобрать при помощи AI</button>
+              <button className="clipSB_btn" onClick={onRunAiSplit} disabled={model.ai_split_status === "running"}>Разобрать при помощи AI</button>
+              {model.ai_split_status === "running" ? <div>AI разбирает аудио...</div> : null}
+              {model.ai_split_error ? <div className="manualJsonError">{model.ai_split_error}</div> : null}
               <div className="manualAiSummary">{model.split_chat?.ai_summary || "AI-ответ появится после запроса."}</div>
               <small>AI создаёт только фразовую разбивку и краткую драматургию. Промты и фото пользователь добавляет вручную.</small>
+              <button className="clipSB_btn" onClick={() => {
+                const ai = buildMockSplitJson({ projectKind: model.project_kind, splitSettings: model.split_settings, format: model.format, durationSec: effectiveAudio?.duration_sec || 24 });
+                patch({ step: "split_chat_ready", last_split_source: "ai", split_chat: { user_request: splitInput, ai_summary: ai.global_hint, raw_ai_json: ai }, json_error: "" });
+              }} style={{ display: "none" }}>Mock split</button>
 </> : <>
               <div className="manualActionsRow">
                 <button className="clipSB_btn" onClick={onInsertSampleJson}>Вставить образец JSON</button>
