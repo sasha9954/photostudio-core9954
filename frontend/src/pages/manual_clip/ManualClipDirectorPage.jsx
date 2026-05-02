@@ -4,6 +4,23 @@ import "./ManualClipDirectorPage.css";
 
 const STORAGE_KEY = "manual_clip_board_active_project";
 const ROUTES = ["ia2v", "i2v", "i2v_sound"];
+const STATUS_VIDEO_READY = "video_ready";
+
+function resolveManualSceneStatus(scene = {}) {
+  if (scene.video_url) return STATUS_VIDEO_READY;
+  if (scene.video_prompt && scene.image_url) return "prompt_ready";
+  if (scene.image_url) return "photo_loaded";
+  if (scene.audio_slice_url) return "audio_ready";
+  return "draft";
+}
+
+function getSceneStatusLabel(status) {
+  if (status === STATUS_VIDEO_READY) return "готово";
+  if (status === "photo_loaded") return "фото";
+  if (status === "prompt_ready") return "промт";
+  if (status === "audio_ready") return "аудио";
+  return status || "draft";
+}
 
 function normalizeScene(scene = {}, idx = 0) {
   const start = Number(scene.start_sec || 0);
@@ -62,7 +79,8 @@ export default function ManualClipDirectorPage() {
   const onUploadImage = (sceneId, file) => {
     if (!file) return;
     const imageUrl = URL.createObjectURL(file);
-    updateScene(sceneId, { image_url: imageUrl, status: "photo_loaded" });
+    const nextScene = { ...(scenes.find((s) => s.scene_id === sceneId) || {}), image_url: imageUrl };
+    updateScene(sceneId, { image_url: imageUrl, status: resolveManualSceneStatus(nextScene) });
   };
 
   const onCreateVideo = (scene) => {
@@ -72,7 +90,7 @@ export default function ManualClipDirectorPage() {
     }
     updateScene(scene.scene_id, { status: "video_rendering", error: "" });
     setTimeout(() => {
-      updateScene(scene.scene_id, { status: "video_ready", video_url: "mock://manual-video-ready" });
+      updateScene(scene.scene_id, { status: STATUS_VIDEO_READY, video_url: "mock://manual-video-ready", error: "" });
     }, 350);
   };
 
@@ -80,12 +98,13 @@ export default function ManualClipDirectorPage() {
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">
+      <button className="clipSB_btn" onClick={() => navigate(-1)}>Назад к AI-разбивке</button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
     </div>
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">
-        {scenes.map((scene, idx) => <button key={scene.scene_id} className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""}`} onClick={() => setSelectedSceneId(scene.scene_id)}>
-          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className="manualStatusBadge">{scene.status}</span><small>{scene.drama_hint || "—"}</small>
+        {scenes.map((scene, idx) => <button key={scene.scene_id} className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`} onClick={() => setSelectedSceneId(scene.scene_id)}>
+          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}>{getSceneStatusLabel(scene.status)}</span><small>{scene.drama_hint || "—"}</small>
         </button>)}
       </aside>
 
@@ -100,19 +119,39 @@ export default function ManualClipDirectorPage() {
           <div>Длительность: {Number(selectedScene.duration_sec).toFixed(2)} c</div>
         </div>
 
-        <label>Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { video_prompt: e.target.value })} /></label>
-        <label>Negative prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { negative_prompt: e.target.value })} /></label>
-        {selectedScene.route === "i2v_sound" ? <label>Sound prompt<textarea value={selectedScene.sound_prompt} onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /></label> : null}
+        <label>Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
+          const nextScene = { ...selectedScene, video_prompt: e.target.value };
+          updateScene(selectedScene.scene_id, { video_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
+        }} /></label>
+        <label>Negative prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => {
+          const nextScene = { ...selectedScene, negative_prompt: e.target.value };
+          updateScene(selectedScene.scene_id, { negative_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
+        }} /></label>
+        {selectedScene.route === "i2v_sound" ? <label>Sound prompt<textarea value={selectedScene.sound_prompt} onChange={(e) => {
+          const nextScene = { ...selectedScene, sound_prompt: e.target.value };
+          updateScene(selectedScene.scene_id, { sound_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
+        }} /></label> : null}
 
         <div className="manualDirectorButtons">
-          {selectedScene.route === "ia2v" ? <button className="clipSB_btn" onClick={() => updateScene(selectedScene.scene_id, { status: selectedScene.audio_slice_url ? "audio_ready" : selectedScene.status, error: selectedScene.audio_slice_url ? "" : "Аудио сцены ещё не нарезано" })}>Изъять аудио</button> : null}
+          {selectedScene.route === "ia2v" ? <button className="clipSB_btn" onClick={() => {
+            if (!selectedScene.audio_slice_url) {
+              updateScene(selectedScene.scene_id, { error: "Аудио сцены ещё не нарезано" });
+              return;
+            }
+            const nextStatus = selectedScene.status === STATUS_VIDEO_READY ? STATUS_VIDEO_READY : resolveManualSceneStatus(selectedScene);
+            updateScene(selectedScene.scene_id, { status: nextStatus, error: "" });
+          }}>Изъять аудио</button> : null}
           {selectedScene.route === "ia2v" && selectedScene.audio_slice_url ? <span className="manualAudioReady">Аудио сцены готово</span> : null}
           <button className="clipSB_btn" onClick={() => onCreateVideo(selectedScene)}>Создать видео</button>
-          <button className="clipSB_btn" onClick={() => {
-            const nextScenes = scenes.filter((s) => s.scene_id !== selectedScene.scene_id);
-            persistProject({ ...project, scenes: nextScenes });
-            setSelectedSceneId(nextScenes[0]?.scene_id || "");
-          }}>Удалить</button>
+          <button className="clipSB_btn" disabled={!selectedScene.video_url} onClick={() => {
+            const sceneWithoutVideo = { ...selectedScene, video_url: "" };
+            updateScene(selectedScene.scene_id, {
+              video_url: "",
+              video_error: "",
+              error: "",
+              status: resolveManualSceneStatus(sceneWithoutVideo),
+            });
+          }}>{selectedScene.video_url ? "Удалить видео" : "Видео нет"}</button>
         </div>
         {selectedScene.error ? <div className="manualError">{selectedScene.error}</div> : null}
       </section> : null}
