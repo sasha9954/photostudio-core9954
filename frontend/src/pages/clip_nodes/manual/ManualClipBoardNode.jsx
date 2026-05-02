@@ -454,7 +454,7 @@ export default function ManualClipBoardNode({ id, data }) {
           <section className="manualPanel manualPanelPlan manualSplitPlan">
             <h4>План {planKind}</h4>
             {aiScenes.length === 0 ? <div>План появится после AI-разбивки или разбора JSON.</div> : <>
-              <div className="manualPlanRows">{aiScenes.map((s, idx) => <div key={`${s.scene_id || idx}-${idx}`} className="manualPlanRow">{(s.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`).toUpperCase()} | {Number(s.start_sec || 0).toFixed(2)}–{Number(s.end_sec || 0).toFixed(2)} | {s.route || "ia2v"} | {s.quality || "check"} | {s.drama_hint || "—"}</div>)}</div>
+              <div className="manualPlanRows">{aiScenes.map((s, idx) => <div key={`${s.scene_id || idx}-${idx}`} className="manualPlanRow">{(s.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`).toUpperCase()} | {Number(s.start_sec || 0).toFixed(2)}–{Number(s.end_sec || 0).toFixed(2)} | {s.route || "ia2v"} | {s.quality || "check"} | {s.drama_hint || s.short_note || s.scene_goal_ru || "—"}</div>)}</div>
               <div className="manualActionsRow">
                 <button className="clipSB_btn" onClick={onBuildScenes} disabled={!canBuildScenes}>Собрать сцены</button>
               </div>
