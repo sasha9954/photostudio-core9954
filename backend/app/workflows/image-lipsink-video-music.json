@@ -1,21 +1,21 @@
 {
   "269": {
     "inputs": {
-      "image": "рроз.jpg"
+      "image": "о1 (1).jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Load Image"
+      "title": "Загрузить изображение"
     }
   },
   "276": {
     "inputs": {
-      "audio": "5666.mp3",
-      "audioUI": "/api/view?filename=5666.mp3&type=input&subfolder=&rand=0.3432663467822794"
+      "audio": "ghj.mp3",
+      "audioUI": "/api/view?filename=ghj.mp3&type=input&subfolder=&rand=0.914390834882819"
     },
     "class_type": "LoadAudio",
     "_meta": {
-      "title": "Load Audio"
+      "title": "Загрузить аудио"
     }
   },
   "341": {
@@ -31,7 +31,7 @@
     },
     "class_type": "SaveVideo",
     "_meta": {
-      "title": "Save Video"
+      "title": "Сохранить видео"
     }
   },
   "340:285": {
@@ -40,16 +40,16 @@
     },
     "class_type": "RandomNoise",
     "_meta": {
-      "title": "RandomNoise"
+      "title": "Случайный шум"
     }
   },
   "340:286": {
     "inputs": {
-      "noise_seed": 803273866902483
+      "noise_seed": 584813786638037
     },
     "class_type": "RandomNoise",
     "_meta": {
-      "title": "RandomNoise"
+      "title": "Случайный шум"
     }
   },
   "340:287": {
@@ -74,7 +74,7 @@
     },
     "class_type": "KSamplerSelect",
     "_meta": {
-      "title": "KSamplerSelect"
+      "title": "Выбор KSampler"
     }
   },
   "340:289": {
@@ -104,7 +104,7 @@
     },
     "class_type": "CFGGuider",
     "_meta": {
-      "title": "CFGGuider"
+      "title": "CFG Гид"
     }
   },
   "340:291": {
@@ -132,7 +132,7 @@
     },
     "class_type": "SamplerCustomAdvanced",
     "_meta": {
-      "title": "SamplerCustomAdvanced"
+      "title": "Пользовательский сэмплер (Расширенный)"
     }
   },
   "340:292": {
@@ -206,7 +206,7 @@
     },
     "class_type": "KSamplerSelect",
     "_meta": {
-      "title": "KSamplerSelect"
+      "title": "Выбор KSampler"
     }
   },
   "340:303": {
@@ -222,7 +222,7 @@
     },
     "class_type": "LTXVAudioVAEDecode",
     "_meta": {
-      "title": "LTXV Audio VAE Decode"
+      "title": "LTXV Декодирование аудио VAE"
     }
   },
   "340:307": {
@@ -242,7 +242,7 @@
     },
     "class_type": "LTXVConditioning",
     "_meta": {
-      "title": "LTXVConditioning"
+      "title": "Кондиционирование LTXV"
     }
   },
   "340:308": {
@@ -291,7 +291,7 @@
     },
     "class_type": "SamplerCustomAdvanced",
     "_meta": {
-      "title": "SamplerCustomAdvanced"
+      "title": "Пользовательский сэмплер (Расширенный)"
     }
   },
   "340:311": {
@@ -324,7 +324,7 @@
     },
     "class_type": "CFGGuider",
     "_meta": {
-      "title": "CFGGuider"
+      "title": "CFG Гид"
     }
   },
   "340:316": {
@@ -344,7 +344,7 @@
     },
     "class_type": "VAEDecodeTiled",
     "_meta": {
-      "title": "VAE Decode (Tiled)"
+      "title": "Декодировать VAE (плитками)"
     }
   },
   "340:325": {
@@ -395,7 +395,7 @@
     },
     "class_type": "SolidMask",
     "_meta": {
-      "title": "SolidMask"
+      "title": "Сплошная маска"
     }
   },
   "340:335": {
@@ -404,7 +404,7 @@
     },
     "class_type": "LTXVAudioVAELoader",
     "_meta": {
-      "title": "LTXV Audio VAE Loader"
+      "title": "LTXV Загрузчик аудио VAE"
     }
   },
   "340:305": {
@@ -426,7 +426,7 @@
     },
     "class_type": "ResizeImagesByLongerEdge",
     "_meta": {
-      "title": "Resize Images by Longer Edge"
+      "title": "Изменить размер изображений по длинной стороне"
     }
   },
   "340:334": {
@@ -452,7 +452,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "340:299": {
@@ -465,7 +465,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "340:304": {
@@ -478,7 +478,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "340:312": {
@@ -498,7 +498,7 @@
     },
     "class_type": "CreateVideo",
     "_meta": {
-      "title": "Create Video"
+      "title": "Создать видео"
     }
   },
   "340:331": {
@@ -537,7 +537,7 @@
     },
     "class_type": "EmptyLTXVLatentVideo",
     "_meta": {
-      "title": "EmptyLTXVLatentVideo"
+      "title": "Пустой LTXVLatentVideo"
     }
   },
   "340:329": {
@@ -554,7 +554,7 @@
     },
     "class_type": "ComfyMathExpression",
     "_meta": {
-      "title": "Math Expression"
+      "title": "Математическое выражение"
     }
   },
   "340:324": {
@@ -580,7 +580,7 @@
     },
     "class_type": "TrimAudioDuration",
     "_meta": {
-      "title": "Trim Audio Duration"
+      "title": "Обрезка длительности аудио"
     }
   },
   "340:328": {
@@ -596,7 +596,7 @@
     },
     "class_type": "LTXVAudioVAEEncode",
     "_meta": {
-      "title": "LTXV Audio VAE Encode"
+      "title": "LTXV Кодирование аудио VAE"
     }
   },
   "340:326": {
@@ -628,7 +628,7 @@
     },
     "class_type": "SetLatentNoiseMask",
     "_meta": {
-      "title": "Set Latent Noise Mask"
+      "title": "Установить маску шума латента"
     }
   },
   "340:313": {
@@ -637,7 +637,7 @@
     },
     "class_type": "LatentUpscaleModelLoader",
     "_meta": {
-      "title": "Load Latent Upscale Model"
+      "title": "Загрузить модель увеличения latent"
     }
   },
   "340:293": {
@@ -651,7 +651,7 @@
     },
     "class_type": "LoraLoaderModelOnly",
     "_meta": {
-      "title": "Load LoRA"
+      "title": "Загрузчик LoRA (Только модель)"
     }
   },
   "340:318": {
@@ -662,7 +662,7 @@
     },
     "class_type": "LTXAVTextEncoderLoader",
     "_meta": {
-      "title": "LTXV Audio Text Encoder Loader"
+      "title": "LTXV Загрузчик аудио-текстового энкодера"
     }
   },
   "340:344": {
@@ -681,7 +681,7 @@
     },
     "class_type": "LoraLoader",
     "_meta": {
-      "title": "Load LoRA (Model and CLIP)"
+      "title": "Загрузить LoRA"
     }
   },
   "340:297": {
@@ -704,7 +704,7 @@
     },
     "class_type": "ResizeImageMaskNode",
     "_meta": {
-      "title": "Resize Image/Mask"
+      "title": "Изменить размер изображения/маски"
     }
   },
   "340:306": {
@@ -720,7 +720,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "CLIP Text Encode (Prompt)"
+      "title": "Кодирование текста CLIP (Запрос)"
     }
   },
   "340:317": {
@@ -729,21 +729,12 @@
     },
     "class_type": "CheckpointLoaderSimple",
     "_meta": {
-      "title": "Load Checkpoint"
-    }
-  },
-  "340:319": {
-    "inputs": {
-      "value": "Emotional singing performance in tight medium framing with persistent face/mouth readability. LIP-SYNC PERFORMANCE RULES (STRICT): performer-first, face/mouth readability is mandatory, eye line toward camera or near-camera is preferred, emotional lyric delivery through face/shoulders/hands/subtle torso rhythm, and only gentle head turns/subtle lean/soft sway/phrase-timed hand gestures are allowed. Camera movement must stay slow, controlled, and readable: gentle push-in, slight lateral drift, or slow eye-level arc only. CAMERA ORBIT SAFETY: if orbit is used it must stay a slow horizontal right-to-left or left-to-right arc around the performer at eye/chest/waist level; keep horizon stable and subject readable. Forbidden camera behavior: no overhead orbit, no top-down rotation, no camera roll, no spinning around head, no top orbit, no overhead spin, no head-top camera circle, no drone-like loop over subject, no aggressive zoom-out, no fast retreating camera, no whip-pan, no chaotic circular chase camera. Background extras may move softly but remain secondary and non-distracting; no chaotic background dance and no crowd stealing focus. No unreadable mouth and no extreme motion blur. Environment remains background support; no running/chasing/spinning as primary action. LTX 2.3 LIP-SYNC PERFORMANCE CANON and PHYSICS/ANATOMY/MICROPHONE constraints apply."
-    },
-    "class_type": "PrimitiveStringMultiline",
-    "_meta": {
-      "title": "Prompt"
+      "title": "Загрузить сheckpoint"
     }
   },
   "340:314": {
     "inputs": {
-      "text": "cartoon, anime, game look, low quality, blur, flicker, jitter, face distortion, identity drift, extra fingers, extra arms, duplicate microphone, deformed hands, broken legs, crossed legs, fused legs, warped limbs, twisted hips, unnatural posture, bad body mechanics, floating feet, sliding feet, foot distortion, leg deformation, outfit change, sudden zoom, shaky camera, text, watermark",
+      "text": "",
       "clip": [
         "340:318",
         0
@@ -751,7 +742,16 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "CLIP Text Encode (Prompt)"
+      "title": "Кодирование текста CLIP (Запрос)"
+    }
+  },
+  "340:319": {
+    "inputs": {
+      "value": "closed mouth, weak lip movement, no singing, static face, expressionless performance, frozen body, stiff hands, robotic motion, exaggerated gestures, overacting, shouting, screaming, distorted mouth, broken teeth, warped face, extra fingers, deformed hands, extra limbs, body distortion, identity drift, wrong outfit, wrong location, camera shake, camera spin, orbit camera, sudden zoom, fast movement, background morphing, flicker, jitter, blur, low detail, unrealistic motion"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "Prompt"
     }
   }
 }

@@ -1,6 +1,6 @@
 export const MANUAL_CLIP_MODE = "manual_clip_board";
 export const MANUAL_CLIP_STEPS = ["empty", "audio_loaded", "split_chat_ready", "scene_plan_ready"];
-export const ROUTES = ["ia2v", "i2v", "i2v_sound"];
+export const ROUTES = ["ia2v", "i2v", "i2v_sound", "first_last", "first_last_sound"];
 export const PROJECT_KINDS = ["clip", "story"];
 export const SPLIT_SOURCES = ["ai", "json"];
 
@@ -38,6 +38,8 @@ export function getDefaultManualClipNodeData() {
       target_scene_count: "auto",
       lipsync_ratio: "auto",
       route_preference: "mixed",
+      cutting_style: "mixed_phrase",
+      continuity_mode: "manual_last_frame_optional",
     },
     scenes: [],
     selectedSceneId: "",
@@ -152,14 +154,22 @@ export function normalizeScene(scene, idx) {
     energy: String(scene?.energy || "mid"),
     quality: String(scene?.quality || "check"),
     boundary_reason: String(scene?.boundary_reason || "uncertain_boundary"),
+    boundary_confidence: String(scene?.boundary_confidence || ""),
+    boundary_warning: String(scene?.boundary_warning || ""),
+    contains_vocal: Boolean(scene?.contains_vocal),
+    contains_instrumental: Boolean(scene?.contains_instrumental),
     transition_out: String(scene?.transition_out || "soft_cut_after_tail"),
     drama_hint: String(scene?.drama_hint || ""),
     short_note: String(scene?.short_note || ""),
     scene_goal_ru: String(scene?.scene_goal_ru || ""),
     prompt_hint_ru: String(scene?.prompt_hint_ru || ""),
     story_position_ru: String(scene?.story_position_ru || ""),
-    image_url: String(scene?.image_url || ""),
-    image_preview_url: String(scene?.image_preview_url || ""),
+    image_url: String(scene?.image_url || scene?.start_image_url || ""),
+    start_image_url: String(scene?.start_image_url || scene?.image_url || ""),
+    end_image_url: String(scene?.end_image_url || ""),
+    image_preview_url: String(scene?.image_preview_url || scene?.start_image_preview_url || ""),
+    start_image_preview_url: String(scene?.start_image_preview_url || scene?.image_preview_url || ""),
+    end_image_preview_url: String(scene?.end_image_preview_url || ""),
     image_upload_status: String(scene?.image_upload_status || ""),
     image_upload_error: String(scene?.image_upload_error || ""),
     video_prompt: String(scene?.video_prompt || ""),
@@ -203,7 +213,41 @@ export function buildMontageManifest(data = {}) {
   const scenes = (Array.isArray(data?.scenes) ? data.scenes : [])
     .filter((scene) => scene?.status === "video_ready" && scene?.video_url)
     .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0))
-    .map((scene) => ({ scene_id: scene.scene_id, index: scene.index, start_sec: scene.start_sec, end_sec: scene.end_sec, duration_sec: scene.duration_sec, route: scene.route, video_url: scene.video_url }));
+    .map((scene, idx) => ({
+      scene_id: scene.scene_id,
+      sceneId: scene.scene_id,
+      index: scene.index,
+      order: Number(scene.index || idx + 1),
+      start_sec: scene.start_sec,
+      end_sec: scene.end_sec,
+      startSec: scene.start_sec,
+      endSec: scene.end_sec,
+      duration_sec: scene.duration_sec,
+      requestedDurationSec: Number(scene.duration_sec || Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)) || 0),
+      route: scene.route,
+      mode: scene.route,
+      video_url: scene.video_url,
+      videoUrl: scene.video_url,
+      video_has_audio: Boolean(scene.video_has_audio),
+      videoHasAudio: Boolean(scene.video_has_audio),
+      keep_generated_audio: Boolean(scene.keep_generated_audio),
+      keepGeneratedAudio: Boolean(scene.keep_generated_audio),
+      generated_audio_policy: scene.generated_audio_policy || "",
+      generatedAudioPolicy: scene.generated_audio_policy || "",
+      generated_audio_gain_db: Number(scene.generated_audio_gain_db ?? -16),
+      generatedAudioGainDb: Number(scene.generated_audio_gain_db ?? -16),
+      sound_prompt: scene.sound_prompt || "",
+      soundPrompt: scene.sound_prompt || "",
+    }));
 
-  return { source: MANUAL_CLIP_MODE, format: String(data?.format || "9:16"), audio_url: String(data?.audio?.url || ""), scenes };
+  return {
+    source: MANUAL_CLIP_MODE,
+    sourceKind: MANUAL_CLIP_MODE,
+    projectKind: String(data?.project_kind || "clip"),
+    format: String(data?.format || "9:16"),
+    audio_url: String(data?.audio?.url || ""),
+    audioUrl: String(data?.audio?.url || ""),
+    audio: data?.audio || null,
+    scenes,
+  };
 }

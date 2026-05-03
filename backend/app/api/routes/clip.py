@@ -241,6 +241,36 @@ IA2V_MINIMAL_NEGATIVE_PROMPT = (
     "duplicate main subject, severe facial deformation"
 )
 
+MANUAL_CLIP_LIPSYNC_NEGATIVE_PROMPT = (
+    "text on screen, subtitles, captions, logo, watermark, letters, random words, title card, "
+    "closed mouth, frozen face, weak lip movement, no singing, unreadable lips, hidden mouth, "
+    "face turned away, camera roll, spinning camera, rotating frame, orbit camera, dutch angle, "
+    "unstable framing, fast camera shake, distorted lips, broken jaw, distorted face, bad hands, "
+    "extra fingers, identity drift"
+)
+
+MANUAL_CLIP_I2V_NEGATIVE_PROMPT = (
+    "text on screen, subtitles, captions, logo, watermark, letters, random words, title card, "
+    "camera roll, spinning camera, rotating frame, orbit camera, dutch angle, fast camera movement, "
+    "sudden jump cuts, unstable framing, identity drift, different face, different outfit, distorted body, "
+    "broken anatomy, extra limbs, bad hands, extra fingers, melted face, flickering, blurry face, "
+    "cartoon, CGI, low quality"
+)
+
+MANUAL_CLIP_I2V_SOUND_NEGATIVE_PROMPT = (
+    "text on screen, subtitles, captions, logo, watermark, letters, random words, title card, "
+    "wrong sound source, noisy audio, distorted voice, robotic sound, chaotic motion, camera roll, "
+    "spinning camera, orbit camera, unstable framing, identity drift, broken anatomy, distorted face, "
+    "bad hands, extra fingers, flickering, cartoon, CGI, low quality"
+)
+
+MANUAL_CLIP_FIRST_LAST_NEGATIVE_PROMPT = (
+    "on-screen text, subtitles, captions, watermark, logo, letters in scene, random signage, "
+    "identity drift, different face, different outfit, different location, broken anatomy, extra limbs, "
+    "melted transition, morphing body, duplicated person, camera roll, spinning camera, orbit camera, "
+    "sudden jump, teleporting, frame flicker, unstable geometry, surreal deformation, cartoon, CGI, low quality"
+)
+
 # Canon-derived structured presets for compact i2v intent selection.
 # The builder uses these lists as source-of-truth for allowed/forbidden motion logic.
 LTX_I2V_CANON_ALLOWED_BODY_ACTIONS: tuple[str, ...] = (
@@ -444,6 +474,13 @@ class ManualClipDirectorChatIn(BaseModel):
     answers: dict = Field(default_factory=dict)
 
 
+class ClipExtractLastFrameIn(BaseModel):
+    videoUrl: str
+    sceneId: str | None = None
+    sourceSceneId: str | None = None
+    frameOffsetSec: float | None = 0.08
+
+
 def _resolve_audio_slice_compatibility(payload: AudioSliceIn) -> tuple[str, bool, bool, str]:
     raw_render_mode = str(payload.renderMode or "").strip().lower()
     raw_ltx_mode = str(payload.ltxMode or "").strip()
@@ -525,6 +562,20 @@ class ClipVideoIn(BaseModel):
     duetLockEnabled: bool | None = None
     duetIdentityContract: str | None = None
     directorGenreIntent: str | None = None
+    manualClip: bool | None = False
+    manual_clip: bool | None = False
+    source: str | None = None
+    project_kind: str | None = None
+    send_audio_to_generator: bool | None = None
+    sendAudioToGenerator: bool | None = None
+    soundPrompt: str | None = None
+    sound_prompt: str | None = None
+    keepGeneratedAudio: bool | None = None
+    keep_generated_audio: bool | None = None
+    generatedAudioPolicy: str | None = None
+    generated_audio_policy: str | None = None
+    generatedAudioGainDb: int | float | None = None
+    generated_audio_gain_db: int | float | None = None
 
 
 class AssembleSceneIn(BaseModel):
@@ -540,6 +591,14 @@ class AssembleSceneIn(BaseModel):
     segmentId: str | None = None
     route: str | None = None
     audioSliceUrl: str | None = None
+    keepGeneratedAudio: bool | None = None
+    keep_generated_audio: bool | None = None
+    generatedAudioPolicy: str | None = None
+    generated_audio_policy: str | None = None
+    generatedAudioGainDb: int | float | None = None
+    generated_audio_gain_db: int | float | None = None
+    soundPrompt: str | None = None
+    sound_prompt: str | None = None
     mode: str | None = None
     model: str | None = None
 
@@ -547,10 +606,30 @@ class AssembleSceneIn(BaseModel):
 class AssembleIntroIn(BaseModel):
     nodeId: str | None = None
     title: str | None = None
+    manualTitleRaw: str | None = None
     autoTitle: bool | None = True
     stylePreset: str | None = "cinematic_dark"
     durationSec: int | float | None = 2.5
     imageUrl: str | None = None
+    montageEnabled: bool | None = False
+    montageMode: str | None = "frame_generation"
+    videoFadeInSec: int | float | None = 0
+    videoFadeOutSec: int | float | None = 0
+    audioMode: str | None = "after_intro"
+    audioFadeInSec: int | float | None = 0
+    audioFadeOutSec: int | float | None = 0
+    titleEnabled: bool | None = True
+    titleText: str | None = None
+    titleDurationSec: int | float | None = 2
+    titlePosition: str | None = "center_above"
+    titleAnimation: str | None = "fade"
+    titleStylePreset: str | None = "cinematic_serif"
+    titleSizePreset: str | None = "medium"
+    watermarkEnabled: bool | None = False
+    watermarkText: str | None = None
+    watermarkPosition: str | None = "top_right"
+    watermarkStylePreset: str | None = "minimal"
+    watermarkOpacity: int | float | None = 0.45
 
 
 class IntroGenerateIn(BaseModel):
@@ -948,26 +1027,35 @@ def _normalize_clip_video_transition_type(value: str | None) -> str:
 
 LTX_WORKFLOW_KEY_TO_FILE = {
     "i2v": "image-video.json",
-    "f_l": "last-first cadr.json",
+    "i2v_sound": "image-video-golos-zvuk.json",
+    "f_l": "last-first cadr-NO sound.json",
+    "f_l_sound": "last-first cadr-sound.json",
     "continuation": "image-video.json",
     "lip_sync": "image-lipsink-video-music.json",
 }
 DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
+    "i2v_sound": "i2v_sound",
     "first_last": "f_l",
+    "first_last_sound": "f_l_sound",
     "f_l": "f_l",
+    "f_l_sound": "f_l_sound",
     "lip_sync_music": "lip_sync",
     "lip_sync": "lip_sync",
 }
 DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE = {
     "i2v": "image_video",
+    "i2v_sound": "i2v_sound",
     "lip_sync_music": "lip_sync_music",
     "first_last": "first_last",
+    "first_last_sound": "first_last_sound",
 }
 DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE = {
     "i2v": "i2v",
+    "i2v_sound": "i2v_sound",
     "lip_sync": "lip_sync_music",
     "f_l": "first_last",
+    "f_l_sound": "first_last_sound",
 }
 DIRECT_ROUTE_RISKY_ROTATION_MARKERS = (
     "spin",
@@ -1000,21 +1088,29 @@ DIRECT_ROUTE_RISKY_ROTATION_MARKERS = (
 )
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
+    "image-video-golos-zvuk.json": "i2v_sound",
     "image-video-golos-zvuk.json": "i2v",
     "last-first cadr.json": "f_l",
+    "last-first cadr-no sound.json": "f_l",
+    "last-first cadr-sound.json": "f_l_sound",
     "imag-imag-video-bz.json": "f_l",
     "imag-imag-video-zvuk.json": "f_l",
     "image-lipsink-video-music.json": "lip_sync",
 }
 
-LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "lip_sync"}
-LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l"}
+LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "i2v_sound", "lip_sync"}
+LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l", "f_l_sound"}
 LTX_CONTINUATION_WORKFLOW_KEYS = {"continuation"}
 LTX_LEGACY_WORKFLOW_ALIASES = {
     "i2v_as": "i2v",
+    "image_video_sound": "i2v_sound",
+    "standard_video_sound": "i2v_sound",
+    "video_with_sound": "i2v_sound",
     "f_l_as": "f_l",
     "first_last": "f_l",
     "first-last": "f_l",
+    "first_last_sound": "f_l_sound",
+    "first-last-sound": "f_l_sound",
     "imag_imag_video_bz": "f_l",
     "imag-imag-video-bz": "f_l",
     "ia2v": "lip_sync",
@@ -1023,9 +1119,15 @@ LTX_LEGACY_WORKFLOW_ALIASES = {
 
 LTX_MODE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
+    "i2v_sound": "i2v_sound",
     # legacy input alias (do not treat as production key)
     "i2v_as": "i2v",
+    "image_video_sound": "i2v_sound",
+    "standard_video_sound": "i2v_sound",
+    "video_with_sound": "i2v_sound",
     "f_l": "f_l",
+    "f_l_sound": "f_l_sound",
+    "first_last_sound": "f_l_sound",
     # legacy input alias (do not treat as production key)
     "f_l_as": "f_l",
     "continuation": "continuation",
@@ -1035,38 +1137,40 @@ LTX_MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_distilled_fp8": {
         "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_dev_fp16": {
         "key": "ltx23_dev_fp16",
         "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_distilled_fp16": {
         "key": "ltx23_distilled_fp16",
         "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_13b_dev_fp8": {
         "key": "ltx23_13b_dev_fp8",
         "ckpt_name": "ltx-2.3-13b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_13b_distilled_fp8": {
         "key": "ltx23_13b_distilled_fp8",
         "ckpt_name": "ltx-2.3-13b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
 }
 LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
     "i2v": "ltx23_dev_fp8",
+    "i2v_sound": "ltx23_dev_fp8",
     "lip_sync": "ltx23_dev_fp8",
     "f_l": "ltx23_distilled_fp8",
+    "f_l_sound": "ltx23_distilled_fp8",
 }
 
 UNIVERSAL_PERSON_IDENTITY_FIELDS = [
@@ -1660,7 +1764,33 @@ def _resolve_generation_and_target_duration(payload: ClipVideoIn, workflow_key: 
         target_duration = 5.0
 
     normalized_workflow = _normalize_ltx_workflow_key(workflow_key) or str(workflow_key or "").strip().lower()
-    if normalized_workflow == "i2v":
+    is_manual_clip_board = _is_manual_clip_board_payload(payload)
+    explicit_generation_duration = _safe_positive_float(payload.generationDurationSec)
+
+    # LTX/Comfy often returns slightly shorter files than the requested duration
+    # (for example: 4.0s requested -> ~3.7s returned). For Manual Clip Board we
+    # prefer to over-generate and trim back to the scene boundary instead of
+    # freezing/padding the last frame, because freeze frames are visible in music
+    # montage.
+    manual_overgenerate_sec = 1.0
+    if is_manual_clip_board and normalized_workflow in {"f_l", "f_l_sound"}:
+        generation_duration = float(explicit_generation_duration or target_duration)
+        if generation_duration > float(target_duration) + 0.05:
+            generation_duration = float(target_duration)
+        overgenerate_reason = "manual_clip_first_last_exact_target_no_overgenerate"
+    elif is_manual_clip_board and normalized_workflow in {"lip_sync", "lip_sync_music"}:
+        generation_duration = max(
+            float(target_duration) + manual_overgenerate_sec,
+            float(explicit_generation_duration or 0.0),
+        )
+        overgenerate_reason = f"manual_clip_lip_sync_audio_silence_tail_plus_{manual_overgenerate_sec:g}s_trim_no_pad"
+    elif is_manual_clip_board and normalized_workflow in {"i2v", "i2v_sound"}:
+        generation_duration = max(
+            float(target_duration) + manual_overgenerate_sec,
+            float(explicit_generation_duration or 0.0),
+        )
+        overgenerate_reason = f"manual_clip_{normalized_workflow}_target_plus_{manual_overgenerate_sec:g}s_trim_no_pad"
+    elif normalized_workflow == "i2v":
         generation_duration = float(target_duration) + 1.0
         overgenerate_reason = "i2v_policy_target_plus_1s"
     else:
@@ -1675,7 +1805,7 @@ def _resolve_generation_and_target_duration(payload: ClipVideoIn, workflow_key: 
             generation_duration = target_duration
         overgenerate_reason = "non_i2v_passthrough"
 
-    trim_reason = "generation_exceeds_target" if generation_duration > target_duration else "target_ge_generation_no_trim"
+    trim_reason = "generation_exceeds_target_trim_no_pad" if generation_duration > target_duration else "target_ge_generation_no_trim"
     return float(generation_duration), float(target_duration), overgenerate_reason, trim_reason
 
 
@@ -1684,6 +1814,8 @@ def _trim_scene_video_to_target_duration(
     video_url: str,
     target_duration_sec: float,
     scene_id: str,
+    allow_last_frame_pad: bool = False,
+    max_last_frame_pad_sec: float = 0.40,
 ) -> tuple[str, float | None, dict[str, Any]]:
     debug: dict[str, Any] = {
         "sceneId": scene_id,
@@ -1712,8 +1844,67 @@ def _trim_scene_video_to_target_duration(
         if not source_duration or source_duration <= 0:
             debug["trimReason"] = "source_duration_missing"
             return video_url, source_duration, debug
-        if source_duration <= target_duration_sec:
-            debug["trimReason"] = "source_shorter_or_equal_than_target"
+        duration_delta = float(source_duration) - float(target_duration_sec)
+        if abs(duration_delta) <= 0.04:
+            debug["trimmedDurationSec"] = source_duration
+            debug["trimReason"] = "source_already_matches_target"
+            return video_url, source_duration, debug
+
+        if duration_delta < -0.04:
+            under_duration = abs(float(duration_delta))
+            debug["trimmedDurationSec"] = source_duration
+            debug["padApplied"] = False
+            debug["underDurationSec"] = round(under_duration, 3)
+
+            if allow_last_frame_pad and under_duration <= float(max_last_frame_pad_sec):
+                padded_filename = f"scene_pad_{scene_id}_{uuid4().hex}.mp4"
+                padded_path = os.path.join(str(ASSETS_DIR), padded_filename)
+                ok, err = _run_ffmpeg(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        source_path,
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "0:a?",
+                        "-vf",
+                        f"tpad=stop_mode=clone:stop_duration={under_duration:.3f}",
+                        "-t",
+                        f"{float(target_duration_sec):.3f}",
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-crf",
+                        "18",
+                        "-c:a",
+                        "aac",
+                        "-movflags",
+                        "+faststart",
+                        padded_path,
+                    ]
+                )
+                if not ok:
+                    debug["trimReason"] = f"last_frame_pad_ffmpeg_failed:{err}"
+                    return video_url, source_duration, debug
+                padded_duration, padded_probe_err = _ffprobe_duration(padded_path)
+                debug["trimmedDurationSec"] = padded_duration
+                if padded_probe_err:
+                    debug["trimReason"] = f"last_frame_pad_probe_failed:{padded_probe_err}"
+                    return video_url, source_duration, debug
+                debug["padApplied"] = True
+                debug["padDurationSec"] = round(under_duration, 3)
+                debug["trimApplied"] = False
+                debug["trimReason"] = "last_frame_padded_to_target_duration"
+                return _build_public_static_url(padded_filename), padded_duration, debug
+
+            debug["trimReason"] = (
+                "source_shorter_than_target_pad_disabled"
+                if not allow_last_frame_pad
+                else "source_shorter_than_target_exceeds_last_frame_pad_limit"
+            )
             return video_url, source_duration, debug
 
         trimmed_filename = f"scene_trim_{scene_id}_{uuid4().hex}.mp4"
@@ -1765,7 +1956,7 @@ def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
     public_route = normalized_route if normalized_route in DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE else ""
     video_generation_route = "f_l" if public_route == "first_last" else public_route
     render_mode = DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE.get(public_route, "")
-    ltx_mode = "f_l" if public_route == "first_last" else public_route
+    ltx_mode = "f_l_sound" if public_route == "first_last_sound" else ("f_l" if public_route == "first_last" else public_route)
     resolved_workflow_file = LTX_WORKFLOW_KEY_TO_FILE.get(workflow_key, "") if workflow_key else ""
     route_render_mode_consistent = bool(public_route and render_mode == DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE.get(public_route))
     is_lip_sync_route = public_route == "lip_sync_music"
@@ -1785,8 +1976,8 @@ def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
                 and render_mode == "image_video"
             )
             or (
-                public_route == "first_last"
-                and workflow_key == "f_l"
+                public_route in {"first_last", "first_last_sound"}
+                and workflow_key in {"f_l", "f_l_sound"}
                 and ltx_mode == "f_l"
                 and render_mode == "first_last"
             )
@@ -2143,6 +2334,9 @@ def _resolve_ltx_workflow_selection(
         if is_lipsync or render_mode == "avatar_lipsync":
             fallback_workflow_key = "lip_sync"
             source = "legacy_render_mode"
+        elif str(render_mode or "").strip().lower() in {"i2v_sound", "image_video_sound", "standard_video_sound"}:
+            fallback_workflow_key = "i2v_sound"
+            source = "render_mode_i2v_sound"
         elif is_continuous:
             fallback_workflow_key = "f_l"
             source = "legacy_transition"
@@ -2920,6 +3114,255 @@ def _resolve_ltx_i2v_compact_negative_prompt(candidate: str) -> str:
     if is_short and not any(marker in lowered for marker in planner_style_markers):
         return value
     return LTX_I2V_COMPACT_NEGATIVE_FALLBACK
+
+
+
+def _as_boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _is_manual_clip_board_payload(payload: ClipVideoIn) -> bool:
+    source = str(getattr(payload, "source", "") or "").strip().lower()
+    project_kind = str(getattr(payload, "project_kind", "") or "").strip().lower()
+    return bool(
+        source == "manual_clip_board"
+        or _as_boolish(getattr(payload, "manualClip", False))
+        or _as_boolish(getattr(payload, "manual_clip", False))
+        or project_kind == "manual_clip_board"
+    )
+
+
+def _join_prompt_parts(*parts: Any) -> str:
+    return "\n\n".join(str(part or "").strip() for part in parts if str(part or "").strip()).strip()
+
+
+def _combine_negative_prompts(*parts: Any) -> str:
+    seen: set[str] = set()
+    chunks: list[str] = []
+    for part in parts:
+        raw = str(part or "").strip()
+        if not raw:
+            continue
+        for item in re.split(r"[,\n]+", raw):
+            cleaned = re.sub(r"\s+", " ", str(item or "").strip())
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            chunks.append(cleaned)
+    return ", ".join(chunks)
+
+
+def _resolve_manual_clip_route_kind(payload: ClipVideoIn, workflow_key: str | None, scene_contract: dict[str, Any] | None = None) -> str:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    normalized_workflow_key = _normalize_ltx_workflow_key(workflow_key)
+    render_mode = str(getattr(payload, "renderMode", "") or "").strip().lower()
+    route_hint = str(
+        contract.get("route")
+        or contract.get("sourceRoute")
+        or contract.get("video_generation_route")
+        or contract.get("videoGenerationRoute")
+        or getattr(payload, "resolvedWorkflowKey", "")
+        or ""
+    ).strip().lower()
+
+    if normalized_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS or render_mode in {"first_last", "first_last_sound", "f_l", "f_l_sound"} or route_hint in {"first_last", "first_last_sound", "f_l", "f_l_sound"}:
+        return "first_last_sound" if (normalized_workflow_key == "f_l_sound" or render_mode in {"first_last_sound", "f_l_sound"} or route_hint in {"first_last_sound", "f_l_sound"}) else "first_last"
+    if normalized_workflow_key in {"lip_sync", "lip_sync_music"} or render_mode in {"lip_sync", "lip_sync_music", "avatar_lipsync"} or route_hint in {"ia2v", "lip_sync", "lip_sync_music"}:
+        return "lip_sync"
+    if render_mode in {"i2v_sound", "image_video_sound", "standard_video_sound"} or route_hint in {"i2v_sound", "video_with_sound"} or _as_boolish(getattr(payload, "send_audio_to_generator", False)) or _as_boolish(getattr(payload, "sendAudioToGenerator", False)):
+        return "i2v_sound"
+    return "i2v"
+
+
+def _sanitize_manual_clip_visible_prompt(raw: str) -> str:
+    text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"(?im)^\s*(MANUAL CLIP USER PROMPT|MANUAL SOUND PROMPT|LTX LIP-SYNC BOOST|LTX I2V MOTION BOOST|LTX I2V WITH SOUND BOOST|LTX FIRST/LAST TRANSITION BOOST)\s*:?\s*$", "", text)
+    text = re.sub(r"(?im)^\s*(PROMPT|NEGATIVE PROMPT|START FRAME|END FRAME|TRANSITION|USER INTENT|BOOST)\s*:?\s*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _sanitize_manual_first_last_user_prompt(raw: str) -> str:
+    text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"(?im)^\s*(START FRAME|END FRAME|TRANSITION|NEGATIVE PROMPT|PROMPT|USER INTENT|BOOST)\s*:\s*$", "", text)
+    text = re.sub(r"(?im)^\s*(LTX|MANUAL CLIP|FIRST/LAST|FIRST LAST).{0,80}:\s*$", "", text)
+    text = re.sub(r"(?i)\bLTX\s+FIRST\s*/?\s*LAST\s+TRANSITION\s+BOOST\b\s*:?\s*", "", text)
+    text = re.sub(r"(?i)\bMANUAL\s+CLIP\s+FIRST\s*/?\s*LAST\s+USER\s+INTENT\b\s*:?\s*", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
+def _build_manual_first_last_effective_prompt(*, base_prompt: str, transition_prompt: str, seconds: float) -> str:
+    user_motion = _sanitize_manual_first_last_user_prompt(transition_prompt or base_prompt or "")
+    if not user_motion:
+        user_motion = "Create one smooth physically realistic transition from the first frame to the last frame."
+    duration_line = f"Target duration is about {float(seconds):.2f} seconds. Motion should stay smooth and readable for the whole shot."
+    return _join_prompt_parts(
+        user_motion,
+        "The first uploaded image is the opening frame. The second uploaded image is the final frame. The video should begin from the opening image and naturally arrive at the final image as one continuous physically believable camera shot.",
+        "Preserve the same subject identity, outfit, train, compartment, lighting family, rainy night atmosphere, and world continuity. Keep the transition grounded, stable, readable, and realistic.",
+        "Use coherent perspective, stable anatomy, stable train geometry, and controlled camera motion. The shot should finish on the final uploaded image composition.",
+        duration_line,
+    )
+
+
+def _compose_manual_clip_effective_prompt(
+    *,
+    video_prompt: str,
+    transition_action_prompt: str,
+    output_format: str,
+    requested_duration_sec: int | float | None,
+    workflow_key: str | None,
+    scene_contract: dict[str, Any] | None,
+    payload: ClipVideoIn,
+) -> tuple[str, dict]:
+    base_prompt = _sanitize_manual_clip_visible_prompt(video_prompt or "")
+    transition_prompt = _sanitize_manual_clip_visible_prompt(transition_action_prompt or "")
+    sound_prompt = _sanitize_manual_clip_visible_prompt(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")
+    route_kind = _resolve_manual_clip_route_kind(payload, workflow_key, scene_contract)
+    seconds = _safe_positive_float(requested_duration_sec) or 5.0
+    generated_audio_gain_db = _safe_float(getattr(payload, "generatedAudioGainDb", None))
+    if generated_audio_gain_db is None:
+        generated_audio_gain_db = _safe_float(getattr(payload, "generated_audio_gain_db", None))
+    if generated_audio_gain_db is None:
+        generated_audio_gain_db = -16.0
+    if not base_prompt:
+        base_prompt = "Use the uploaded image as the exact first frame and identity anchor. Create a realistic cinematic motion shot."
+
+    if route_kind == "lip_sync":
+        boost = (
+            ""
+            "Use the uploaded image as the exact first frame and identity anchor. The visible person must clearly sing to the provided vocal audio. "
+            "Keep the mouth visible, readable, and naturally moving with the vocal rhythm. Use emotional facial performance, subtle head nods, "
+            "small chest movement, restrained hand gestures, stable identity, and realistic human motion. Keep the camera locked and stable; "
+            "no orbit, no roll, no spinning, no dutch angle. Use only a very slow subtle push-in if motion is needed."
+        )
+        prompt_builder_mode = "manual_clip_ltx_lipsync_compact"
+        duration_line = f"Target duration is about {seconds:.2f} seconds. Keep motion continuous and readable for the full shot."
+        sound_prompt_block = ""
+        effective_prompt = _join_prompt_parts(
+            base_prompt,
+            transition_prompt,
+            sound_prompt_block,
+            boost,
+            duration_line,
+        )
+    elif route_kind == "i2v_sound":
+        sound_line = sound_prompt or "natural background sound that matches the visible action and space"
+        boost = (
+            ""
+            "Use the uploaded image as the exact first frame and identity anchor. Keep one simple readable action for the whole shot. "
+            "Generate realistic grounded motion and matching diegetic scene audio. The sound must feel like background/atmosphere under the master music, not a loud separate track. "
+            f"Sound design instruction: {sound_line}. "
+            f"Target generated-scene-audio mix level: {float(generated_audio_gain_db):.1f} dB under the master track. "
+            "Preserve the same face, outfit, location, lighting, and realism. Keep the camera stable; no orbit, no roll, no spinning."
+        )
+        prompt_builder_mode = "manual_clip_ltx_i2v_sound_compact"
+        duration_line = f"Target duration is about {seconds:.2f} seconds. Keep motion continuous and readable for the full shot."
+        sound_prompt_block = sound_prompt if sound_prompt else ""
+        effective_prompt = _join_prompt_parts(
+            base_prompt,
+            transition_prompt,
+            sound_prompt_block,
+            boost,
+            duration_line,
+        )
+    elif route_kind in {"first_last", "first_last_sound"}:
+        prompt_builder_mode = "manual_clip_ltx_first_last_compact" if route_kind == "first_last" else "manual_clip_ltx_first_last_sound_compact"
+        effective_prompt = _build_manual_first_last_effective_prompt(
+            base_prompt=base_prompt,
+            transition_prompt=transition_prompt,
+            seconds=seconds,
+        )
+    else:
+        boost = (
+            ""
+            "Use the uploaded image as the exact first frame and identity anchor. Keep one simple readable action for the whole shot. "
+            "Use restrained realistic motion, stable identity, stable location, and controlled cinematic camera movement. "
+            "Preserve the same face, outfit, lighting, and grounded realism. Keep the camera stable; no orbit, no roll, no spinning, no sudden action jumps."
+        )
+        prompt_builder_mode = "manual_clip_ltx_i2v_compact"
+        duration_line = f"Target duration is about {seconds:.2f} seconds. Keep motion continuous and readable for the full shot."
+        sound_prompt_block = ""
+        effective_prompt = _join_prompt_parts(
+            base_prompt,
+            transition_prompt,
+            sound_prompt_block,
+            boost,
+            duration_line,
+        )
+    return effective_prompt, {
+        "has_humans": _looks_like_human_scene(base_prompt, transition_prompt, "", ""),
+        "requestedPromptPreview": _prompt_preview(base_prompt, 500),
+        "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+        "effectivePromptLength": len(effective_prompt),
+        "videoPromptLength": len(base_prompt),
+        "transitionActionPromptLength": len(transition_prompt),
+        "sceneHumanVisualAnchors": [],
+        "hardContinuityContractApplied": False,
+        "openingShot": None,
+        "identityLockApplied": True,
+        "genreHardeningApplied": False,
+        "genreHardeningSource": "manual_clip_board",
+        "genreHardeningPreview": "",
+        "ltxCanonApplied": True,
+        "ltxCanonLipSyncMode": route_kind == "lip_sync",
+        "duetHardeningApplied": False,
+        "duetHardeningSource": "manual_clip_board",
+        "duetContractDetected": False,
+        "duetContractPreview": {},
+        "routeAwareStrictModeApplied": True,
+        "resolvedStrictPositivePromptPreview": _prompt_preview(effective_prompt, 320),
+        "resolvedStrictNegativePromptPreview": "",
+        "humanAnchorsSuppressedForFirstLast": False,
+        "globalConsistencySuppressedForFirstLast": True,
+        "effectivePromptSource": "manual_clip_board",
+        "promptBuilderMode": prompt_builder_mode,
+        "manualClipRouteKind": route_kind,
+        "payloadVideoPromptPreview": _prompt_preview(base_prompt, 320),
+        "payloadTransitionActionPromptPreview": _prompt_preview(transition_prompt, 320),
+        "payloadSoundPromptPreview": _prompt_preview(sound_prompt, 320),
+        "generatedAudioGainDb": float(generated_audio_gain_db),
+        "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", None) or getattr(payload, "keep_generated_audio", None)),
+        "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
+    }
+
+
+def _resolve_manual_clip_negative_prompt(
+    *,
+    payload: ClipVideoIn,
+    scene_contract: dict[str, Any] | None,
+    workflow_key: str | None,
+) -> str:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    raw_negative = str(
+        payload.videoNegativePrompt
+        or payload.video_negative_prompt
+        or contract.get("negativeVideoPrompt")
+        or contract.get("negative_video_prompt")
+        or contract.get("videoNegativePrompt")
+        or contract.get("video_negative_prompt")
+        or contract.get("negativePrompt")
+        or contract.get("negative_prompt")
+        or ""
+    ).strip()
+    route_kind = _resolve_manual_clip_route_kind(payload, workflow_key, scene_contract)
+    if route_kind == "lip_sync":
+        preset = MANUAL_CLIP_LIPSYNC_NEGATIVE_PROMPT
+    elif route_kind == "i2v_sound":
+        preset = MANUAL_CLIP_I2V_SOUND_NEGATIVE_PROMPT
+    elif route_kind in {"first_last", "first_last_sound"}:
+        preset = MANUAL_CLIP_FIRST_LAST_NEGATIVE_PROMPT
+    else:
+        preset = MANUAL_CLIP_I2V_NEGATIVE_PROMPT
+    return _combine_negative_prompts(raw_negative, preset)
 
 
 def _compose_video_effective_prompt(
@@ -3754,6 +4197,74 @@ def _read_audio_bytes_from_source(source_url: str) -> tuple[bytes | None, str | 
             return None, None, None, f"audio_read_error:{str(exc)[:300]}"
 
     return None, None, None, "audio_source_unsupported"
+
+
+def _append_silence_tail_to_audio_bytes(
+    *,
+    audio_bytes: bytes | None,
+    audio_ext: str | None,
+    tail_silence_sec: float,
+    scene_id: str,
+) -> tuple[bytes | None, str | None, str | None, dict[str, Any]]:
+    """Append a short silent tail to lipsync input audio before sending it to Comfy.
+
+    This is intentionally different from freezing/padding the video after render.
+    LTX AV often returns slightly shorter videos than requested, and it tends to
+    follow the input audio length. For Manual Clip Board lipsync we over-generate
+    by feeding a longer audio input (scene audio + silence), then trim the video
+    back to the exact scene duration.
+    """
+    tail_sec = max(0.0, float(tail_silence_sec or 0.0))
+    debug: dict[str, Any] = {
+        "sceneId": scene_id,
+        "audioPadMode": "silence_tail",
+        "tailSilenceSec": round(tail_sec, 3),
+        "audioPadApplied": False,
+        "inputExt": str(audio_ext or "").strip().lower(),
+        "inputBytes": len(audio_bytes or b""),
+        "sourceAudioDurationSec": None,
+        "generationAudioDurationSec": None,
+        "outputExt": "mp3",
+        "outputBytes": None,
+        "error": "",
+    }
+    if not audio_bytes:
+        debug["error"] = "audio_bytes_missing"
+        return audio_bytes, audio_ext, None, debug
+    if tail_sec <= 0.001:
+        debug["error"] = "tail_silence_not_required"
+        return audio_bytes, audio_ext, None, debug
+
+    input_ext = str(audio_ext or "mp3").strip().lower().lstrip(".") or "mp3"
+    # pydub/ffmpeg expects 'ipod' for m4a-like exports, but for upload to Comfy
+    # MP3 is the safest common denominator and comfy_remote uploads it as source.mp3.
+    decode_format = input_ext if input_ext in {"mp3", "wav", "ogg", "flac", "aac", "m4a", "mp4"} else None
+    if decode_format == "m4a":
+        decode_format = "mp4"
+    try:
+        segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=decode_format)
+        source_ms = len(segment)
+        tail_ms = int(round(tail_sec * 1000.0))
+        silence = AudioSegment.silent(duration=tail_ms, frame_rate=segment.frame_rate)
+        padded = segment + silence
+        out_buffer = io.BytesIO()
+        padded.export(out_buffer, format="mp3")
+        out_bytes = out_buffer.getvalue()
+        if not out_bytes:
+            raise RuntimeError("audio_export_empty")
+        debug.update(
+            {
+                "audioPadApplied": True,
+                "sourceAudioDurationSec": round(float(source_ms) / 1000.0, 3),
+                "generationAudioDurationSec": round(float(len(padded)) / 1000.0, 3),
+                "outputExt": "mp3",
+                "outputBytes": len(out_bytes),
+            }
+        )
+        return out_bytes, "mp3", "audio/mpeg", debug
+    except Exception as exc:
+        debug["error"] = f"audio_silence_tail_failed:{str(exc)[:240]}"
+        return audio_bytes, audio_ext, None, debug
 
 
 def _prepare_provider_audio_url(source_url: str) -> tuple[str, str | None]:
@@ -14821,7 +15332,11 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         '      "story_position_ru": string,\n'
         '      "video_prompt": string,\n'
         '      "negative_prompt": string,\n'
-        '      "sound_prompt": ""\n'
+        '      "sound_prompt": "",\n'
+        '      "boundary_confidence": "high|medium|low",\n'
+        '      "boundary_warning": string,\n'
+        '      "contains_vocal": boolean,\n'
+        '      "contains_instrumental": boolean\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -14829,12 +15344,21 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
         "- Cover the full audio duration from 0 to audio_duration_sec.\n"
         "- Do not create gaps.\n"
         "- Do not create overlaps.\n"
-        "- Prefer scene duration 4–7 sec.\n"
-        "- For clip mode: split by vocal phrases / music accents; use ia2v for lip-sync/performance moments; use i2v for visual story/cutaways; use i2v_sound only when sound atmosphere matters.\n"
+        "- PHRASE BOUNDARY FIRST: scene boundaries must prefer ends of vocal phrases, full lyric lines, pauses, breaths, downbeats, instrumental changes, or clear energy transitions.\n"
+        "- Never cut inside a word. Never start a scene with the tail of the previous word. Never steal the beginning of the next phrase unless unavoidable.\n"
+        "- Timing is soft, not mechanical. Do not split by a fixed 5/6 sec grid if it breaks phrases.\n"
+        "- Route timing canon for CLIP mode: ia2v/lip-sync is usually 3–6 sec; longer chorus/emotional lip-sync may merge adjacent clean phrases into 5–7 sec.\n"
+        "- Route timing canon for CLIP mode: i2v and i2v_sound are usually 3–5 sec depending on scene reveal and natural phrase/instrumental boundaries.\n"
+        "- If user requests longer lip-sync, merge nearby vocal phrases only when phrase boundaries are clean and the resulting duration is about 5–7 sec.\n"
+        "- If user requests shorter/simple visual scenes, choose short natural phrase/visual chunks around 3–4 sec, but still cut only on clean phrase/pause/downbeat boundaries.\n"
+        "- Instrumental breaks longer than about 4 sec count as real scenes; split long instrumental sections into i2v/i2v_sound scenes around natural musical changes.\n"
+        "- For clip mode: available routes are only ia2v, i2v, i2v_sound. Do NOT use first_last or first_last_sound as clip routes. Continuity from previous last frame is a manual UI feature, not an AI route.\n"
+        "- Route descriptions: ia2v = lip-sync/performance to vocal audio; i2v = visual story/cutaway without generated scene sound; i2v_sound = visual scene with generated scene sound such as siren, motor, wind, waves, footsteps, crowd, gunshot, or short phrase.\n"
         "- For story mode: use mostly i2v and i2v_sound; route ia2v only if direct speech/lip-sync is needed.\n"
-        "- Respect target_scene_count if provided.\n"
-        "- Respect lipsync_ratio if provided.\n"
+        "- Respect target_scene_count if provided, but phrase boundaries have higher priority.\n"
+        "- Respect lipsync_ratio if provided as a soft target, not as a reason to break words/phrases.\n"
         "- Respect route_preference if provided.\n"
+        "- If user gives route mix like 35/40/25, interpret it as approximate distribution of ia2v/i2v/i2v_sound unless specified otherwise.\n"
         "- Follow director_contract as hard guidance.\n"
         "- Do not invent a different story than in director_contract.\n"
         "- Do not change lip-sync density intent from director_contract.\n"
@@ -14887,7 +15411,7 @@ def _manual_clip_split_prompt(payload: ManualClipAiSplitIn, *, audio_attached: b
 def _manual_director_required_fields(project_kind: str) -> list[str]:
     if str(project_kind or "clip") == "story":
         return ["story_intent", "main_character", "conflict_or_event", "visual_style", "narration_mode", "turning_point", "ending", "camera_style"]
-    return ["story_intent", "main_performer", "lip_sync_density", "performance_place", "cutaway_strategy", "intro_plan", "outro_plan", "camera_style"]
+    return ["story_intent", "main_performer", "lip_sync_density", "performance_place", "cutaway_strategy", "intro_plan", "outro_plan", "camera_style", "route_mix_preference", "cutting_style_preference"]
 
 
 def _manual_director_contract_missing_fields(contract: dict, project_kind: str) -> list[str]:
@@ -14910,6 +15434,8 @@ def _manual_director_question_label(project_kind: str, field: str) -> str:
         "intro_plan": "Как должен начаться клип?",
         "outro_plan": "Какой финал нужен?",
         "camera_style": "Какой стиль камеры: живой, кино, клиповый, спокойный?",
+        "route_mix_preference": "Какие типы сцен использовать и в каком примерном балансе? Например: 40% lip-sync, 40% i2v, 20% i2v_sound. Доступно: lip-sync/ia2v, i2v, i2v_sound.",
+        "cutting_style_preference": "Как нарезать сцены: lip-sync подольше 5–7 сек, простые видео короче 3–4 сек, или смешанный режим? Границы всё равно должны идти по концам фраз/паузам.",
     }
     story_labels = {
         "story_intent": "О чём история и какое настроение?",
@@ -15067,6 +15593,9 @@ def manual_clip_director_chat(payload: ManualClipDirectorChatIn):
         "You are a Manual Clip AI Director.\n"
         "Your job is NOT to split the audio yet.\n"
         "Your job is to understand the user's intended clip/story before splitting.\n"
+        "For clip mode, explain available scene routes before split if the user has not chosen them: ia2v/lip-sync = singer performs to vocal audio; i2v = visual cutaway without generated scene sound; i2v_sound = visual scene with generated sound such as siren, motor, wind, waves, footsteps, crowd, gunshot, short phrase.\n"
+        "Do NOT propose first_last/first_last_sound as normal clip routes. Continuity by taking previous video's last frame is a manual UI feature, not an AI route.\n"
+        "Ask for route mix if missing, for example 40% lip-sync / 40% i2v / 20% i2v_sound, and ask whether the user prefers longer lip-sync phrases or shorter simple visual scenes.\n"
         "Return ONLY JSON.\n"
         "If enough info is known, return done=true and contract.\n"
         "If not enough info, return done=false and questions.\n"
@@ -15200,8 +15729,475 @@ def _update_clip_assemble_job(job_id: str, **updates):
         job.update(updates)
 
 
+def _intro_montage_enabled(intro: AssembleIntroIn | None) -> bool:
+    return bool(getattr(intro, "montageEnabled", False)) if intro else False
+
+
+def _intro_montage_mode(intro: AssembleIntroIn | None) -> str:
+    mode = str(getattr(intro, "montageMode", "") or "").strip().lower()
+    if mode in {"black_before_clip", "over_first_scene", "frame_generation"}:
+        return mode
+    return "frame_generation"
+
+
 def _has_valid_intro_image(intro: AssembleIntroIn | None) -> bool:
-    return bool(str(getattr(intro, "imageUrl", "") or "").strip())
+    if not intro:
+        return False
+    mode = _intro_montage_mode(intro)
+    if _intro_montage_enabled(intro) and mode == "over_first_scene":
+        return False
+    if str(getattr(intro, "imageUrl", "") or "").strip():
+        return True
+    return _intro_montage_enabled(intro) and mode == "black_before_clip"
+
+
+def _clamp_float(value: Any, fallback: float, min_value: float, max_value: float) -> float:
+    try:
+        raw = float(value)
+    except Exception:
+        raw = fallback
+    if not math.isfinite(raw):
+        raw = fallback
+    return max(min_value, min(max_value, raw))
+
+
+def _assembly_safe_text(value: Any, fallback: str = "") -> str:
+    text = str(value if value is not None else fallback).strip()
+    return re.sub(r"\s+", " ", text)[:240]
+
+
+def _intro_title_style_preset(value: Any) -> str:
+    preset = str(value or "cinematic_serif").strip().lower()
+    if preset in {"cinematic_serif", "dark_crime", "poster_bold", "modern_clean", "retro_vhs"}:
+        return preset
+    return "cinematic_serif"
+
+
+def _intro_title_size_preset(value: Any) -> str:
+    preset = str(value or "medium").strip().lower()
+    if preset in {"small", "medium", "large"}:
+        return preset
+    return "medium"
+
+
+def _intro_watermark_style_preset(value: Any) -> str:
+    preset = str(value or "minimal").strip().lower()
+    if preset in {"minimal", "cinematic_gold", "dark_corner"}:
+        return preset
+    return "minimal"
+
+
+def _intro_existing_font_path(candidates: list[str]) -> str:
+    for raw in candidates:
+        path = str(raw or "").strip()
+        if path and os.path.isfile(path):
+            return path
+    return ""
+
+
+def _intro_font_candidates_for_style(style: str, *, bold: bool = True) -> list[str]:
+    preset = _intro_title_style_preset(style)
+    if preset == "poster_bold":
+        return [
+            "C:/Windows/Fonts/impact.ttf",
+            "C:/Windows/Fonts/ariblk.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ]
+    if preset == "retro_vhs":
+        return [
+            "C:/Windows/Fonts/consolab.ttf",
+            "C:/Windows/Fonts/courbd.ttf",
+            "C:/Windows/Fonts/lucon.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationMono-Bold.ttf",
+        ]
+    if preset == "modern_clean":
+        return [
+            "C:/Windows/Fonts/segoeuib.ttf",
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/calibrib.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        ]
+    if preset == "dark_crime":
+        return [
+            "C:/Windows/Fonts/georgiab.ttf",
+            "C:/Windows/Fonts/timesbd.ttf",
+            "C:/Windows/Fonts/cambriab.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed-Bold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        ]
+    return [
+        "C:/Windows/Fonts/georgiab.ttf",
+        "C:/Windows/Fonts/timesbd.ttf",
+        "C:/Windows/Fonts/cambriab.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
+    ]
+
+
+def _intro_fontfile_for_style(style: str) -> str:
+    return _intro_existing_font_path(_intro_font_candidates_for_style(style, bold=True))
+
+
+def _ffmpeg_fontfile_option(font_path: str) -> str:
+    path = str(font_path or "").strip().replace("\\", "/")
+    if not path:
+        return ""
+    # ffmpeg drawtext on Windows needs the drive colon escaped.
+    path = path.replace(":", "\\:")
+    path = _ffmpeg_drawtext_escape(path)
+    return f"fontfile='{path}':"
+
+
+def _get_intro_font_for_style(size: int, style: str) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    normalized_size = max(24, int(size))
+    font_path = _intro_fontfile_for_style(style)
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, normalized_size)
+        except Exception:
+            pass
+    return _get_intro_font(normalized_size, bold=True)
+
+
+def _intro_title_font_size(width: int, title_size: str) -> int:
+    preset = _intro_title_size_preset(title_size)
+    if preset == "small":
+        return max(24, int(width * 0.048))
+    if preset == "large":
+        return max(34, int(width * 0.074))
+    return max(28, int(width * 0.060))
+
+
+def _intro_ffmpeg_title_fontsize_expr(title_size: str) -> str:
+    preset = _intro_title_size_preset(title_size)
+    if preset == "small":
+        return "h*0.044"
+    if preset == "large":
+        return "h*0.070"
+    return "h*0.055"
+
+
+def _intro_title_font_px(height: int, title_size: str) -> int:
+    preset = _intro_title_size_preset(title_size)
+    if preset == "small":
+        return max(24, int(height * 0.044))
+    if preset == "large":
+        return max(34, int(height * 0.070))
+    return max(28, int(height * 0.055))
+
+
+def _intro_title_line_height_px(font_px: int) -> int:
+    return max(30, int(float(font_px) * 1.20))
+
+
+def _intro_title_max_chars_per_line(width: int, font_px: int) -> int:
+    # Safe approximation for uppercase title rendering in ffmpeg drawtext.
+    avg_char_w = max(8.0, float(font_px) * 0.56)
+    max_width = float(width) * 0.82
+    return max(8, int(max_width / avg_char_w))
+
+
+def _wrap_intro_title_for_video(title: str, width: int, height: int, title_size: str) -> list[str]:
+    clean = _assembly_safe_text(title, "")
+    if not clean:
+        return []
+    font_px = _intro_title_font_px(height, title_size)
+    max_chars = _intro_title_max_chars_per_line(width, font_px)
+    raw_lines = [line.strip() for line in re.split(r"[\n/]+", clean) if line.strip()]
+    if not raw_lines:
+        raw_lines = [clean]
+    lines: list[str] = []
+    for raw_line in raw_lines:
+        words = [w for w in re.split(r"\s+", raw_line) if w]
+        if not words:
+            continue
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) <= max_chars or not current:
+                current = candidate
+                continue
+            lines.append(current)
+            current = word
+        if current:
+            lines.append(current)
+    # Keep montage readable. If very long, clamp to 3 lines and shorten last line.
+    result = lines[:3]
+    if len(lines) > 3 and result:
+        result[-1] = (result[-1][: max(0, max_chars - 1)].rstrip() + "…").strip()
+    return [line.upper() for line in result if line.strip()]
+
+
+def _intro_title_base_y_expr(position: str, line_count: int, font_px: int) -> str:
+    pos = str(position or "center_above").strip().lower()
+    line_h = _intro_title_line_height_px(font_px)
+    block_h = max(1, line_count) * line_h
+    if pos == "center":
+        return f"(h-{block_h})/2"
+    if pos == "center_below":
+        return f"(h*0.62)-{block_h}/2"
+    return f"(h*0.40)-{block_h}/2"
+
+def _intro_pil_title_colors(style: str, accent: tuple[int, int, int]) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], int]:
+    preset = _intro_title_style_preset(style)
+    if preset == "dark_crime":
+        return (242, 231, 216, 242), (0, 0, 0, 190), 2
+    if preset == "poster_bold":
+        return (255, 255, 255, 246), (0, 0, 0, 210), 3
+    if preset == "modern_clean":
+        return (245, 247, 255, 238), (0, 0, 0, 140), 1
+    if preset == "retro_vhs":
+        return (248, 240, 223, 242), (0, 0, 0, 210), 2
+    return (accent[0], accent[1], accent[2], 246), (0, 0, 0, 170), 2
+
+
+def _intro_ffmpeg_title_style(style: str) -> str:
+    preset = _intro_title_style_preset(style)
+    if preset == "dark_crime":
+        return "fontcolor=0xF2E7D8@0.96:borderw=2:bordercolor=black@0.74:shadowcolor=black@0.92:shadowx=3:shadowy=4"
+    if preset == "poster_bold":
+        return "fontcolor=white@0.96:borderw=2:bordercolor=black@0.78:shadowcolor=black@0.85:shadowx=2:shadowy=3"
+    if preset == "modern_clean":
+        return "fontcolor=white@0.92:shadowcolor=black@0.70:shadowx=1:shadowy=2"
+    if preset == "retro_vhs":
+        return "fontcolor=0xF8F0DF@0.95:borderw=1:bordercolor=black@0.85:shadowcolor=0x8B1E2D@0.35:shadowx=3:shadowy=2"
+    return "fontcolor=0xF6D365@0.96:shadowcolor=black@0.82:shadowx=2:shadowy=3"
+
+
+def _intro_ffmpeg_watermark_style(style: str, opacity: float) -> str:
+    preset = _intro_watermark_style_preset(style)
+    op = max(0.1, min(1.0, float(opacity)))
+    if preset == "cinematic_gold":
+        return f"fontcolor=0xF6D365@{op:.2f}:shadowcolor=black@0.72:shadowx=1:shadowy=2"
+    if preset == "dark_corner":
+        return f"fontcolor=white@{op:.2f}:borderw=1:bordercolor=black@0.50:shadowcolor=black@0.85:shadowx=1:shadowy=2"
+    return f"fontcolor=white@{op:.2f}:shadowcolor=black@0.70:shadowx=1:shadowy=2"
+
+
+def _render_black_intro_card(path: str, width: int, height: int, intro: AssembleIntroIn | None) -> dict[str, Any]:
+    title = _assembly_safe_text(getattr(intro, "titleText", None) or getattr(intro, "manualTitleRaw", None) or getattr(intro, "title", None) or "")
+    style_preset = str(getattr(intro, "stylePreset", "cinematic_dark") or "cinematic_dark").strip().lower()
+    title_position = str(getattr(intro, "titlePosition", "center_above") or "center_above").strip().lower()
+    title_style = _intro_title_style_preset(getattr(intro, "titleStylePreset", "cinematic_serif"))
+    title_size = _intro_title_size_preset(getattr(intro, "titleSizePreset", "medium"))
+    watermark_enabled = bool(getattr(intro, "watermarkEnabled", False))
+    watermark_text = _assembly_safe_text(getattr(intro, "watermarkText", None) or "")
+    watermark_position = str(getattr(intro, "watermarkPosition", "top_right") or "top_right").strip().lower()
+    watermark_style = _intro_watermark_style_preset(getattr(intro, "watermarkStylePreset", "minimal"))
+    watermark_opacity = _clamp_float(getattr(intro, "watermarkOpacity", 0.45), 0.45, 0.1, 1.0)
+
+    if style_preset == "cinematic_dark":
+        bg_top = (6, 11, 22)
+        bg_bottom = (1, 3, 8)
+        accent = (246, 211, 101)
+    else:
+        bg_top = (5, 12, 18)
+        bg_bottom = (2, 4, 8)
+        accent = (120, 255, 220)
+
+    img = Image.new("RGB", (width, height), bg_bottom)
+    draw = ImageDraw.Draw(img)
+    for y in range(height):
+        k = y / max(1, height - 1)
+        r = int(bg_top[0] * (1 - k) + bg_bottom[0] * k)
+        g = int(bg_top[1] * (1 - k) + bg_bottom[1] * k)
+        b = int(bg_top[2] * (1 - k) + bg_bottom[2] * k)
+        draw.line([(0, y), (width, y)], fill=(r, g, b))
+
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    od = ImageDraw.Draw(overlay)
+    od.ellipse((int(width * -0.1), int(height * -0.15), int(width * 0.8), int(height * 0.55)), fill=(accent[0], accent[1], accent[2], 34))
+    od.rectangle((0, int(height * 0.78), width, height), fill=(0, 0, 0, 92))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay)
+    draw = ImageDraw.Draw(img)
+
+    if title:
+        font = _get_intro_font_for_style(_intro_title_font_size(width, title_size), title_style)
+        title_lines = _wrap_intro_title_for_video(title, width, height, title_size)
+        line_h = _intro_title_line_height_px(_intro_title_font_size(width, title_size))
+        block_h = max(1, len(title_lines)) * line_h
+        y_ratio = 0.42 if title_position == "center_above" else (0.50 if title_position == "center" else 0.60)
+        y = max(24, int(height * y_ratio - block_h / 2))
+        title_fill, title_shadow, shadow_offset = _intro_pil_title_colors(title_style, accent)
+        widest = 0
+        for line_idx, title_line in enumerate(title_lines or [title.upper()]):
+            bbox = draw.textbbox((0, 0), title_line, font=font)
+            tw = bbox[2] - bbox[0]
+            widest = max(widest, tw)
+            x = max(24, int((width - tw) / 2))
+            yy = y + line_idx * line_h
+            draw.text((x + shadow_offset, yy + shadow_offset + 1), title_line, font=font, fill=title_shadow)
+            draw.text((x, yy), title_line, font=font, fill=title_fill)
+        line_w = min(int(width * 0.34), max(120, int(widest * 0.85)))
+        line_x = int((width - line_w) / 2)
+        line_y = y + block_h + max(12, int(height * 0.018))
+        draw.rounded_rectangle((line_x, line_y, line_x + line_w, line_y + 5), radius=4, fill=(accent[0], accent[1], accent[2], 220))
+
+    if watermark_enabled and watermark_text:
+        wm_size = max(13, int(width * (0.019 if watermark_style != "minimal" else 0.016)))
+        wm_font = _get_intro_font_for_style(wm_size, "cinematic_serif" if watermark_style == "cinematic_gold" else "modern_clean")
+        wm_upper = watermark_text.upper()
+        bbox = draw.textbbox((0, 0), wm_upper, font=wm_font)
+        ww = bbox[2] - bbox[0]
+        wh = bbox[3] - bbox[1]
+        margin = max(18, int(width * 0.025))
+        wx = width - margin - ww if watermark_position.endswith("right") else margin
+        wy = height - margin - wh if watermark_position.startswith("bottom") else margin
+        alpha = int(255 * watermark_opacity)
+        if watermark_style == "cinematic_gold":
+            wm_fill = (accent[0], accent[1], accent[2], alpha)
+        else:
+            wm_fill = (255, 255, 255, alpha)
+        draw.text((wx + 1, wy + 2), wm_upper, font=wm_font, fill=(0, 0, 0, min(190, alpha)))
+        draw.text((wx, wy), wm_upper, font=wm_font, fill=wm_fill)
+
+    img.convert("RGB").save(path, format="PNG", optimize=True)
+    return {
+        "title": title,
+        "stylePreset": style_preset,
+        "titlePosition": title_position,
+        "watermarkApplied": watermark_enabled and bool(watermark_text),
+    }
+
+
+def _ffmpeg_drawtext_escape(value: Any) -> str:
+    text = _assembly_safe_text(value, "")
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("%", "\\%")
+    )
+
+
+def _intro_title_y_expr(position: str) -> str:
+    pos = str(position or "center_above").strip().lower()
+    if pos == "center":
+        return "(h-text_h)/2"
+    if pos == "center_below":
+        return "(h*0.62)-text_h/2"
+    return "(h*0.40)-text_h/2"
+
+
+def _intro_watermark_position_expr(position: str) -> tuple[str, str]:
+    pos = str(position or "top_right").strip().lower()
+    x = "w-text_w-28" if pos.endswith("right") else "28"
+    y = "h-text_h-24" if pos.startswith("bottom") else "24"
+    return x, y
+
+
+def _build_assembly_video_filters(
+    intro: AssembleIntroIn | None,
+    total_duration_sec: float | None,
+    *,
+    width: int = 1080,
+    height: int = 1920,
+) -> list[str]:
+    if not intro or not _intro_montage_enabled(intro):
+        return []
+    filters: list[str] = []
+    total = float(total_duration_sec or 0.0)
+    fade_in = _clamp_float(getattr(intro, "videoFadeInSec", 0), 0.0, 0.0, 4.0)
+    fade_out = _clamp_float(getattr(intro, "videoFadeOutSec", 0), 0.0, 0.0, 6.0)
+    if fade_in > 0.001:
+        filters.append(f"fade=t=in:st=0:d={fade_in:.3f}")
+    if fade_out > 0.001 and total > fade_out + 0.05:
+        filters.append(f"fade=t=out:st={max(0.0, total - fade_out):.3f}:d={fade_out:.3f}")
+
+    mode = _intro_montage_mode(intro)
+    title = _assembly_safe_text(getattr(intro, "titleText", None) or getattr(intro, "title", None) or "")
+    title_enabled = bool(getattr(intro, "titleEnabled", True))
+    if mode == "over_first_scene" and title_enabled and title:
+        title_duration = _clamp_float(getattr(intro, "titleDurationSec", 2), 2.0, 0.1, 8.0)
+        title_style = _intro_title_style_preset(getattr(intro, "titleStylePreset", "cinematic_serif"))
+        title_size = _intro_title_size_preset(getattr(intro, "titleSizePreset", "medium"))
+        title_style_expr = _intro_ffmpeg_title_style(title_style)
+        title_fontfile_expr = _ffmpeg_fontfile_option(_intro_fontfile_for_style(title_style))
+        font_px = _intro_title_font_px(height, title_size)
+        line_h = _intro_title_line_height_px(font_px)
+        title_fontsize = str(font_px)
+        lines = _wrap_intro_title_for_video(title, int(width or 1080), int(height or 1920), title_size)
+        base_y = _intro_title_base_y_expr(
+            str(getattr(intro, "titlePosition", "center_above") or "center_above"),
+            len(lines) or 1,
+            font_px,
+        )
+        for line_idx, line in enumerate(lines or [title.upper()]):
+            escaped = _ffmpeg_drawtext_escape(line)
+            y_expr = f"({base_y})+{line_idx * line_h}"
+            filters.append(
+                "drawtext="
+                f"{title_fontfile_expr}"
+                f"text='{escaped}':"
+                f"{title_style_expr}:"
+                f"fontsize={title_fontsize}:"
+                "x=(w-text_w)/2:"
+                f"y={y_expr}:"
+                f"enable='between(t,0,{title_duration:.3f})'"
+            )
+
+    watermark_enabled = bool(getattr(intro, "watermarkEnabled", False))
+    watermark_text = _assembly_safe_text(getattr(intro, "watermarkText", None) or "")
+    if watermark_enabled and watermark_text:
+        opacity = _clamp_float(getattr(intro, "watermarkOpacity", 0.45), 0.45, 0.1, 1.0)
+        x_expr, y_expr = _intro_watermark_position_expr(str(getattr(intro, "watermarkPosition", "top_right") or "top_right"))
+        escaped_wm = _ffmpeg_drawtext_escape(watermark_text.upper())
+        watermark_style = _intro_watermark_style_preset(getattr(intro, "watermarkStylePreset", "minimal"))
+        wm_style_expr = _intro_ffmpeg_watermark_style(watermark_style, opacity)
+        wm_fontfile_expr = _ffmpeg_fontfile_option(_intro_fontfile_for_style("cinematic_serif" if watermark_style == "cinematic_gold" else "modern_clean"))
+        wm_fontsize = "h*0.020" if watermark_style != "minimal" else "h*0.018"
+        filters.append(
+            "drawtext="
+            f"{wm_fontfile_expr}"
+            f"text='{escaped_wm}':"
+            f"{wm_style_expr}:"
+            f"fontsize={wm_fontsize}:"
+            f"x={x_expr}:y={y_expr}"
+        )
+    return filters
+
+
+def _apply_assembly_video_filters(source_path: str, intro: AssembleIntroIn | None, total_duration_sec: float | None, generated_temp_assets: list[str], *, format_value: str | None = None) -> tuple[str, dict[str, Any]]:
+    width, height = _resolve_assembly_video_geometry(format_value)
+    filters = _build_assembly_video_filters(intro, total_duration_sec, width=width, height=height)
+    debug = {"filtersApplied": False, "filterCount": len(filters), "error": ""}
+    if not filters:
+        return source_path, debug
+    out_path = os.path.join(str(ASSETS_DIR), f"clip_final_visual_{uuid4().hex}.mp4")
+    generated_temp_assets.append(out_path)
+    vf = ",".join(filters) + ",format=yuv420p"
+    ok, err = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", source_path,
+        "-vf", vf,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "18",
+        "-an",
+        out_path,
+    ])
+    if ok and os.path.isfile(out_path):
+        debug["filtersApplied"] = True
+        return out_path, debug
+    debug["error"] = str(err or "video_filter_failed")[:300]
+    print("[CLIP ASSEMBLE VIDEO FILTER WARNING]", json.dumps(debug, ensure_ascii=False))
+    return source_path, debug
+
+
+def _build_master_audio_filter(intro: AssembleIntroIn | None) -> str:
+    if not intro or not _intro_montage_enabled(intro):
+        return "asetpts=PTS-STARTPTS"
+    parts = ["asetpts=PTS-STARTPTS"]
+    fade_in = _clamp_float(getattr(intro, "audioFadeInSec", 0), 0.0, 0.0, 6.0)
+    audio_mode = str(getattr(intro, "audioMode", "after_intro") or "after_intro").strip().lower()
+    if audio_mode == "fade_in_with_video" and fade_in > 0.001:
+        parts.append(f"afade=t=in:st=0:d={fade_in:.3f}")
+    return ",".join(parts)
 
 
 def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
@@ -15212,6 +16208,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     temp_files: list[str] = []
     generated_temp_assets: list[str] = []
     prepared_scenes: list[tuple[str, float]] = []
+    scene_audio_mix_items: list[dict[str, Any]] = []
     assembly_timing_debug: list[dict[str, Any]] = []
     final_path: str | None = None
 
@@ -15273,14 +16270,19 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 totalSteps=total_steps,
                 progressPercent=max(10, min(70, intro_progress)),
             )
-            intro_path, intro_err = _resolve_media_input(intro_image_url, temp_files)
-            if intro_err or not intro_path:
-                raise RuntimeError(f"INTRO_MEDIA_RESOLVE_FAILED:{intro_err or 'unknown'}")
+            width, height = _resolve_assembly_video_geometry(payload.format)
+            if intro_image_url:
+                intro_path, intro_err = _resolve_media_input(intro_image_url, temp_files)
+                if intro_err or not intro_path:
+                    raise RuntimeError(f"INTRO_MEDIA_RESOLVE_FAILED:{intro_err or 'unknown'}")
+            else:
+                intro_path = os.path.join(str(ASSETS_DIR), f"clip_intro_card_{uuid4().hex}.png")
+                generated_temp_assets.append(intro_path)
+                _render_black_intro_card(intro_path, width, height, intro)
 
             intro_filename = f"clip_intro_{uuid4().hex}.mp4"
             intro_video_path = os.path.join(str(ASSETS_DIR), intro_filename)
             generated_temp_assets.append(intro_video_path)
-            width, height = _resolve_assembly_video_geometry(payload.format)
             ffmpeg_ok, ffmpeg_err = _run_ffmpeg([
                 "ffmpeg",
                 "-y",
@@ -15445,6 +16447,50 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                                 ),
                             )
 
+            generated_audio_gain_db = _safe_float(getattr(scene, "generatedAudioGainDb", None))
+            if generated_audio_gain_db is None:
+                generated_audio_gain_db = _safe_float(getattr(scene, "generated_audio_gain_db", None))
+            if generated_audio_gain_db is None:
+                generated_audio_gain_db = -16.0
+            generated_audio_policy = str(getattr(scene, "generatedAudioPolicy", None) or getattr(scene, "generated_audio_policy", None) or "").strip()
+            keep_generated_audio = bool(getattr(scene, "keepGeneratedAudio", False) or getattr(scene, "keep_generated_audio", False))
+            scene_route = str(scene.route or "").strip().lower()
+            generated_audio_mix_prepared = False
+            generated_audio_mix_error = ""
+            generated_audio_path = ""
+            if keep_generated_audio and scene_route in {"i2v_sound", "first_last_sound", "video_with_sound"}:
+                generated_audio_path = os.path.join(str(ASSETS_DIR), f"clip_scene_sfx_{idx}_{uuid4().hex}.m4a")
+                generated_temp_assets.append(generated_audio_path)
+                gain_filter = f"volume={float(generated_audio_gain_db):.3f}dB,atrim=duration={expected_duration:.3f},asetpts=PTS-STARTPTS"
+                sfx_ok, sfx_err = _run_ffmpeg([
+                    "ffmpeg", "-y",
+                    "-i", scene_path,
+                    "-vn",
+                    "-filter:a", gain_filter,
+                    "-ac", "2",
+                    "-ar", "48000",
+                    "-c:a", "aac",
+                    generated_audio_path,
+                ])
+                if sfx_ok and os.path.isfile(generated_audio_path):
+                    generated_audio_mix_prepared = True
+                    scene_audio_mix_items.append({
+                        "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
+                        "path": generated_audio_path,
+                        "timelineStartSec": round(timeline_start, 3),
+                        "durationSec": round(expected_duration, 3),
+                        "gainDb": round(float(generated_audio_gain_db), 3),
+                        "policy": generated_audio_policy or "mix_generated_audio_under_master",
+                        "soundPrompt": str(getattr(scene, "soundPrompt", None) or getattr(scene, "sound_prompt", None) or "")[:300],
+                    })
+                else:
+                    generated_audio_mix_error = str(sfx_err or "generated_audio_extract_failed")[:300]
+                    try:
+                        if os.path.isfile(generated_audio_path):
+                            os.remove(generated_audio_path)
+                    except Exception:
+                        pass
+
             debug_entry = {
                 "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
                 "route": str(scene.route or "").strip().lower() or None,
@@ -15458,6 +16504,12 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 "normalizedVideoDurationSec": round(float(normalized_duration), 3),
                 "audioSliceUrl": audio_slice_url or None,
                 "audioSliceDurationSec": round(audio_slice_duration, 3) if audio_slice_duration is not None else None,
+                "keepGeneratedAudio": bool(keep_generated_audio),
+                "generatedAudioPolicy": generated_audio_policy or None,
+                "generatedAudioGainDb": round(float(generated_audio_gain_db), 3),
+                "generatedAudioMixPrepared": bool(generated_audio_mix_prepared),
+                "generatedAudioMixError": generated_audio_mix_error or None,
+                "soundPrompt": str(getattr(scene, "soundPrompt", None) or getattr(scene, "sound_prompt", None) or "")[:300] or None,
                 "timelineStartSec": round(timeline_start, 3),
                 "timelineEndSec": round(timeline_end, 3),
                 "cumulativeExpectedEndSec": round(cumulative_expected_end, 3),
@@ -15517,13 +16569,32 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         if concat_video_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
             raise RuntimeError("FFPROBE_MISSING")
 
+        visual_filter_debug = {"filtersApplied": False, "filterCount": 0, "error": ""}
+        if intro and _intro_montage_enabled(intro):
+            assembled_no_audio, visual_filter_debug = _apply_assembly_video_filters(
+                assembled_no_audio,
+                intro,
+                concat_video_duration_sec,
+                generated_temp_assets,
+            )
+            filtered_duration_sec, filtered_duration_diag = probe_media_duration_sec(assembled_no_audio, temp_files=temp_files)
+            if filtered_duration_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+                raise RuntimeError("FFPROBE_MISSING")
+            if filtered_duration_sec is not None:
+                concat_video_duration_sec = filtered_duration_sec
+
         final_filename = f"clip_final_{uuid4().hex}.mp4"
         final_path = os.path.join(str(ASSETS_DIR), final_filename)
         audio_applied = False
-        audio_delay_sec = intro_duration if has_intro and intro_duration > 0 else 0.0
+        intro_audio_mode = str(getattr(intro, "audioMode", "after_intro") or "after_intro").strip().lower() if intro else "after_intro"
+        audio_delay_sec = intro_duration if has_intro and intro_duration > 0 and intro_audio_mode == "after_intro" else 0.0
 
         audio_url = str(payload.masterAudioUrl or payload.audioUrl or "").strip()
         master_audio_duration_sec: float | None = None
+        scene_audio_mix_applied = False
+        scene_audio_mix_count = len(scene_audio_mix_items)
+        if scene_audio_mix_items:
+            print("[CLIP ASSEMBLE SCENE AUDIO MIX PLAN]", json.dumps({"jobId": job_id, "count": scene_audio_mix_count, "items": scene_audio_mix_items}, ensure_ascii=False))
         if audio_url:
             print(f"[CLIP ASSEMBLE] stage=audio_mux delaySec={audio_delay_sec:.3f}")
             _update_clip_assemble_job(
@@ -15556,19 +16627,89 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                     audio_mux_cmd = [
                         "ffmpeg", "-y",
                         "-i", assembled_no_audio,
-                    ]
-                    if audio_delay_sec > 0:
-                        audio_mux_cmd.extend(["-itsoffset", f"{audio_delay_sec:.3f}"])
-                    audio_mux_cmd.extend([
                         "-i", audio_path,
-                        "-map", "0:v:0",
-                        "-map", "1:a:0",
-                        "-c:v", "copy",
-                        "-c:a", "aac",
-                        "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
-                        final_path,
-                    ])
+                    ]
+                    for item in scene_audio_mix_items:
+                        audio_mux_cmd.extend(["-i", str(item.get("path") or "")])
+
+                    if scene_audio_mix_items:
+                        filter_parts: list[str] = []
+                        mix_labels: list[str] = []
+
+                        master_delay_ms = max(0, int(round(float(audio_delay_sec or 0.0) * 1000.0)))
+                        master_audio_filter = _build_master_audio_filter(intro)
+                        if master_delay_ms > 0:
+                            filter_parts.append(f"[1:a]adelay={master_delay_ms}|{master_delay_ms},{master_audio_filter}[a_master]")
+                        else:
+                            filter_parts.append(f"[1:a]{master_audio_filter}[a_master]")
+                        mix_labels.append("[a_master]")
+
+                        for mix_idx, item in enumerate(scene_audio_mix_items, start=2):
+                            timeline_start_sec = float(item.get("timelineStartSec") or 0.0)
+                            scene_delay_sec = max(0.0, float(audio_delay_sec or 0.0) + timeline_start_sec)
+                            scene_delay_ms = max(0, int(round(scene_delay_sec * 1000.0)))
+                            label = f"a_scene_{mix_idx}"
+                            filter_parts.append(f"[{mix_idx}:a]adelay={scene_delay_ms}|{scene_delay_ms},asetpts=PTS-STARTPTS[{label}]")
+                            mix_labels.append(f"[{label}]")
+
+                        filter_parts.append(
+                            "".join(mix_labels)
+                            + f"amix=inputs={len(mix_labels)}:duration=longest:dropout_transition=0:normalize=0[aout]"
+                        )
+                        filter_complex = ";".join(filter_parts)
+                        print(
+                            "[CLIP ASSEMBLE AUDIO MIX FILTER]",
+                            json.dumps(
+                                {
+                                    "jobId": job_id,
+                                    "masterDelayMs": master_delay_ms,
+                                    "sceneAudioCount": len(scene_audio_mix_items),
+                                    "normalize": 0,
+                                    "mode": "master_plus_scene_audio_adelay",
+                                },
+                                ensure_ascii=False,
+                            ),
+                        )
+                        audio_mux_cmd.extend([
+                            "-filter_complex", filter_complex,
+                            "-map", "0:v:0",
+                            "-map", "[aout]",
+                            "-c:v", "copy",
+                            "-c:a", "aac",
+                            "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
+                            final_path,
+                        ])
+                    else:
+                        master_audio_filter = _build_master_audio_filter(intro)
+                        if audio_delay_sec > 0:
+                            audio_mux_cmd = [
+                                "ffmpeg", "-y",
+                                "-i", assembled_no_audio,
+                                "-itsoffset", f"{audio_delay_sec:.3f}",
+                                "-i", audio_path,
+                            ]
+                        if master_audio_filter and master_audio_filter != "asetpts=PTS-STARTPTS" and audio_delay_sec <= 0:
+                            audio_mux_cmd.extend([
+                                "-map", "0:v:0",
+                                "-map", "1:a:0",
+                                "-c:v", "copy",
+                                "-af", master_audio_filter.replace("asetpts=PTS-STARTPTS,", "").replace("asetpts=PTS-STARTPTS", "anull"),
+                                "-c:a", "aac",
+                                "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
+                                final_path,
+                            ])
+                        else:
+                            audio_mux_cmd.extend([
+                                "-map", "0:v:0",
+                                "-map", "1:a:0",
+                                "-c:v", "copy",
+                                "-c:a", "aac",
+                                "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
+                                final_path,
+                            ])
                     audio_ok, audio_ffmpeg_err = _run_ffmpeg(audio_mux_cmd)
+                    if audio_ok and scene_audio_mix_items:
+                        scene_audio_mix_applied = True
                     if audio_ok:
                         audio_applied = True
                     else:
@@ -15592,11 +16733,67 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                         raise RuntimeError("FFMPEG_MISSING")
                     raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
         else:
-            copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
-            if not copy_ok:
-                if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                    raise RuntimeError("FFMPEG_MISSING")
-                raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
+            if scene_audio_mix_items:
+                audio_mux_cmd = ["ffmpeg", "-y", "-i", assembled_no_audio]
+                for item in scene_audio_mix_items:
+                    audio_mux_cmd.extend(["-i", str(item.get("path") or "")])
+
+                filter_parts: list[str] = []
+                mix_labels: list[str] = []
+                base_delay_sec = float(audio_delay_sec or 0.0)
+                for input_idx, item in enumerate(scene_audio_mix_items, start=1):
+                    timeline_start_sec = float(item.get("timelineStartSec") or 0.0)
+                    scene_delay_sec = max(0.0, base_delay_sec + timeline_start_sec)
+                    scene_delay_ms = max(0, int(round(scene_delay_sec * 1000.0)))
+                    label = f"a_scene_{input_idx}"
+                    filter_parts.append(f"[{input_idx}:a]adelay={scene_delay_ms}|{scene_delay_ms},asetpts=PTS-STARTPTS[{label}]")
+                    mix_labels.append(f"[{label}]")
+
+                filter_parts.append(
+                    "".join(mix_labels)
+                    + f"amix=inputs={len(mix_labels)}:duration=longest:dropout_transition=0:normalize=0[aout]"
+                )
+                filter_complex = ";".join(filter_parts)
+                print(
+                    "[CLIP ASSEMBLE AUDIO MIX FILTER]",
+                    json.dumps(
+                        {
+                            "jobId": job_id,
+                            "baseDelaySec": round(base_delay_sec, 3),
+                            "sceneAudioCount": len(scene_audio_mix_items),
+                            "normalize": 0,
+                            "mode": "scene_audio_only_adelay",
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                audio_mux_cmd.extend([
+                    "-filter_complex", filter_complex,
+                    "-map", "0:v:0",
+                    "-map", "[aout]",
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-t", f"{float(expected_timeline_duration_sec + audio_delay_sec):.3f}",
+                    final_path,
+                ])
+                copy_ok, copy_err = _run_ffmpeg(audio_mux_cmd)
+                if copy_ok:
+                    scene_audio_mix_applied = True
+                    audio_applied = True
+                else:
+                    if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                        raise RuntimeError("FFMPEG_MISSING")
+                    fallback_ok, fallback_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                    if not fallback_ok:
+                        if fallback_err == "ffmpeg_missing_install_and_add_to_PATH":
+                            raise RuntimeError("FFMPEG_MISSING")
+                        raise RuntimeError(f"ASSEMBLE_FAILED:{fallback_err}")
+            else:
+                copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
+                if not copy_ok:
+                    if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                        raise RuntimeError("FFMPEG_MISSING")
+                    raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
 
         if not os.path.isfile(final_path):
             raise RuntimeError("final_file_not_created")
@@ -15620,6 +16817,9 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             "finalDriftSec": round(float(final_drift_sec), 3),
             "maxSceneDurationDeltaSec": round(float(max_scene_delta), 3),
             "driftDetected": bool(drift_detected),
+            "sceneAudioMixCount": int(scene_audio_mix_count),
+            "sceneAudioMixApplied": bool(scene_audio_mix_applied),
+            "sceneAudioMixItems": scene_audio_mix_items,
         }
         print("[ASSEMBLY TIMING SUMMARY]", json.dumps(assembly_timing_summary, ensure_ascii=False))
 
@@ -15633,6 +16833,9 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             progressPercent=100,
             finalVideoUrl=final_video_url,
             audioApplied=audio_applied,
+            sceneAudioMixApplied=scene_audio_mix_applied,
+            sceneAudioMixCount=scene_audio_mix_count,
+            sceneAudioMixItems=scene_audio_mix_items,
             current=total_steps,
             total=total_steps,
             totalSteps=total_steps,
@@ -15976,6 +17179,12 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "avAudioDrivenGenerationPresent": bool(((out.get("debug") or {}).get("avAudioDrivenGenerationPresent")) if isinstance(out.get("debug"), dict) else False),
                 "explicitMouthControlBranchPresent": bool(((out.get("debug") or {}).get("explicitMouthControlBranchPresent")) if isinstance(out.get("debug"), dict) else False),
                 "proofReasonDetailed": str(((out.get("debug") or {}).get("proofReasonDetailed") if isinstance(out.get("debug"), dict) else "") or ""),
+                "videoHasAudio": bool(out.get("videoHasAudio") or out.get("hasAudio") or getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
+                "hasAudio": bool(out.get("videoHasAudio") or out.get("hasAudio") or getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
+                "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
+                "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or out.get("generatedAudioPolicy") or ""),
+                "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
+                "soundPromptPreview": str(((out.get("debug") or {}).get("payloadSoundPromptPreview") if isinstance(out.get("debug"), dict) else "") or str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300]),
                 "updatedAt": time.time(),
                 "completedAt": time.time() if status == "done" else None,
             })
@@ -16072,12 +17281,128 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=error")
 
 
+@router.post("/clip/video/extract-last-frame")
+def clip_video_extract_last_frame(payload: ClipExtractLastFrameIn):
+    video_url = str(payload.videoUrl or "").strip()
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+    source_scene_id = str(payload.sourceSceneId or "").strip()
+    frame_offset_sec = _safe_float(getattr(payload, "frameOffsetSec", None))
+    if frame_offset_sec is None:
+        frame_offset_sec = 0.08
+    frame_offset_sec = max(0.02, min(1.0, float(frame_offset_sec)))
+
+    if not video_url:
+        return JSONResponse({"ok": False, "detail": "video_url_required"}, status_code=400)
+
+    _ensure_assets_dir()
+    temp_files: list[str] = []
+    try:
+        video_path, resolve_err = _resolve_media_input(video_url, temp_files)
+        if resolve_err or not video_path or not os.path.isfile(video_path):
+            return JSONResponse(
+                {"ok": False, "detail": "video_resolve_failed", "hint": resolve_err or "video_not_found"},
+                status_code=400,
+            )
+
+        duration_sec, duration_diag = probe_media_duration_sec(video_path, temp_files=temp_files)
+        if duration_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+            return JSONResponse({"ok": False, "detail": "ffprobe_missing_install_and_add_to_PATH"}, status_code=500)
+
+        safe_scene_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", scene_id).strip("_") or "scene"
+        safe_source_id = re.sub(r"[^a-zA-Z0-9_-]+", "_", source_scene_id).strip("_") or "prev"
+        filename = f"manual_last_frame_{safe_source_id}_to_{safe_scene_id}_{uuid4().hex}.jpg"
+        out_path = os.path.join(str(ASSETS_DIR), filename)
+
+        seek_sec = None
+        if isinstance(duration_sec, (float, int)) and math.isfinite(float(duration_sec)) and float(duration_sec) > 0:
+            seek_sec = max(0.0, float(duration_sec) - frame_offset_sec)
+
+        if seek_sec is not None:
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", f"{seek_sec:.3f}",
+                "-i", video_path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                out_path,
+            ]
+        else:
+            cmd = [
+                "ffmpeg", "-y",
+                "-sseof", f"-{frame_offset_sec:.3f}",
+                "-i", video_path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                out_path,
+            ]
+
+        ok, err = _run_ffmpeg(cmd)
+        if not ok or not os.path.isfile(out_path):
+            if err == "ffmpeg_missing_install_and_add_to_PATH":
+                return JSONResponse({"ok": False, "detail": "ffmpeg_missing_install_and_add_to_PATH"}, status_code=500)
+            return JSONResponse({"ok": False, "detail": "last_frame_extract_failed", "hint": err}, status_code=500)
+
+        image_url = _build_public_static_url(filename)
+        return {
+            "ok": True,
+            "sceneId": scene_id,
+            "sourceSceneId": source_scene_id,
+            "videoUrl": video_url,
+            "imageUrl": image_url,
+            "image_url": image_url,
+            "durationSec": round(float(duration_sec), 3) if isinstance(duration_sec, (float, int)) and math.isfinite(float(duration_sec)) else None,
+            "seekSec": round(float(seek_sec), 3) if seek_sec is not None else None,
+            "frameOffsetSec": round(float(frame_offset_sec), 3),
+        }
+    finally:
+        for temp_file in temp_files:
+            try:
+                if os.path.isfile(temp_file):
+                    os.remove(temp_file)
+            except Exception:
+                pass
+
+
 @router.post("/clip/video/start")
 def clip_video_start(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
     provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
     resolved_duration_sec, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
+    now_ts = time.time()
+    with CLIP_VIDEO_JOBS_LOCK:
+        for existing_job_id, existing_job in reversed(list(CLIP_VIDEO_JOBS.items())):
+            if str(existing_job.get("sceneId") or "") != scene_id:
+                continue
+            if str(existing_job.get("provider") or "") != provider:
+                continue
+            existing_workflow = _normalize_ltx_workflow_key(str(existing_job.get("workflowKey") or existing_job.get("resolvedWorkflowKey") or resolved_workflow_hint or ""))
+            requested_workflow = _normalize_ltx_workflow_key(str(resolved_workflow_hint or ""))
+            if existing_workflow and requested_workflow and existing_workflow != requested_workflow:
+                continue
+            if str(existing_job.get("status") or "").lower() not in {"queued", "running"}:
+                continue
+            if now_ts - float(existing_job.get("updatedAt") or 0) > 1800:
+                continue
+            print(
+                "[CLIP VIDEO JOB DEDUPE] "
+                f"sceneId={scene_id} existingJobId={existing_job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
+            )
+            return {
+                "ok": True,
+                "jobId": existing_job_id,
+                "job_id": existing_job_id,
+                "id": existing_job_id,
+                "sceneId": scene_id,
+                "status": str(existing_job.get("status") or "running"),
+                "providerJobId": existing_job.get("providerJobId"),
+                "comfyPromptId": existing_job.get("comfyPromptId") or existing_job.get("providerJobId"),
+                "resolvedWorkflowKey": resolved_workflow_hint,
+                "statusEndpoint": f"/api/clip/video/status/{existing_job_id}",
+                "jobStored": True,
+                "deduplicated": True,
+            }
+
     job_id = uuid4().hex
     with CLIP_VIDEO_JOBS_LOCK:
         CLIP_VIDEO_JOBS[job_id] = {
@@ -16090,7 +17415,8 @@ def clip_video_start(payload: ClipVideoIn):
             "videoUrl": None,
             "mode": None,
             "model": None,
-            "workflowKey": None,
+            "workflowKey": resolved_workflow_hint if resolved_workflow_hint != "auto" else None,
+            "resolvedWorkflowKey": resolved_workflow_hint,
             "requestedDurationSec": float(resolved_duration_sec),
             "generationDurationSec": _safe_positive_float(payload.generationDurationSec),
             "targetDurationSec": _safe_positive_float(payload.targetDurationSec),
@@ -16125,6 +17451,12 @@ def clip_video_start(payload: ClipVideoIn):
             "avAudioDrivenGenerationPresent": False,
             "explicitMouthControlBranchPresent": False,
             "proofReasonDetailed": "",
+            "videoHasAudio": False,
+            "hasAudio": False,
+            "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
+            "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
+            "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
+            "soundPromptPreview": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300],
             "updatedAt": time.time(),
             "completedAt": None,
         }
@@ -16552,6 +17884,7 @@ def clip_video(payload: ClipVideoIn):
             or scene_contract_for_prompt.get("video_prompt")
             or ""
         ).strip()
+        is_manual_clip_board_request = _is_manual_clip_board_payload(payload)
         scene_final_contract = _resolve_scene_final_video_contract(payload, scene_contract_for_prompt)
         scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
         metadata_route_allowed = _is_video_metadata_route_allowed(
@@ -16562,7 +17895,23 @@ def clip_video(payload: ClipVideoIn):
         )
         has_canonical_final_contract = bool(scene_final_contract.get("valid"))
         has_gemini_video_metadata = bool(metadata_route_allowed and scene_video_metadata.get("valid"))
-        if has_canonical_final_contract:
+        if is_manual_clip_board_request:
+            effective_prompt, prompt_debug = _compose_manual_clip_effective_prompt(
+                video_prompt=scene_video_prompt,
+                transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
+                output_format=output_format,
+                requested_duration_sec=generation_duration_sec,
+                workflow_key=final_workflow_key,
+                scene_contract=scene_contract_for_prompt,
+                payload=payload,
+            )
+            scene_video_negative_prompt = _resolve_manual_clip_negative_prompt(
+                payload=payload,
+                scene_contract=scene_contract_for_prompt,
+                workflow_key=final_workflow_key,
+            )
+            prompt_source_label = "manual_clip_board"
+        elif has_canonical_final_contract:
             effective_prompt = str(scene_final_contract.get("positive_prompt") or "").strip()
             scene_video_negative_prompt = str(scene_final_contract.get("negative_prompt") or "").strip()
             prompt_debug = {
@@ -16574,6 +17923,7 @@ def clip_video(payload: ClipVideoIn):
                 "effectivePromptSource": "canonical_final_video_prompt_contract",
                 "promptBuilderMode": "scenario_manifest_only",
             }
+            prompt_source_label = "canonical_final_video_prompt_contract"
         elif has_gemini_video_metadata:
             effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
             scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
@@ -16586,6 +17936,7 @@ def clip_video(payload: ClipVideoIn):
                 "effectivePromptSource": "gemini_video_metadata",
                 "promptBuilderMode": "gemini_video_metadata_guardrail",
             }
+            prompt_source_label = "gemini_video_metadata"
         else:
             effective_prompt, prompt_debug = _compose_video_effective_prompt(
                 video_prompt=scene_video_prompt,
@@ -16610,14 +17961,17 @@ def clip_video(payload: ClipVideoIn):
                 workflow_key=final_workflow_key,
                 model_key=resolved_model_key,
             )
-        if final_workflow_key in {"lip_sync", "lip_sync_music"}:
+            prompt_source_label = "legacy_backend_builder"
+        if final_workflow_key in {"lip_sync", "lip_sync_music"} and not is_manual_clip_board_request:
             scene_video_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
         print(
             "[CLIP VIDEO PROMPT SOURCE] "
             + json.dumps(
             {
                     "sceneId": scene_id,
-                    "source": "canonical_final_video_prompt_contract" if has_canonical_final_contract else ("gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder"),
+                    "source": prompt_source_label,
+                    "manualClipBoard": bool(is_manual_clip_board_request),
+                    "promptBuilderMode": str(prompt_debug.get("promptBuilderMode") or ""),
                     "workflowKey": final_workflow_key,
                     "metadataRouteAllowed": metadata_route_allowed,
                     "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),
@@ -16903,6 +18257,20 @@ def clip_video(payload: ClipVideoIn):
                         "hint": (audio_err or "failed_to_read_audio_bytes_from_source")[:300],
                     },
                 )
+            audio_tail_silence_sec = 0.0
+            audio_pad_debug: dict[str, Any] | None = None
+            if is_manual_clip_board_request:
+                audio_tail_silence_sec = max(0.0, float(generation_duration_sec) - float(target_duration_sec))
+            if audio_tail_silence_sec > 0.001:
+                audio_bytes, audio_ext, audio_mime_override, audio_pad_debug = _append_silence_tail_to_audio_bytes(
+                    audio_bytes=audio_bytes,
+                    audio_ext=audio_ext,
+                    tail_silence_sec=audio_tail_silence_sec,
+                    scene_id=scene_id,
+                )
+                if audio_mime_override:
+                    _audio_mime = audio_mime_override
+                print("[LIP_SYNC AUDIO PAD] " + json.dumps(audio_pad_debug, ensure_ascii=False))
             audio_transport_mode = "upload"
             print(
                 "[LIP_SYNC AUDIO BYTES READY] "
@@ -16916,13 +18284,19 @@ def clip_video(payload: ClipVideoIn):
                         "audioBytesSize": len(audio_bytes or b""),
                         "audioExt": audio_ext or "unknown",
                         "audioTransportMode": audio_transport_mode,
+                        "manualClipBoard": bool(is_manual_clip_board_request),
+                        "audioSilenceTailSec": round(float(audio_tail_silence_sec), 3),
+                        "audioPadApplied": bool((audio_pad_debug or {}).get("audioPadApplied")),
                     },
                     ensure_ascii=False,
                 )
             )
 
         image_filename = f"{scene_id}_{int(time.time())}.{(image_ext or 'jpg').lower()}"
-        comfy_requested_duration_sec = float(generation_duration_sec if _normalize_ltx_workflow_key(final_workflow_key) == "i2v" else requested_duration)
+        # Always send the backend-resolved generation duration to Comfy.
+        # For Manual Clip Board lipsync this is target + silence-tail overgeneration,
+        # so audio length and workflow duration stay aligned before final trim.
+        comfy_requested_duration_sec = float(generation_duration_sec or requested_duration)
         print(
             "[COMFY REMOTE] "
             f"workflow={workflow_path} width={width} height={height} requestedDurationSec={requested_duration} generationDurationSec={generation_duration_sec} comfyDurationSec={comfy_requested_duration_sec}"
@@ -17154,11 +18528,13 @@ def clip_video(payload: ClipVideoIn):
             "trimApplied": False,
             "trimReason": trim_plan_reason,
         }
-        if video_url and generation_duration_sec > target_duration_sec:
+        if video_url and target_duration_sec > 0:
             trimmed_url, trimmed_duration_sec, trim_result_debug = _trim_scene_video_to_target_duration(
                 video_url=video_url,
                 target_duration_sec=target_duration_sec,
                 scene_id=scene_id,
+                allow_last_frame_pad=final_workflow_key in (LTX_FIRST_LAST_WORKFLOW_KEYS | {"lip_sync", "lip_sync_music"}),
+                max_last_frame_pad_sec=0.40,
             )
             video_url = trimmed_url
             if trimmed_duration_sec and trimmed_duration_sec > 0:
@@ -17232,6 +18608,11 @@ def clip_video(payload: ClipVideoIn):
             "targetDurationSec": round(float(target_duration_sec), 3),
             "generationDurationSec": round(float(generation_duration_sec), 3),
             "providerDurationSec": round(float(source_video_duration_sec or comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or generation_duration_sec), 3),
+            "videoHasAudio": bool(final_workflow_key == "i2v_sound" and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
+            "hasAudio": bool(final_workflow_key == "i2v_sound" and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
+            "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
+            "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
+            "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
             "sceneDurationSec": scene_duration_sec,
@@ -17260,6 +18641,10 @@ def clip_video(payload: ClipVideoIn):
                 "effectivePromptSource": str(prompt_debug.get("effectivePromptSource") or "generic"),
                 "payloadVideoPromptPreview": prompt_debug.get("payloadVideoPromptPreview"),
                 "payloadTransitionActionPromptPreview": prompt_debug.get("payloadTransitionActionPromptPreview"),
+                "payloadSoundPromptPreview": prompt_debug.get("payloadSoundPromptPreview"),
+                "generatedAudioGainDb": prompt_debug.get("generatedAudioGainDb"),
+                "keepGeneratedAudio": prompt_debug.get("keepGeneratedAudio"),
+                "generatedAudioPolicy": prompt_debug.get("generatedAudioPolicy"),
                 "payloadVideoNegativePromptPreview": prompt_debug.get("payloadVideoNegativePromptPreview"),
                 "promptPatchedNodeIds": comfy_debug.get("prompt_patched_node_ids") or [],
                 "negativePromptNodePatched": bool(comfy_debug.get("negative_prompt_node_patched")),
@@ -17347,6 +18732,7 @@ def clip_video(payload: ClipVideoIn):
 
     scene_human_visual_anchors = [str(item or "").strip() for item in (payload.sceneHumanVisualAnchors or []) if str(item or "").strip()]
     scene_contract_for_prompt = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    is_manual_clip_board_request = _is_manual_clip_board_payload(payload)
     scene_final_contract = _resolve_scene_final_video_contract(payload, scene_contract_for_prompt)
     scene_video_metadata = _resolve_scene_video_metadata(payload, scene_contract_for_prompt)
     metadata_route_allowed = _is_video_metadata_route_allowed(
@@ -17357,7 +18743,23 @@ def clip_video(payload: ClipVideoIn):
     )
     has_canonical_final_contract = bool(scene_final_contract.get("valid"))
     has_gemini_video_metadata = bool(metadata_route_allowed and scene_video_metadata.get("valid"))
-    if has_canonical_final_contract:
+    if is_manual_clip_board_request:
+        effective_prompt, prompt_debug = _compose_manual_clip_effective_prompt(
+            video_prompt=str(payload.videoPrompt or "").strip(),
+            transition_action_prompt=str(payload.transitionActionPrompt or "").strip(),
+            output_format=output_format,
+            requested_duration_sec=payload.requestedDurationSec,
+            workflow_key=final_workflow_key,
+            scene_contract=scene_contract_for_prompt,
+            payload=payload,
+        )
+        scene_video_negative_prompt = _resolve_manual_clip_negative_prompt(
+            payload=payload,
+            scene_contract=scene_contract_for_prompt,
+            workflow_key=final_workflow_key,
+        )
+        prompt_source_label = "manual_clip_board"
+    elif has_canonical_final_contract:
         effective_prompt = str(scene_final_contract.get("positive_prompt") or "").strip()
         scene_video_negative_prompt = str(scene_final_contract.get("negative_prompt") or "").strip()
         prompt_debug = {
@@ -17369,6 +18771,7 @@ def clip_video(payload: ClipVideoIn):
             "effectivePromptSource": "canonical_final_video_prompt_contract",
             "promptBuilderMode": "scenario_manifest_only",
         }
+        prompt_source_label = "canonical_final_video_prompt_contract"
     elif has_gemini_video_metadata:
         effective_prompt = str(scene_video_metadata.get("ltx_positive") or "").strip()
         scene_video_negative_prompt = str(scene_video_metadata.get("ltx_negative") or "").strip() or VIDEO_METADATA_NEGATIVE_FALLBACK
@@ -17381,6 +18784,7 @@ def clip_video(payload: ClipVideoIn):
             "effectivePromptSource": "gemini_video_metadata",
             "promptBuilderMode": "gemini_video_metadata_guardrail",
         }
+        prompt_source_label = "gemini_video_metadata"
     else:
         effective_prompt, prompt_debug = _compose_video_effective_prompt(
             video_prompt=str(payload.videoPrompt or "").strip(),
@@ -17401,14 +18805,17 @@ def clip_video(payload: ClipVideoIn):
             payload,
             scene_contract_for_prompt,
         )
-    if final_workflow_key in {"lip_sync", "lip_sync_music"}:
+        prompt_source_label = "legacy_backend_builder"
+    if final_workflow_key in {"lip_sync", "lip_sync_music"} and not is_manual_clip_board_request:
         scene_video_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
     print(
         "[CLIP VIDEO PROMPT SOURCE] "
         + json.dumps(
             {
                 "sceneId": scene_id,
-                "source": "canonical_final_video_prompt_contract" if has_canonical_final_contract else ("gemini_video_metadata" if has_gemini_video_metadata else "legacy_backend_builder"),
+                "source": prompt_source_label,
+                "manualClipBoard": bool(is_manual_clip_board_request),
+                "promptBuilderMode": str(prompt_debug.get("promptBuilderMode") or ""),
                 "workflowKey": final_workflow_key,
                 "metadataRouteAllowed": metadata_route_allowed,
                 "motion_tag": str(scene_video_metadata.get("motion_tag") or ""),

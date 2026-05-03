@@ -31,6 +31,8 @@ COMFY_LTX_CAPABILITIES = {
 COMFY_AUDIO_WORKFLOW_FILES = {
     # production audio-sensitive workflow key
     "lip_sync": "image-lipsink-video-music.json",
+    # i2v_sound is a sound-capable image-to-video workflow, but it does not require an input audio file.
+    "i2v_sound": "image-video-golos-zvuk.json",
 }
 COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
     "loadaudio",
@@ -108,64 +110,76 @@ COMFY_FIRST_LAST_PROMPT_CLASS_NAMES = {
 
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
+    "i2v_sound": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": False, "continuation": False},
     "f_l": {"single_image": False, "first_last": True, "audio_sensitive": False, "lip_sync": False, "continuation": False},
+    "f_l_sound": {"single_image": False, "first_last": True, "audio_sensitive": True, "lip_sync": False, "continuation": False},
     "continuation": {"single_image": False, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": True},
     "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
 }
 COMFY_LEGACY_WORKFLOW_ALIASES = {
     "i2v_as": "i2v",
+    "image_video_sound": "i2v_sound",
+    "standard_video_sound": "i2v_sound",
+    "video_with_sound": "i2v_sound",
     "f_l_as": "f_l",
     "first_last": "f_l",
+    "first_last_sound": "f_l_sound",
+    "f_l_sound": "f_l_sound",
     "imag-imag-video-bz": "f_l",
     "ia2v": "lip_sync",
     "lip_sync_music": "lip_sync",
 }
 COMFY_WORKFLOW_FAMILY = {
     "i2v": "ltx_image_video",
+    "i2v_sound": "ltx_image_video_sound",
     "f_l": "ltx_first_last",
+    "f_l_sound": "ltx_first_last_sound",
     "continuation": "ltx_continuation",
     "lip_sync": "comfy_lip_sync_audio",
 }
 COMFY_WORKFLOW_FILENAME_FALLBACKS = {
     "i2v": ("image-video.json",),
-    "f_l": ("last-first cadr.json", "imag-imag-video-bz.json", "imag-imag-video-zvuk.json"),
+    "i2v_sound": ("image-video-golos-zvuk.json", "image-video.json"),
+    "f_l": ("last-first cadr-NO sound.json", "last-first cadr.json", "imag-imag-video-bz.json"),
+    "f_l_sound": ("last-first cadr-sound.json", "imag-imag-video-zvuk.json"),
     "continuation": ("image-video.json",),
     "lip_sync": ("image-lipsink-video-music.json",),
 }
-COMFY_MODEL_GATED_WORKFLOW_KEYS = {"i2v", "f_l", "continuation"}
+COMFY_MODEL_GATED_WORKFLOW_KEYS = {"i2v", "i2v_sound", "f_l", "f_l_sound", "continuation"}
 MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_distilled_fp8": {
         "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_dev_fp16": {
         "key": "ltx23_dev_fp16",
         "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_distilled_fp16": {
         "key": "ltx23_distilled_fp16",
         "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_13b_dev_fp8": {
         "key": "ltx23_13b_dev_fp8",
         "ckpt_name": "ltx-2.3-13b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
     "ltx23_13b_distilled_fp8": {
         "key": "ltx23_13b_distilled_fp8",
         "ckpt_name": "ltx-2.3-13b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "f_l"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
     },
 }
 MODEL_PATCH_NODE_TYPES = {"CheckpointLoaderSimple", "LTXAVTextEncoderLoader", "LTXVAudioVAELoader"}
+F_L_WORKFLOW_KEYS = {"f_l", "f_l_sound"}
 
 
 def _validate_comfy_ltx_request(
@@ -391,6 +405,73 @@ def _parse_json_response(resp: Response, *, stage: str) -> tuple[dict | None, st
         return None, f"{stage}_invalid_json_root:{type(payload).__name__}"
 
     return payload, None
+
+
+def _history_entry_has_outputs(entry: dict | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    outputs = entry.get("outputs")
+    return isinstance(outputs, dict) and bool(outputs)
+
+
+def _normalize_history_entry_payload(prompt_id: str, payload: dict | None) -> dict | None:
+    safe_prompt_id = str(prompt_id or "").strip()
+    if not safe_prompt_id or not isinstance(payload, dict):
+        return None
+
+    direct_entry = payload.get(safe_prompt_id)
+    if isinstance(direct_entry, dict):
+        return {safe_prompt_id: direct_entry}
+
+    history_obj = payload.get("history")
+    if isinstance(history_obj, dict):
+        nested_entry = history_obj.get(safe_prompt_id)
+        if isinstance(nested_entry, dict):
+            return {safe_prompt_id: nested_entry}
+
+    return None
+
+
+def _fetch_comfy_global_history_entry(
+    prompt_id: str,
+    *,
+    connect_timeout: int,
+    read_timeout: int,
+) -> tuple[dict | None, str | None]:
+    safe_prompt_id = str(prompt_id or "").strip()
+    if not safe_prompt_id:
+        return None, "prompt_id_empty"
+
+    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history"
+    try:
+        resp = requests.get(url, timeout=(connect_timeout, read_timeout))
+        body_snippet = _response_body_snippet(resp)
+        logger.info("[COMFY REMOTE] global history response status=%s body=%r", resp.status_code, body_snippet)
+        if resp.status_code >= 400:
+            return None, f"global_history_non_200:status={resp.status_code}:body={body_snippet}"
+        payload, parse_err = _parse_json_response(resp, stage="global_history_response")
+        if parse_err or not payload:
+            return None, parse_err or "global_history_response_invalid_json"
+        normalized = _normalize_history_entry_payload(safe_prompt_id, payload)
+        if normalized and _history_entry_has_outputs(normalized.get(safe_prompt_id)):
+            logger.info(
+                "[COMFY REMOTE] global history recovered outputs prompt_id=%s keys=%s",
+                safe_prompt_id,
+                list((normalized.get(safe_prompt_id) or {}).get("outputs", {}).keys())[:50],
+            )
+            return normalized, None
+        if normalized:
+            return normalized, "global_history_entry_without_outputs"
+        return None, "global_history_prompt_id_missing"
+    except ConnectTimeout as exc:
+        return None, f"global_history_connect_timeout:{str(exc)[:300]}"
+    except ReadTimeout as exc:
+        return None, f"global_history_read_timeout:{str(exc)[:300]}"
+    except RequestException as exc:
+        return None, f"global_history_request_error:{str(exc)[:300]}"
+    except Exception as exc:
+        logger.exception("[COMFY REMOTE] global history unexpected error url=%s prompt_id=%s", url, safe_prompt_id)
+        return None, f"global_history_unexpected_error:{str(exc)[:300]}"
 
 
 def _preview_value(value, *, limit: int = 280):
@@ -787,6 +868,25 @@ def wait_for_comfy_result(
                     transient_invalid_json_streak,
                     body_preview,
                 )
+                if transient_invalid_json_streak in {3, 6, 10} or transient_invalid_json_streak % 25 == 0:
+                    recovered_payload, recovered_err = _fetch_comfy_global_history_entry(
+                        safe_prompt_id,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
+                    )
+                    if recovered_payload and _history_entry_has_outputs(recovered_payload.get(safe_prompt_id)):
+                        logger.warning(
+                            "[COMFY REMOTE] recovered completed output from global history after empty /history/{prompt_id} prompt_id=%s streak=%s",
+                            safe_prompt_id,
+                            transient_invalid_json_streak,
+                        )
+                        return recovered_payload, None
+                    logger.info(
+                        "[COMFY REMOTE] global history fallback not ready prompt_id=%s streak=%s err=%s",
+                        safe_prompt_id,
+                        transient_invalid_json_streak,
+                        recovered_err or "",
+                    )
                 time.sleep(_next_sleep(sleep_sec, transient_invalid_json_streak))
                 continue
             transient_invalid_json_streak = 0
@@ -853,6 +953,22 @@ def wait_for_comfy_result(
                     )
                     if outputs:
                         return payload, None
+                    recovered_payload, recovered_err = _fetch_comfy_global_history_entry(
+                        safe_prompt_id,
+                        connect_timeout=connect_timeout,
+                        read_timeout=read_timeout,
+                    )
+                    if recovered_payload and _history_entry_has_outputs(recovered_payload.get(safe_prompt_id)):
+                        logger.warning(
+                            "[COMFY REMOTE] recovered completed output from global history after empty outputs prompt_id=%s",
+                            safe_prompt_id,
+                        )
+                        return recovered_payload, None
+                    logger.info(
+                        "[COMFY REMOTE] global history fallback after empty outputs not ready prompt_id=%s err=%s",
+                        safe_prompt_id,
+                        recovered_err or "",
+                    )
         except ConnectTimeout as exc:
             transient_transport_streak += 1
             logger.warning(
@@ -896,13 +1012,27 @@ def wait_for_comfy_result(
         )
         return last_valid_payload, None
 
+    recovered_payload, recovered_err = _fetch_comfy_global_history_entry(
+        safe_prompt_id,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+    )
+    if recovered_payload and _history_entry_has_outputs(recovered_payload.get(safe_prompt_id)):
+        logger.warning(
+            "[COMFY REMOTE] recovered completed output from global history at timeout prompt_id=%s timeout_sec=%s",
+            safe_prompt_id,
+            timeout_sec,
+        )
+        return recovered_payload, None
+
     logger.warning(
-        "[COMFY REMOTE] history wait timeout prompt_id=%s timeout_sec=%s saw_valid_history_payload=%s last_status=%s last_body=%r",
+        "[COMFY REMOTE] history wait timeout prompt_id=%s timeout_sec=%s saw_valid_history_payload=%s last_status=%s last_body=%r global_history_err=%s",
         safe_prompt_id,
         timeout_sec,
         saw_valid_history_payload,
         last_response_status,
         last_response_body_snippet,
+        recovered_err or "",
     )
     return None, "timeout"
 
@@ -1593,7 +1723,7 @@ def _patch_duration_and_frames(
 
     # Priority B: graph-aware linked chain patch for linked frames_number/frames/num_frames (+f_l linked length).
     frame_input_keys = ("frames_number", "frames", "num_frames")
-    linked_chain_keys = (*frame_input_keys, "length") if normalized_workflow_key in {"f_l"} else frame_input_keys
+    linked_chain_keys = (*frame_input_keys, "length") if normalized_workflow_key in F_L_WORKFLOW_KEYS else frame_input_keys
     for node_id, node in workflow.items():
         if not isinstance(node, dict):
             continue
@@ -1682,7 +1812,7 @@ def _patch_duration_and_frames(
                 continue
             inputs[key] = int(frames)
             frames_patch_ids.append(str(node_id))
-        if normalized_workflow_key in {"f_l"} and "length" in inputs:
+        if normalized_workflow_key in F_L_WORKFLOW_KEYS and "length" in inputs:
             length_value = inputs.get("length")
             if not _is_linked_input(length_value):
                 continue
@@ -2650,12 +2780,12 @@ def _patch_workflow_inputs(
     wf = copy.deepcopy(workflow)
     normalized_workflow_key = str(workflow_key or "").strip().lower()
     discovery = _discover_lip_sync_nodes(wf) if normalized_workflow_key == "lip_sync" else {}
-    first_last_discovery = _discover_first_last_patch_nodes(wf) if normalized_workflow_key == "f_l" else {}
+    first_last_discovery = _discover_first_last_patch_nodes(wf) if normalized_workflow_key in F_L_WORKFLOW_KEYS else {}
     used_legacy_fallback_ids = False
     optional_fallback_misses: list[dict[str, str]] = []
 
     discovered_fps_id = str(discovery.get("fps_node_id") or "").strip() if isinstance(discovery, dict) else ""
-    if normalized_workflow_key == "f_l" and not discovered_fps_id:
+    if normalized_workflow_key in F_L_WORKFLOW_KEYS and not discovered_fps_id:
         discovered_fps_id = str(first_last_discovery.get("fps_node_id") or "").strip()
     if normalized_workflow_key == "lip_sync" and not discovered_fps_id:
         discovered_fps_id = LIPSYNC_PRIMARY_NODE_IDS["fps"]
@@ -2725,7 +2855,7 @@ def _patch_workflow_inputs(
                     },
                 },
             )
-    elif normalized_workflow_key == "f_l":
+    elif normalized_workflow_key in F_L_WORKFLOW_KEYS:
         if first_last_discovery.get("positive_prompt_node_id"):
             f_l_positive_prompt_node_id = str(first_last_discovery.get("positive_prompt_node_id") or "")
             f_l_positive_prompt_input_key = str(first_last_discovery.get("positive_prompt_input_key") or "")
@@ -2774,7 +2904,7 @@ def _patch_workflow_inputs(
             (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
             (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
         ])
-    if normalized_workflow_key not in {"lip_sync", "f_l"}:
+    if normalized_workflow_key not in ({"lip_sync"} | F_L_WORKFLOW_KEYS):
         patch_values.extend([
             (*FIXED_IMAGE_VIDEO_NODES["width"], int(width)),
             (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
@@ -2790,7 +2920,7 @@ def _patch_workflow_inputs(
             patched_node_by_key[str(key)] = str(node_id)
 
     resolved_negative_prompt_node_id = (
-        f_l_negative_prompt_node_id if (normalized_workflow_key == "f_l" and f_l_negative_prompt_node_id) else _discover_negative_prompt_node(wf)
+        f_l_negative_prompt_node_id if (normalized_workflow_key in F_L_WORKFLOW_KEYS and f_l_negative_prompt_node_id) else _discover_negative_prompt_node(wf)
     )
     workflow_static_negative_prompt = ""
     negative_prompt_node_patched = False
@@ -2807,7 +2937,7 @@ def _patch_workflow_inputs(
                     effective_negative_prompt = _dedupe_prompt_tokens_csv(workflow_static_negative_prompt, scene_negative_prompt)
                     input_key = (
                         f_l_negative_prompt_input_key
-                        if (normalized_workflow_key == "f_l" and f_l_negative_prompt_input_key in negative_inputs)
+                        if (normalized_workflow_key in F_L_WORKFLOW_KEYS and f_l_negative_prompt_input_key in negative_inputs)
                         else ("text" if "text" in negative_inputs else ("value" if "value" in negative_inputs else ""))
                     )
                     if input_key:
@@ -2843,7 +2973,7 @@ def _patch_workflow_inputs(
 
     if seed is not None:
         seed_targets: list[tuple[str, str]] = []
-        if normalized_workflow_key == "f_l":
+        if normalized_workflow_key in F_L_WORKFLOW_KEYS:
             discovered_seed_node_ids = [str(item) for item in (first_last_discovery.get("seed_node_ids") or []) if str(item).strip()]
             if discovered_seed_node_ids:
                 seed_targets.extend([(node_id, "noise_seed") for node_id in discovered_seed_node_ids])
@@ -2853,7 +2983,7 @@ def _patch_workflow_inputs(
         for node_id, key in list(dict.fromkeys(seed_targets)):
             ok, err = _set_node_input(wf, node_id, key, int(seed))
             if not ok:
-                if normalized_workflow_key == "f_l" and str(err or "").startswith("missing_node:"):
+                if normalized_workflow_key in F_L_WORKFLOW_KEYS and str(err or "").startswith("missing_node:"):
                     optional_fallback_misses.append(
                         {
                             "workflowKey": normalized_workflow_key,
@@ -2898,13 +3028,13 @@ def _patch_workflow_inputs(
         "optionalFallbackMisses": optional_fallback_misses,
         "saveVideoFilenamePrefix": str(discovery.get("save_video_filename_prefix") or ""),
         "usedLegacyFallbackIds": bool(used_legacy_fallback_ids),
-        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else (f_l_positive_prompt_node_id if normalized_workflow_key == "f_l" else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]))),
-        "patchedPositivePromptNodeId": str(f_l_positive_prompt_node_id if normalized_workflow_key == "f_l" else ""),
-        "patchedNegativePromptNodeId": str(f_l_negative_prompt_node_id if normalized_workflow_key == "f_l" else ""),
-        "positivePromptNodePatched": bool(f_l_positive_prompt_node_id) if normalized_workflow_key == "f_l" else bool(patched_node_by_key.get("value")),
+        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else (f_l_positive_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]))),
+        "patchedPositivePromptNodeId": str(f_l_positive_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else ""),
+        "patchedNegativePromptNodeId": str(f_l_negative_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else ""),
+        "positivePromptNodePatched": bool(f_l_positive_prompt_node_id) if normalized_workflow_key in F_L_WORKFLOW_KEYS else bool(patched_node_by_key.get("value")),
         "negativePromptNodePatched": bool(negative_prompt_node_patched),
-        "promptPatchInputKey": str(f_l_positive_prompt_input_key if normalized_workflow_key == "f_l" else "value"),
-        "negativePromptPatchInputKey": str(f_l_negative_prompt_input_key if normalized_workflow_key == "f_l" else ""),
+        "promptPatchInputKey": str(f_l_positive_prompt_input_key if normalized_workflow_key in F_L_WORKFLOW_KEYS else "value"),
+        "negativePromptPatchInputKey": str(f_l_negative_prompt_input_key if normalized_workflow_key in F_L_WORKFLOW_KEYS else ""),
         "patchedImageNodeId": str((patched_node_by_key.get("image") or (discovery.get("image_node_ids") or [LIPSYNC_PRIMARY_NODE_IDS["image"]])[0]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("image") or (first_last_discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0])),
         "patchedDurationNodeId": str((discovery.get("duration_node_id") or LIPSYNC_PRIMARY_NODE_IDS["duration"]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("value") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
         "patchedFpsNodeId": str((discovery.get("fps_node_id") or LIPSYNC_PRIMARY_NODE_IDS["fps"]) if normalized_workflow_key == "lip_sync" else (first_last_discovery.get("fps_node_id") or FIXED_IMAGE_VIDEO_NODES["fps"][0])),
@@ -2954,7 +3084,7 @@ def _patch_workflow_inputs(
             ],
         },
     )
-    if normalized_workflow_key == "f_l":
+    if normalized_workflow_key in F_L_WORKFLOW_KEYS:
         logger.info(
             "[COMFY F_L PATCH RESOLUTION] %s",
             {
@@ -3184,11 +3314,11 @@ def run_comfy_image_to_video(
     scene_negative_prompt = str(negative_prompt or "").strip()
     uploaded_start_name = uploaded_name
     uploaded_end_name = ""
-    if start_image_bytes and normalized_workflow_key in {"f_l"}:
+    if start_image_bytes and normalized_workflow_key in {"f_l", "f_l_sound"}:
         uploaded_start_name, start_upload_err = upload_image_to_comfy(start_image_bytes, f"{Path(image_filename).stem}_start.jpg")
         if start_upload_err or not uploaded_start_name:
             return None, f"upload_failed:{start_upload_err or 'start_image_upload_failed'}"
-    if end_image_bytes and normalized_workflow_key in {"f_l"}:
+    if end_image_bytes and normalized_workflow_key in {"f_l", "f_l_sound"}:
         uploaded_end_name, end_upload_err = upload_image_to_comfy(end_image_bytes, f"{Path(image_filename).stem}_end.jpg")
         if end_upload_err or not uploaded_end_name:
             return None, f"upload_failed:{end_upload_err or 'end_image_upload_failed'}"
@@ -3229,7 +3359,7 @@ def run_comfy_image_to_video(
     )
     final_workflow_dump_path = ""
     i2v_final_node_dump: dict[str, object] = {}
-    if normalized_workflow_key == "i2v":
+    if normalized_workflow_key in {"i2v", "i2v_sound"}:
         fps_from_node = _read_node_input(patched_workflow, "267:260", "value")
         try:
             resolved_i2v_fps = int(round(float(fps_from_node)))
@@ -3326,7 +3456,7 @@ def run_comfy_image_to_video(
     expected_second_image_value = ""
     start_frame_image_bound = False
     end_frame_image_bound = False
-    if normalized_workflow_key in {"f_l"}:
+    if normalized_workflow_key in {"f_l", "f_l_sound"}:
         if not uploaded_end_name:
             return None, "capability_error:LTX_SECOND_FRAME_REQUIRED:end_image_missing_for_first_last_workflow"
         first_last_patch_debug = _patch_first_last_images(
@@ -3883,7 +4013,7 @@ def run_comfy_image_to_video(
                 proof_reason_detailed = "workflow_has_no_mouth_lipsync_capable_nodes"
             else:
                 proof_reason_detailed = "real_mouth_lipsync_path_not_proven"
-    elif normalized_workflow_key == "i2v":
+    elif normalized_workflow_key in {"i2v", "i2v_sound"}:
         probable_actual_workflow_mode = "generic_i2v"
     if normalized_workflow_key == "lip_sync":
         logger.info(
@@ -3913,17 +4043,17 @@ def run_comfy_image_to_video(
     resolved_prompt_node_id_for_debug = str(
         (
             (workflow_discovery_debug.get("patchedPositivePromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
-            if normalized_workflow_key == "f_l"
+            if normalized_workflow_key in F_L_WORKFLOW_KEYS
             else (workflow_discovery_debug.get("patchedPromptNodeId") if isinstance(workflow_discovery_debug, dict) else "")
         )
         or (LIPSYNC_PRIMARY_NODE_IDS["prompt"] if normalized_workflow_key == "lip_sync" else FIXED_IMAGE_VIDEO_NODES["prompt"][0])
     )
     resolved_prompt_input_key_for_debug = str(
         (workflow_discovery_debug.get("promptPatchInputKey") if isinstance(workflow_discovery_debug, dict) else "")
-        or ("value" if normalized_workflow_key != "f_l" else "text")
+        or ("value" if normalized_workflow_key not in F_L_WORKFLOW_KEYS else "text")
     )
     prompt_patched_node_ids = [resolved_prompt_node_id_for_debug]
-    if normalized_workflow_key == "f_l":
+    if normalized_workflow_key in F_L_WORKFLOW_KEYS:
         resolved_negative_prompt_id = str((workflow_discovery_debug.get("patchedNegativePromptNodeId") if isinstance(workflow_discovery_debug, dict) else "") or "")
         if resolved_negative_prompt_id:
             prompt_patched_node_ids.append(resolved_negative_prompt_id)

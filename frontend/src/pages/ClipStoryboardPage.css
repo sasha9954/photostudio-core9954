@@ -5678,3 +5678,95 @@ body.ps_clip_fullscreen .mainCol {
 .asdv2_contractList::-webkit-scrollbar,.asdv2_chatMessages::-webkit-scrollbar,.asdv2_audioSegments::-webkit-scrollbar,.asdv2_plan::-webkit-scrollbar,.asdv2_stageReview::-webkit-scrollbar{width:8px}
 .asdv2_contractList::-webkit-scrollbar-thumb,.asdv2_chatMessages::-webkit-scrollbar-thumb,.asdv2_audioSegments::-webkit-scrollbar-thumb,.asdv2_plan::-webkit-scrollbar-thumb,.asdv2_stageReview::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:999px}
 .asdv2_stageStatus{font-size:11px;opacity:.85}
+
+
+.clipSB_introMontagePanel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(120, 255, 220, 0.14);
+  border-radius: 14px;
+  background: rgba(8, 15, 27, 0.42);
+}
+
+.clipSB_introMontageGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.clipSB_introMontageWide {
+  grid-column: 1 / -1;
+}
+
+.clipSB_introMontagePreviewTitle {
+  position: absolute;
+  z-index: 4;
+  left: 10%;
+  right: 10%;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: 0 6px 22px rgba(0,0,0,0.78);
+  font-size: clamp(16px, 4.4vw, 34px);
+  line-height: 1.12;
+  pointer-events: none;
+}
+
+.clipSB_introMontagePreviewTitle_center_above {
+  top: 38%;
+  transform: translateY(-50%);
+}
+
+.clipSB_introMontagePreviewTitle_center {
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.clipSB_introMontagePreviewTitle_center_below {
+  top: 62%;
+  transform: translateY(-50%);
+}
+
+.clipSB_introMontageWatermark {
+  position: absolute;
+  z-index: 5;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.9);
+  text-shadow: 0 2px 8px rgba(0,0,0,0.85);
+  pointer-events: none;
+}
+
+.clipSB_introMontageWatermark_top_left { top: 14px; left: 14px; }
+.clipSB_introMontageWatermark_top_right { top: 14px; right: 14px; }
+.clipSB_introMontageWatermark_bottom_left { bottom: 14px; left: 14px; }
+.clipSB_introMontageWatermark_bottom_right { bottom: 14px; right: 14px; }
+
+@media (max-width: 860px) {
+  .clipSB_introMontageGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+
+.clipSB_introMontageNote {
+  grid-column: 1 / -1;
+  padding: 8px 10px;
+  border: 1px solid rgba(115, 255, 220, 0.16);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+  color: rgba(220, 234, 255, 0.74);
+}
+
+
+.clipSB_introMontageGrid .clipSB_select,
+.clipSB_introMontageGrid .clipSB_input {
+  min-height: 36px;
+}
+
+.clipSB_introMontageGrid .clipSB_hint {
+  margin-bottom: 5px;
+}

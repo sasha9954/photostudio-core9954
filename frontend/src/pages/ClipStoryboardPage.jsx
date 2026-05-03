@@ -2756,6 +2756,9 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
   if (sourceType === "scenarioStoryboard" && sourceHandle === "scenario_storyboard_out" && targetType === "assemblyNode") {
     return "storyboard_to_assembly";
   }
+  if (sourceType === "manualClipBoard" && sourceHandle === "manual_clip_board_out" && targetType === "assemblyNode") {
+    return "storyboard_to_assembly";
+  }
   if (existingKind && EDGE_STYLE_BY_KIND[existingKind]) return existingKind;
   if (targetType === "assemblyNode") return "assembly";
   return "default";
@@ -5640,6 +5643,180 @@ const INTRO_FRAME_PREVIEW_FORMAT_OPTIONS = [
 const INTRO_TITLE_RECOMMENDED_CHARS = 40;
 const INTRO_HOOK_TITLE_MAX_CHARS = 64;
 
+const INTRO_MONTAGE_MODES = {
+  FRAME_GENERATION: "frame_generation",
+  BLACK_BEFORE_CLIP: "black_before_clip",
+  OVER_FIRST_SCENE: "over_first_scene",
+};
+
+const INTRO_TITLE_POSITIONS = {
+  CENTER_ABOVE: "center_above",
+  CENTER: "center",
+  CENTER_BELOW: "center_below",
+};
+
+const INTRO_WATERMARK_POSITIONS = {
+  TOP_LEFT: "top_left",
+  TOP_RIGHT: "top_right",
+  BOTTOM_LEFT: "bottom_left",
+  BOTTOM_RIGHT: "bottom_right",
+};
+
+const INTRO_TITLE_STYLE_PRESETS = [
+  { value: "cinematic_serif", label: "Киношный serif", hint: "мягкий титр" },
+  { value: "dark_crime", label: "Тёмный криминал", hint: "жёстче, контрастнее" },
+  { value: "poster_bold", label: "Постерный жирный", hint: "крупный и читаемый" },
+  { value: "modern_clean", label: "Современный чистый", hint: "аккуратный" },
+  { value: "retro_vhs", label: "Ретро / VHS", hint: "слегка грубый" },
+];
+
+const INTRO_TITLE_SIZE_PRESETS = [
+  { value: "small", label: "маленький" },
+  { value: "medium", label: "средний" },
+  { value: "large", label: "крупный" },
+];
+
+const INTRO_WATERMARK_STYLE_PRESETS = [
+  { value: "minimal", label: "минимальный" },
+  { value: "cinematic_gold", label: "киношный золотой" },
+  { value: "dark_corner", label: "тёмный угол" },
+];
+
+function normalizeIntroTitleStylePreset(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return INTRO_TITLE_STYLE_PRESETS.some((item) => item.value === normalized) ? normalized : "cinematic_serif";
+}
+
+function normalizeIntroTitleSizePreset(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return INTRO_TITLE_SIZE_PRESETS.some((item) => item.value === normalized) ? normalized : "medium";
+}
+
+function normalizeIntroWatermarkStylePreset(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return INTRO_WATERMARK_STYLE_PRESETS.some((item) => item.value === normalized) ? normalized : "minimal";
+}
+
+function getIntroTitleStyleMeta(value) {
+  const preset = normalizeIntroTitleStylePreset(value);
+  if (preset === "dark_crime") {
+    return {
+      color: "#f2e7d8",
+      fontFamily: "Georgia, 'Times New Roman', serif",
+      fontWeight: 800,
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
+      textShadow: "0 4px 18px rgba(0,0,0,.92), 0 0 2px rgba(255,255,255,.25)",
+    };
+  }
+  if (preset === "poster_bold") {
+    return {
+      color: "#ffffff",
+      fontFamily: "Impact, 'Arial Black', system-ui, sans-serif",
+      fontWeight: 900,
+      letterSpacing: "0.045em",
+      textTransform: "uppercase",
+      textShadow: "0 4px 14px rgba(0,0,0,.88)",
+    };
+  }
+  if (preset === "modern_clean") {
+    return {
+      color: "#f5f7ff",
+      fontFamily: "Inter, Segoe UI, Arial, sans-serif",
+      fontWeight: 700,
+      letterSpacing: "0.035em",
+      textTransform: "none",
+      textShadow: "0 3px 10px rgba(0,0,0,.72)",
+    };
+  }
+  if (preset === "retro_vhs") {
+    return {
+      color: "#f8f0df",
+      fontFamily: "'Courier New', monospace",
+      fontWeight: 800,
+      letterSpacing: "0.07em",
+      textTransform: "uppercase",
+      textShadow: "2px 2px 0 rgba(0,0,0,.9), -1px 0 rgba(255,60,80,.35)",
+    };
+  }
+  return {
+    color: "#f6d365",
+    fontFamily: "Georgia, 'Times New Roman', serif",
+    fontWeight: 800,
+    letterSpacing: "0.10em",
+    textTransform: "uppercase",
+    textShadow: "0 4px 18px rgba(0,0,0,.82)",
+  };
+}
+
+function getIntroTitleSizeMeta(value) {
+  const preset = normalizeIntroTitleSizePreset(value);
+  if (preset === "small") return { previewFontSize: "18px" };
+  if (preset === "large") return { previewFontSize: "30px" };
+  return { previewFontSize: "24px" };
+}
+
+function getIntroWatermarkStyleMeta(value) {
+  const preset = normalizeIntroWatermarkStylePreset(value);
+  if (preset === "cinematic_gold") {
+    return {
+      color: "#f6d365",
+      fontFamily: "Georgia, 'Times New Roman', serif",
+      fontWeight: 700,
+      letterSpacing: "0.10em",
+      textTransform: "uppercase",
+      textShadow: "0 2px 8px rgba(0,0,0,.70)",
+    };
+  }
+  if (preset === "dark_corner") {
+    return {
+      color: "#ffffff",
+      fontFamily: "Inter, Segoe UI, Arial, sans-serif",
+      fontWeight: 800,
+      letterSpacing: "0.08em",
+      textTransform: "uppercase",
+      textShadow: "0 2px 8px rgba(0,0,0,.90)",
+    };
+  }
+  return {
+    color: "#ffffff",
+    fontFamily: "Inter, Segoe UI, Arial, sans-serif",
+    fontWeight: 600,
+    letterSpacing: "0.07em",
+    textTransform: "uppercase",
+    textShadow: "0 2px 6px rgba(0,0,0,.65)",
+  };
+}
+
+function normalizeIntroMontageMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === INTRO_MONTAGE_MODES.BLACK_BEFORE_CLIP) return normalized;
+  if (normalized === INTRO_MONTAGE_MODES.OVER_FIRST_SCENE) return normalized;
+  return INTRO_MONTAGE_MODES.FRAME_GENERATION;
+}
+
+function normalizeIntroTitlePosition(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Object.values(INTRO_TITLE_POSITIONS).includes(normalized) ? normalized : INTRO_TITLE_POSITIONS.CENTER_ABOVE;
+}
+
+function normalizeIntroWatermarkPosition(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return Object.values(INTRO_WATERMARK_POSITIONS).includes(normalized) ? normalized : INTRO_WATERMARK_POSITIONS.TOP_RIGHT;
+}
+
+function normalizeIntroSeconds(value, fallback = 1, min = 0, max = 8) {
+  const raw = parseLocaleFloat(value);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(raw * 10) / 10));
+}
+
+function normalizeIntroOpacity(value, fallback = 0.45) {
+  const raw = parseLocaleFloat(value);
+  if (!Number.isFinite(raw)) return fallback;
+  return Math.max(0.1, Math.min(1, Math.round(raw * 100) / 100));
+}
+
 function normalizeIntroFramePreviewKind(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === INTRO_FRAME_PREVIEW_KINDS.UPLOADED) return INTRO_FRAME_PREVIEW_KINDS.UPLOADED;
@@ -5755,6 +5932,9 @@ function resolveIntroFramePreviewUrl(introFrame) {
 
 function hasIntroFramePreview(introFrame) {
   if (!introFrame) return false;
+  const montageEnabled = introFrame?.montageEnabled === true;
+  const montageMode = normalizeIntroMontageMode(introFrame?.montageMode);
+  if (montageEnabled && montageMode !== INTRO_MONTAGE_MODES.FRAME_GENERATION) return true;
   const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
   if (previewKind === INTRO_FRAME_PREVIEW_KINDS.GENERATED_LOCAL) {
     return !!String(introFrame?.userTitleRaw ?? introFrame?.title ?? "").trim()
@@ -5768,6 +5948,9 @@ function buildIntroFrameComparablePayload(introFrame) {
   if (!introFrame || !hasIntroFramePreview(introFrame)) return null;
   const previewKind = getEffectiveIntroFramePreviewKind(introFrame);
   const manualTitleRaw = String(introFrame?.userTitleRaw ?? introFrame?.title ?? "");
+  const montageEnabled = introFrame?.montageEnabled === true;
+  const montageMode = normalizeIntroMontageMode(introFrame?.montageMode);
+  const titleText = String(introFrame?.montageTitleText ?? manualTitleRaw ?? "").trim();
   return {
     nodeId: String(introFrame?.nodeId || ""),
     title: manualTitleRaw.trim(),
@@ -5783,16 +5966,35 @@ function buildIntroFrameComparablePayload(introFrame) {
       previewKind === INTRO_FRAME_PREVIEW_KINDS.UPLOADED
       || previewKind === INTRO_FRAME_PREVIEW_KINDS.BACKEND_GENERATED
     ) ? String(introFrame?.imageUrl || "").trim() : "",
+    montageEnabled,
+    montageMode,
+    videoFadeInSec: normalizeIntroSeconds(introFrame?.videoFadeInSec, 1, 0, 4),
+    videoFadeOutSec: normalizeIntroSeconds(introFrame?.videoFadeOutSec, 0, 0, 6),
+    audioMode: String(introFrame?.audioMode || "after_intro"),
+    audioFadeInSec: normalizeIntroSeconds(introFrame?.audioFadeInSec, 1, 0, 6),
+    audioFadeOutSec: normalizeIntroSeconds(introFrame?.audioFadeOutSec, 0, 0, 8),
+    titleEnabled: introFrame?.titleEnabled !== false,
+    titleText,
+    titleDurationSec: normalizeIntroSeconds(introFrame?.titleDurationSec, 2, 0.1, 8),
+    titlePosition: normalizeIntroTitlePosition(introFrame?.titlePosition),
+    titleAnimation: String(introFrame?.titleAnimation || "fade"),
+    titleStylePreset: normalizeIntroTitleStylePreset(introFrame?.titleStylePreset),
+    titleSizePreset: normalizeIntroTitleSizePreset(introFrame?.titleSizePreset),
+    watermarkEnabled: introFrame?.watermarkEnabled === true,
+    watermarkText: String(introFrame?.watermarkText || "").trim(),
+    watermarkPosition: normalizeIntroWatermarkPosition(introFrame?.watermarkPosition),
+    watermarkStylePreset: normalizeIntroWatermarkStylePreset(introFrame?.watermarkStylePreset),
+    watermarkOpacity: normalizeIntroOpacity(introFrame?.watermarkOpacity, 0.45),
   };
 }
 
 function buildIntroFramePayload(introFrame) {
   const comparable = buildIntroFrameComparablePayload(introFrame);
+  if (!comparable) return null;
   const imageUrl = resolveIntroFramePreviewUrl(introFrame);
-  if (!comparable || !imageUrl) return null;
   return {
     ...comparable,
-    imageUrl,
+    imageUrl: imageUrl || comparable.imageUrl || "",
   };
 }
 
@@ -5809,6 +6011,17 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16", int
         requestedDurationSec: getSceneRequestedDurationSec(scene),
         transitionType: resolveSceneTransitionType(scene),
         order: Number.isFinite(Number(scene?.order)) ? Number(scene.order) : idx + 1,
+        route: String(scene?.route || scene?.mode || scene?.workflowKey || "").trim(),
+        mode: String(scene?.mode || scene?.route || scene?.workflowKey || "").trim(),
+        startSec: Number(scene?.startSec ?? scene?.start_sec ?? scene?.t0 ?? 0),
+        endSec: Number(scene?.endSec ?? scene?.end_sec ?? scene?.t1 ?? 0),
+        t0: Number(scene?.t0 ?? scene?.startSec ?? scene?.start_sec ?? 0),
+        t1: Number(scene?.t1 ?? scene?.endSec ?? scene?.end_sec ?? 0),
+        keepGeneratedAudio: Boolean(scene?.keepGeneratedAudio ?? scene?.keep_generated_audio ?? false),
+        generatedAudioPolicy: String(scene?.generatedAudioPolicy || scene?.generated_audio_policy || ""),
+        generatedAudioGainDb: Number(scene?.generatedAudioGainDb ?? scene?.generated_audio_gain_db ?? -16),
+        soundPrompt: String(scene?.soundPrompt || scene?.sound_prompt || ""),
+        videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? false),
       };
     })
     .filter(Boolean);
@@ -5850,8 +6063,40 @@ function normalizeComfyScenesForAssembly(scenes = [], fallbackFormat = DEFAULT_S
   });
 }
 
+function normalizeManualClipScenesForAssembly(scenes = [], fallbackFormat = DEFAULT_SCENE_IMAGE_FORMAT) {
+  return (Array.isArray(scenes) ? scenes : [])
+    .map((scene, idx) => {
+      const videoUrl = String(scene?.videoUrl || scene?.video_url || "").trim();
+      const startSec = Number(scene?.startSec ?? scene?.start_sec ?? scene?.t0 ?? 0);
+      const endSec = Number(scene?.endSec ?? scene?.end_sec ?? scene?.t1 ?? 0);
+      const durationSec = Number(scene?.durationSec ?? scene?.duration_sec ?? Math.max(0, endSec - startSec) ?? 0);
+      return {
+        ...scene,
+        sceneId: String(scene?.sceneId || scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
+        videoUrl,
+        startSec,
+        endSec,
+        t0: startSec,
+        t1: endSec,
+        requestedDurationSec: Number.isFinite(durationSec) && durationSec > 0 ? durationSec : getSceneRequestedDurationSec(scene),
+        order: Number.isFinite(Number(scene?.order ?? scene?.index)) ? Number(scene?.order ?? scene?.index) : idx + 1,
+        route: String(scene?.route || scene?.mode || "").trim(),
+        mode: String(scene?.mode || scene?.route || "").trim(),
+        imageFormat: resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, fallbackFormat),
+        format: resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, fallbackFormat),
+        keepGeneratedAudio: Boolean(scene?.keepGeneratedAudio ?? scene?.keep_generated_audio ?? false),
+        generatedAudioPolicy: String(scene?.generatedAudioPolicy || scene?.generated_audio_policy || ""),
+        generatedAudioGainDb: Number(scene?.generatedAudioGainDb ?? scene?.generated_audio_gain_db ?? -16),
+        soundPrompt: String(scene?.soundPrompt || scene?.sound_prompt || ""),
+        videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? false),
+      };
+    })
+    .filter((scene) => String(scene?.videoUrl || "").trim());
+}
+
 function getAssemblySourceLabel(scenesSource = "none") {
   if (scenesSource === "scenarioStoryboard") return "SCENARIO STORYBOARD";
+  if (scenesSource === "manualClipBoard") return "MANUAL CLIP BOARD";
   return "НЕ ПОДКЛЮЧЕНО";
 }
 
@@ -5886,7 +6131,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       if (edge?.target !== effectiveAssemblyNodeId) return false;
       if (String(edge?.targetHandle || "") !== "assembly_in") return false;
       const sourceType = String(nodesById.get(edge?.source)?.type || "");
-      return sourceType === "scenarioStoryboard";
+      return sourceType === "scenarioStoryboard" || sourceType === "manualClipBoard";
     })
     : [];
   const incomingEdge = incomingSourceEdges.length ? incomingSourceEdges[incomingSourceEdges.length - 1] : null;
@@ -5917,6 +6162,25 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       status: String(introNode?.data?.status || "idle"),
       contextSummary: String(introNode?.data?.contextSummary || "").trim(),
       altTitles: Array.isArray(introNode?.data?.altTitles) ? introNode.data.altTitles : [],
+      montageEnabled: introNode?.data?.montageEnabled === true,
+      montageMode: normalizeIntroMontageMode(introNode?.data?.montageMode),
+      videoFadeInSec: normalizeIntroSeconds(introNode?.data?.videoFadeInSec, 1, 0, 4),
+      videoFadeOutSec: normalizeIntroSeconds(introNode?.data?.videoFadeOutSec, 0, 0, 6),
+      audioMode: String(introNode?.data?.audioMode || "after_intro"),
+      audioFadeInSec: normalizeIntroSeconds(introNode?.data?.audioFadeInSec, 1, 0, 6),
+      audioFadeOutSec: normalizeIntroSeconds(introNode?.data?.audioFadeOutSec, 0, 0, 8),
+      titleEnabled: introNode?.data?.titleEnabled !== false,
+      montageTitleText: String(introNode?.data?.montageTitleText ?? introNode?.data?.userTitleRaw ?? introNode?.data?.title ?? "").trim(),
+      titleDurationSec: normalizeIntroSeconds(introNode?.data?.titleDurationSec, 2, 0.1, 8),
+      titlePosition: normalizeIntroTitlePosition(introNode?.data?.titlePosition),
+      titleAnimation: String(introNode?.data?.titleAnimation || "fade"),
+      titleStylePreset: normalizeIntroTitleStylePreset(introNode?.data?.titleStylePreset),
+      titleSizePreset: normalizeIntroTitleSizePreset(introNode?.data?.titleSizePreset),
+      watermarkEnabled: introNode?.data?.watermarkEnabled === true,
+      watermarkText: String(introNode?.data?.watermarkText || "").trim(),
+      watermarkPosition: normalizeIntroWatermarkPosition(introNode?.data?.watermarkPosition),
+      watermarkStylePreset: normalizeIntroWatermarkStylePreset(introNode?.data?.watermarkStylePreset),
+      watermarkOpacity: normalizeIntroOpacity(introNode?.data?.watermarkOpacity, 0.45),
     }
     : null;
   if (CLIP_TRACE_SCENARIO_GRAPH) {
@@ -5943,6 +6207,23 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     };
   }
 
+  if (sourceNode?.type === "manualClipBoard") {
+    const sourceFormat = resolvePreferredSceneFormat(sourceNode?.data?.format, DEFAULT_SCENE_IMAGE_FORMAT);
+    const scenes = normalizeManualClipScenesForAssembly(sourceNode?.data?.scenes || [], sourceFormat);
+    return {
+      assemblyNodeId: effectiveAssemblyNodeId,
+      sourceNodeId: String(sourceNode?.id || ""),
+      sourceNodeType: "manualClipBoard",
+      scenesSource: "manualClipBoard",
+      scenes,
+      scenarioFormat: sourceFormat,
+      audioUrl: String(sourceNode?.data?.audio?.url || sourceNode?.data?.audioUrl || "").trim(),
+      introSourceNodeId: String(introFrame?.nodeId || ""),
+      introSourceNodeType: introFrame?.nodeType || "",
+      introFrame,
+    };
+  }
+
   return {
     assemblyNodeId: effectiveAssemblyNodeId,
     sourceNodeId: "",
@@ -5950,6 +6231,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     scenesSource: "none",
     scenes: [],
     scenarioFormat: DEFAULT_SCENE_IMAGE_FORMAT,
+    audioUrl: "",
     introSourceNodeId: String(introFrame?.nodeId || ""),
     introSourceNodeType: introFrame?.nodeType || "",
     introFrame,
@@ -9816,6 +10098,19 @@ function IntroFrameNode({ id, data }) {
     : status === "generating" || status === "preview_generating"
       ? "собираем preview..."
       : "черновик";
+  const montageEnabled = data?.montageEnabled === true;
+  const montageMode = normalizeIntroMontageMode(data?.montageMode);
+  const montageTitleText = String(data?.montageTitleText ?? rawTitle ?? "").trim();
+  const titlePosition = normalizeIntroTitlePosition(data?.titlePosition);
+  const watermarkText = String(data?.watermarkText || "").trim();
+  const watermarkPosition = normalizeIntroWatermarkPosition(data?.watermarkPosition);
+  const watermarkOpacity = normalizeIntroOpacity(data?.watermarkOpacity, 0.45);
+  const titleStylePreset = normalizeIntroTitleStylePreset(data?.titleStylePreset);
+  const titleStyleMeta = getIntroTitleStyleMeta(titleStylePreset);
+  const titleSizePreset = normalizeIntroTitleSizePreset(data?.titleSizePreset);
+  const titleSizeMeta = getIntroTitleSizeMeta(titleSizePreset);
+  const watermarkStylePreset = normalizeIntroWatermarkStylePreset(data?.watermarkStylePreset);
+  const watermarkStyleMeta = getIntroWatermarkStyleMeta(watermarkStylePreset);
   const selectedStylePreset = normalizeIntroStylePreset(data?.stylePreset || "cinematic_dark");
   const selectedStyleMeta = getIntroStyleMeta(selectedStylePreset);
   const selectedNegativeRules = Array.isArray(selectedStyleMeta?.negativeRules) && selectedStyleMeta.negativeRules.length
@@ -9899,12 +10194,12 @@ function IntroFrameNode({ id, data }) {
                     </div>
                     {derivedTitle ? (
                       <div className="clipSB_introDerivedTitle clipSB_small">
-                        <strong>{rawTitle.trim() ? "Auto title:" : "Заголовок для генерации:"}</strong> {derivedTitle}
+                        <strong>{rawTitle.trim() ? "Авто-заголовок:" : "Заголовок для генерации:"}</strong> {derivedTitle}
                       </div>
                     ) : null}
                     {generatedHookTitle && generatedHookTitle !== derivedTitle && generatedHookTitle !== rawTitle.trim() ? (
                       <div className="clipSB_introDerivedTitle clipSB_small">
-                        <strong>Hook title:</strong> {generatedHookTitle}
+                        <strong>Служебный hook:</strong> {generatedHookTitle}
                       </div>
                     ) : null}
                   </label>
@@ -9918,8 +10213,134 @@ function IntroFrameNode({ id, data }) {
                     <span className="clipSB_small">Auto title по сюжетному контексту</span>
                   </label>
 
+                  <div className="clipSB_introMontagePanel">
+                    <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={montageEnabled}
+                        onChange={(e) => data?.onField?.(id, "montageEnabled", e.target.checked)}
+                      />
+                      <span className="clipSB_small">Использовать в Assembly как монтажное вступление / титр</span>
+                    </label>
+
+                    {montageEnabled ? (
+                      <>
+                      <div className="clipSB_introMontageNote clipSB_small">Можно вводить дробные значения через точку или запятую: 1.5 или 1,5. Настройки применяются в Assembly при сборке клипа.</div>
+                      <div className="clipSB_introMontageGrid">
+                        <label>
+                          <div className="clipSB_hint">Режим вступления</div>
+                          <select className="clipSB_select" value={montageMode} onChange={(e) => data?.onField?.(id, "montageMode", e.target.value)}>
+                            <option value={INTRO_MONTAGE_MODES.BLACK_BEFORE_CLIP}>Чёрный экран перед клипом</option>
+                            <option value={INTRO_MONTAGE_MODES.OVER_FIRST_SCENE}>Появление/титр поверх первой сцены</option>
+                            <option value={INTRO_MONTAGE_MODES.FRAME_GENERATION}>Только генерация кадра</option>
+                          </select>
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Плавное появление видео, сек</div>
+                          <input className="clipSB_input" type="text" inputMode="decimal" value={String(data?.videoFadeInSec ?? "1")} onChange={(e) => data?.onField?.(id, "videoFadeInSec", e.target.value)} placeholder="1" />
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Плавное затухание видео, сек</div>
+                          <input className="clipSB_input" type="text" inputMode="decimal" value={String(data?.videoFadeOutSec ?? "0")} onChange={(e) => data?.onField?.(id, "videoFadeOutSec", e.target.value)} placeholder="0" />
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Режим аудио</div>
+                          <select className="clipSB_select" value={String(data?.audioMode || "after_intro")} onChange={(e) => data?.onField?.(id, "audioMode", e.target.value)}>
+                            <option value="after_intro">Аудио начинается после вступления</option>
+                            <option value="fade_in_with_video">Аудио сразу + плавное появление</option>
+                            <option value="immediate">Аудио начинается сразу</option>
+                          </select>
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Плавное появление аудио, сек</div>
+                          <input className="clipSB_input" type="text" inputMode="decimal" value={String(data?.audioFadeInSec ?? "1")} onChange={(e) => data?.onField?.(id, "audioFadeInSec", e.target.value)} placeholder="1" />
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Плавное затухание аудио, сек</div>
+                          <input className="clipSB_input" type="text" inputMode="decimal" value={String(data?.audioFadeOutSec ?? "0")} onChange={(e) => data?.onField?.(id, "audioFadeOutSec", e.target.value)} placeholder="0" />
+                        </label>
+                        <label className="clipSB_introMontageWide">
+                          <div className="clipSB_hint">Текст титра для монтажа</div>
+                          <input className="clipSB_input" value={String(data?.montageTitleText ?? rawTitle ?? "")} onChange={(e) => data?.onField?.(id, "montageTitleText", e.target.value)} placeholder="Одесса / Возвращение домой / После зоны" />
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Длительность титра, сек</div>
+                          <input className="clipSB_input" type="text" inputMode="decimal" value={String(data?.titleDurationSec ?? "2")} onChange={(e) => data?.onField?.(id, "titleDurationSec", e.target.value)} placeholder="2" />
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Позиция титра</div>
+                          <select className="clipSB_select" value={titlePosition} onChange={(e) => data?.onField?.(id, "titlePosition", e.target.value)}>
+                            <option value={INTRO_TITLE_POSITIONS.CENTER_ABOVE}>чуть выше середины</option>
+                            <option value={INTRO_TITLE_POSITIONS.CENTER}>по центру</option>
+                            <option value={INTRO_TITLE_POSITIONS.CENTER_BELOW}>чуть ниже середины</option>
+                          </select>
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Анимация титра</div>
+                          <select className="clipSB_select" value={String(data?.titleAnimation || "fade")} onChange={(e) => data?.onField?.(id, "titleAnimation", e.target.value)}>
+                            <option value="fade">плавное появление</option>
+                            <option value="slide_up">выезд снизу вверх</option>
+                            <option value="none">без анимации</option>
+                          </select>
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Стиль титра</div>
+                          <select className="clipSB_select" value={titleStylePreset} onChange={(e) => data?.onField?.(id, "titleStylePreset", e.target.value)}>
+                            {INTRO_TITLE_STYLE_PRESETS.map((item) => (
+                              <option key={item.value} value={item.value}>{item.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label>
+                          <div className="clipSB_hint">Размер титра</div>
+                          <select className="clipSB_select" value={titleSizePreset} onChange={(e) => data?.onField?.(id, "titleSizePreset", e.target.value)}>
+                            {INTRO_TITLE_SIZE_PRESETS.map((item) => (
+                              <option key={item.value} value={item.value}>{item.label}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="clipSB_introMontageWide" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <input type="checkbox" checked={data?.watermarkEnabled === true} onChange={(e) => data?.onField?.(id, "watermarkEnabled", e.target.checked)} />
+                          <span className="clipSB_small">Водяной знак</span>
+                        </label>
+                        {data?.watermarkEnabled === true ? (
+                          <>
+                            <label className="clipSB_introMontageWide">
+                              <div className="clipSB_hint">Текст водяного знака</div>
+                              <input className="clipSB_input" value={watermarkText} onChange={(e) => data?.onField?.(id, "watermarkText", e.target.value)} placeholder="AVA-STUDIO" />
+                            </label>
+                            <label>
+                              <div className="clipSB_hint">Стиль водяного знака</div>
+                              <select className="clipSB_select" value={watermarkStylePreset} onChange={(e) => data?.onField?.(id, "watermarkStylePreset", e.target.value)}>
+                                {INTRO_WATERMARK_STYLE_PRESETS.map((item) => (
+                                  <option key={item.value} value={item.value}>{item.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              <div className="clipSB_hint">Позиция водяного знака</div>
+                              <select className="clipSB_select" value={watermarkPosition} onChange={(e) => data?.onField?.(id, "watermarkPosition", e.target.value)}>
+                                <option value={INTRO_WATERMARK_POSITIONS.TOP_LEFT}>верхний левый</option>
+                                <option value={INTRO_WATERMARK_POSITIONS.TOP_RIGHT}>верхний правый</option>
+                                <option value={INTRO_WATERMARK_POSITIONS.BOTTOM_LEFT}>нижний левый</option>
+                                <option value={INTRO_WATERMARK_POSITIONS.BOTTOM_RIGHT}>нижний правый</option>
+                              </select>
+                            </label>
+                            <label>
+                              <div className="clipSB_hint">Прозрачность</div>
+                              <input className="clipSB_input" type="text" inputMode="decimal" value={String(data?.watermarkOpacity ?? "0.45")} onChange={(e) =>
+                                  data?.onField?.(id, "watermarkOpacity", e.target.value)
+                                } placeholder="0.45" />
+                            </label>
+                          </>
+                        ) : null}
+                      </div>
+                      </>
+                    ) : null}
+                  </div>
+
                   <label>
-                    <div className="clipSB_hint" style={{ marginBottom: 6 }}>Style preset</div>
+                    <div className="clipSB_hint" style={{ marginBottom: 6 }}>Стиль кадра</div>
                     <select
                       className="clipSB_select"
                       value={selectedStylePreset}
@@ -9935,14 +10356,14 @@ function IntroFrameNode({ id, data }) {
 
                   <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 92px", gap: 10, alignItems: "end" }}>
                     <label>
-                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Format</div>
+                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Формат</div>
                       <div className="clipSB_input clipSB_inputReadonly" style={{ minHeight: 42, display: "flex", alignItems: "center" }}>
                         {previewFormatMeta.label}
-                        {data?.scenarioFormat ? <span className="clipSB_small" style={{ marginLeft: 8, opacity: 0.72 }}>from COMFY BRAIN</span> : null}
+                        {data?.scenarioFormat ? <span className="clipSB_small" style={{ marginLeft: 8, opacity: 0.72 }}>из COMFY BRAIN</span> : null}
                       </div>
                     </label>
                     <label>
-                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Sec</div>
+                      <div className="clipSB_hint" style={{ marginBottom: 6 }}>Сек</div>
                       <input
                         className="clipSB_input"
                         type="text"
@@ -10089,6 +10510,47 @@ function IntroFrameNode({ id, data }) {
                     </div>
                   </>
                 )}
+                {montageEnabled ? (
+                  <>
+                    {String(montageTitleText || "").trim() ? (
+                      <div
+                        className={`clipSB_introMontagePreviewTitle clipSB_introMontagePreviewTitle_${titlePosition}`}
+                        style={{
+                          color: titleStyleMeta.color || styleMeta.accent,
+                          fontFamily: titleStyleMeta.fontFamily,
+                          fontWeight: titleStyleMeta.fontWeight,
+                          letterSpacing: titleStyleMeta.letterSpacing,
+                          textTransform: titleStyleMeta.textTransform,
+                          textShadow: titleStyleMeta.textShadow,
+                          fontSize: titleSizeMeta.previewFontSize,
+                          maxWidth: "82%",
+                          whiteSpace: "normal",
+                          overflowWrap: "break-word",
+                          textAlign: "center",
+                          lineHeight: 1.12,
+                        }}
+                      >
+                        {montageTitleText}
+                      </div>
+                    ) : null}
+                    {data?.watermarkEnabled === true && watermarkText ? (
+                      <div
+                        className={`clipSB_introMontageWatermark clipSB_introMontageWatermark_${watermarkPosition}`}
+                        style={{
+                          opacity: watermarkOpacity,
+                          color: watermarkStyleMeta.color,
+                          fontFamily: watermarkStyleMeta.fontFamily,
+                          fontWeight: watermarkStyleMeta.fontWeight,
+                          letterSpacing: watermarkStyleMeta.letterSpacing,
+                          textTransform: watermarkStyleMeta.textTransform,
+                          textShadow: watermarkStyleMeta.textShadow,
+                        }}
+                      >
+                        {watermarkText}
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
                 </div>
 
                 <div className="clipSB_introFrameActions">
@@ -10170,6 +10632,9 @@ function AssemblyNode({ id, data }) {
         <div className="clipSB_assemblyStats">
           <div className="clipSB_assemblyRow"><span>Source</span><strong className="clipSB_assemblyValue">{data?.sourceLabel || "НЕ ПОДКЛЮЧЕНО"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Intro</span><strong className="clipSB_assemblyValue">{data?.introLabel || "НЕТ INTRO"}</strong></div>
+          {data?.introMontageEnabled ? (
+            <div className="clipSB_assemblyRow"><span>Montage</span><strong className="clipSB_assemblyValue">{data?.introMontageMode || "intro"} • title {data?.introTitleDurationSec || 0}s</strong></div>
+          ) : null}
           <div className="clipSB_assemblyRow"><span>Audio</span><strong className="clipSB_assemblyValue">{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
@@ -18884,13 +19349,14 @@ Aspect ratio: ${imageFormat}`,
   const assemblyScenesForPayload = assemblySource.scenes;
   const assemblyIntroFrame = assemblySource.introFrame;
   const assemblyHasIntro = hasIntroFramePreview(assemblyIntroFrame);
+  const assemblyIntroAddsDuration = assemblyHasIntro && normalizeIntroMontageMode(assemblyIntroFrame?.montageMode) !== INTRO_MONTAGE_MODES.OVER_FIRST_SCENE;
   const assemblyReadySceneCount = useMemo(
     () => assemblyScenesForPayload.filter((scene) => String(scene?.videoUrl || "").trim()).length,
     [assemblyScenesForPayload]
   );
   const assemblyDurationEstimateSec = useMemo(
-    () => assemblyScenesForPayload.reduce((sum, scene) => sum + (Number(getSceneRequestedDurationSec(scene)) || 0), 0) + (assemblyHasIntro ? Number(assemblyIntroFrame?.durationSec || 0) : 0),
-    [assemblyHasIntro, assemblyIntroFrame?.durationSec, assemblyScenesForPayload]
+    () => assemblyScenesForPayload.reduce((sum, scene) => sum + (Number(getSceneRequestedDurationSec(scene)) || 0), 0) + (assemblyIntroAddsDuration ? Number(assemblyIntroFrame?.durationSec || 0) : 0),
+    [assemblyIntroAddsDuration, assemblyIntroFrame?.durationSec, assemblyScenesForPayload]
   );
 
   const assemblyPayload = useMemo(() => {
@@ -18901,11 +19367,11 @@ Aspect ratio: ${imageFormat}`,
     );
     return buildAssemblyPayload({
       scenes: assemblyScenesForPayload,
-      audioUrl: globalAudioUrlRaw,
+      audioUrl: globalAudioUrlRaw || assemblySource.audioUrl || "",
       format: sceneFormat,
       intro: assemblyIntroFrame,
     });
-  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.scenarioFormat, globalAudioUrlRaw]);
+  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.audioUrl, assemblySource.scenarioFormat, globalAudioUrlRaw]);
 
   const assemblySourceNodeId = String(assemblySource.sourceNodeId || "");
   const assemblySourceNodeType = String(assemblySource.sourceNodeType || "");
@@ -18975,6 +19441,7 @@ Aspect ratio: ${imageFormat}`,
     assemblyFormat,
     assemblyHasAudio,
     assemblyHasIntro,
+      assemblyIntroAddsDuration,
     assemblyIntroDurationSec,
     assemblyIntroSourceNodeId,
     assemblyIntroSourceNodeType,
@@ -19283,8 +19750,12 @@ Aspect ratio: ${imageFormat}`,
     sourceLabel: assemblySourceLabel,
     introLabel: assemblyIntroLabel,
     hasIntro: assemblyHasIntro,
+    introAddsDuration: assemblyIntroAddsDuration,
     introDurationSec: assemblyIntroDurationSec,
     introTitle: assemblyIntroTitle,
+    introMontageEnabled: assemblyIntroFrame?.montageEnabled === true,
+    introMontageMode: assemblyIntroFrame?.montageMode || "",
+    introTitleDurationSec: Number(assemblyIntroFrame?.titleDurationSec || 0),
     debugSummary: assemblyDebugSummary,
     canAssemble: assemblyCanAssemble,
     isAssembling,
@@ -19309,10 +19780,14 @@ Aspect ratio: ${imageFormat}`,
     assemblyFormat,
     assemblyHasAudio,
     assemblyHasIntro,
+    assemblyIntroAddsDuration,
     assemblyInfo,
     assemblyIntroDurationSec,
     assemblyIntroLabel,
     assemblyIntroTitle,
+    assemblyIntroFrame?.montageEnabled,
+    assemblyIntroFrame?.montageMode,
+    assemblyIntroFrame?.titleDurationSec,
     assemblyJobId,
     assemblyProgressPercent,
     assemblyReadySceneCount,
@@ -25039,7 +25514,7 @@ const hydrate = useCallback((source = "unknown") => {
         id,
         type: "introFrame",
         position: { x: centerX + jitterX, y: centerY + jitterY },
-        data: { title: "", userTitleRaw: "", derivedTitle: "", generatedHookTitle: "", previewTitleUsed: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "" },
+        data: { title: "", userTitleRaw: "", derivedTitle: "", generatedHookTitle: "", previewTitleUsed: "", autoTitle: true, manualTitle: false, stylePreset: "cinematic_dark", durationSec: 2.5, previewFormat: INTRO_FRAME_PREVIEW_FORMATS.LANDSCAPE, imageUrl: "", previewKind: "", status: "idle", generatedAt: "", altTitles: [], error: "", montageEnabled: false, montageMode: INTRO_MONTAGE_MODES.BLACK_BEFORE_CLIP, videoFadeInSec: 1, videoFadeOutSec: 0, audioMode: "after_intro", audioFadeInSec: 1, audioFadeOutSec: 0, titleEnabled: true, montageTitleText: "", titleDurationSec: 2, titlePosition: INTRO_TITLE_POSITIONS.CENTER_ABOVE, titleAnimation: "fade", titleStylePreset: "cinematic_serif", titleSizePreset: "medium", watermarkEnabled: false, watermarkText: "", watermarkPosition: INTRO_WATERMARK_POSITIONS.TOP_RIGHT, watermarkStylePreset: "minimal", watermarkOpacity: 0.45 },
       };
     } else if (type === "assembly") {
       node = { id, type: "assemblyNode", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
@@ -25667,7 +26142,7 @@ const hydrate = useCallback((source = "unknown") => {
           return nextEdges;
         }
 
-        if (src.type === "scenarioStoryboard" && (params.sourceHandle || "") === "scenario_storyboard_out") {
+        if ((src.type === "scenarioStoryboard" && (params.sourceHandle || "") === "scenario_storyboard_out") || (src.type === "manualClipBoard" && (params.sourceHandle || "") === "manual_clip_board_out")) {
           if (dst.type !== "assemblyNode" || (params.targetHandle || "") !== "assembly_in") {
             traceScenarioGraphConnect("rejected", {
               sourceType: src.type,
@@ -25686,7 +26161,7 @@ const hydrate = useCallback((source = "unknown") => {
             targetType: dst.type,
             targetHandle: params.targetHandle || "",
           });
-          refreshNodeBindingsForEdges(nextEdges, "edges:connect:scenario-storyboard-assembly");
+          refreshNodeBindingsForEdges(nextEdges, src.type === "manualClipBoard" ? "edges:connect:manual-clip-board-assembly" : "edges:connect:scenario-storyboard-assembly");
           return nextEdges;
         }
 

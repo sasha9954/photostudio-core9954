@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { fetchJson } from "../../../services/api.js";
 import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
@@ -7,6 +7,113 @@ import "./ManualClipBoardNode.css";
 import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson } from "./manualClipBoardDomain";
 
 
+const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
+const ACTIVE_PROJECT_ID_STORAGE_KEY = "manual_clip_board_active_project_id";
+
+function getManualProjectStorageKey(nodeId = "") {
+  const safeId = String(nodeId || "default").trim() || "default";
+  return `manual_clip_board_project:${safeId}`;
+}
+
+function readJsonStorage(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readManualProjectForNode(nodeId = "") {
+  const safeId = String(nodeId || "").trim();
+  const active = readJsonStorage(ACTIVE_PROJECT_STORAGE_KEY);
+  if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
+  const scoped = readJsonStorage(getManualProjectStorageKey(safeId));
+  if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) return scoped;
+  return null;
+}
+
+function persistManualProject(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  try {
+    const serialized = JSON.stringify(safeProject);
+    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, serialized);
+    const nodeId = String(safeProject?.nodeId || "").trim();
+    if (nodeId) {
+      localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
+      localStorage.setItem(getManualProjectStorageKey(nodeId), serialized);
+    }
+  } catch {}
+}
+
+function removeManualProjectForNode(nodeId = "") {
+  const safeId = String(nodeId || "").trim();
+  try {
+    if (safeId) localStorage.removeItem(getManualProjectStorageKey(safeId));
+    const active = readJsonStorage(ACTIVE_PROJECT_STORAGE_KEY);
+    if (!safeId || String(active?.nodeId || "") === safeId) {
+      localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+      localStorage.removeItem(ACTIVE_PROJECT_ID_STORAGE_KEY);
+    }
+  } catch {}
+}
+
+function getSceneTimelineKey(scene = {}) {
+  return [
+    String(scene.scene_id || ""),
+    Number(scene.start_sec || 0).toFixed(3),
+    Number(scene.end_sec || 0).toFixed(3),
+  ].join("|");
+}
+
+function getSceneIdKey(scene = {}) {
+  return String(scene.scene_id || "").trim();
+}
+
+function hasDirectorWork(scene = {}) {
+  return Boolean(
+    scene?.image_url
+    || scene?.image_preview_url
+    || scene?.video_url
+    || scene?.video_prompt
+    || scene?.negative_prompt
+    || scene?.sound_prompt
+    || scene?.audio_slice_url
+    || scene?.audio_extracted
+    || scene?.video_job_id
+    || scene?.video_error
+    || scene?.video_request_payload_preview
+    || scene?.status === "video_ready"
+  );
+}
+
+function mergeSceneDirectorWork(scene = {}, old = {}) {
+  if (!old || typeof old !== "object") return scene;
+  return {
+    ...scene,
+    route: old.route || scene.route || "",
+    image_url: old.image_url || scene.image_url || "",
+    image_preview_url: old.image_preview_url || scene.image_preview_url || "",
+    image_upload_status: old.image_upload_status || scene.image_upload_status || "",
+    image_upload_error: old.image_upload_error || scene.image_upload_error || "",
+    video_url: old.video_url || scene.video_url || "",
+    video_prompt: old.video_prompt || scene.video_prompt || "",
+    negative_prompt: old.negative_prompt || scene.negative_prompt || "",
+    sound_prompt: old.sound_prompt || scene.sound_prompt || "",
+    audio_slice_url: old.audio_slice_url || scene.audio_slice_url || "",
+    audio_slice_duration_sec: old.audio_slice_duration_sec || scene.audio_slice_duration_sec || 0,
+    audio_extracted: Boolean(old.audio_extracted || scene.audio_extracted),
+    status: old.status || scene.status || "draft",
+    error: old.error || scene.error || "",
+    video_job_id: old.video_job_id || scene.video_job_id || "",
+    video_error: old.video_error || scene.video_error || "",
+    video_has_audio: Boolean(old.video_has_audio || scene.video_has_audio),
+    generated_audio_policy: old.generated_audio_policy || scene.generated_audio_policy || "",
+    generated_audio_gain_db: Number(old.generated_audio_gain_db ?? scene.generated_audio_gain_db ?? -16),
+    keep_generated_audio: Boolean(old.keep_generated_audio || scene.keep_generated_audio),
+    video_request_payload_preview: old.video_request_payload_preview || scene.video_request_payload_preview || null,
+  };
+}
 
 function getSceneContractKey(scene = {}) {
   return [
@@ -18,44 +125,20 @@ function getSceneContractKey(scene = {}) {
 }
 
 function mergeDirectorSceneWork(currentScenes = [], existingScenes = []) {
-  const existingByKey = new Map(existingScenes.map((scene) => [getSceneContractKey(scene), scene]));
-  return currentScenes.map((scene) => {
-    const old = existingByKey.get(getSceneContractKey(scene));
-    if (!old) return scene;
-    return {
-      ...scene,
-      image_url: old.image_url || scene.image_url || "",
-      image_preview_url: old.image_preview_url || scene.image_preview_url || "",
-      image_upload_status: old.image_upload_status || scene.image_upload_status || "",
-      image_upload_error: old.image_upload_error || scene.image_upload_error || "",
-      video_url: old.video_url || scene.video_url || "",
-      video_prompt: old.video_prompt || scene.video_prompt || "",
-      negative_prompt: old.negative_prompt || scene.negative_prompt || "",
-      sound_prompt: old.sound_prompt || scene.sound_prompt || "",
-      audio_slice_url: old.audio_slice_url || scene.audio_slice_url || "",
-      audio_slice_duration_sec: old.audio_slice_duration_sec || scene.audio_slice_duration_sec || 0,
-      audio_extracted: Boolean(old.audio_extracted || scene.audio_extracted),
-      status: old.status || scene.status || "draft",
-      error: old.error || scene.error || "",
-      video_job_id: old.video_job_id || scene.video_job_id || "",
-      video_error: old.video_error || scene.video_error || "",
-      video_has_audio: Boolean(old.video_has_audio || scene.video_has_audio),
-      generated_audio_policy: old.generated_audio_policy || scene.generated_audio_policy || "",
-      generated_audio_gain_db: Number(old.generated_audio_gain_db ?? scene.generated_audio_gain_db ?? -16),
-      keep_generated_audio: Boolean(old.keep_generated_audio || scene.keep_generated_audio),
-      video_request_payload_preview: old.video_request_payload_preview || scene.video_request_payload_preview || null,
-    };
+  const existingByTimeline = new Map();
+  for (const oldScene of Array.isArray(existingScenes) ? existingScenes : []) {
+    const timelineKey = getSceneTimelineKey(oldScene);
+    if (timelineKey && !existingByTimeline.has(timelineKey)) existingByTimeline.set(timelineKey, oldScene);
+  }
+
+  return (Array.isArray(currentScenes) ? currentScenes : []).map((scene) => {
+    const old = existingByTimeline.get(getSceneTimelineKey(scene)) || null;
+    return old ? mergeSceneDirectorWork(scene, old) : scene;
   });
 }
 
 function clearManualDirectorProjectForNode(nodeId) {
-  try {
-    const raw = localStorage.getItem("manual_clip_board_active_project");
-    const existing = raw ? JSON.parse(raw) : null;
-    if (existing?.nodeId === nodeId) {
-      localStorage.removeItem("manual_clip_board_active_project");
-    }
-  } catch {}
+  removeManualProjectForNode(nodeId);
 }
 
 function buildManualDirectorChatResetState() {
@@ -119,6 +202,35 @@ export default function ManualClipBoardNode({ id, data }) {
   const planKind = model.project_kind === "story" ? "истории" : "клипа";
   const directorChat = model.manual_director_chat || {};
   const directorContractMissing = model.split_source === "ai" && model.manual_director_required === true && directorChat.done !== true;
+
+  useEffect(() => {
+    const storedProject = readManualProjectForNode(id);
+    const storedScenes = Array.isArray(storedProject?.scenes) ? storedProject.scenes : [];
+    if (!storedScenes.length) return;
+
+    const currentScenes = Array.isArray(data?.scenes) ? data.scenes : [];
+    const mergedScenes = currentScenes.length ? mergeDirectorSceneWork(currentScenes, storedScenes) : storedScenes;
+    const currentSignature = JSON.stringify(currentScenes);
+    const mergedSignature = JSON.stringify(mergedScenes);
+    if (currentSignature === mergedSignature && currentScenes.length) return;
+
+    patch({
+      step: storedProject?.step || data?.step || "scene_plan_ready",
+      mode: storedProject?.mode || data?.mode || model.mode,
+      format: storedProject?.format || data?.format || model.format,
+      audio: storedProject?.audio || data?.audio || model.audio,
+      split_chat: storedProject?.split_chat || data?.split_chat || model.split_chat,
+      project_kind: storedProject?.project_kind || data?.project_kind || model.project_kind,
+      last_split_source: storedProject?.last_split_source || data?.last_split_source || model.last_split_source,
+      scenes: mergedScenes,
+      selectedSceneId: storedProject?.selectedSceneId || data?.selectedSceneId || mergedScenes[0]?.scene_id || "",
+      split_audio_status: storedProject?.split_audio_status || data?.split_audio_status || model.split_audio_status,
+      split_audio_error: storedProject?.split_audio_error || data?.split_audio_error || model.split_audio_error,
+      split_audio_count: storedProject?.split_audio_count ?? data?.split_audio_count ?? model.split_audio_count,
+    });
+  // Run once on mount: this syncs saved Manual Director work back into the graph node.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onRunDirectorChat = async (forceFinalize = false) => {
     const isStartingNewDirectorDialog = !forceFinalize
@@ -329,6 +441,28 @@ export default function ManualClipBoardNode({ id, data }) {
       }
     }
 
+    const existingProject = readManualProjectForNode(id);
+    if (existingProject?.nodeId === id && Array.isArray(existingProject?.scenes)) {
+      mergedScenes = mergeDirectorSceneWork(mergedScenes, existingProject.scenes);
+    }
+
+    const nextProjectSnapshot = {
+      nodeId: id,
+      mode: model.mode,
+      format: model.format,
+      audio: effectiveAudio,
+      split_chat: model.split_chat,
+      project_kind: model.project_kind,
+      last_split_source: model.last_split_source,
+      step: "scene_plan_ready",
+      scenes: mergedScenes,
+      selectedSceneId: mergedScenes[0]?.scene_id || "",
+      split_audio_status: splitAudioStatus,
+      split_audio_error: splitAudioError,
+      split_audio_count: splitAudioCount,
+    };
+    persistManualProject(nextProjectSnapshot);
+
     patch({
       step: "scene_plan_ready",
       scenes: mergedScenes,
@@ -349,16 +483,10 @@ export default function ManualClipBoardNode({ id, data }) {
   const onOpenDirectorBoard = () => {
     let nextScenes = scenes;
     try {
-      const raw = localStorage.getItem("manual_clip_board_active_project");
-      const existingProject = raw ? JSON.parse(raw) : null;
+      const existingProject = readManualProjectForNode(id);
       if (existingProject?.nodeId === id) {
         const existingScenes = Array.isArray(existingProject?.scenes) ? existingProject.scenes : [];
-        const currentKeys = scenes.map(getSceneContractKey);
-        const existingKeys = existingScenes.map(getSceneContractKey);
-        const isSameContract = currentKeys.length === existingKeys.length && currentKeys.every((key, idx) => key === existingKeys[idx]);
-        if (isSameContract) {
-          nextScenes = mergeDirectorSceneWork(scenes, existingScenes);
-        }
+        nextScenes = mergeDirectorSceneWork(scenes, existingScenes);
       }
     } catch {
       nextScenes = scenes;
@@ -374,7 +502,12 @@ export default function ManualClipBoardNode({ id, data }) {
       last_split_source: model.last_split_source,
       scenes: nextScenes,
     };
-    localStorage.setItem("manual_clip_board_active_project", JSON.stringify(payload));
+    persistManualProject(payload);
+    patch({
+      scenes: nextScenes,
+      selectedSceneId: nextScenes[0]?.scene_id || model.selectedSceneId || "",
+      step: scenes.length ? "scene_plan_ready" : model.step,
+    });
     navigate("/studio/manual-clip-board");
   };
 
@@ -407,7 +540,8 @@ export default function ManualClipBoardNode({ id, data }) {
             <label>Формат<select value={model.format} onChange={(e) => patch({ format: e.target.value })}><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
             <label>Цель сцен<select value={model.split_settings?.target_scene_count || "auto"} onChange={(e) => updateSplitSettings("target_scene_count", e.target.value)}><option value="auto">auto</option><option value="8">8</option><option value="10">10</option><option value="12">12</option><option value="16">16</option></select></label>
             <label>Lip-sync<select value={model.split_settings?.lipsync_ratio || "auto"} onChange={(e) => updateSplitSettings("lipsync_ratio", e.target.value)}><option value="auto">auto</option><option value="30%">30%</option><option value="50%">50%</option><option value="70%">70%</option></select></label>
-            <label>Маршрут<select value={model.split_settings?.route_preference || "mixed"} onChange={(e) => updateSplitSettings("route_preference", e.target.value)}><option value="mixed">mixed</option><option value="mostly_i2v">mostly_i2v</option><option value="mostly_ia2v">mostly_ia2v</option></select></label>
+            <label>Маршрут<select value={model.split_settings?.route_preference || "mixed"} onChange={(e) => updateSplitSettings("route_preference", e.target.value)}><option value="mixed">mixed</option><option value="mostly_i2v">mostly_i2v</option><option value="mostly_ia2v">mostly_ia2v</option><option value="with_i2v_sound">with_i2v_sound</option></select></label>
+            <label>Нарезка<select value={model.split_settings?.cutting_style || "mixed_phrase"} onChange={(e) => updateSplitSettings("cutting_style", e.target.value)}><option value="mixed_phrase">смешанная по фразам</option><option value="longer_lipsync">lip-sync длиннее 5–7 сек</option><option value="short_visuals">простые видео короче 3–4 сек</option></select></label>
           </section>
 
           <section className="manualPanel manualPanelAi">
@@ -440,13 +574,13 @@ export default function ManualClipBoardNode({ id, data }) {
                   <div>{directorChat.summary || "Режиссёрский контракт готов."}</div>
                 </div> : <small>Сначала соберите режиссёрский контракт, чтобы AI не придумывал сценарий сам.</small>}
               </div>
-              <textarea className="manualAiTextarea" value={splitInput} onChange={(e) => setSplitInput(e.target.value)} placeholder="Например: Разбей по вокальным фразам. Криминальная драма Одесса 90-х. 30% lip-sync, остальное сюжетные сцены. Не режь слова, переходы на концах строк." />
+              <textarea className="manualAiTextarea" value={splitInput} onChange={(e) => setSplitInput(e.target.value)} placeholder="Например: использовать lip-sync / i2v / i2v_sound примерно 40/40/20. Lip-sync подольше 5–7 сек на чистых соседних фразах, простые видео 3–4 сек. Строго резать по концам фраз/паузам, не внутри слов." />
               <button className="clipSB_btn" onClick={onRunAiSplit} disabled={model.ai_split_status === "running" || directorContractMissing}>Разобрать при помощи AI</button>
               {directorContractMissing ? <small>AI-разбивка станет доступна после режиссёрского контракта.</small> : null}
               {model.ai_split_status === "running" ? <div>AI разбирает аудио...</div> : null}
               {model.ai_split_error ? <div className="manualJsonError">{model.ai_split_error}</div> : null}
               {model.split_chat?.raw_ai_json ? <div className="manualAiSummary">{model.split_chat?.ai_summary}</div> : <div className="manualAiSummary">AI-разбивка появится после запуска по контракту.</div>}
-              <small>AI создаёт только фразовую разбивку и краткую драматургию. Промты и фото пользователь добавляет вручную.</small>
+              <small>AI создаёт только фразовую разбивку и краткую драматургию. Доступные clip routes: ia2v/lip-sync, i2v, i2v_sound. First/last не используется как route; продолжение через последний кадр делается вручную в доске.</small>
               <button className="clipSB_btn" onClick={() => {
                 const ai = buildMockSplitJson({ projectKind: model.project_kind, splitSettings: model.split_settings, format: model.format, durationSec: effectiveAudio?.duration_sec || 24 });
                 patch({ step: "split_chat_ready", last_split_source: "ai", split_chat: { user_request: splitInput, ai_summary: ai.global_hint, raw_ai_json: ai }, json_error: "" });
@@ -490,5 +624,6 @@ export default function ManualClipBoardNode({ id, data }) {
       </div>}
     </div>
     <Handle type="target" position={Position.Left} id="audio_in" />
+    <Handle type="source" position={Position.Right} id="manual_clip_board_out" />
   </NodeShell>;
 }

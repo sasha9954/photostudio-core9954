@@ -3,11 +3,34 @@ import { useNavigate } from "react-router-dom";
 import "./ManualClipAudioPreviewPage.css";
 
 const STORAGE_KEY = "manual_clip_board_active_project";
+const ACTIVE_PROJECT_ID_STORAGE_KEY = "manual_clip_board_active_project_id";
+
+function getManualProjectStorageKey(nodeId = "") {
+  const safeId = String(nodeId || "default").trim() || "default";
+  return `manual_clip_board_project:${safeId}`;
+}
+
+function readJsonStorage(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function readManualActiveProject() {
+  const active = readJsonStorage(STORAGE_KEY);
+  if (active) return active;
+  const activeNodeId = String(localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY) || "").trim();
+  if (activeNodeId) return readJsonStorage(getManualProjectStorageKey(activeNodeId));
+  return null;
+}
 
 export default function ManualClipAudioPreviewPage() {
   const navigate = useNavigate();
   const project = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch { return null; }
+    return readManualActiveProject();
   }, []);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
 
