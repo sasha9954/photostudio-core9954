@@ -807,6 +807,19 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     return prompt_id, None
 
 
+def _write_debug_workflow_dump(*, scene_id: str, workflow_key: str, workflow: dict) -> tuple[str, str]:
+    safe_scene_id = str(scene_id or "").strip() or "scene"
+    dump_dir = Path(__file__).resolve().parents[2] / "static" / "debug_workflows"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    dump_filename = f"last_{str(workflow_key or 'workflow').strip() or 'workflow'}_{safe_scene_id}_sent_to_comfy.json"
+    dump_path = dump_dir / dump_filename
+    payload = json.dumps(workflow, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    workflow_md5 = hashlib.md5(payload).hexdigest()
+    with open(dump_path, "w", encoding="utf-8") as wf_dump_file:
+        json.dump(workflow, wf_dump_file, ensure_ascii=False, indent=2)
+    return str(dump_path), workflow_md5
+
+
 def wait_for_comfy_result(
     prompt_id: str,
     timeout_sec: int,
@@ -4162,6 +4175,40 @@ def run_comfy_image_to_video(
             "submitReachedPromptCreation": True,
         },
     )
+    workflow_dump_path = ""
+    workflow_md5 = ""
+    try:
+        workflow_dump_path, workflow_md5 = _write_debug_workflow_dump(
+            scene_id=str(scene_id or "").strip(),
+            workflow_key=normalized_workflow_key,
+            workflow=patched_workflow,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[COMFY WORKFLOW DEBUG DUMP] failed sceneId=%s workflowKey=%s error=%s",
+            str(scene_id or "").strip(),
+            normalized_workflow_key,
+            str(exc)[:300],
+        )
+    logger.info(
+        "[COMFY WORKFLOW SUBMIT PAYLOAD] %s",
+        {
+            "sceneId": str(scene_id or "").strip(),
+            "workflowKey": normalized_workflow_key,
+            "workflowFile": workflow_source,
+            "workflowMd5": workflow_md5,
+            "workflowDumpPath": workflow_dump_path,
+            "promptNodeIds": prompt_patched_node_ids,
+            "audioNodeIds": audio_patch_node_ids,
+            "width": int(width),
+            "height": int(height),
+            "fps": int(fps),
+            "requestedDurationSec": float(requested_duration_sec),
+            "frames": int(frame_count),
+            "uploadedImageFilename": str(uploaded_name or ""),
+            "uploadedAudioFilename": str(uploaded_audio_name or "") if 'uploaded_audio_name' in locals() else "",
+        },
+    )
 
     prompt_id, submit_err = submit_comfy_prompt(patched_workflow)
     logger.info(
@@ -4175,6 +4222,9 @@ def run_comfy_image_to_video(
             "submitReachedUpload": True,
             "submitReachedPromptCreation": True,
             "promptIdReceived": bool(prompt_id and not submit_err),
+            "workflowMd5": workflow_md5,
+            "workflowDumpPath": workflow_dump_path,
+            "promptId": str(prompt_id or ""),
         },
     )
     if submit_err or not prompt_id:
