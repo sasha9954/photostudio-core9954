@@ -31,6 +31,7 @@ import {
 } from "./clip_nodes/comfy";
 import VideoRefNode from "./clip_nodes/VideoRefNode";
 import ManualClipBoardNode from "./clip_nodes/manual/ManualClipBoardNode";
+import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
 import {
   normalizeRenderProfile,
   normalizeAudioStoryMode,
@@ -25538,6 +25539,8 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "refGroup", position: { x: centerX + jitterX, y: centerY + jitterY }, data: { mode: 'crowd', density: 'medium', formation: '', outfitConsistency: 'varied outfit', notes: '', refs: [], uploading: false, refStatus: 'empty' } };
     } else if (type === "manualClipBoard") {
       node = { id, type: "manualClipBoard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
+    } else if (type === "manualTiming") {
+      node = { id, type: "manualTiming", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else {
       return;
     }
@@ -25882,6 +25885,7 @@ const hydrate = useCallback((source = "unknown") => {
       refAnimal: RefAnimalNode,
       refGroup: RefGroupNode,
       manualClipBoard: ManualClipBoardNode,
+      manualTiming: ManualTimingNode,
     }),
     []
   );
@@ -27386,6 +27390,7 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("comfyNarrative")}>📚 Сценарий</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioPipelineDebug")}>🧪 Scenario Pipeline Debug</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("aiScenarioDirectorV2")}>🎬 AI Scenario Director V2</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("manualTiming")}>⏱️ Тайминг песни</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("manualClipBoard")}>✂️ AI-разбивка клипа</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
