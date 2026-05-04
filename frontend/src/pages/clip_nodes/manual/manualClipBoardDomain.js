@@ -105,6 +105,17 @@ export function buildMockSplitJson({ projectKind = "clip", durationSec = 24, for
   return buildManualClipSampleJson({ projectKind, durationSec: Math.max(12, Number(durationSec) || 24), format });
 }
 
+export function toBool(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "on"].includes(v)) return true;
+    if (["false", "0", "no", "n", "off", ""].includes(v)) return false;
+  }
+  return fallback;
+}
+
 export function parseManualSplitJson(rawText) {
   try {
     const parsed = JSON.parse(String(rawText || "").trim());
@@ -156,11 +167,11 @@ export function normalizeScene(scene, idx) {
     boundary_reason: String(scene?.boundary_reason || "uncertain_boundary"),
     boundary_confidence: String(scene?.boundary_confidence || ""),
     boundary_warning: String(scene?.boundary_warning || ""),
-    use_sound_suggestion: Boolean(scene?.use_sound_suggestion),
-    contains_vocal_assumption: Boolean(scene?.contains_vocal_assumption),
-    contains_instrumental_assumption: Boolean(scene?.contains_instrumental_assumption),
-    contains_vocal: Boolean(scene?.contains_vocal ?? scene?.contains_vocal_assumption),
-    contains_instrumental: Boolean(scene?.contains_instrumental ?? scene?.contains_instrumental_assumption),
+    use_sound_suggestion: toBool(scene?.use_sound_suggestion),
+    contains_vocal_assumption: toBool(scene?.contains_vocal_assumption),
+    contains_instrumental_assumption: toBool(scene?.contains_instrumental_assumption),
+    contains_vocal: toBool(scene?.contains_vocal, toBool(scene?.contains_vocal_assumption)),
+    contains_instrumental: toBool(scene?.contains_instrumental, toBool(scene?.contains_instrumental_assumption)),
     transition_out: String(scene?.transition_out || "soft_cut_after_tail"),
     story_time: String(scene?.story_time || ""),
     scene_type: String(scene?.scene_type || ""),
