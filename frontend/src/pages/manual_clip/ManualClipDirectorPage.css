@@ -273,3 +273,22 @@
   min-height: 230px;
   flex: 0 0 auto;
 }
+
+
+.manualUserNotesList {
+  margin-top: 8px;
+}
+
+.manualUserNoteEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manualUserNoteToggle {
+  width: fit-content;
+}
+
+.manualUserNoteEditor textarea {
+  min-height: 72px;
+}
