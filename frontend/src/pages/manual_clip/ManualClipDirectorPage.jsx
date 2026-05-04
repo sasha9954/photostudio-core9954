@@ -222,7 +222,7 @@ function normalizeScene(scene = {}, idx = 0) {
     start_sec: start,
     end_sec: end,
     duration_sec: Number((Math.max(0, end - start)).toFixed(3)),
-    use_sound_suggestion: String(scene.use_sound_suggestion || ""),
+    use_sound_suggestion: Boolean(scene.use_sound_suggestion),
     contains_vocal_assumption: Boolean(scene.contains_vocal_assumption),
     contains_instrumental_assumption: Boolean(scene.contains_instrumental_assumption),
     contains_vocal: Boolean(scene.contains_vocal ?? scene.contains_vocal_assumption),
