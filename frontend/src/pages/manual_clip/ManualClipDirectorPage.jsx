@@ -659,13 +659,13 @@ export default function ManualClipDirectorPage() {
           <div>Драматургия: {dramaturgyText}</div>
           <div>Смысл: {sceneGoalText}</div>
           <div>Что учесть в prompt: {promptHintText}</div>
-          {userNoteItems.length ? <div style={{ marginTop: 8 }}>
+          {userNoteItems.length ? <div className="manualUserNotesList">
             <div>Заметки пользователя:</div>
             {userNoteItems.map((item, idx) => <div key={`${selectedScene.scene_id}-user-note-${idx}`}>• {item}</div>)}
           </div> : null}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <button className="clipSB_btn" style={{ width: "fit-content" }} onClick={() => setIsUserNoteEditorOpen((prev) => !prev)}>
+        <div className="manualUserNoteEditor">
+          <button className="clipSB_btn manualUserNoteToggle" onClick={() => setIsUserNoteEditorOpen((prev) => !prev)}>
             {isUserNoteEditorOpen ? "Скрыть заметку" : "+ заметка"}
           </button>
           {isUserNoteEditorOpen ? <textarea
