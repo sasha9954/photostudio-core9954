@@ -180,6 +180,7 @@ export function normalizeScene(scene, idx) {
     scene_goal_ru: String(scene?.scene_goal_ru || ""),
     photo_prompt_hint_ru: String(scene?.photo_prompt_hint_ru || ""),
     prompt_hint_ru: String(scene?.prompt_hint_ru || scene?.photo_prompt_hint_ru || ""),
+    user_note_ru: String(scene?.user_note_ru || scene?.user_notes_ru || ""),
     story_position_ru: String(scene?.story_position_ru || scene?.story_time || ""),
     image_url: String(scene?.image_url || scene?.start_image_url || ""),
     start_image_url: String(scene?.start_image_url || scene?.image_url || ""),

@@ -245,6 +245,7 @@ function normalizeScene(scene = {}, idx = 0) {
     scene_goal_ru: String(scene.scene_goal_ru || ""),
     photo_prompt_hint_ru: String(scene.photo_prompt_hint_ru || ""),
     prompt_hint_ru: String(scene.prompt_hint_ru || scene.photo_prompt_hint_ru || ""),
+    user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || ""),
     story_position_ru: String(scene.story_position_ru || scene.story_time || ""),
     video_prompt: String(scene.video_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
@@ -285,6 +286,7 @@ export default function ManualClipDirectorPage() {
   const videoStartInFlightRef = useRef(new Set());
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
+  const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
@@ -315,6 +317,18 @@ export default function ManualClipDirectorPage() {
   const promptHintText = selectedScene
     ? (selectedScene.prompt_hint_ru || "Напишите prompt вручную под выбранное изображение.")
     : "Напишите prompt вручную под выбранное изображение.";
+  const userNoteItems = useMemo(() => {
+    const raw = String(selectedScene?.user_note_ru || "");
+    if (!raw.trim()) return [];
+    return raw
+      .split(/\n|;/g)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }, [selectedScene?.user_note_ru]);
+
+  useEffect(() => {
+    setIsUserNoteEditorOpen(false);
+  }, [selectedSceneId]);
 
   const updateScene = (sceneId, patchOrFactory) => {
     setProject((prevProject) => {
@@ -645,6 +659,20 @@ export default function ManualClipDirectorPage() {
           <div>Драматургия: {dramaturgyText}</div>
           <div>Смысл: {sceneGoalText}</div>
           <div>Что учесть в prompt: {promptHintText}</div>
+          {userNoteItems.length ? <div style={{ marginTop: 8 }}>
+            <div>Заметки пользователя:</div>
+            {userNoteItems.map((item, idx) => <div key={`${selectedScene.scene_id}-user-note-${idx}`}>• {item}</div>)}
+          </div> : null}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <button className="clipSB_btn" style={{ width: "fit-content" }} onClick={() => setIsUserNoteEditorOpen((prev) => !prev)}>
+            {isUserNoteEditorOpen ? "Скрыть заметку" : "+ заметка"}
+          </button>
+          {isUserNoteEditorOpen ? <textarea
+            value={String(selectedScene.user_note_ru || "")}
+            placeholder="Своя заметка к сцене: звук, фраза, визуал, что не забыть..."
+            onChange={(e) => updateScene(selectedScene.scene_id, { user_note_ru: e.target.value })}
+          /> : null}
         </div>
 
         <label className="manualPromptBlock">Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
