@@ -156,7 +156,7 @@ export function normalizeScene(scene, idx) {
     boundary_reason: String(scene?.boundary_reason || "uncertain_boundary"),
     boundary_confidence: String(scene?.boundary_confidence || ""),
     boundary_warning: String(scene?.boundary_warning || ""),
-    use_sound_suggestion: String(scene?.use_sound_suggestion || ""),
+    use_sound_suggestion: Boolean(scene?.use_sound_suggestion),
     contains_vocal_assumption: Boolean(scene?.contains_vocal_assumption),
     contains_instrumental_assumption: Boolean(scene?.contains_instrumental_assumption),
     contains_vocal: Boolean(scene?.contains_vocal ?? scene?.contains_vocal_assumption),
