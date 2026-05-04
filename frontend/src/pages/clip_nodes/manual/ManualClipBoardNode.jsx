@@ -92,6 +92,16 @@ function mergeSceneDirectorWork(scene = {}, old = {}) {
   return {
     ...scene,
     route: old.route || scene.route || "",
+    use_sound_suggestion: old.use_sound_suggestion || scene.use_sound_suggestion || "",
+    contains_vocal_assumption: Boolean(old.contains_vocal_assumption ?? scene.contains_vocal_assumption),
+    contains_instrumental_assumption: Boolean(old.contains_instrumental_assumption ?? scene.contains_instrumental_assumption),
+    story_time: old.story_time || scene.story_time || "",
+    scene_type: old.scene_type || scene.scene_type || "",
+    drama_hint: old.drama_hint || scene.drama_hint || "",
+    short_note: old.short_note || scene.short_note || "",
+    photo_prompt_hint_ru: old.photo_prompt_hint_ru || scene.photo_prompt_hint_ru || "",
+    prompt_hint_ru: old.prompt_hint_ru || scene.prompt_hint_ru || "",
+    story_position_ru: old.story_position_ru || scene.story_position_ru || "",
     image_url: old.image_url || scene.image_url || "",
     image_preview_url: old.image_preview_url || scene.image_preview_url || "",
     image_upload_status: old.image_upload_status || scene.image_upload_status || "",
@@ -403,15 +413,12 @@ export default function ManualClipBoardNode({ id, data }) {
     const rawScenes = Array.isArray(splitJson?.scenes) ? splitJson.scenes : [];
     const normalized = rawScenes.map((s, idx) => {
       const scene = normalizeScene(s, idx);
-      if (model.last_split_source === "ai") {
-        return {
-          ...scene,
-          video_prompt: "",
-          negative_prompt: "",
-          sound_prompt: "",
-        };
-      }
-      return scene;
+      return {
+        ...scene,
+        video_prompt: "",
+        negative_prompt: "",
+        sound_prompt: "",
+      };
     });
     let mergedScenes = normalized;
     let splitAudioError = "";
@@ -471,6 +478,25 @@ export default function ManualClipBoardNode({ id, data }) {
       split_audio_error: splitAudioError,
       split_audio_count: splitAudioCount,
     });
+  };
+
+  const onCopyProjectJson = () => {
+    const projectSnapshot = {
+      nodeId: id,
+      mode: model.mode,
+      format: model.format,
+      audio: effectiveAudio,
+      split_chat: model.split_chat,
+      project_kind: model.project_kind,
+      last_split_source: model.last_split_source,
+      step: model.step,
+      scenes,
+      selectedSceneId: model.selectedSceneId || scenes[0]?.scene_id || "",
+      split_audio_status: model.split_audio_status,
+      split_audio_error: model.split_audio_error,
+      split_audio_count: model.split_audio_count,
+    };
+    navigator.clipboard?.writeText(JSON.stringify(projectSnapshot, null, 2));
   };
 
   const canBuildScenes = !!model?.split_chat?.raw_ai_json;
@@ -617,6 +643,7 @@ export default function ManualClipBoardNode({ id, data }) {
             {model.split_audio_error ? <div className="manualJsonError">Сцены собраны, но аудио-нарезка не удалась: {model.split_audio_error}</div> : null}
             {model.split_audio_status === "done" ? <div>Аудио сцен нарезано: {Number(model.split_audio_count || 0)}</div> : null}
             {scenes.length > 0 ? <div className="manualActionsRow">
+              <button className="clipSB_btn" onClick={onCopyProjectJson}>Скопировать JSON проекта</button>
               <button className="clipSB_btn" onClick={onOpenDirectorBoard} disabled={!canOpenBoard}>Перейти в режиссёрскую доску</button>
             </div> : null}
           </section>
