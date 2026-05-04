@@ -151,6 +151,10 @@ function clearManualDirectorProjectForNode(nodeId) {
   removeManualProjectForNode(nodeId);
 }
 
+function clearManualProjectForNode(nodeId) {
+  removeManualProjectForNode(nodeId);
+}
+
 function buildManualDirectorChatResetState() {
   return {
     messages: [],
@@ -340,6 +344,7 @@ export default function ManualClipBoardNode({ id, data }) {
     }
     patch({ ai_split_status: "running", ai_split_error: "" });
     try {
+      clearManualProjectForNode(id);
       const payload = {
         audio_url: effectiveAudio?.url || "",
         audio_filename: effectiveAudio?.filename || "",
@@ -358,6 +363,11 @@ export default function ManualClipBoardNode({ id, data }) {
       patch({
         step: "split_chat_ready",
         last_split_source: "ai",
+        scenes: [],
+        selectedSceneId: "",
+        split_audio_status: "idle",
+        split_audio_error: "",
+        split_audio_count: 0,
         split_chat: { user_request: splitInput, ai_summary: splitJson.global_hint || directorChat.summary || "", raw_ai_json: splitJson },
         json_error: "",
         ai_split_status: "done",
@@ -376,11 +386,17 @@ export default function ManualClipBoardNode({ id, data }) {
       return;
     }
 
+    clearManualProjectForNode(id);
     patch({
       step: "split_chat_ready",
       last_split_source: "json",
       project_kind: parsed.splitJson.project_kind || model.project_kind,
       format: parsed.splitJson.format || model.format,
+      scenes: [],
+      selectedSceneId: "",
+      split_audio_status: "idle",
+      split_audio_error: "",
+      split_audio_count: 0,
       split_chat: {
         user_request: "JSON import",
         ai_summary: parsed.splitJson.global_hint || "Разбивка загружена из JSON.",
@@ -446,11 +462,6 @@ export default function ManualClipBoardNode({ id, data }) {
         splitAudioStatus = "error";
         splitAudioError = String(error?.message || "audio_slice_failed");
       }
-    }
-
-    const existingProject = readManualProjectForNode(id);
-    if (existingProject?.nodeId === id && Array.isArray(existingProject?.scenes)) {
-      mergedScenes = mergeDirectorSceneWork(mergedScenes, existingProject.scenes);
     }
 
     const nextProjectSnapshot = {
@@ -555,7 +566,10 @@ export default function ManualClipBoardNode({ id, data }) {
             <select value={model.format} onChange={(e) => patch({ format: e.target.value })}><option>9:16</option><option>16:9</option><option>1:1</option></select>
           </div>
           <div className="manualChip">Статус: {model.step}</div>
-          <button className="clipSB_btn" onClick={() => patch(getDefaultManualClipNodeData())}>Сбросить</button>
+          <button className="clipSB_btn" onClick={() => {
+            clearManualProjectForNode(id);
+            patch(getDefaultManualClipNodeData());
+          }}>Сбросить</button>
         </div>
 
         <div className="manualSplitWorkspace">
