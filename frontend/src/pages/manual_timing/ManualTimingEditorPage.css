@@ -1,3 +1,485 @@
-.manualTimingPage { max-width: 760px; margin: 0 auto; }
-.manualTimingPage_actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0 8px; }
-.manualTimingPage_hint { color: #b7c7ef; }
+.manualTimingPage {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  gap: 14px;
+}
+
+.manualTimingMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  color: #cfd9ff;
+  font-size: 13px;
+}
+
+.manualTimingPage_hint {
+  color: #b7c7ef;
+}
+
+.manualTimingTransport {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(11, 16, 28, 0.72);
+  border: 1px solid rgba(120, 150, 220, 0.18);
+  display: grid;
+  gap: 12px;
+}
+
+.manualTimingAudioEngine {
+  display: none;
+}
+
+.manualTimingNoAudio {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(40, 25, 35, 0.65);
+  border: 1px solid rgba(255, 120, 160, 0.22);
+  color: #ffd9e2;
+}
+
+.manualTimingPlayerShell {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(7, 12, 22, 0.78);
+  border: 1px solid rgba(120, 150, 220, 0.18);
+}
+
+.manualTimingPlayerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: #dbe7ff;
+  font-size: 12px;
+}
+
+.manualTimingPlayerHeader div:last-child {
+  color: rgba(210, 225, 255, 0.68);
+}
+
+.manualTimingPlayerTrack {
+  position: relative;
+  height: 64px;
+  overflow: visible;
+  border-radius: 999px;
+  cursor: crosshair;
+  background: linear-gradient(90deg, rgba(17, 22, 35, 0.96), rgba(10, 14, 24, 0.96));
+  border: 1px solid rgba(165, 185, 255, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+
+.manualTimingUncutTrack {
+  position: absolute;
+  inset: 10px 10px;
+  border-radius: 999px;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(125, 140, 170, 0.17),
+    rgba(125, 140, 170, 0.17) 8px,
+    rgba(75, 85, 110, 0.14) 8px,
+    rgba(75, 85, 110, 0.14) 16px
+  );
+}
+
+.manualTimingPlayerSegment {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  border: 0;
+  border-right: 1px solid rgba(255,255,255,0.28);
+  border-left: 1px solid rgba(0,0,0,0.16);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--segment-color) 72%, #ffffff 10%), color-mix(in srgb, var(--segment-color) 55%, #000000 45%));
+  color: #061018;
+  font-weight: 800;
+  font-size: 10px;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.22);
+  cursor: pointer;
+  overflow: hidden;
+  z-index: 2;
+  padding: 0 4px;
+}
+
+.manualTimingPlayerSegment.isOpenTail {
+  background: linear-gradient(180deg, rgba(75, 84, 106, 0.55), rgba(38, 45, 64, 0.58));
+  color: rgba(220, 230, 255, 0.74);
+  text-shadow: none;
+  border-style: dashed;
+}
+
+.manualTimingPlayerSegment.isActive {
+  outline: 2px solid rgba(255, 255, 255, 0.92);
+  outline-offset: -2px;
+  box-shadow: 0 0 18px rgba(120, 255, 220, 0.28), inset 0 0 0 1px rgba(255,255,255,0.2);
+  z-index: 6;
+}
+
+.manualTimingPlayerSegment span {
+  position: relative;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.manualTimingCandidateRange {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  border-radius: 999px;
+  background: rgba(120, 255, 220, 0.16);
+  border: 1px solid rgba(120, 255, 220, 0.52);
+  box-shadow: inset 0 0 16px rgba(120, 255, 220, 0.12), 0 0 14px rgba(120, 255, 220, 0.12);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.manualTimingPlayerMarker,
+.manualTimingLastCutLine,
+.manualTimingPlayhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-1px);
+  pointer-events: none;
+}
+
+.manualTimingPlayerMarker {
+  width: 1px;
+  background: rgba(255, 245, 170, 0.62);
+  z-index: 7;
+}
+
+.manualTimingLastCutLine {
+  width: 3px;
+  background: rgba(120, 255, 220, 0.92);
+  box-shadow: 0 0 14px rgba(120, 255, 220, 0.48);
+  z-index: 8;
+}
+
+.manualTimingPlayhead {
+  width: 3px;
+  background: #ffffff;
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.75), 0 0 28px rgba(120, 200, 255, 0.35);
+  z-index: 999;
+}
+
+.manualTimingPlayhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 11px;
+  border-radius: 999px;
+  background: rgba(255, 80, 90, 0.18);
+}
+
+.manualTimingPlayhead span {
+  position: absolute;
+  top: -2px;
+  left: 8px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(8, 12, 22, 0.88);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #fff;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.manualTimingPlayerLegend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  color: rgba(215, 226, 255, 0.75);
+  font-size: 11px;
+}
+
+.manualTimingPlayerLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.manualTimingPlayerLegend i {
+  display: inline-block;
+  width: 18px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.legendCut { background: #37d6c2; }
+.legendTail { background: rgba(90, 100, 125, 0.7); }
+.legendCandidate { background: rgba(120, 255, 220, 0.28); border: 1px solid rgba(120, 255, 220, 0.55); }
+
+.manualTimingCompactActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.manualTimingCompactActions .clipSB_btn,
+.manualTimingNudgeButtons .clipSB_btn,
+.manualTimingRowActions .clipSB_btn {
+  width: auto;
+  min-width: 0;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.manualTimingWorkInfo {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(17, 23, 36, 0.78);
+  border: 1px solid rgba(120, 150, 220, 0.14);
+  color: #dbe7ff;
+  font-size: 12px;
+}
+
+.manualTimingNudgePanel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(15, 25, 34, 0.78);
+  border: 1px solid rgba(120, 255, 220, 0.15);
+}
+
+.manualTimingNudgeTitle {
+  color: #eafffb;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manualTimingNudgeButtons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.manualTimingNudgeHint {
+  color: rgba(210, 225, 255, 0.72);
+  font-size: 11px;
+}
+
+.manualTimingCopyStatus {
+  color: #a7ffd8;
+  font-size: 12px;
+}
+
+.manualTimingTimeline {
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(9, 12, 22, 0.78);
+  border: 1px solid rgba(120, 150, 220, 0.16);
+}
+
+.manualTimingTimelineTrack {
+  position: relative;
+  height: 74px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: linear-gradient(90deg, rgba(22, 31, 52, 0.92), rgba(16, 20, 34, 0.92));
+  border: 1px solid rgba(150, 180, 255, 0.16);
+}
+
+.manualTimingSegment {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  min-width: 18px;
+  padding: 4px 6px;
+  border: 1px solid rgba(117, 249, 218, 0.24);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--segment-color) 50%, rgba(20, 35, 52, 0.78));
+  color: #eafffb;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.manualTimingSegment span {
+  font-size: 10px;
+  color: rgba(226, 244, 255, 0.72);
+  white-space: nowrap;
+}
+
+.manualTimingSegment.isOpenTail {
+  background: rgba(52, 60, 82, 0.58);
+  border-style: dashed;
+  color: rgba(226, 235, 255, 0.74);
+}
+
+.manualTimingSegment.isActive {
+  border-color: rgba(120, 255, 220, 0.8);
+  box-shadow: 0 0 0 1px rgba(120, 255, 220, 0.25), 0 0 18px rgba(120, 255, 220, 0.14);
+}
+
+.manualTimingMarker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-1px);
+  background: rgba(255, 245, 170, 0.86);
+  box-shadow: 0 0 10px rgba(255, 245, 170, 0.4);
+  pointer-events: none;
+}
+
+.manualTimingWarnings {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(59, 42, 17, 0.72);
+  border: 1px solid rgba(255, 201, 100, 0.26);
+  color: #ffe3a9;
+  font-size: 12px;
+}
+
+.manualTimingRows {
+  display: grid;
+  gap: 8px;
+  max-height: 520px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.manualTimingRows::-webkit-scrollbar {
+  width: 8px;
+}
+
+.manualTimingRows::-webkit-scrollbar-thumb {
+  background: rgba(120, 255, 220, 0.35);
+  border-radius: 999px;
+}
+
+.manualTimingRow {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(13, 18, 31, 0.86);
+  border: 1px solid rgba(120, 150, 220, 0.16);
+}
+
+.manualTimingRow.isSelected {
+  border-color: rgba(120, 255, 220, 0.5);
+  box-shadow: 0 0 0 1px rgba(120, 255, 220, 0.12);
+}
+
+.manualTimingRowMain,
+.manualTimingRowControls,
+.manualTimingRowActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.manualTimingRowMain {
+  color: #dbe7ff;
+  font-size: 12px;
+}
+
+.manualTimingRowControls label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #aebce0;
+  font-size: 11px;
+}
+
+.manualTimingRowControls select {
+  min-width: 116px;
+  background: #111722;
+  color: #e8edf7;
+  border: 1px solid #354057;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.manualTimingCheck input {
+  width: auto;
+}
+
+.manualTimingNote {
+  min-height: 54px;
+  background: #111722;
+  color: #e8edf7;
+  border: 1px solid #354057;
+  border-radius: 8px;
+  padding: 8px;
+  resize: vertical;
+}
+
+@media (max-width: 720px) {
+  .manualTimingCompactActions .clipSB_btn,
+  .manualTimingNudgeButtons .clipSB_btn,
+  .manualTimingRowActions .clipSB_btn {
+    flex: 1 1 auto;
+  }
+}
+
+.manualTimingJumpBox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: rgba(9, 15, 27, 0.72);
+  border: 1px solid rgba(120, 150, 220, 0.18);
+  color: rgba(225, 235, 255, 0.86);
+  font-size: 12px;
+}
+
+.manualTimingTimecodeInput {
+  display: inline-grid;
+  grid-template-columns: 44px auto 34px auto 48px;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(130, 155, 214, 0.42);
+  background: rgba(12, 18, 31, 0.95);
+  color: #eaf0ff;
+  font-variant-numeric: tabular-nums;
+}
+
+.manualTimingTimecodeInput input {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 2px;
+  border: 0;
+  background: transparent;
+  color: #eaf0ff;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+}
+
+.manualTimingTimecodeInput input:focus {
+  color: #ffffff;
+  background: rgba(120, 255, 220, 0.14);
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px rgba(120, 255, 220, 0.26);
+}
+
+.manualTimingTimecodeInput span {
+  color: rgba(225, 235, 255, 0.78);
+  font-weight: 800;
+}
+
+.manualTimingJumpBox .clipSB_btn {
+  padding: 7px 10px;
+}

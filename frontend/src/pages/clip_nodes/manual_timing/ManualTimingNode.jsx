@@ -1,34 +1,33 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualTimingNode.css";
-import { buildManualTimingExportJson, getDefaultManualTimingNodeData, normalizeManualTimingAudio } from "./manualTimingDomain";
-
-const ACTIVE_PROJECT_STORAGE_KEY = "manual_timing_active_project";
-const ACTIVE_PROJECT_ID_STORAGE_KEY = "manual_timing_active_project_id";
-
-function getManualTimingProjectStorageKey(nodeId = "") {
-  const safeId = String(nodeId || "default").trim() || "default";
-  return `manual_timing_project:${safeId}`;
-}
-
-function persistManualTimingProject(project = {}) {
-  try {
-    const serialized = JSON.stringify(project || {});
-    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, serialized);
-    const nodeId = String(project?.nodeId || "").trim();
-    if (nodeId) {
-      localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
-      localStorage.setItem(getManualTimingProjectStorageKey(nodeId), serialized);
-    }
-  } catch {}
-}
+import {
+  buildManualTimingExportJson,
+  getDefaultManualTimingNodeData,
+  normalizeManualTimingAudio,
+  persistManualTimingProject,
+  readManualTimingProjectForNode,
+  removeManualTimingProjectForNode,
+} from "./manualTimingDomain";
 
 function formatDurationSec(value) {
   const sec = Number(value || 0);
-  if (!Number.isFinite(sec) || sec <= 0) return "0.00s";
-  return `${sec.toFixed(2)}s`;
+  if (!Number.isFinite(sec) || sec <= 0) return "0.00 с";
+  return `${sec.toFixed(2)} с`;
+}
+
+function formatTimingStatus(status) {
+  if (status === "confirmed") return "подтверждено";
+  if (status === "draft") return "черновик";
+  return "пусто";
+}
+
+function audioEquals(a = {}, b = {}) {
+  return String(a?.url || "") === String(b?.url || "")
+    && String(a?.filename || "") === String(b?.filename || "")
+    && Number(a?.duration_sec || 0) === Number(b?.duration_sec || 0);
 }
 
 export default function ManualTimingNode({ id, data }) {
@@ -39,11 +38,27 @@ export default function ManualTimingNode({ id, data }) {
   const normalizedConnectedAudio = normalizeManualTimingAudio(connectedAudio);
   const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : normalizeManualTimingAudio(model.audio);
 
-  React.useEffect(() => {
-    if (JSON.stringify(effectiveAudio) !== JSON.stringify(model.audio || {})) {
-      patch({ audio: effectiveAudio, updatedAt: Date.now() });
-    }
-  }, [effectiveAudio, model.audio]);
+  useEffect(() => {
+    const stored = readManualTimingProjectForNode(id);
+    if (!stored || typeof stored !== "object") return;
+    const storedUpdatedAt = Number(stored?.updatedAt || 0);
+    const currentUpdatedAt = Number(model?.updatedAt || 0);
+    if (storedUpdatedAt <= currentUpdatedAt) return;
+    patch({
+      ...stored,
+      nodeId: undefined,
+      updatedAt: storedUpdatedAt,
+    });
+    // sync saved editor changes back to graph node once on mount / after returning.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!effectiveAudio?.url) return;
+    if (audioEquals(effectiveAudio, model.audio || {})) return;
+    patch({ audio: effectiveAudio, timing_status: model.timing_status === "empty" ? "draft" : model.timing_status, updatedAt: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveAudio?.url, effectiveAudio?.filename, effectiveAudio?.duration_sec]);
 
   const persistProject = () => {
     const project = {
@@ -71,17 +86,52 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onResetTiming = () => {
+    removeManualTimingProjectForNode(id);
     patch({ markers: [], scenes: [], timing_status: "empty", selectedSceneId: "", updatedAt: Date.now() });
   };
 
+  const onAudioUpload = (file) => {
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    const audioEl = new Audio();
+    audioEl.preload = "metadata";
+    audioEl.onloadedmetadata = () => {
+      const durationSec = Number(audioEl.duration || 0);
+      patch({
+        audio: {
+          url,
+          filename: file.name,
+          duration_sec: Number.isFinite(durationSec) ? Number(durationSec.toFixed(3)) : 0,
+          duration_ms: Number.isFinite(durationSec) ? Math.round(durationSec * 1000) : 0,
+        },
+        timing_status: "draft",
+        markers: [],
+        scenes: [],
+        selectedSceneId: "",
+        updatedAt: Date.now(),
+      });
+    };
+    audioEl.onerror = () => {
+      patch({
+        audio: { url, filename: file.name, duration_sec: 0, duration_ms: 0 },
+        timing_status: "draft",
+        markers: [],
+        scenes: [],
+        selectedSceneId: "",
+        updatedAt: Date.now(),
+      });
+    };
+    audioEl.src = url;
+  };
+
   return (
-    <NodeShell title="Тайминг песни" subtitle="manual timing draft" accent="var(--accentB)">
+    <NodeShell title="Тайминг песни" subtitle="ручная разметка" accent="var(--accentB)">
       <Handle type="target" position={Position.Left} id="audio_in" />
       <div className="manualTimingNode_block">
         <div className="manualTimingNode_row"><b>Аудио:</b> {effectiveAudio.filename || "аудио не выбрано"}</div>
         <div className="manualTimingNode_row"><b>Длительность:</b> {formatDurationSec(effectiveAudio.duration_sec)}</div>
         <div className="manualTimingNode_row"><b>Сцен:</b> {Array.isArray(model.scenes) ? model.scenes.length : 0}</div>
-        <div className="manualTimingNode_row"><b>Статус:</b> {String(model.timing_status || "empty")}</div>
+        <div className="manualTimingNode_row"><b>Статус:</b> {formatTimingStatus(model.timing_status)}</div>
 
         <label className="manualTimingNode_label">Формат</label>
         <select className="manualTimingNode_select" value={model.format || "9:16"} onChange={(e) => patch({ format: e.target.value, updatedAt: Date.now() })}>
@@ -90,16 +140,20 @@ export default function ManualTimingNode({ id, data }) {
           <option value="1:1">1:1</option>
         </select>
 
-        <label className="manualTimingNode_label">Project kind</label>
+        <label className="manualTimingNode_label">Тип проекта</label>
         <select className="manualTimingNode_select" value={model.project_kind || "clip"} onChange={(e) => patch({ project_kind: e.target.value, updatedAt: Date.now() })}>
-          <option value="clip">clip</option>
-          <option value="story">story</option>
+          <option value="clip">клип</option>
+          <option value="story">история</option>
         </select>
 
         <div className="manualTimingNode_actions">
           <button className="clipSB_btn" onClick={onOpenEditor}>Открыть редактор</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON таймингов</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onResetTiming}>Сбросить тайминги</button>
+          <label className="clipSB_btn clipSB_btnSecondary manualTimingNode_upload">
+            Загрузить аудио
+            <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} hidden />
+          </label>
         </div>
       </div>
       <Handle type="source" position={Position.Right} id="manual_timing_out" />

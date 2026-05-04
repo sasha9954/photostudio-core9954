@@ -24632,6 +24632,85 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
             data: nextData,
           };
         }
+        if (n.type === "manualTiming") {
+          const safeEdgesForConnections =
+            (typeof effectiveEdges !== "undefined" && Array.isArray(effectiveEdges))
+              ? effectiveEdges
+              : Array.isArray(edgesRef.current)
+                ? edgesRef.current
+                : [];
+
+          const nodesById = new Map(
+            (Array.isArray(effectiveNodes) ? effectiveNodes : [])
+              .map((nodeItem) => [nodeItem.id, nodeItem])
+          );
+
+          const connectedInputs = getNarrativeConnectedInputsSnapshot({
+            node: n,
+            nodesById,
+            edges: safeEdgesForConnections,
+          });
+          const audioInput = connectedInputs?.audio_in || null;
+
+          const audioUrl = String(audioInput?.url || audioInput?.value || "").trim();
+          const audioFilename = String(
+            audioInput?.fileName
+            || audioInput?.filename
+            || audioInput?.preview
+            || "audio"
+          ).trim();
+          const durationSecRaw = Number(
+            audioInput?.audioDurationSec
+            ?? audioInput?.durationSec
+            ?? audioInput?.duration
+            ?? audioInput?.meta?.audioDurationSec
+            ?? audioInput?.meta?.durationSec
+            ?? 0
+          );
+
+          const connectedAudio = audioUrl
+            ? {
+                url: audioUrl,
+                filename: audioFilename,
+                duration_sec: Number.isFinite(durationSecRaw) && durationSecRaw > 0
+                  ? Number(durationSecRaw.toFixed(3))
+                  : 0,
+                duration_ms: Number.isFinite(durationSecRaw) && durationSecRaw > 0
+                  ? Math.round(durationSecRaw * 1000)
+                  : 0,
+              }
+            : null;
+
+          const nextData = {
+            ...base.data,
+            connectedInputs,
+            connectedAudio: audioInput,
+            onPatchNodeData: (nodeId, patch = {}) => {
+              setNodes((prev) => bindHandlers(prev.map((nodeItem) => (
+                nodeItem.id === nodeId
+                  ? { ...nodeItem, data: { ...nodeItem.data, ...(patch || {}) } }
+                  : nodeItem
+              )), {
+                nodesNow: prev,
+                edgesNow: edgesRef.current || [],
+                traceReason: "manual-timing:patch",
+              }));
+            },
+          };
+
+          if (connectedAudio) {
+            nextData.audio = connectedAudio;
+            if (!String(nextData.timing_status || "").trim() || nextData.timing_status === "empty") {
+              nextData.timing_status = "draft";
+            }
+          }
+
+          return {
+            ...base,
+            data: nextData,
+          };
+        }
+
 
         if (n.type === "aiScenarioDirectorV2") {
           const safeEdgesForConnections =
@@ -25981,6 +26060,33 @@ const hydrate = useCallback((source = "unknown") => {
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:manual-clip-board");
           return nextEdges;
         }
+        if (dst.type === "manualTiming") {
+          const h = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
+          const ok =
+            h === "audio_in"
+            && src.type === "audioNode"
+            && sourceHandle === "audio";
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === params.target && (e.targetHandle || "") === h));
+          const presentation = getEdgePresentation({
+            sourceHandle,
+            targetHandle: h,
+            sourceType: src.type,
+            targetType: dst.type,
+          });
+          nextEdges = addEdge({
+            ...params,
+            type: "smoothstep",
+            className: presentation.className,
+            animated: presentation.animated,
+            style: presentation.style,
+            data: { kind: presentation.kind },
+          }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:manual-timing");
+          return nextEdges;
+        }
+
 
         if (src.type === "aiScenarioDirectorV2" && (params.sourceHandle || "") === "scenario_out_v2") {
           const targetHandle = params.targetHandle || "";

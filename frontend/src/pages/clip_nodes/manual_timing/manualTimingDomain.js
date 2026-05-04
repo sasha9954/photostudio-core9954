@@ -1,6 +1,76 @@
+export const MANUAL_TIMING_MODE = "manual_timing";
+export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
+export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
+
+export const MANUAL_TIMING_SECTIONS = ["intro", "verse", "chorus", "bridge", "instrumental", "outro"];
+export const MANUAL_TIMING_ROUTES = ["ia2v", "i2v"];
+export const MANUAL_TIMING_ENERGY = ["soft", "mid", "high"];
+
+const MANUAL_TIMING_SECTION_LABELS_RU = {
+  intro: "вступление",
+  verse: "куплет",
+  chorus: "припев",
+  bridge: "бридж",
+  instrumental: "проигрыш",
+  outro: "финал",
+};
+
+function sectionLabelRu(section = "") {
+  const key = String(section || "").trim().toLowerCase();
+  return MANUAL_TIMING_SECTION_LABELS_RU[key] || key || "не указана";
+}
+
+export function getManualTimingProjectStorageKey(nodeId = "") {
+  const safeId = String(nodeId || "default").trim() || "default";
+  return `manual_timing_project:${safeId}`;
+}
+
+export function readManualTimingJsonStorage(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readManualTimingProjectForNode(nodeId = "") {
+  const safeId = String(nodeId || "").trim();
+  const active = readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+  if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
+  const scoped = readManualTimingJsonStorage(getManualTimingProjectStorageKey(safeId));
+  if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) return scoped;
+  return null;
+}
+
+export function persistManualTimingProject(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  try {
+    const serialized = JSON.stringify(safeProject);
+    localStorage.setItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY, serialized);
+    const nodeId = String(safeProject?.nodeId || "").trim();
+    if (nodeId) {
+      localStorage.setItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY, nodeId);
+      localStorage.setItem(getManualTimingProjectStorageKey(nodeId), serialized);
+    }
+  } catch {}
+}
+
+export function removeManualTimingProjectForNode(nodeId = "") {
+  const safeId = String(nodeId || "").trim();
+  try {
+    if (safeId) localStorage.removeItem(getManualTimingProjectStorageKey(safeId));
+    const active = readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+    if (!safeId || String(active?.nodeId || "") === safeId) {
+      localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+      localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY);
+    }
+  } catch {}
+}
+
 export function getDefaultManualTimingNodeData() {
   return {
-    mode: "manual_timing",
+    mode: MANUAL_TIMING_MODE,
     project_kind: "clip",
     format: "9:16",
     audio: {
@@ -20,24 +90,257 @@ export function getDefaultManualTimingNodeData() {
 export function normalizeManualTimingAudio(audio = null) {
   if (!audio || typeof audio !== "object") return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
   const url = String(audio.url || audio.value || audio.href || "").trim();
-  const filename = String(audio.filename || audio.fileName || audio.name || audio.meta?.filename || "").trim();
-  const durationSecRaw = Number(audio.duration_sec ?? audio.durationSec ?? audio.duration ?? audio.meta?.duration_sec ?? audio.meta?.duration ?? 0);
+  const filename = String(audio.filename || audio.fileName || audio.name || audio.preview || audio.meta?.filename || "").trim();
+  const durationSecRaw = Number(
+    audio.duration_sec
+    ?? audio.durationSec
+    ?? audio.audioDurationSec
+    ?? audio.duration
+    ?? audio.meta?.duration_sec
+    ?? audio.meta?.durationSec
+    ?? audio.meta?.audioDurationSec
+    ?? audio.meta?.duration
+    ?? 0
+  );
   const durationMsRaw = Number(audio.duration_ms ?? audio.durationMs ?? audio.meta?.duration_ms ?? 0);
   const duration_sec = Number.isFinite(durationSecRaw) ? Number(durationSecRaw.toFixed(3)) : 0;
   const duration_ms = Number.isFinite(durationMsRaw) && durationMsRaw > 0 ? Math.round(durationMsRaw) : Math.round(duration_sec * 1000);
   return { url, filename, duration_sec, duration_ms };
 }
 
+export function roundTimingSec(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Number(n.toFixed(3));
+}
+
+export function formatTimingSec(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "0:00.000";
+  const minutes = Math.floor(n / 60);
+  const seconds = Math.floor(n % 60);
+  const millis = Math.round((n - Math.floor(n)) * 1000);
+  return `${minutes}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+}
+
+export function normalizeManualTimingSection(section = "") {
+  const value = String(section || "").trim().toLowerCase();
+  return MANUAL_TIMING_SECTIONS.includes(value) ? value : "verse";
+}
+
+export function normalizeManualTimingRoute(route = "") {
+  const value = String(route || "").trim().toLowerCase();
+  return MANUAL_TIMING_ROUTES.includes(value) ? value : "i2v";
+}
+
+export function normalizeManualTimingEnergy(energy = "") {
+  const value = String(energy || "").trim().toLowerCase();
+  return MANUAL_TIMING_ENERGY.includes(value) ? value : "mid";
+}
+
+export function getSectionDefaults(section = "") {
+  const normalized = normalizeManualTimingSection(section);
+  if (normalized === "intro" || normalized === "instrumental" || normalized === "outro") {
+    return {
+      section: normalized,
+      route: "i2v",
+      contains_vocal: false,
+      contains_vocal_assumption: false,
+      contains_instrumental_assumption: true,
+    };
+  }
+  return {
+    section: normalized,
+    route: "ia2v",
+    contains_vocal: true,
+    contains_vocal_assumption: true,
+    contains_instrumental_assumption: false,
+  };
+}
+
+export function normalizeManualTimingMarkers(markers = [], durationSec = 0) {
+  const duration = roundTimingSec(durationSec);
+  const values = (Array.isArray(markers) ? markers : [])
+    .map((value) => roundTimingSec(value))
+    .filter((value) => Number.isFinite(value) && value >= 0 && (!duration || value <= duration));
+
+  values.push(0);
+  if (duration > 0) values.push(duration);
+
+  const sorted = [...new Set(values.map((value) => value.toFixed(3)))]
+    .map((value) => Number(value))
+    .sort((a, b) => a - b);
+
+  const deduped = [];
+  for (const value of sorted) {
+    const prev = deduped[deduped.length - 1];
+    if (prev === undefined || Math.abs(value - prev) >= 0.001) deduped.push(value);
+  }
+  return deduped;
+}
+
+function buildScenePreserveMaps(existingScenes = []) {
+  const byId = new Map();
+  const byTimeline = new Map();
+  (Array.isArray(existingScenes) ? existingScenes : []).forEach((scene) => {
+    const id = String(scene?.scene_id || "").trim();
+    if (id && !byId.has(id)) byId.set(id, scene);
+    const key = `${roundTimingSec(scene?.start_sec).toFixed(3)}|${roundTimingSec(scene?.end_sec).toFixed(3)}`;
+    if (key !== "0.000|0.000" && !byTimeline.has(key)) byTimeline.set(key, scene);
+  });
+  return { byId, byTimeline };
+}
+
+export function buildManualTimingScenesFromMarkers(markers = [], existingScenes = [], options = {}) {
+  const duration = Number(options.durationSec || 0);
+  const safeMarkers = normalizeManualTimingMarkers(markers, duration);
+  const { byId, byTimeline } = buildScenePreserveMaps(existingScenes);
+  const scenes = [];
+
+  for (let i = 0; i < safeMarkers.length - 1; i += 1) {
+    const start = roundTimingSec(safeMarkers[i]);
+    const end = roundTimingSec(safeMarkers[i + 1]);
+    if (!(end > start)) continue;
+    const sceneId = `seg_${String(i + 1).padStart(2, "0")}`;
+    const timelineKey = `${start.toFixed(3)}|${end.toFixed(3)}`;
+    const old = byTimeline.get(timelineKey) || byId.get(sceneId) || {};
+    const section = normalizeManualTimingSection(old.section || (i === 0 ? "intro" : "verse"));
+    const defaults = getSectionDefaults(section);
+    const route = normalizeManualTimingRoute(old.route || defaults.route);
+    const containsVocal = typeof old.contains_vocal === "boolean"
+      ? old.contains_vocal
+      : Boolean(old.contains_vocal_assumption ?? defaults.contains_vocal);
+    const containsInstrumental = typeof old.contains_instrumental === "boolean"
+      ? old.contains_instrumental
+      : Boolean(old.contains_instrumental_assumption ?? !containsVocal);
+
+    scenes.push({
+      scene_id: sceneId,
+      index: i + 1,
+      start_sec: start,
+      end_sec: end,
+      duration_sec: roundTimingSec(end - start),
+      section,
+      route,
+      contains_vocal: containsVocal,
+      contains_vocal_assumption: Boolean(old.contains_vocal_assumption ?? containsVocal),
+      contains_instrumental_assumption: Boolean(old.contains_instrumental_assumption ?? containsInstrumental),
+      use_sound_suggestion: Boolean(old.use_sound_suggestion || false),
+      energy: normalizeManualTimingEnergy(old.energy || "mid"),
+      quality: String(old.quality || "manual_draft"),
+      boundary_reason: String(old.boundary_reason || "manual_marker"),
+      transition_out: String(old.transition_out || "manual_cut"),
+      story_time: String(old.story_time || ""),
+      scene_type: String(old.scene_type || ""),
+      drama_hint: String(old.drama_hint || ""),
+      short_note: String(old.short_note || ""),
+      scene_goal_ru: String(old.scene_goal_ru || ""),
+      photo_prompt_hint_ru: String(old.photo_prompt_hint_ru || ""),
+      prompt_hint_ru: String(old.prompt_hint_ru || old.photo_prompt_hint_ru || ""),
+      story_position_ru: String(old.story_position_ru || old.story_time || ""),
+      user_note_ru: String(old.user_note_ru || old.user_notes_ru || ""),
+      video_prompt: String(old.video_prompt || ""),
+      negative_prompt: String(old.negative_prompt || ""),
+      sound_prompt: String(old.sound_prompt || ""),
+    });
+  }
+
+  return scenes;
+}
+
+export function updateManualTimingSceneById(scenes = [], sceneId = "", patch = {}) {
+  return (Array.isArray(scenes) ? scenes : []).map((scene) => {
+    if (String(scene?.scene_id || "") !== String(sceneId || "")) return scene;
+    const next = { ...scene, ...(patch || {}) };
+    const sectionChanged = Object.prototype.hasOwnProperty.call(patch || {}, "section");
+    if (sectionChanged) {
+      const defaults = getSectionDefaults(next.section);
+      next.section = defaults.section;
+      next.route = defaults.route;
+      next.contains_vocal = defaults.contains_vocal;
+      next.contains_vocal_assumption = defaults.contains_vocal_assumption;
+      next.contains_instrumental_assumption = defaults.contains_instrumental_assumption;
+    }
+    if (Object.prototype.hasOwnProperty.call(patch || {}, "contains_vocal")) {
+      next.contains_vocal = Boolean(patch.contains_vocal);
+      next.contains_vocal_assumption = Boolean(patch.contains_vocal);
+      next.contains_instrumental_assumption = !Boolean(patch.contains_vocal);
+    }
+    next.route = normalizeManualTimingRoute(next.route);
+    next.energy = normalizeManualTimingEnergy(next.energy);
+    return next;
+  });
+}
+
+export function buildManualTimingWarnings(project = {}) {
+  const audio = normalizeManualTimingAudio(project.audio);
+  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const warnings = [];
+  const duration = Number(audio.duration_sec || 0);
+
+  if (!scenes.length) warnings.push("Нет сегментов разметки.");
+  if (scenes.length) {
+    if (Math.abs(Number(scenes[0]?.start_sec || 0)) > 0.001) warnings.push("Первая сцена не начинается с 0.000 сек.");
+    if (duration > 0 && Math.abs(Number(scenes[scenes.length - 1]?.end_sec || 0) - duration) > 0.05) warnings.push("Последняя сцена не заканчивается на длительности аудио.");
+  }
+
+  scenes.forEach((scene, idx) => {
+    const start = Number(scene.start_sec || 0);
+    const end = Number(scene.end_sec || 0);
+    const dur = Number(scene.duration_sec || (end - start));
+    if (idx > 0) {
+      const prevEnd = Number(scenes[idx - 1]?.end_sec || 0);
+      if (Math.abs(start - prevEnd) > 0.01) warnings.push(`${scene.scene_id}: есть разрыв или наложение с предыдущей сценой.`);
+    }
+    if (dur < 1.0) warnings.push(`${scene.scene_id}: длительность меньше 1 сек.`);
+    if (dur > 9.0) warnings.push(`${scene.scene_id}: длительность больше 9 сек — проверь, не склеены ли разные фразы.`);
+    if (scene.route === "ia2v" && !scene.contains_vocal) warnings.push(`${scene.scene_id}: ia2v стоит на участке без вокала.`);
+    if (["intro", "instrumental"].includes(String(scene.section || "")) && scene.route === "ia2v") warnings.push(`${scene.scene_id}: секция “${sectionLabelRu(scene.section)}”, но выбран route=ia2v.`);
+  });
+
+  return warnings;
+}
+
 export function buildManualTimingExportJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
+  const scenes = (Array.isArray(safeProject.scenes) ? safeProject.scenes : []).map((scene, idx) => ({
+    scene_id: String(scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
+    index: Number(scene?.index || idx + 1),
+    start_sec: roundTimingSec(scene?.start_sec),
+    end_sec: roundTimingSec(scene?.end_sec),
+    duration_sec: roundTimingSec(scene?.duration_sec || (Number(scene?.end_sec || 0) - Number(scene?.start_sec || 0))),
+    section: normalizeManualTimingSection(scene?.section),
+    route: normalizeManualTimingRoute(scene?.route),
+    contains_vocal: Boolean(scene?.contains_vocal),
+    contains_vocal_assumption: Boolean(scene?.contains_vocal_assumption ?? scene?.contains_vocal),
+    contains_instrumental_assumption: Boolean(scene?.contains_instrumental_assumption ?? !scene?.contains_vocal),
+    use_sound_suggestion: Boolean(scene?.use_sound_suggestion),
+    energy: normalizeManualTimingEnergy(scene?.energy),
+    quality: String(scene?.quality || (safeProject.timing_status === "confirmed" ? "manual_confirmed" : "manual_draft")),
+    boundary_reason: String(scene?.boundary_reason || "manual_marker"),
+    transition_out: String(scene?.transition_out || "manual_cut"),
+    story_time: String(scene?.story_time || ""),
+    scene_type: String(scene?.scene_type || ""),
+    drama_hint: String(scene?.drama_hint || ""),
+    short_note: String(scene?.short_note || ""),
+    scene_goal_ru: String(scene?.scene_goal_ru || ""),
+    photo_prompt_hint_ru: String(scene?.photo_prompt_hint_ru || ""),
+    prompt_hint_ru: String(scene?.prompt_hint_ru || scene?.photo_prompt_hint_ru || ""),
+    story_position_ru: String(scene?.story_position_ru || scene?.story_time || ""),
+    user_note_ru: String(scene?.user_note_ru || ""),
+    video_prompt: "",
+    negative_prompt: "",
+    sound_prompt: "",
+  }));
+
   return {
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
     format: String(safeProject.format || "9:16"),
-    split_type: "manual_timing_draft",
+    split_type: safeProject.timing_status === "confirmed" ? "manual_timing_confirmed" : "manual_timing_draft",
     audio_duration_sec: Number(audio.duration_sec || 0),
-    global_hint: "Manual timing draft",
-    scenes: Array.isArray(safeProject.scenes) ? safeProject.scenes : [],
+    global_hint: safeProject.timing_status === "confirmed" ? "Manual timing confirmed by user" : "Manual timing draft",
+    scenes,
   };
 }

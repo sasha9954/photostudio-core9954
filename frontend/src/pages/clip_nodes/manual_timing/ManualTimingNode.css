@@ -3,3 +3,6 @@
 .manualTimingNode_label { font-size: 11px; color: #9db0df; margin-top: 2px; }
 .manualTimingNode_select { width: 100%; background: rgba(10, 14, 24, 0.85); color: #eaf0ff; border: 1px solid rgba(130, 155, 214, 0.45); border-radius: 8px; padding: 7px 10px; }
 .manualTimingNode_actions { display: grid; gap: 6px; margin-top: 4px; }
+.manualTimingNode_upload {
+  text-align: center;
+}
