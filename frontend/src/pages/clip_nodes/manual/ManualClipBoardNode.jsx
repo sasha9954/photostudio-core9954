@@ -4,7 +4,7 @@ import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
-import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson } from "./manualClipBoardDomain";
+import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson, toBool } from "./manualClipBoardDomain";
 
 
 const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
@@ -92,9 +92,9 @@ function mergeSceneDirectorWork(scene = {}, old = {}) {
   return {
     ...scene,
     route: scene.route || old.route || "",
-    use_sound_suggestion: scene.use_sound_suggestion ?? old.use_sound_suggestion ?? false,
-    contains_vocal_assumption: scene.contains_vocal_assumption ?? old.contains_vocal_assumption ?? false,
-    contains_instrumental_assumption: scene.contains_instrumental_assumption ?? old.contains_instrumental_assumption ?? false,
+    use_sound_suggestion: toBool(scene.use_sound_suggestion, toBool(old.use_sound_suggestion)),
+    contains_vocal_assumption: toBool(scene.contains_vocal_assumption, toBool(old.contains_vocal_assumption)),
+    contains_instrumental_assumption: toBool(scene.contains_instrumental_assumption, toBool(old.contains_instrumental_assumption)),
     story_time: scene.story_time || old.story_time || "",
     scene_type: scene.scene_type || old.scene_type || "",
     drama_hint: scene.drama_hint || old.drama_hint || "",

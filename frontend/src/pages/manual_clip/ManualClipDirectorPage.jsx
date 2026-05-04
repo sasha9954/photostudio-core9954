@@ -212,6 +212,17 @@ function getSceneStatusLabel(scene = {}) {
   return status || "draft";
 }
 
+function toBool(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "on"].includes(v)) return true;
+    if (["false", "0", "no", "n", "off", ""].includes(v)) return false;
+  }
+  return fallback;
+}
+
 function normalizeScene(scene = {}, idx = 0) {
   const start = Number(scene.start_sec || 0);
   const end = Number(scene.end_sec || start);
@@ -222,11 +233,11 @@ function normalizeScene(scene = {}, idx = 0) {
     start_sec: start,
     end_sec: end,
     duration_sec: Number((Math.max(0, end - start)).toFixed(3)),
-    use_sound_suggestion: Boolean(scene.use_sound_suggestion),
-    contains_vocal_assumption: Boolean(scene.contains_vocal_assumption),
-    contains_instrumental_assumption: Boolean(scene.contains_instrumental_assumption),
-    contains_vocal: Boolean(scene.contains_vocal ?? scene.contains_vocal_assumption),
-    contains_instrumental: Boolean(scene.contains_instrumental ?? scene.contains_instrumental_assumption),
+    use_sound_suggestion: toBool(scene.use_sound_suggestion),
+    contains_vocal_assumption: toBool(scene.contains_vocal_assumption),
+    contains_instrumental_assumption: toBool(scene.contains_instrumental_assumption),
+    contains_vocal: toBool(scene.contains_vocal, toBool(scene.contains_vocal_assumption)),
+    contains_instrumental: toBool(scene.contains_instrumental, toBool(scene.contains_instrumental_assumption)),
     story_time: String(scene.story_time || ""),
     scene_type: String(scene.scene_type || ""),
     drama_hint: String(scene.drama_hint || ""),
