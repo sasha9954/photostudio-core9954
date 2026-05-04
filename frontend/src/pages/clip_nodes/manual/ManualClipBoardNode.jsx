@@ -101,6 +101,7 @@ function mergeSceneDirectorWork(scene = {}, old = {}) {
     short_note: scene.short_note || old.short_note || "",
     photo_prompt_hint_ru: scene.photo_prompt_hint_ru || old.photo_prompt_hint_ru || "",
     prompt_hint_ru: scene.prompt_hint_ru || old.prompt_hint_ru || "",
+    user_note_ru: scene.user_note_ru || old.user_note_ru || "",
     story_position_ru: scene.story_position_ru || old.story_position_ru || "",
     image_url: old.image_url || scene.image_url || "",
     image_preview_url: old.image_preview_url || scene.image_preview_url || "",
