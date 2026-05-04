@@ -82,6 +82,26 @@
 .manualSplitPlan {
   grid-column: 1 / -1;
   min-width: 0;
+  min-height: 0;
 }
-.manualPlanRows { display:flex; flex-direction:column; gap:4px; font-family:monospace; }
+.manualPanelPlan,
+.manualSplitPlan {
+  min-height: 0;
+}
+.manualPlanRows {
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  font-family:monospace;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+.manualPlanRows::-webkit-scrollbar {
+  width: 8px;
+}
+.manualPlanRows::-webkit-scrollbar-thumb {
+  background: rgba(120, 255, 220, 0.35);
+  border-radius: 999px;
+}
 .manualPlanRow { padding:6px 8px; background:#12121a; border-radius:6px; }
