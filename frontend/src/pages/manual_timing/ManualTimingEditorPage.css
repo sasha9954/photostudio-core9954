@@ -707,3 +707,57 @@
     flex: 1 1 auto;
   }
 }
+
+.manualTimingDurationBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.2;
+  border: 1px solid rgba(212, 195, 148, 0.35);
+  background: rgba(146, 130, 92, 0.22);
+  color: #f6e6b9;
+}
+
+.manualTimingDurationBadge.isSoft {
+  border-color: rgba(196, 186, 144, 0.32);
+  background: rgba(138, 129, 103, 0.2);
+  color: #e7ddbc;
+}
+
+.manualTimingDurationBadge.isWarning {
+  border-color: rgba(255, 182, 92, 0.45);
+  background: rgba(138, 101, 58, 0.28);
+  color: #ffd9a8;
+}
+
+.manualTimingDurationBadge.isDanger {
+  border-color: rgba(255, 120, 120, 0.45);
+  background: rgba(132, 62, 62, 0.3);
+  color: #ffc0c0;
+}
+
+.manualTimingQuickEditWarning {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  border: 1px solid rgba(196, 186, 144, 0.32);
+  background: rgba(138, 129, 103, 0.2);
+  color: #e7ddbc;
+}
+
+.manualTimingQuickEditWarning.isWarning {
+  border-color: rgba(255, 182, 92, 0.45);
+  background: rgba(138, 101, 58, 0.28);
+  color: #ffd9a8;
+}
+
+.manualTimingQuickEditWarning.isDanger {
+  border-color: rgba(255, 120, 120, 0.45);
+  background: rgba(132, 62, 62, 0.3);
+  color: #ffc0c0;
+}
