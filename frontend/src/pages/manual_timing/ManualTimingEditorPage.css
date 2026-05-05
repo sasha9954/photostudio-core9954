@@ -750,6 +750,12 @@
   color: #e7ddbc;
 }
 
+.manualTimingQuickEditWarning.isSoft {
+  border-color: rgba(196, 186, 144, 0.32);
+  background: rgba(138, 129, 103, 0.2);
+  color: #e7ddbc;
+}
+
 .manualTimingQuickEditWarning.isWarning {
   border-color: rgba(255, 182, 92, 0.45);
   background: rgba(138, 101, 58, 0.28);
