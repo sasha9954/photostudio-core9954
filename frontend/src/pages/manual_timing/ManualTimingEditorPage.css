@@ -483,3 +483,77 @@
 .manualTimingJumpBox .clipSB_btn {
   padding: 7px 10px;
 }
+
+.manualTimingJsonPanel {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(18, 21, 34, 0.78);
+  border: 1px solid rgba(165, 185, 255, 0.18);
+}
+
+.manualTimingJsonHeader {
+  display: grid;
+  gap: 3px;
+  color: #e7eeff;
+  font-size: 13px;
+}
+
+.manualTimingJsonHeader span {
+  color: rgba(215, 226, 255, 0.68);
+  font-size: 12px;
+}
+
+.manualTimingJsonActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.manualTimingJsonActions .clipSB_btn,
+.manualTimingJsonActions .manualTimingFileBtn {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.manualTimingFileBtn {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.manualTimingFileBtn input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.manualTimingJsonTextarea {
+  width: 100%;
+  min-height: 160px;
+  resize: vertical;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 150, 220, 0.28);
+  background: rgba(6, 10, 18, 0.82);
+  color: #e8f0ff;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+@media (max-width: 720px) {
+  .manualTimingJsonActions .clipSB_btn,
+  .manualTimingJsonActions .manualTimingFileBtn {
+    flex: 1 1 auto;
+  }
+}

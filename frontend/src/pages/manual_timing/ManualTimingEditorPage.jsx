@@ -7,12 +7,14 @@ import {
   MANUAL_TIMING_ROUTES,
   MANUAL_TIMING_SECTIONS,
   buildManualTimingExportJson,
+  buildManualTimingSampleJson,
   buildManualTimingScenesFromMarkers,
   buildManualTimingWarnings,
   formatTimingSec,
   getDefaultManualTimingNodeData,
   normalizeManualTimingAudio,
   normalizeManualTimingMarkers,
+  normalizeManualTimingProjectFromJson,
   persistManualTimingProject,
   roundTimingSec,
   updateManualTimingSceneById,
@@ -156,6 +158,8 @@ export default function ManualTimingEditorPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
+  const [jsonImportText, setJsonImportText] = useState("");
+  const [isJsonImportOpen, setIsJsonImportOpen] = useState(false);
   const [jumpTimeParts, setJumpTimeParts] = useState(() => ({ min: "0", sec: "00", ms: "000" }));
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
@@ -489,9 +493,26 @@ export default function ManualTimingEditorPage() {
     setJumpTimeParts(getTimingPartsFromSec(currentTimeRef.current || currentTime));
   };
 
-  const confirmTailReset = (message) => {
-    if (typeof window === "undefined") return true;
-    return window.confirm(message || "Изменяется уже размеченный участок. Все следующие разрезы будут удалены. Продолжить?");
+  const shiftMarkersFromBoundary = (safeMarkers = [], markerIndex = 0, nextTimeValue = 0) => {
+    const lastIndex = safeMarkers.length - 1;
+    if (markerIndex <= 0 || markerIndex >= lastIndex) return safeMarkers;
+
+    const currentMarker = Number(safeMarkers[markerIndex] || 0);
+    const requestedNext = roundTimingSec(Number(nextTimeValue || 0));
+    const prevMarker = Number(safeMarkers[markerIndex - 1] || 0);
+    const lastInternalMarker = Number(safeMarkers[lastIndex - 1] || currentMarker);
+
+    const minDelta = (prevMarker + 0.25) - currentMarker;
+    const maxDelta = (durationSec - 0.25) - lastInternalMarker;
+    const requestedDelta = requestedNext - currentMarker;
+    if ((requestedDelta > 0 && maxDelta <= 0) || (requestedDelta < 0 && minDelta >= 0) || maxDelta < minDelta) return safeMarkers;
+    const delta = roundTimingSec(Math.min(maxDelta, Math.max(minDelta, requestedDelta)));
+    if (Math.abs(delta) < 0.001) return safeMarkers;
+
+    return safeMarkers.map((marker, idx) => {
+      if (idx >= markerIndex && idx < lastIndex) return roundTimingSec(Number(marker) + delta);
+      return marker;
+    });
   };
 
   const addMarkerAt = (timeValue) => {
@@ -510,13 +531,9 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
-    const lastInternal = getLastInternalMarker(safeMarkers);
-    const isEditingEarlierTail = time < lastInternal - 0.001;
-    if (isEditingEarlierTail && !confirmTailReset("Вы ставите разрез раньше уже размеченного хвоста. Все следующие разрезы после этой точки будут удалены. Продолжить?")) return;
-
-    const nextMarkers = isEditingEarlierTail
-      ? [...safeMarkers.filter((marker) => Number(marker) < time || Math.abs(Number(marker) - durationSec) < 0.001), time]
-      : [...safeMarkers, time];
+    // Если ставим разрез внутри уже размеченного участка, просто добавляем новую границу.
+    // Следующие сцены не удаляются: они остаются на своих местах.
+    const nextMarkers = [...safeMarkers, time];
     const normalized = normalizeManualTimingMarkers(nextMarkers, durationSec);
     const boundaryIndex = normalized.findIndex((marker) => Math.abs(Number(marker) - time) < 0.001);
     const selectedSceneId = boundaryIndex > 0 ? getSceneIdForIndex(boundaryIndex - 1) : project.selectedSceneId;
@@ -548,14 +565,10 @@ export default function ManualTimingEditorPage() {
     const nextTime = roundTimingSec(clampTime(currentMarker + Number(delta || 0), maxTime));
     if (nextTime <= minTime || nextTime >= durationSec - 0.001) return;
 
-    const hasFutureCuts = markerIndex < markers.length - 2;
-    if (hasFutureCuts && !confirmTailReset("Вы двигаете раннюю границу. Все следующие разрезы после неё будут удалены. Продолжить?")) return;
-
-    const nextMarkers = hasFutureCuts
-      ? [...markers.slice(0, markerIndex), nextTime, durationSec]
-      : markers.map((marker, idx) => (idx === markerIndex ? nextTime : marker));
+    const nextMarkers = shiftMarkersFromBoundary(markers, markerIndex, nextTime);
+    const actualTime = Number(nextMarkers[markerIndex] || currentMarker);
     rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: selectedScene.scene_id, timing_status: "draft" });
-    setAudioTime(nextTime, { pause: true, clearBound: true });
+    setAudioTime(actualTime, { pause: true, clearBound: true });
   };
 
   const playSegment = (scene) => {
@@ -581,11 +594,8 @@ export default function ManualTimingEditorPage() {
     const safeMarkers = normalizeManualTimingMarkers(project.markers, durationSec);
     const boundaryIndex = safeMarkers.findIndex((marker) => Math.abs(Number(marker) - end) < 0.001);
     if (boundaryIndex <= 0 || boundaryIndex >= safeMarkers.length - 1) return;
-    const hasFutureCuts = boundaryIndex < safeMarkers.length - 2;
-    if (hasFutureCuts && !confirmTailReset("Вы объединяете ранний отрезок. Все следующие разрезы после этой границы будут удалены. Продолжить?")) return;
-    const nextMarkers = hasFutureCuts
-      ? [...safeMarkers.slice(0, boundaryIndex), durationSec]
-      : safeMarkers.filter((marker) => Math.abs(Number(marker) - end) > 0.001);
+    // Удаляем только выбранную границу, остальные последующие разрезы остаются.
+    const nextMarkers = safeMarkers.filter((marker) => Math.abs(Number(marker) - end) > 0.001);
     rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: scene.scene_id, timing_status: "draft" });
   };
 
@@ -612,6 +622,63 @@ export default function ManualTimingEditorPage() {
       window.setTimeout(() => setCopyStatus(""), 1600);
     } catch {
       setCopyStatus("Не удалось скопировать JSON");
+    }
+  };
+
+  const downloadJsonPayload = (payload, filename = "manual_timing.json") => {
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setCopyStatus("JSON скачан");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    } catch {
+      setCopyStatus("Не удалось скачать JSON");
+    }
+  };
+
+  const onDownloadTimingJson = () => {
+    downloadJsonPayload(buildManualTimingExportJson(project), "manual_timing_export.json");
+  };
+
+  const onDownloadSampleJson = () => {
+    downloadJsonPayload(buildManualTimingSampleJson(project), "manual_timing_sample_for_chatgpt.json");
+  };
+
+  const applyImportedTimingJson = (rawObject) => {
+    const nextProject = normalizeManualTimingProjectFromJson(rawObject, project);
+    persist(nextProject);
+    setJsonImportText(JSON.stringify(buildManualTimingExportJson(nextProject), null, 2));
+    setCopyStatus(`JSON загружен: сцен ${nextProject.scenes?.length || 0}`);
+    window.setTimeout(() => setCopyStatus(""), 1800);
+    setAudioTime(0, { pause: true, clearBound: true });
+  };
+
+  const onImportTimingJson = () => {
+    try {
+      const raw = JSON.parse(jsonImportText || "{}");
+      applyImportedTimingJson(raw);
+    } catch (error) {
+      setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
+    }
+  };
+
+  const onImportJsonFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setJsonImportText(text);
+      applyImportedTimingJson(JSON.parse(text));
+    } catch (error) {
+      setCopyStatus(`Ошибка файла JSON: ${error?.message || "неверный формат"}`);
     }
   };
 
@@ -832,7 +899,32 @@ export default function ManualTimingEditorPage() {
               onClick={() => nudgeSelectedBoundary(step)}
             >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
           </div>
-          <div className="manualTimingNudgeHint">Выбери сцену ниже. Доводчик двигает её конечную границу. Если двигать раннюю границу, все следующие разрезы будут удалены после подтверждения.</div>
+          <div className="manualTimingNudgeHint">Выбери сцену ниже. Доводчик двигает её конечную границу. Если двигать раннюю границу, следующие разрезы сдвинутся на такое же расстояние.</div>
+        </div>
+
+        <div className="manualTimingJsonPanel">
+          <div className="manualTimingJsonHeader">
+            <strong>JSON разметки</strong>
+            <span>Загрузи JSON с таймингами — сцены сразу появятся на шкале, а подсказки попадут в строки сцен.</span>
+          </div>
+          <div className="manualTimingJsonActions">
+            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
+              Загрузить JSON файл
+              <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
+            </label>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)}>
+              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить JSON текстом"}
+            </button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
+          </div>
+          {isJsonImportOpen ? <textarea
+            className="manualTimingJsonTextarea"
+            value={jsonImportText}
+            placeholder="Вставь сюда JSON с scenes/start_sec/end_sec/route/section/user_note_ru..."
+            onChange={(e) => setJsonImportText(e.target.value)}
+          /> : null}
         </div>
 
         {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}
