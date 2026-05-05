@@ -873,7 +873,6 @@ export default function ManualTimingEditorPage() {
               const isOpenTail = scene.scene_id === openTailSceneId;
               const isActive = selectedScene?.scene_id === scene.scene_id;
               const durationWarning = getManualTimingSceneDurationWarning(scene);
-              const warningSuffix = durationWarning ? ` · ⚠ ${durationWarning.label}` : "";
               return <button
                 key={`player-${scene.scene_id}`}
                 className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isActive ? "isActive" : ""}`}
@@ -882,7 +881,7 @@ export default function ManualTimingEditorPage() {
                 onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
                 title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
               >
-                <span>{scene.scene_id}{warningSuffix}</span>
+                <span>{scene.scene_id}</span>
               </button>;
             })}
             {candidateWidthPercent > 0.1 ? <div
