@@ -231,7 +231,6 @@
 
 .manualTimingWorkInfo {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
   gap: 8px;
   padding: 10px;
   border-radius: 12px;
@@ -239,6 +238,55 @@
   border: 1px solid rgba(120, 150, 220, 0.14);
   color: #dbe7ff;
   font-size: 12px;
+}
+
+.manualTimingSelectedSceneSummary {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 150, 220, 0.2);
+  background: rgba(10, 15, 28, 0.75);
+  color: #e9f1ff;
+  line-height: 1.4;
+}
+
+.manualTimingStatusGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.manualTimingStatusItem {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(120, 150, 220, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.manualTimingStatusItem span {
+  color: rgba(210, 225, 255, 0.74);
+}
+
+.manualTimingStatusValue {
+  font-size: 14px;
+  line-height: 1.2;
+  color: #ffffff;
+}
+
+.manualTimingStatusItem.isPrimary {
+  border-color: rgba(120, 255, 220, 0.35);
+  background: rgba(40, 84, 77, 0.24);
+}
+
+@media (max-width: 720px) {
+  .manualTimingStatusGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .manualTimingSelectedSceneSummary {
+    font-size: 11px;
+  }
 }
 
 .manualTimingNudgePanel {

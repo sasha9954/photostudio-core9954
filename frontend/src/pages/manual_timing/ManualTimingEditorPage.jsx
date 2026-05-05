@@ -195,12 +195,21 @@ export default function ManualTimingEditorPage() {
   const warnings = useMemo(() => buildManualTimingWarnings(project), [project]);
   const lastCutSec = getLastInternalMarker(markers);
   const candidateDurationSec = Math.max(0, Number(currentTime || 0) - Number(lastCutSec || 0));
-  const selectedBoundarySec = selectedScene ? Number(selectedScene.end_sec || 0) : 0;
+  const selectedSceneStartSec = selectedScene ? Number(selectedScene.start_sec || 0) : 0;
+  const selectedSceneEndSec = selectedScene ? Number(selectedScene.end_sec || 0) : 0;
+  const selectedSceneDurationSec = selectedScene
+    ? Number(selectedScene.duration_sec || (selectedSceneEndSec - selectedSceneStartSec))
+    : 0;
+  const selectedSceneDurationWarning = selectedScene
+    ? getManualTimingSceneDurationWarning(selectedScene)
+    : null;
+  const selectedBoundarySec = selectedSceneEndSec;
   const selectedBoundaryIsInternal = selectedSceneIndex >= 0 && selectedSceneIndex < scenes.length - 1;
   const playheadPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(currentTime || 0) / durationSec) * 100)) : 0;
   const lastCutPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(lastCutSec || 0) / durationSec) * 100)) : 0;
   const candidateWidthPercent = durationSec > 0 ? Math.max(0, Math.min(100 - lastCutPercent, ((Number(currentTime || 0) - Number(lastCutSec || 0)) / durationSec) * 100)) : 0;
   const openTailSceneId = project.timing_status === "confirmed" ? "" : scenes[scenes.length - 1]?.scene_id || "";
+  const candidateDurationLabel = candidateDurationSec > 0.001 ? formatTimingSec(candidateDurationSec) : "—";
 
   useEffect(() => {
     currentTimeRef.current = Number(currentTime || 0);
@@ -956,11 +965,22 @@ export default function ManualTimingEditorPage() {
         </div>
 
         <div className="manualTimingWorkInfo">
-          <div><b>Последний разрез:</b> {formatTimingSec(lastCutSec)}</div>
-          <div><b>Текущий курсор:</b> {formatTimingSec(currentTime)}</div>
-          <div><b>Длина следующего отрезка:</b> {formatTimingSec(candidateDurationSec)}</div>
-          <div><b>Выбранная сцена:</b> {selectedScene?.scene_id || "—"}</div>
-          <div><b>Конец выбранной сцены:</b> {selectedScene ? formatTimingSec(selectedBoundarySec) : "—"}</div>
+          <div className="manualTimingSelectedSceneSummary">
+            {selectedScene ? <>
+              <b>Выбрано:</b> {selectedScene.scene_id} · {formatTimingSec(selectedSceneStartSec)} → {formatTimingSec(selectedSceneEndSec)} · длина {formatTimingSec(selectedSceneDurationSec)}
+            </> : <>
+              <b>Выбрано:</b> —
+            </>}
+          </div>
+          <div className="manualTimingStatusGrid">
+            <div className="manualTimingStatusItem"><span>Последний разрез</span><strong className="manualTimingStatusValue">{formatTimingSec(lastCutSec)}</strong></div>
+            <div className="manualTimingStatusItem"><span>Текущий курсор</span><strong className="manualTimingStatusValue">{formatTimingSec(currentTime)}</strong></div>
+            <div className="manualTimingStatusItem"><span>Следующий отрезок</span><strong className="manualTimingStatusValue">{candidateDurationLabel}</strong></div>
+            <div className="manualTimingStatusItem"><span>Выбранная сцена</span><strong className="manualTimingStatusValue">{selectedScene?.scene_id || "—"}</strong></div>
+            <div className="manualTimingStatusItem"><span>Начало выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedSceneStartSec) : "—"}</strong></div>
+            <div className="manualTimingStatusItem"><span>Конец выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedBoundarySec) : "—"}</strong></div>
+            <div className="manualTimingStatusItem isPrimary"><span>Длина выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedSceneDurationSec) : "—"}</strong>{selectedSceneDurationWarning ? <span className={`manualTimingDurationBadge ${getDurationWarningClassName(selectedSceneDurationWarning)}`}>⚠ {selectedSceneDurationWarning.label}</span> : null}</div>
+          </div>
         </div>
 
         <div className="manualTimingNudgePanel">
