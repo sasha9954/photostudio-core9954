@@ -557,3 +557,153 @@
     flex: 1 1 auto;
   }
 }
+.manualTimingQuickEditOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(3, 6, 12, 0.68);
+  backdrop-filter: blur(8px);
+}
+
+.manualTimingQuickEditModal {
+  width: min(620px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(15, 22, 38, 0.98), rgba(8, 13, 25, 0.98));
+  border: 1px solid rgba(150, 180, 255, 0.28);
+  box-shadow: 0 26px 70px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  color: #e9f0ff;
+}
+
+.manualTimingQuickEditHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.manualTimingQuickEditHeader h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 18px;
+  letter-spacing: 0.01em;
+}
+
+.manualTimingQuickEditMeta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 5px;
+  color: rgba(220, 232, 255, 0.72);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.manualTimingQuickEditMeta strong {
+  color: #8fffe3;
+  font-size: 13px;
+}
+
+.manualTimingQuickEditClose {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(160, 185, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(235, 242, 255, 0.88);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.manualTimingQuickEditClose:hover {
+  background: rgba(255, 255, 255, 0.11);
+  color: #ffffff;
+}
+
+.manualTimingQuickEditGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.manualTimingQuickEditField {
+  display: grid;
+  gap: 6px;
+  color: rgba(225, 235, 255, 0.86);
+  font-size: 13px;
+}
+
+.manualTimingQuickEditField select,
+.manualTimingQuickEditTextarea {
+  width: 100%;
+  min-width: 0;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 150, 220, 0.34);
+  background: rgba(5, 10, 20, 0.86);
+  color: #edf4ff;
+  padding: 9px 10px;
+  outline: none;
+}
+
+.manualTimingQuickEditField select:focus,
+.manualTimingQuickEditTextarea:focus {
+  border-color: rgba(90, 240, 210, 0.62);
+  box-shadow: 0 0 0 2px rgba(90, 240, 210, 0.12);
+}
+
+.manualTimingQuickEditCheck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 150, 220, 0.22);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(230, 238, 255, 0.88);
+  font-size: 13px;
+}
+
+.manualTimingQuickEditCheck input {
+  accent-color: #70f2d7;
+}
+
+.manualTimingQuickEditTextarea {
+  min-height: 108px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.manualTimingQuickEditHint {
+  color: rgba(210, 225, 255, 0.58);
+  font-size: 12px;
+}
+
+.manualTimingQuickEditActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.manualTimingQuickEditActions .clipSB_btn {
+  width: auto;
+  min-width: 110px;
+}
+
+@media (max-width: 720px) {
+  .manualTimingQuickEditGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .manualTimingQuickEditActions .clipSB_btn {
+    flex: 1 1 auto;
+  }
+}

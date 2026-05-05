@@ -249,25 +249,36 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
 }
 
 export function updateManualTimingSceneById(scenes = [], sceneId = "", patch = {}) {
+  const safePatch = patch && typeof patch === "object" ? patch : {};
   return (Array.isArray(scenes) ? scenes : []).map((scene) => {
     if (String(scene?.scene_id || "") !== String(sceneId || "")) return scene;
-    const next = { ...scene, ...(patch || {}) };
-    const sectionChanged = Object.prototype.hasOwnProperty.call(patch || {}, "section");
+    const next = { ...scene, ...safePatch };
+    const sectionChanged = Object.prototype.hasOwnProperty.call(safePatch, "section");
+    const routeChanged = Object.prototype.hasOwnProperty.call(safePatch, "route");
+    const containsVocalChanged = Object.prototype.hasOwnProperty.call(safePatch, "contains_vocal");
+
     if (sectionChanged) {
-      const defaults = getSectionDefaults(next.section);
+      const defaults = getSectionDefaults(safePatch.section);
       next.section = defaults.section;
-      next.route = defaults.route;
-      next.contains_vocal = defaults.contains_vocal;
-      next.contains_vocal_assumption = defaults.contains_vocal_assumption;
-      next.contains_instrumental_assumption = defaults.contains_instrumental_assumption;
+      if (!routeChanged) next.route = defaults.route;
+      if (!containsVocalChanged) {
+        next.contains_vocal = defaults.contains_vocal;
+        next.contains_vocal_assumption = defaults.contains_vocal_assumption;
+        next.contains_instrumental_assumption = defaults.contains_instrumental_assumption;
+      }
     }
-    if (Object.prototype.hasOwnProperty.call(patch || {}, "contains_vocal")) {
-      next.contains_vocal = Boolean(patch.contains_vocal);
-      next.contains_vocal_assumption = Boolean(patch.contains_vocal);
-      next.contains_instrumental_assumption = !Boolean(patch.contains_vocal);
+
+    if (containsVocalChanged) {
+      next.contains_vocal = Boolean(safePatch.contains_vocal);
+      next.contains_vocal_assumption = Boolean(safePatch.contains_vocal);
+      next.contains_instrumental_assumption = !Boolean(safePatch.contains_vocal);
     }
+
+    if (routeChanged) next.route = safePatch.route;
+    next.section = normalizeManualTimingSection(next.section);
     next.route = normalizeManualTimingRoute(next.route);
     next.energy = normalizeManualTimingEnergy(next.energy);
+    next.use_sound_suggestion = Boolean(next.use_sound_suggestion);
     return next;
   });
 }

@@ -160,6 +160,8 @@ export default function ManualTimingEditorPage() {
   const [copyStatus, setCopyStatus] = useState("");
   const [jsonImportText, setJsonImportText] = useState("");
   const [isJsonImportOpen, setIsJsonImportOpen] = useState(false);
+  const [quickEditSceneId, setQuickEditSceneId] = useState("");
+  const [quickEditDraft, setQuickEditDraft] = useState(null);
   const [jumpTimeParts, setJumpTimeParts] = useState(() => ({ min: "0", sec: "00", ms: "000" }));
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
@@ -177,6 +179,10 @@ export default function ManualTimingEditorPage() {
   const selectedSceneIndex = useMemo(
     () => scenes.findIndex((scene) => scene.scene_id === selectedScene?.scene_id),
     [scenes, selectedScene?.scene_id]
+  );
+  const quickEditScene = useMemo(
+    () => scenes.find((scene) => scene.scene_id === quickEditSceneId) || null,
+    [scenes, quickEditSceneId]
   );
   const warnings = useMemo(() => buildManualTimingWarnings(project), [project]);
   const lastCutSec = getLastInternalMarker(markers);
@@ -609,6 +615,64 @@ export default function ManualTimingEditorPage() {
     persist({ ...project, scenes: nextScenes, selectedSceneId: sceneId, timing_status: "draft" });
   };
 
+  const openQuickEdit = (scene) => {
+    if (!scene?.scene_id) return;
+    setQuickEditSceneId(scene.scene_id);
+    setQuickEditDraft({
+      section: scene.section || "verse",
+      route: scene.route || "i2v",
+      contains_vocal: Boolean(scene.contains_vocal),
+      use_sound_suggestion: Boolean(scene.use_sound_suggestion),
+      energy: scene.energy || "mid",
+      user_note_ru: String(scene.user_note_ru || ""),
+    });
+    persist({ ...project, selectedSceneId: scene.scene_id });
+  };
+
+  const closeQuickEdit = () => {
+    setQuickEditDraft(null);
+    setQuickEditSceneId("");
+  };
+
+  const applyQuickEdit = () => {
+    if (!quickEditSceneId || !quickEditDraft) return;
+    const nextScenes = updateManualTimingSceneById(scenes, quickEditSceneId, {
+      section: quickEditDraft.section || "verse",
+      route: quickEditDraft.route || "i2v",
+      contains_vocal: Boolean(quickEditDraft.contains_vocal),
+      use_sound_suggestion: Boolean(quickEditDraft.use_sound_suggestion),
+      energy: quickEditDraft.energy || "mid",
+      user_note_ru: String(quickEditDraft.user_note_ru || ""),
+    });
+    persist({
+      ...project,
+      scenes: nextScenes,
+      selectedSceneId: quickEditSceneId,
+      timing_status: "draft",
+    });
+    closeQuickEdit();
+  };
+
+  useEffect(() => {
+    if (!quickEditSceneId || !quickEditDraft) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeQuickEdit();
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey) {
+        const tagName = String(event.target?.tagName || "").toLowerCase();
+        if (tagName === "textarea") return;
+        event.preventDefault();
+        applyQuickEdit();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickEditSceneId, quickEditDraft]);
+
   const onConfirmTiming = () => {
     const nextScenes = scenes.map((scene) => ({ ...scene, quality: "manual_confirmed" }));
     persist({ ...project, scenes: nextScenes, timing_status: "confirmed" });
@@ -750,6 +814,7 @@ export default function ManualTimingEditorPage() {
   }, [project.markers, durationSec]);
 
   return (
+    <>
     <div className="manualTimingPage pageCard">
       <h1 className="pageTitle">Тайминг песни</h1>
       <div className="manualTimingMetaGrid">
@@ -785,7 +850,7 @@ export default function ManualTimingEditorPage() {
         <div className="manualTimingPlayerShell">
           <div className="manualTimingPlayerHeader">
             <div><b>Главная шкала разметки</b></div>
-            <div>серое — ещё не размечено · цветное — готовые отрезки · линия — текущее место</div>
+            <div>серое — ещё не размечено · цветное — готовые отрезки · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
           <div
             className="manualTimingPlayerTrack"
@@ -804,8 +869,8 @@ export default function ManualTimingEditorPage() {
                 className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isActive ? "isActive" : ""}`}
                 style={getSegmentStyle(scene, idx)}
                 onClick={(event) => onTimelineSegmentClick(event, scene)}
-                onDoubleClick={(event) => { event.stopPropagation(); playSegment(scene); }}
-                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}. Двойной клик — проиграть только этот отрезок`}
+                onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
+                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}. Двойной клик — быстрая правка`}
               >
                 <span>{scene.scene_id}</span>
               </button>;
@@ -939,7 +1004,8 @@ export default function ManualTimingEditorPage() {
               className={`manualTimingSegment ${isOpenTail ? "isOpenTail" : ""} ${selectedScene?.scene_id === scene.scene_id ? "isActive" : ""}`}
               style={getSegmentStyle(scene, idx)}
               onClick={() => selectSceneAndSeekStart(scene, { pause: true })}
-              title={`${scene.scene_id} ${formatTimingSec(scene.start_sec)}–${formatTimingSec(scene.end_sec)}`}
+              onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
+              title={`${scene.scene_id} ${formatTimingSec(scene.start_sec)}–${formatTimingSec(scene.end_sec)}. Двойной клик — быстрая правка`}
             >{scene.scene_id}<span>{SECTION_LABELS[scene.section] || scene.section}/{scene.route}</span></button>;
           })}
           {markerPercents.map((marker) => <div key={marker.value} className="manualTimingMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
@@ -987,5 +1053,58 @@ export default function ManualTimingEditorPage() {
 
       <p className="manualTimingPage_hint">Размечай песню по слуху: вступление, куплет, припев, проигрыш. Пиши заметки к отрезкам — они потом отобразятся в “Подсказка сцены” в режиссёрской доске.</p>
     </div>
+    {quickEditSceneId && quickEditDraft ? <div className="manualTimingQuickEditOverlay" onClick={closeQuickEdit} role="presentation">
+      <div className="manualTimingQuickEditModal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Быстрая правка сцены">
+        <div className="manualTimingQuickEditHeader">
+          <div>
+            <h3>Быстрая правка сцены</h3>
+            <div className="manualTimingQuickEditMeta">
+              <strong>{quickEditSceneId}</strong>
+              {quickEditScene ? <span>{formatTimingSec(quickEditScene.start_sec)} → {formatTimingSec(quickEditScene.end_sec)} · {formatTimingSec(quickEditScene.duration_sec)}</span> : null}
+            </div>
+          </div>
+          <button className="manualTimingQuickEditClose" type="button" onClick={closeQuickEdit} title="Закрыть">×</button>
+        </div>
+
+        <div className="manualTimingQuickEditGrid">
+          <label className="manualTimingQuickEditField">Секция
+            <select value={quickEditDraft.section || "verse"} onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), section: e.target.value }))}>
+              {MANUAL_TIMING_SECTIONS.map((item) => <option key={item} value={item}>{SECTION_LABELS[item] || item}</option>)}
+            </select>
+          </label>
+
+          <label className="manualTimingQuickEditField">Маршрут
+            <select value={quickEditDraft.route || "i2v"} onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), route: e.target.value }))}>
+              {MANUAL_TIMING_ROUTES.map((item) => <option key={item} value={item}>{ROUTE_LABELS[item] || item}</option>)}
+            </select>
+          </label>
+
+          <label className="manualTimingQuickEditField">Энергия
+            <select value={quickEditDraft.energy || "mid"} onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), energy: e.target.value }))}>
+              {MANUAL_TIMING_ENERGY.map((item) => <option key={item} value={item}>{ENERGY_LABELS[item] || item}</option>)}
+            </select>
+          </label>
+
+          <label className="manualTimingQuickEditCheck"><input type="checkbox" checked={Boolean(quickEditDraft.contains_vocal)} onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), contains_vocal: e.target.checked }))} /> Есть вокал / lip-sync</label>
+          <label className="manualTimingQuickEditCheck"><input type="checkbox" checked={Boolean(quickEditDraft.use_sound_suggestion)} onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), use_sound_suggestion: e.target.checked }))} /> Сгенерировать звук для i2v</label>
+        </div>
+
+        <label className="manualTimingQuickEditField">Заметка к сцене
+          <textarea
+            className="manualTimingQuickEditTextarea"
+            value={String(quickEditDraft.user_note_ru || "")}
+            placeholder="Например: поезд начало, Привоз, банда во дворе, милиция, звук мигалок..."
+            onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), user_note_ru: e.target.value }))}
+          />
+        </label>
+
+        <div className="manualTimingQuickEditHint">Enter — сохранить, Esc — закрыть. В заметке Enter оставляет перенос строки.</div>
+        <div className="manualTimingQuickEditActions">
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={closeQuickEdit}>Отмена</button>
+          <button className="clipSB_btn" type="button" onClick={applyQuickEdit}>OK</button>
+        </div>
+      </div>
+    </div> : null}
+    </>
   );
 }
