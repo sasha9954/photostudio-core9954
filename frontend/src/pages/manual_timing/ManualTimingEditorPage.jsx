@@ -12,6 +12,7 @@ import {
   buildManualTimingWarnings,
   formatTimingSec,
   getDefaultManualTimingNodeData,
+  getManualTimingSceneDurationWarning,
   normalizeManualTimingAudio,
   normalizeManualTimingMarkers,
   normalizeManualTimingProjectFromJson,
@@ -146,6 +147,13 @@ function getSecFromTimingParts(parts = {}) {
   const ms = Number(String(parts.ms ?? "0").replace(/\D/g, "") || 0);
   if (![min, sec, ms].every(Number.isFinite)) return null;
   return min * 60 + sec + ms / 1000;
+}
+
+function getDurationWarningClassName(durationWarning = null) {
+  if (!durationWarning) return "";
+  if (durationWarning.severity === "danger") return "isDanger";
+  if (durationWarning.severity === "warning") return "isWarning";
+  return "isSoft";
 }
 
 export default function ManualTimingEditorPage() {
@@ -864,15 +872,17 @@ export default function ManualTimingEditorPage() {
             {scenes.map((scene, idx) => {
               const isOpenTail = scene.scene_id === openTailSceneId;
               const isActive = selectedScene?.scene_id === scene.scene_id;
+              const durationWarning = getManualTimingSceneDurationWarning(scene);
+              const warningSuffix = durationWarning ? ` · ⚠ ${durationWarning.label}` : "";
               return <button
                 key={`player-${scene.scene_id}`}
                 className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isActive ? "isActive" : ""}`}
                 style={getSegmentStyle(scene, idx)}
                 onClick={(event) => onTimelineSegmentClick(event, scene)}
                 onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
-                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}. Двойной клик — быстрая правка`}
+                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
               >
-                <span>{scene.scene_id}</span>
+                <span>{scene.scene_id}{warningSuffix}</span>
               </button>;
             })}
             {candidateWidthPercent > 0.1 ? <div
@@ -1021,11 +1031,13 @@ export default function ManualTimingEditorPage() {
         {scenes.map((scene, idx) => {
           const isSelected = selectedScene?.scene_id === scene.scene_id;
           const canMerge = idx < scenes.length - 1;
+          const durationWarning = getManualTimingSceneDurationWarning(scene);
           return <div key={scene.scene_id} className={`manualTimingRow ${isSelected ? "isSelected" : ""}`} onClick={() => selectSceneAndSeekStart(scene, { pause: true })}>
             <div className="manualTimingRowMain">
               <strong>{scene.scene_id}</strong>
               <span>{formatTimingSec(scene.start_sec)} – {formatTimingSec(scene.end_sec)}</span>
               <span>длина: {formatTimingSec(scene.duration_sec)}</span>
+              {durationWarning ? <span className={`manualTimingDurationBadge ${getDurationWarningClassName(durationWarning)}`}>⚠ {durationWarning.label}</span> : null}
             </div>
             <div className="manualTimingRowControls" onClick={(e) => e.stopPropagation()}>
               <label>Секция<select value={scene.section || "verse"} onChange={(e) => updateScene(scene.scene_id, { section: e.target.value })}>{MANUAL_TIMING_SECTIONS.map((item) => <option key={item} value={item}>{SECTION_LABELS[item] || item}</option>)}</select></label>
@@ -1061,6 +1073,10 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingQuickEditMeta">
               <strong>{quickEditSceneId}</strong>
               {quickEditScene ? <span>{formatTimingSec(quickEditScene.start_sec)} → {formatTimingSec(quickEditScene.end_sec)} · {formatTimingSec(quickEditScene.duration_sec)}</span> : null}
+              {quickEditScene ? (() => {
+                const durationWarning = getManualTimingSceneDurationWarning({ ...quickEditScene, ...quickEditDraft });
+                return durationWarning ? <div className={`manualTimingQuickEditWarning ${getDurationWarningClassName(durationWarning)}`}>⚠ <b>{durationWarning.label}</b>: {durationWarning.text}</div> : null;
+              })() : null}
             </div>
           </div>
           <button className="manualTimingQuickEditClose" type="button" onClick={closeQuickEdit} title="Закрыть">×</button>

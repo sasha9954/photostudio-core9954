@@ -444,11 +444,73 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   };
 }
 
+
+export function getManualTimingSceneDurationWarning(scene = {}) {
+  const start = Number(scene?.start_sec || 0);
+  const end = Number(scene?.end_sec || 0);
+  const durationSec = Number(scene?.duration_sec || (end - start));
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return null;
+
+  const route = String(scene?.route || "").trim().toLowerCase();
+
+  if (durationSec < 3.0) {
+    return {
+      type: "too_short",
+      severity: "warning",
+      label: "короткая",
+      text: "Сцена короткая: LTX может не успеть раскрыть движение. Использовать можно для быстрых монтажных ударов.",
+    };
+  }
+  if (durationSec < 3.5) {
+    return {
+      type: "short_but_ok",
+      severity: "soft",
+      label: "коротковата",
+      text: "Сцена коротковата, но допустима. Лучше использовать простое действие.",
+    };
+  }
+  if (route === "ia2v" && durationSec > 6.5 && durationSec < 8.0) {
+    return {
+      type: "ia2v_long",
+      severity: "soft",
+      label: "ia2v длинновата",
+      text: "Lip-sync сцена длинновата. Можно оставить, если фраза цельная, но лучше 3.5–6.5 сек.",
+    };
+  }
+  if (route === "i2v" && durationSec > 7.5 && durationSec < 8.0) {
+    return {
+      type: "i2v_long",
+      severity: "soft",
+      label: "i2v длинновата",
+      text: "i2v сцена длинновата. Можно оставить для атмосферы, но движение должно быть простым.",
+    };
+  }
+  if (durationSec >= 8.0 && durationSec < 10.0) {
+    return {
+      type: "long",
+      severity: "warning",
+      label: "длинная",
+      text: "Сцена длинная: лучше держать простое движение или разделить.",
+    };
+  }
+  if (durationSec >= 10.0) {
+    return {
+      type: "very_long",
+      severity: "danger",
+      label: "очень длинная",
+      text: "Очень длинная сцена: лучше разделить на несколько сцен.",
+    };
+  }
+
+  return null;
+}
+
 export function buildManualTimingWarnings(project = {}) {
   const audio = normalizeManualTimingAudio(project.audio);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const warnings = [];
   const duration = Number(audio.duration_sec || 0);
+  const durationWarningBuckets = new Map();
 
   if (!scenes.length) warnings.push("Нет сегментов разметки.");
   if (scenes.length) {
@@ -468,6 +530,28 @@ export function buildManualTimingWarnings(project = {}) {
     if (dur > 9.0) warnings.push(`${scene.scene_id}: длительность больше 9 сек — проверь, не склеены ли разные фразы.`);
     if (scene.route === "ia2v" && !scene.contains_vocal) warnings.push(`${scene.scene_id}: ia2v стоит на участке без вокала.`);
     if (["intro", "instrumental"].includes(String(scene.section || "")) && scene.route === "ia2v") warnings.push(`${scene.scene_id}: секция “${sectionLabelRu(scene.section)}”, но выбран route=ia2v.`);
+
+    const durationWarning = getManualTimingSceneDurationWarning(scene);
+    if (durationWarning) {
+      const bucketKey = durationWarning.type;
+      const bucket = durationWarningBuckets.get(bucketKey) || { label: durationWarning.label, items: [] };
+      bucket.items.push(`${scene.scene_id} (${roundTimingSec(dur).toFixed(3)} сек)`);
+      durationWarningBuckets.set(bucketKey, bucket);
+    }
+  });
+
+  const durationWarningOrder = [
+    ["too_short", "Короткие сцены"],
+    ["short_but_ok", "Коротковатые сцены"],
+    ["ia2v_long", "Lip-sync сцены длинноваты"],
+    ["i2v_long", "i2v сцены длинноваты"],
+    ["long", "Длинные сцены"],
+    ["very_long", "Очень длинные сцены"],
+  ];
+  durationWarningOrder.forEach(([type, title]) => {
+    const bucket = durationWarningBuckets.get(type);
+    if (!bucket?.items?.length) return;
+    warnings.push(`${title}: ${bucket.items.join(", ")}`);
   });
 
   return warnings;
