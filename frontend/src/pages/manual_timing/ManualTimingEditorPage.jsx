@@ -4,6 +4,7 @@ import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
   MANUAL_TIMING_ENERGY,
+  MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   MANUAL_TIMING_ROUTES,
   MANUAL_TIMING_SECTIONS,
   buildManualTimingExportJson,
@@ -169,13 +170,14 @@ function getSceneStoryText(scene = {}) {
   const originalRaw = String(scene?.original_text || scene?.adapted_text_en || scene?.source_text_en || "").trim();
   const ruRaw = String(scene?.translated_text_ru || "").trim();
   const meaningRaw = String(scene?.meaning_hint_ru || "").trim();
-  const instrumental = isInstrumentalScene(scene) || !String(scene?.original_text || "").trim();
+  const hasAnyStoryText = Boolean(originalRaw || ruRaw || meaningRaw);
+  const instrumental = isInstrumentalScene(scene) && !hasAnyStoryText;
   return {
     blockTitle: String(scene?.story_block_title_ru || "Без блока"),
     blockColor: String(scene?.story_block_color || "#64748B"),
     position: String(scene?.story_block_position_ru || "—"),
-    original: instrumental ? "—" : (originalRaw || "—"),
-    ru: instrumental ? "—" : (ruRaw || "—"),
+    original: originalRaw || "—",
+    ru: ruRaw || "—",
     meaning: meaningRaw || (instrumental ? "Инструментальная / сюжетная сцена." : "—"),
   };
 }
@@ -240,7 +242,7 @@ export default function ManualTimingEditorPage() {
     const sceneIds = Array.isArray(block.scene_ids) ? block.scene_ids : [];
     const count = sceneIds.length || scenes.filter((scene) => String(scene.story_block_id || "") === String(block.block_id || "")).length;
     return { ...block, sceneCount: count };
-  }), [storyBlocks, scenes]);
+  }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
 
   useEffect(() => {
     currentTimeRef.current = Number(currentTime || 0);
