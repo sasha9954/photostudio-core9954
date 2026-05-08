@@ -535,7 +535,7 @@ export default function ManualClipBoardNode({ id, data }) {
       last_split_source: model.last_split_source,
       step: model.step,
       prep_template_meta: STORY_PREP_TEMPLATE_META,
-      story_blocks: model.story_blocks || [],
+      story_blocks: pickStoryBlocksFromModel(model),
       scenes,
       selectedSceneId: model.selectedSceneId || scenes[0]?.scene_id || "",
       split_audio_status: model.split_audio_status,
