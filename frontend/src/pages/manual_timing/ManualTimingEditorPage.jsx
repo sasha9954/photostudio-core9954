@@ -1032,6 +1032,46 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
         </div>
 
+        <div className="manualTimingNudgePanel">
+          <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы</div>
+          <div className="manualTimingNudgeButtons">
+            {NUDGE_STEPS.map((step) => <button
+              key={step}
+              className="clipSB_btn clipSB_btnSecondary"
+              disabled={!selectedBoundaryIsInternal}
+              onClick={() => nudgeSelectedBoundary(step)}
+            >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
+          </div>
+          <div className="manualTimingNudgeHint">Выбери сцену ниже. Доводчик двигает её конечную границу. Если двигать раннюю границу, следующие разрезы сдвинутся на такое же расстояние.</div>
+        </div>
+
+        <div className="manualTimingJsonPanel">
+          <div className="manualTimingJsonHeader">
+            <strong>JSON разметки</strong>
+            <span>Загрузи JSON с таймингами — сцены сразу появятся на шкале, а подсказки попадут в строки сцен.</span>
+          </div>
+          <div className="manualTimingJsonActions">
+            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
+              Загрузить JSON файл
+              <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
+            </label>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)}>
+              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить JSON текстом"}
+            </button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
+          </div>
+          {isJsonImportOpen ? <textarea
+            className="manualTimingJsonTextarea"
+            value={jsonImportText}
+            placeholder="Вставь сюда JSON с scenes/start_sec/end_sec/route/section/user_note_ru..."
+            onChange={(e) => setJsonImportText(e.target.value)}
+          /> : null}
+        </div>
+
         <div className="manualTimingWorkInfo">
           <div className="manualTimingSelectedSceneSummary">
             {selectedScene ? <>
@@ -1076,46 +1116,6 @@ export default function ManualTimingEditorPage() {
               </div>
             </div>
           </div> : null}
-        </div>
-
-        <div className="manualTimingNudgePanel">
-          <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы</div>
-          <div className="manualTimingNudgeButtons">
-            {NUDGE_STEPS.map((step) => <button
-              key={step}
-              className="clipSB_btn clipSB_btnSecondary"
-              disabled={!selectedBoundaryIsInternal}
-              onClick={() => nudgeSelectedBoundary(step)}
-            >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
-          </div>
-          <div className="manualTimingNudgeHint">Выбери сцену ниже. Доводчик двигает её конечную границу. Если двигать раннюю границу, следующие разрезы сдвинутся на такое же расстояние.</div>
-        </div>
-
-        <div className="manualTimingJsonPanel">
-          <div className="manualTimingJsonHeader">
-            <strong>JSON разметки</strong>
-            <span>Загрузи JSON с таймингами — сцены сразу появятся на шкале, а подсказки попадут в строки сцен.</span>
-          </div>
-          <div className="manualTimingJsonActions">
-            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
-              Загрузить JSON файл
-              <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
-            </label>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)}>
-              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить JSON текстом"}
-            </button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
-          </div>
-          {isJsonImportOpen ? <textarea
-            className="manualTimingJsonTextarea"
-            value={jsonImportText}
-            placeholder="Вставь сюда JSON с scenes/start_sec/end_sec/route/section/user_note_ru..."
-            onChange={(e) => setJsonImportText(e.target.value)}
-          /> : null}
         </div>
 
         {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}

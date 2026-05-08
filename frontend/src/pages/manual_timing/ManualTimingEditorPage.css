@@ -291,6 +291,8 @@
 
 .manualTimingNudgePanel {
   display: grid;
+  width: 100%;
+  box-sizing: border-box;
   gap: 8px;
   padding: 10px;
   border-radius: 12px;
@@ -534,6 +536,8 @@
 
 .manualTimingJsonPanel {
   display: grid;
+  width: 100%;
+  box-sizing: border-box;
   gap: 8px;
   padding: 8px 10px;
   border-radius: 12px;
