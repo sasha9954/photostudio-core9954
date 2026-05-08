@@ -464,57 +464,74 @@
 }
 
 .manualTimingRow {
-  display: grid;
-  align-items: center;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  min-height: 46px;
-  padding: 8px 10px;
+  min-height: 96px;
+  padding: 10px 12px;
   box-sizing: border-box;
   border-radius: 12px;
   background: rgba(13, 18, 31, 0.86);
   border: 1px solid rgba(120, 150, 220, 0.16);
+  border-left: 5px solid var(--story-block-color, #64748B);
+  overflow: hidden;
   font-size: 12px;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .manualTimingRow.isSelected {
   border-color: rgba(120, 255, 220, 0.5);
+  border-left-color: var(--story-block-color, #64748B);
   box-shadow: 0 0 0 1px rgba(120, 255, 220, 0.12);
 }
 
-.manualTimingRowMain,
-.manualTimingRowControls,
-.manualTimingRowActions {
+.manualTimingRowMain {
   display: flex;
-  gap: 6px 8px;
   flex-wrap: wrap;
   align-items: center;
+  gap: 6px 8px;
   min-width: 0;
-  overflow: visible;
-}
-
-.manualTimingRowMain {
+  width: 100%;
   color: #dbe7ff;
   font-size: 12px;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
 .manualTimingRowMain > strong,
 .manualTimingRowMain > span {
-  line-height: 1.3;
+  line-height: 1.35;
+}
+
+.manualTimingRowControls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(138px, max-content));
+  gap: 8px 10px;
+  align-items: end;
+  min-width: 0;
+  width: 100%;
 }
 
 .manualTimingRowControls label {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+  display: grid;
+  grid-template-rows: auto auto;
+  align-items: start;
+  gap: 4px;
+  min-width: 120px;
   color: #aebce0;
   font-size: 11px;
-  line-height: 1.3;
+  line-height: 1.25;
+}
+
+.manualTimingRowControls select,
+.manualTimingRowControls input {
+  width: auto;
+  min-width: 112px;
+  max-width: 170px;
 }
 
 .manualTimingRowControls select {
-  min-width: 116px;
   background: #111722;
   color: #e8edf7;
   border: 1px solid #354057;
@@ -522,17 +539,52 @@
   padding: 6px 8px;
 }
 
+.manualTimingRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  width: 100%;
+}
+
+.manualTimingDurationBadge,
+.manualTimingBlockBadge {
+  flex: 0 0 auto;
+  line-height: 1.3;
+}
+
+.manualTimingRow::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  border-radius: 12px 0 0 12px;
+  background: var(--story-block-color, #64748B);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.manualTimingRowControls .manualTimingCheck {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: auto;
+}
+
 .manualTimingCheck input {
   width: auto;
+  min-width: 0;
 }
 
 .manualTimingNote {
+  width: 100%;
   min-height: 54px;
   background: #111722;
   color: #e8edf7;
   border: 1px solid #354057;
   border-radius: 8px;
   padding: 8px;
+  box-sizing: border-box;
   resize: vertical;
 }
 
@@ -978,22 +1030,6 @@
   line-height: 1.3;
 }
 
-.manualTimingRow {
-  position: relative;
-  overflow: visible;
-  border-left: 5px solid var(--story-block-color, #64748B);
-}
-
-.manualTimingRow::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 5px;
-  border-radius: 12px 0 0 12px;
-  background: var(--story-block-color, #64748B);
-  opacity: 0.85;
-  pointer-events: none;
-}
 
 .manualTimingBlockMeaningPanel {
   display: grid;
