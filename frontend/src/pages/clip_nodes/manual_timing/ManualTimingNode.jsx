@@ -65,8 +65,11 @@ export default function ManualTimingNode({ id, data }) {
     if (audioEquals(effectiveAudio, model.audio || {})) return;
     patch({
       audio: effectiveAudio,
+      markers: [],
+      scenes: [],
+      selectedSceneId: "",
       story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
-      timing_status: model.timing_status === "empty" ? "draft" : model.timing_status,
+      timing_status: "draft",
       updatedAt: Date.now(),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,7 +102,14 @@ export default function ManualTimingNode({ id, data }) {
 
   const onResetTiming = () => {
     removeManualTimingProjectForNode(id);
-    patch({ markers: [], scenes: [], timing_status: "empty", selectedSceneId: "", updatedAt: Date.now() });
+    patch({
+      markers: [],
+      scenes: [],
+      story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
+      timing_status: "empty",
+      selectedSceneId: "",
+      updatedAt: Date.now(),
+    });
   };
 
   const onAudioUpload = (file) => {
