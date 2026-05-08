@@ -188,6 +188,11 @@ function getTimingSceneIdForAudioPhrase(phrase = null, scenes = []) {
   return String(containingScene?.scene_id || "");
 }
 
+function isUnresolvedAudioPhrase(phrase = {}) {
+  return String(phrase?.status || "") === "needs_transcription"
+    || String(phrase?.assignment_status || "") === "unassigned";
+}
+
 function getSceneStoryText(scene = {}) {
   const originalRaw = String(scene?.original_text || scene?.adapted_text_en || scene?.source_text_en || "").trim();
   const ruRaw = String(scene?.translated_text_ru || "").trim();
@@ -284,10 +289,6 @@ export default function ManualTimingEditorPage() {
       sceneCount,
     };
   }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
-  const isUnresolvedAudioPhrase = (phrase) =>
-    String(phrase?.status || "") === "needs_transcription"
-    || String(phrase?.assignment_status || "") === "unassigned";
-
   const missingPhraseTimelineMarkers = useMemo(() => {
     if (!(durationSec > 0)) return [];
     return audioPhrases
