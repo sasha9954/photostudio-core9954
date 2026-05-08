@@ -465,11 +465,16 @@
 
 .manualTimingRow {
   display: grid;
+  align-items: center;
   gap: 8px;
-  padding: 10px;
+  min-height: 46px;
+  padding: 8px 10px;
+  box-sizing: border-box;
   border-radius: 12px;
   background: rgba(13, 18, 31, 0.86);
   border: 1px solid rgba(120, 150, 220, 0.16);
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .manualTimingRow.isSelected {
@@ -481,14 +486,22 @@
 .manualTimingRowControls,
 .manualTimingRowActions {
   display: flex;
-  gap: 8px;
+  gap: 6px 8px;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
+  overflow: visible;
 }
 
 .manualTimingRowMain {
   color: #dbe7ff;
   font-size: 12px;
+  line-height: 1.3;
+}
+
+.manualTimingRowMain > strong,
+.manualTimingRowMain > span {
+  line-height: 1.3;
 }
 
 .manualTimingRowControls label {
@@ -497,6 +510,7 @@
   gap: 5px;
   color: #aebce0;
   font-size: 11px;
+  line-height: 1.3;
 }
 
 .manualTimingRowControls select {
@@ -813,12 +827,13 @@
 .manualTimingDurationBadge {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 4px;
-  margin-left: 8px;
+  margin-left: 0;
   padding: 2px 8px;
   border-radius: 999px;
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.3;
   border: 1px solid rgba(212, 195, 148, 0.35);
   background: rgba(146, 130, 92, 0.22);
   color: #f6e6b9;
@@ -955,16 +970,17 @@
 .manualTimingBlockBadge {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   max-width: 100%;
   padding: 3px 8px;
   border-radius: 999px;
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.3;
 }
 
 .manualTimingRow {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   border-left: 5px solid var(--story-block-color, #64748B);
 }
 
@@ -973,6 +989,7 @@
   position: absolute;
   inset: 0 auto 0 0;
   width: 5px;
+  border-radius: 12px 0 0 12px;
   background: var(--story-block-color, #64748B);
   opacity: 0.85;
   pointer-events: none;
