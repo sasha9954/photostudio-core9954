@@ -109,15 +109,43 @@ function shouldTraceScenarioRoleScene(sceneId = "") {
 
 function normalizeScenarioStoryBlock(block = {}, idx = 0) {
   const id = normalizeText(block?.block_id ?? block?.id ?? block?.story_block_id ?? `block_${idx + 1}`);
+  const blockGoalRu = normalizeText(
+    block?.block_goal_ru ??
+    block?.blockGoalRu ??
+    block?.goal_ru ??
+    block?.story_block_goal_ru
+  );
+  const blockRevealRu = normalizeText(
+    block?.block_reveal_ru ??
+    block?.blockRevealRu ??
+    block?.reveal_ru ??
+    block?.story_block_reveal_ru
+  );
+  const blockEmotionRu = normalizeText(
+    block?.block_emotion_ru ??
+    block?.blockEmotionRu ??
+    block?.emotion_ru ??
+    block?.story_block_emotion_ru
+  );
+
   return {
     ...block,
     block_id: id,
     id: normalizeText(block?.id) || id,
     title_ru: normalizeText(block?.title_ru ?? block?.title ?? block?.name ?? id),
+    summary_ru: normalizeText(block?.summary_ru ?? block?.summary),
     color: normalizeText(block?.color ?? block?.story_block_color) || "#8aa4ff",
-    goal_ru: normalizeText(block?.goal_ru ?? block?.story_block_goal_ru),
-    reveal_ru: normalizeText(block?.reveal_ru ?? block?.story_block_reveal_ru),
-    emotion_ru: normalizeText(block?.emotion_ru ?? block?.story_block_emotion_ru),
+    block_goal_ru: blockGoalRu,
+    block_reveal_ru: blockRevealRu,
+    block_emotion_ru: blockEmotionRu,
+    goal_ru: blockGoalRu,
+    reveal_ru: blockRevealRu,
+    emotion_ru: blockEmotionRu,
+    scene_ids: Array.isArray(block?.scene_ids || block?.sceneIds)
+      ? (block?.scene_ids || block?.sceneIds).map((id) => normalizeText(id)).filter(Boolean)
+      : [],
+    start_sec: Number(block?.start_sec ?? block?.startSec ?? 0) || 0,
+    end_sec: Number(block?.end_sec ?? block?.endSec ?? 0) || 0,
   };
 }
 
@@ -1868,9 +1896,9 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     story_block_title_ru: normalizeText(source.story_block_title_ru) || storyBlock?.title_ru || "",
     story_block_color: normalizeText(source.story_block_color) || storyBlock?.color || "",
     story_block_position_ru: normalizeText(source.story_block_position_ru),
-    story_block_goal_ru: normalizeText(source.story_block_goal_ru) || storyBlock?.goal_ru || "",
-    story_block_reveal_ru: normalizeText(source.story_block_reveal_ru) || storyBlock?.reveal_ru || "",
-    story_block_emotion_ru: normalizeText(source.story_block_emotion_ru) || storyBlock?.emotion_ru || "",
+    story_block_goal_ru: normalizeText(source.story_block_goal_ru) || storyBlock?.block_goal_ru || storyBlock?.goal_ru || "",
+    story_block_reveal_ru: normalizeText(source.story_block_reveal_ru) || storyBlock?.block_reveal_ru || storyBlock?.reveal_ru || "",
+    story_block_emotion_ru: normalizeText(source.story_block_emotion_ru) || storyBlock?.block_emotion_ru || storyBlock?.emotion_ru || "",
     original_text: normalizeText(source.original_text),
     translated_text_ru: normalizeText(source.translated_text_ru),
     meaning_hint_ru: normalizeText(source.meaning_hint_ru),

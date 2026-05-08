@@ -109,15 +109,46 @@ export function buildMockSplitJson({ projectKind = "clip", durationSec = 24, for
 
 export function normalizeStoryBlock(block = {}, idx = 0) {
   const id = String(block?.block_id || block?.id || block?.story_block_id || `block_${idx + 1}`).trim();
+  const blockGoalRu = String(
+    block?.block_goal_ru ||
+    block?.blockGoalRu ||
+    block?.goal_ru ||
+    block?.story_block_goal_ru ||
+    ""
+  );
+  const blockRevealRu = String(
+    block?.block_reveal_ru ||
+    block?.blockRevealRu ||
+    block?.reveal_ru ||
+    block?.story_block_reveal_ru ||
+    ""
+  );
+  const blockEmotionRu = String(
+    block?.block_emotion_ru ||
+    block?.blockEmotionRu ||
+    block?.emotion_ru ||
+    block?.story_block_emotion_ru ||
+    ""
+  );
+
   return {
     ...block,
     block_id: id,
     id: String(block?.id || id),
     title_ru: String(block?.title_ru || block?.title || block?.name || id),
+    summary_ru: String(block?.summary_ru || block?.summary || ""),
     color: String(block?.color || block?.story_block_color || "#8aa4ff"),
-    goal_ru: String(block?.goal_ru || block?.story_block_goal_ru || ""),
-    reveal_ru: String(block?.reveal_ru || block?.story_block_reveal_ru || ""),
-    emotion_ru: String(block?.emotion_ru || block?.story_block_emotion_ru || ""),
+    block_goal_ru: blockGoalRu,
+    block_reveal_ru: blockRevealRu,
+    block_emotion_ru: blockEmotionRu,
+    goal_ru: blockGoalRu,
+    reveal_ru: blockRevealRu,
+    emotion_ru: blockEmotionRu,
+    scene_ids: Array.isArray(block?.scene_ids || block?.sceneIds)
+      ? (block?.scene_ids || block?.sceneIds).map((id) => String(id || "").trim()).filter(Boolean)
+      : [],
+    start_sec: Number(block?.start_sec ?? block?.startSec ?? 0) || 0,
+    end_sec: Number(block?.end_sec ?? block?.endSec ?? 0) || 0,
   };
 }
 
@@ -217,9 +248,9 @@ export function normalizeScene(scene, idx, storyBlockLookup = null) {
     story_block_title_ru: String(scene?.story_block_title_ru || block?.title_ru || ""),
     story_block_color: String(scene?.story_block_color || block?.color || ""),
     story_block_position_ru: String(scene?.story_block_position_ru || ""),
-    story_block_goal_ru: String(scene?.story_block_goal_ru || block?.goal_ru || ""),
-    story_block_reveal_ru: String(scene?.story_block_reveal_ru || block?.reveal_ru || ""),
-    story_block_emotion_ru: String(scene?.story_block_emotion_ru || block?.emotion_ru || ""),
+    story_block_goal_ru: String(scene?.story_block_goal_ru || block?.block_goal_ru || block?.goal_ru || ""),
+    story_block_reveal_ru: String(scene?.story_block_reveal_ru || block?.block_reveal_ru || block?.reveal_ru || ""),
+    story_block_emotion_ru: String(scene?.story_block_emotion_ru || block?.block_emotion_ru || block?.emotion_ru || ""),
     original_text: String(scene?.original_text || ""),
     translated_text_ru: String(scene?.translated_text_ru || ""),
     meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
