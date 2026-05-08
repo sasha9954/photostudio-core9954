@@ -284,10 +284,14 @@ export default function ManualTimingEditorPage() {
       sceneCount,
     };
   }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
+  const isUnresolvedAudioPhrase = (phrase) =>
+    String(phrase?.status || "") === "needs_transcription"
+    || String(phrase?.assignment_status || "") === "unassigned";
+
   const missingPhraseTimelineMarkers = useMemo(() => {
     if (!(durationSec > 0)) return [];
     return audioPhrases
-      .filter((phrase) => String(phrase.status || "") === "needs_transcription")
+      .filter(isUnresolvedAudioPhrase)
       .map((phrase) => {
         const start = clampTime(phrase.start_sec, durationSec);
         const end = clampTime(phrase.end_sec, durationSec);
