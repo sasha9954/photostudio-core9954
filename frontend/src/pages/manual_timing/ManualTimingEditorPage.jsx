@@ -254,6 +254,51 @@ export default function ManualTimingEditorPage() {
     const count = sceneIds.length || scenes.filter((scene) => String(scene.story_block_id || "") === String(block.block_id || "")).length;
     return { ...block, sceneCount: count };
   }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
+  const timelineBlockRanges = useMemo(() => {
+    if (!(durationSec > 0) || !storyBlocks.length) return [];
+    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+    const sceneById = new Map(scenes.map((scene) => [String(scene.scene_id || ""), scene]));
+
+    return storyBlocks.map((block) => {
+      const blockId = String(block?.block_id || "");
+      const sceneIds = Array.isArray(block?.scene_ids) ? block.scene_ids.map((id) => String(id || "")).filter(Boolean) : [];
+      const directStart = Number(block?.start_sec);
+      const directEnd = Number(block?.end_sec);
+      const hasDirectRange = Number.isFinite(directStart) && Number.isFinite(directEnd) && directEnd > directStart;
+      const isUnknownBlock = blockId === unknownBlockId;
+
+      if (isUnknownBlock && storyBlocks.length === 1) return null;
+      if (isUnknownBlock && !sceneIds.length && !hasDirectRange) return null;
+
+      let startSec = hasDirectRange ? directStart : null;
+      let endSec = hasDirectRange ? directEnd : null;
+      const blockScenesFromIds = sceneIds.map((sceneId) => sceneById.get(sceneId)).filter(Boolean);
+      const blockScenes = blockScenesFromIds.length
+        ? blockScenesFromIds
+        : scenes.filter((scene) => String(scene.story_block_id || "") === blockId);
+
+      if (!(endSec > startSec) && blockScenes.length) {
+        const starts = blockScenes.map((scene) => Number(scene.start_sec)).filter(Number.isFinite);
+        const ends = blockScenes.map((scene) => Number(scene.end_sec)).filter(Number.isFinite);
+        startSec = starts.length ? Math.min(...starts) : null;
+        endSec = ends.length ? Math.max(...ends) : null;
+      }
+
+      if (!(Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec)) return null;
+      const safeStart = clampTime(startSec, durationSec);
+      const safeEnd = clampTime(endSec, durationSec);
+      if (!(safeEnd > safeStart)) return null;
+
+      return {
+        ...block,
+        block_id: blockId,
+        title: String(block?.title_ru || blockId || "Story block"),
+        start_sec: safeStart,
+        end_sec: safeEnd,
+        sceneCount: blockScenes.length || sceneIds.length,
+      };
+    }).filter(Boolean);
+  }, [durationSec, storyBlocks, scenes]);
 
   useEffect(() => {
     currentTimeRef.current = Number(currentTime || 0);
@@ -890,6 +935,16 @@ export default function ManualTimingEditorPage() {
     };
   };
 
+  const getStoryBlockRangeStyle = (blockRange) => {
+    const left = durationSec > 0 ? (Number(blockRange.start_sec || 0) / durationSec) * 100 : 0;
+    const width = durationSec > 0 ? ((Number(blockRange.end_sec || 0) - Number(blockRange.start_sec || 0)) / durationSec) * 100 : 0;
+    return {
+      left: `${Math.max(0, Math.min(100, left))}%`,
+      width: `${Math.max(0.5, Math.min(100, width))}%`,
+      "--story-block-color": blockRange.color || "#64748B",
+    };
+  };
+
   const markerPercents = useMemo(() => {
     if (!(durationSec > 0)) return [];
     return normalizeManualTimingMarkers(project.markers, durationSec).map((marker) => ({
@@ -935,7 +990,7 @@ export default function ManualTimingEditorPage() {
         <div className="manualTimingPlayerShell">
           <div className="manualTimingPlayerHeader">
             <div><b>Главная шкала разметки</b></div>
-            <div>серое — ещё не размечено · цветное — готовые отрезки · линия — текущее место · двойной клик по сцене — быстрая правка</div>
+            <div>верхняя полоса — story blocks · нижняя — сцены · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
           <div
             className="manualTimingPlayerTrack"
@@ -946,6 +1001,18 @@ export default function ManualTimingEditorPage() {
             title="Кликни по шкале, чтобы перейти к этому месту"
           >
             <div className="manualTimingUncutTrack" />
+            {timelineBlockRanges.length ? <div className="manualTimingBlockTrack" aria-label="смысловые блоки на шкале">
+              {timelineBlockRanges.map((blockRange) => <button
+                key={`player-block-${blockRange.block_id}`}
+                type="button"
+                className="manualTimingBlockRange"
+                style={getStoryBlockRangeStyle(blockRange)}
+                onClick={(event) => { event.stopPropagation(); onStoryBlockClick(blockRange); }}
+                title={`${blockRange.title}: ${formatTimingSec(blockRange.start_sec)} – ${formatTimingSec(blockRange.end_sec)}`}
+              >
+                <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
+              </button>)}
+            </div> : null}
             {scenes.map((scene, idx) => {
               const isOpenTail = scene.scene_id === openTailSceneId;
               const isActive = selectedScene?.scene_id === scene.scene_id;
@@ -973,7 +1040,8 @@ export default function ManualTimingEditorPage() {
             </div>
           </div>
           <div className="manualTimingPlayerLegend">
-            <span><i className="legendCut" /> отрезано</span>
+            <span><i className="legendBlock" /> story blocks</span>
+            <span><i className="legendCut" /> сцены</span>
             <span><i className="legendTail" /> ещё не отрезано</span>
             <span><i className="legendCandidate" /> следующий отрезок</span>
           </div>
@@ -1045,6 +1113,34 @@ export default function ManualTimingEditorPage() {
           <div className="manualTimingNudgeHint">Выбери сцену ниже. Доводчик двигает её конечную границу. Если двигать раннюю границу, следующие разрезы сдвинутся на такое же расстояние.</div>
         </div>
 
+        {selectedScene ? <div className="manualTimingSceneTextPanel">
+          <div className="manualTimingSceneTextHeader">
+            <strong>Текст и смысл сцены</strong>
+            <span className="manualTimingBlockBadge" style={{ "--story-block-color": selectedSceneText.blockColor }}>Story block: {selectedSceneText.blockTitle}</span>
+          </div>
+          <div className="manualTimingSceneTextGrid">
+            <div><span>Position</span><strong>{selectedSceneText.position || "—"}</strong></div>
+            <div><span>Original</span><p>{selectedSceneText.original}</p></div>
+            <div><span>RU</span><p>{selectedSceneText.ru}</p></div>
+            <div><span>Meaning</span><p>{selectedSceneText.meaning}</p></div>
+          </div>
+          <div className="manualTimingBlockMeaningPanel">
+            <div className="manualTimingBlockMeaningTitle">Блок</div>
+            <div className="manualTimingBlockMeaningGrid">
+              <div><span>Цель блока</span><p>{selectedSceneText.blockGoal}</p></div>
+              <div><span>Раскрытие блока</span><p>{selectedSceneText.blockReveal}</p></div>
+              <div><span>Эмоция блока</span><p>{selectedSceneText.blockEmotion}</p></div>
+            </div>
+          </div>
+          <div className="manualTimingBlockMeaningPanel">
+            <div className="manualTimingBlockMeaningTitle">Сцена внутри блока</div>
+            <div className="manualTimingBlockMeaningGrid">
+              <div><span>Роль сцены в блоке</span><p>{selectedSceneText.sceneRole}</p></div>
+              <div><span>Прогресс блока</span><p>{selectedSceneText.blockProgress}</p></div>
+            </div>
+          </div>
+        </div> : null}
+
         <div className="manualTimingJsonPanel">
           <div className="manualTimingJsonHeader">
             <strong>JSON разметки</strong>
@@ -1091,33 +1187,6 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingStatusItem"><span>Конец выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedBoundarySec) : "—"}</strong></div>
             <div className="manualTimingStatusItem isPrimary"><span>Длина выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedSceneDurationSec) : "—"}</strong>{selectedSceneDurationWarning ? <span className={`manualTimingDurationBadge ${getDurationWarningClassName(selectedSceneDurationWarning)}`}>⚠ {selectedSceneDurationWarning.label}</span> : null}</div>
           </div>
-          {selectedScene ? <div className="manualTimingSceneTextPanel">
-            <div className="manualTimingSceneTextHeader">
-              <strong>Текст и смысл сцены</strong>
-              <span className="manualTimingBlockBadge" style={{ "--story-block-color": selectedSceneText.blockColor }}>Story block: {selectedSceneText.blockTitle}</span>
-            </div>
-            <div className="manualTimingSceneTextGrid">
-              <div><span>Position</span><strong>{selectedSceneText.position || "—"}</strong></div>
-              <div><span>Original</span><p>{selectedSceneText.original}</p></div>
-              <div><span>RU</span><p>{selectedSceneText.ru}</p></div>
-              <div><span>Meaning</span><p>{selectedSceneText.meaning}</p></div>
-            </div>
-            <div className="manualTimingBlockMeaningPanel">
-              <div className="manualTimingBlockMeaningTitle">Блок</div>
-              <div className="manualTimingBlockMeaningGrid">
-                <div><span>Цель блока</span><p>{selectedSceneText.blockGoal}</p></div>
-                <div><span>Раскрытие блока</span><p>{selectedSceneText.blockReveal}</p></div>
-                <div><span>Эмоция блока</span><p>{selectedSceneText.blockEmotion}</p></div>
-              </div>
-            </div>
-            <div className="manualTimingBlockMeaningPanel">
-              <div className="manualTimingBlockMeaningTitle">Сцена внутри блока</div>
-              <div className="manualTimingBlockMeaningGrid">
-                <div><span>Роль сцены в блоке</span><p>{selectedSceneText.sceneRole}</p></div>
-                <div><span>Прогресс блока</span><p>{selectedSceneText.blockProgress}</p></div>
-              </div>
-            </div>
-          </div> : null}
         </div>
       </section>
 
@@ -1137,6 +1206,18 @@ export default function ManualTimingEditorPage() {
 
       <section className="manualTimingTimeline" aria-label="шкала таймингов">
         <div className="manualTimingTimelineTrack">
+          {timelineBlockRanges.length ? <div className="manualTimingBlockTrack" aria-label="смысловые блоки на шкале сцен">
+            {timelineBlockRanges.map((blockRange) => <button
+              key={`timeline-block-${blockRange.block_id}`}
+              type="button"
+              className="manualTimingBlockRange"
+              style={getStoryBlockRangeStyle(blockRange)}
+              onClick={() => onStoryBlockClick(blockRange)}
+              title={`${blockRange.title}: ${formatTimingSec(blockRange.start_sec)} – ${formatTimingSec(blockRange.end_sec)}`}
+            >
+              <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
+            </button>)}
+          </div> : null}
           {scenes.map((scene, idx) => {
             const isOpenTail = scene.scene_id === openTailSceneId;
             return <button
