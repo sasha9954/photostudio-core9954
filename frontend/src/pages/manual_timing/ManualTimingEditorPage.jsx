@@ -12,6 +12,7 @@ import {
   buildManualTimingSampleJson,
   buildManualTimingScenesFromMarkers,
   buildManualTimingWarnings,
+  deriveStoryBlockRangeFromScenes,
   formatTimingSec,
   getDefaultManualTimingNodeData,
   getManualTimingSceneDurationWarning,
@@ -250,52 +251,38 @@ export default function ManualTimingEditorPage() {
   const openTailSceneId = project.timing_status === "confirmed" ? "" : scenes[scenes.length - 1]?.scene_id || "";
   const candidateDurationLabel = candidateDurationSec > 0.001 ? formatTimingSec(candidateDurationSec) : "—";
   const storyBlockSummaries = useMemo(() => storyBlocks.map((block) => {
-    const sceneIds = Array.isArray(block.scene_ids) ? block.scene_ids : [];
-    const count = sceneIds.length || scenes.filter((scene) => String(scene.story_block_id || "") === String(block.block_id || "")).length;
-    return { ...block, sceneCount: count };
+    const derived = deriveStoryBlockRangeFromScenes(block, scenes);
+    const sceneCount = Number(derived?.scene_count || 0);
+    return {
+      ...block,
+      ...(derived || { scene_ids: [], start_sec: 0, end_sec: 0 }),
+      sceneCount,
+    };
   }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
   const timelineBlockRanges = useMemo(() => {
     if (!(durationSec > 0) || !storyBlocks.length) return [];
     const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
-    const sceneById = new Map(scenes.map((scene) => [String(scene.scene_id || ""), scene]));
 
     return storyBlocks.map((block) => {
       const blockId = String(block?.block_id || "");
-      const sceneIds = Array.isArray(block?.scene_ids) ? block.scene_ids.map((id) => String(id || "")).filter(Boolean) : [];
-      const directStart = Number(block?.start_sec);
-      const directEnd = Number(block?.end_sec);
-      const hasDirectRange = Number.isFinite(directStart) && Number.isFinite(directEnd) && directEnd > directStart;
       const isUnknownBlock = blockId === unknownBlockId;
+      const derived = deriveStoryBlockRangeFromScenes(block, scenes);
 
       if (isUnknownBlock && storyBlocks.length === 1) return null;
-      if (isUnknownBlock && !sceneIds.length && !hasDirectRange) return null;
+      if (isUnknownBlock && !derived) return null;
+      if (!derived) return null;
 
-      let startSec = hasDirectRange ? directStart : null;
-      let endSec = hasDirectRange ? directEnd : null;
-      const blockScenesFromIds = sceneIds.map((sceneId) => sceneById.get(sceneId)).filter(Boolean);
-      const blockScenes = blockScenesFromIds.length
-        ? blockScenesFromIds
-        : scenes.filter((scene) => String(scene.story_block_id || "") === blockId);
-
-      if (!(endSec > startSec) && blockScenes.length) {
-        const starts = blockScenes.map((scene) => Number(scene.start_sec)).filter(Number.isFinite);
-        const ends = blockScenes.map((scene) => Number(scene.end_sec)).filter(Number.isFinite);
-        startSec = starts.length ? Math.min(...starts) : null;
-        endSec = ends.length ? Math.max(...ends) : null;
-      }
-
-      if (!(Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec)) return null;
-      const safeStart = clampTime(startSec, durationSec);
-      const safeEnd = clampTime(endSec, durationSec);
+      const safeStart = clampTime(derived.start_sec, durationSec);
+      const safeEnd = clampTime(derived.end_sec, durationSec);
       if (!(safeEnd > safeStart)) return null;
 
       return {
-        ...block,
+        ...derived,
         block_id: blockId,
         title: String(block?.title_ru || blockId || "Story block"),
         start_sec: safeStart,
         end_sec: safeEnd,
-        sceneCount: blockScenes.length || sceneIds.length,
+        sceneCount: Number(derived.scene_count || 0),
       };
     }).filter(Boolean);
   }, [durationSec, storyBlocks, scenes]);

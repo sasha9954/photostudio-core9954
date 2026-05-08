@@ -211,6 +211,56 @@ export function normalizeManualTimingStoryBlocks(storyBlocks = []) {
   return blocks.length ? blocks : [{ ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK }];
 }
 
+
+export function deriveStoryBlockRangeFromScenes(block, scenes = []) {
+  const blockId = String(block?.block_id || "").trim();
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+  const sceneIds = Array.isArray(block?.scene_ids) ? block.scene_ids.map((sceneId) => String(sceneId || "").trim()).filter(Boolean) : [];
+
+  let blockScenes = [];
+
+  if (sceneIds.length) {
+    blockScenes = sceneIds
+      .map((sceneId) => safeScenes.find((scene) => String(scene?.scene_id || "") === String(sceneId)))
+      .filter((scene) => scene && (!blockId || !scene?.story_block_id || String(scene.story_block_id || "") === blockId));
+  }
+
+  if (!blockScenes.length) {
+    blockScenes = safeScenes.filter((scene) => String(scene?.story_block_id || "") === blockId);
+  }
+
+  if (!blockScenes.length) return null;
+
+  const starts = blockScenes.map((scene) => Number(scene?.start_sec || 0)).filter(Number.isFinite);
+  const ends = blockScenes.map((scene) => Number(scene?.end_sec || 0)).filter(Number.isFinite);
+  if (!starts.length || !ends.length) return null;
+
+  return {
+    ...block,
+    start_sec: roundTimingSec(Math.min(...starts)),
+    end_sec: roundTimingSec(Math.max(...ends)),
+    scene_ids: blockScenes.map((scene) => scene.scene_id),
+    scene_count: blockScenes.length,
+  };
+}
+
+export function syncManualTimingStoryBlocksWithScenes(storyBlocks = [], scenes = []) {
+  const normalizedBlocks = normalizeManualTimingStoryBlocks(storyBlocks);
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+
+  return normalizedBlocks.map((block) => {
+    const derived = deriveStoryBlockRangeFromScenes(block, safeScenes);
+    if (derived) return derived;
+    return {
+      ...block,
+      scene_ids: [],
+      start_sec: 0,
+      end_sec: 0,
+      scene_count: 0,
+    };
+  });
+}
+
 export function hydrateManualTimingScenesWithStoryBlocks(scenes = [], storyBlocks = []) {
   const blocks = normalizeManualTimingStoryBlocks(storyBlocks);
   const blockById = new Map(blocks.map((block) => [String(block.block_id), block]));
@@ -740,8 +790,8 @@ export function buildManualTimingWarnings(project = {}) {
 export function buildManualTimingExportJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
-  const story_blocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
-  const hydratedScenes = hydrateManualTimingScenesWithStoryBlocks(Array.isArray(safeProject.scenes) ? safeProject.scenes : [], story_blocks);
+  const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
+  const hydratedScenes = hydrateManualTimingScenesWithStoryBlocks(Array.isArray(safeProject.scenes) ? safeProject.scenes : [], normalizedStoryBlocks);
   const scenes = hydratedScenes.map((scene, idx) => ({
     scene_id: String(scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(scene?.index || idx + 1),
@@ -782,6 +832,8 @@ export function buildManualTimingExportJson(project = {}) {
     negative_prompt: String(scene?.negative_prompt || ""),
     sound_prompt: String(scene?.sound_prompt || ""),
   }));
+
+  const story_blocks = syncManualTimingStoryBlocksWithScenes(normalizedStoryBlocks, scenes).map(({ scene_count, ...block }) => block);
 
   return {
     chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
