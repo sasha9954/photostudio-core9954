@@ -735,7 +735,7 @@ export default function ManualClipBoardNode({ id, data }) {
             </div> : null}
           </section>
 
-          <section className={`manualPanel storyPrepTemplatePanel ${isStoryPrepExpanded ? "isExpanded" : ""}`}>
+          <section className="manualPanel storyPrepTemplatePanel">
             <div className="storyPrepTemplateHeader">
               <div className="storyPrepTemplateTitle">
                 <h4>Шаблон подготовки сюжета</h4>
@@ -757,7 +757,9 @@ export default function ManualClipBoardNode({ id, data }) {
                 <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
               </div>
             </div>
-            <textarea className={`storyPrepTemplatePreview ${isStoryPrepExpanded ? "isExpanded" : ""}`} value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+            {isStoryPrepExpanded ? (
+              <textarea className="storyPrepTemplatePreview" value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+            ) : null}
           </section>
         </div>
       </div>}
