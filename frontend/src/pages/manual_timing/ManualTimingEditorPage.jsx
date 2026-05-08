@@ -1001,7 +1001,7 @@ export default function ManualTimingEditorPage() {
       audio: nextAudio,
       markers: nextMarkers,
       story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
-      audio_phrases: [],
+      audio_phrases: normalizeManualTimingAudioPhrases(project.audio_phrases),
       scenes: nextScenes,
       selectedSceneId: project.selectedSceneId || nextScenes[0]?.scene_id || "",
       timing_status: project.timing_status === "empty" ? "draft" : project.timing_status,
