@@ -389,11 +389,57 @@ function buildScenePreserveMaps(existingScenes = []) {
   return { byId, byTimeline };
 }
 
+export function getRangeOverlap(aStart, aEnd, bStart, bEnd) {
+  return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+}
+
+export function findBestSceneByTimelineOverlap(start, end, existingScenes = [], usedOldSceneIds = new Set()) {
+  const newDuration = Math.max(0.001, end - start);
+  let best = null;
+
+  (Array.isArray(existingScenes) ? existingScenes : []).forEach((scene) => {
+    const oldId = String(scene?.scene_id || "");
+    if (oldId && usedOldSceneIds.has(oldId)) return;
+
+    const oldStart = Number(scene?.start_sec || 0);
+    const oldEnd = Number(scene?.end_sec || 0);
+    if (!(oldEnd > oldStart)) return;
+
+    const overlap = getRangeOverlap(start, end, oldStart, oldEnd);
+    if (overlap <= 0) return;
+
+    const oldDuration = Math.max(0.001, oldEnd - oldStart);
+    const newRatio = overlap / newDuration;
+    const oldRatio = overlap / oldDuration;
+
+    const score = Math.max(newRatio, oldRatio);
+
+    if (!best || score > best.score) {
+      best = { scene, score, newRatio, oldRatio, overlap };
+    }
+  });
+
+  if (!best) return null;
+
+  // Порог: сцена считается той же самой, если overlap достаточно большой.
+  // Для чуть сдвинутых границ подходит.
+  // Для новой короткой сцены после split не нужно воровать чужой текст бездумно.
+  if (best.score < 0.55) return null;
+
+  return best.scene;
+}
+
+const MANUAL_TIMING_SPLIT_REVIEW_NOTE_RU = "Новая сцена после разреза — проверь текст/смысл";
+
 export function buildManualTimingScenesFromMarkers(markers = [], existingScenes = [], options = {}) {
   const duration = Number(options.durationSec || 0);
   const safeMarkers = normalizeManualTimingMarkers(markers, duration);
-  const { byId, byTimeline } = buildScenePreserveMaps(existingScenes);
+  const safeExistingScenes = Array.isArray(existingScenes) ? existingScenes : [];
+  const { byId, byTimeline } = buildScenePreserveMaps(safeExistingScenes);
   const scenes = [];
+  const usedOldSceneIds = new Set();
+  const sceneCountChanged = safeExistingScenes.length !== Math.max(0, safeMarkers.length - 1);
+  const canUseIdFallback = options.allowIdFallback === true && !sceneCountChanged;
 
   for (let i = 0; i < safeMarkers.length - 1; i += 1) {
     const start = roundTimingSec(safeMarkers[i]);
@@ -401,7 +447,20 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
     if (!(end > start)) continue;
     const sceneId = `seg_${String(i + 1).padStart(2, "0")}`;
     const timelineKey = `${start.toFixed(3)}|${end.toFixed(3)}`;
-    const old = byTimeline.get(timelineKey) || byId.get(sceneId) || {};
+    let old = byTimeline.get(timelineKey) || null;
+
+    if (!old) {
+      old = findBestSceneByTimelineOverlap(start, end, safeExistingScenes, usedOldSceneIds);
+    }
+
+    if (!old && canUseIdFallback) {
+      old = byId.get(sceneId) || null;
+    }
+
+    const shouldCarryStoryFields = Boolean(old);
+    if (old?.scene_id) usedOldSceneIds.add(String(old.scene_id));
+    old = old || {};
+    const needsSplitReviewNote = !shouldCarryStoryFields && sceneCountChanged && safeExistingScenes.length > 0;
     const section = normalizeManualTimingSection(old.section || (i === 0 ? "intro" : "verse"));
     const defaults = getSectionDefaults(section);
     const route = normalizeManualTimingRoute(old.route || defaults.route);
@@ -411,6 +470,9 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
     const containsInstrumental = typeof old.contains_instrumental === "boolean"
       ? old.contains_instrumental
       : Boolean(old.contains_instrumental_assumption ?? !containsVocal);
+    const userNoteRu = shouldCarryStoryFields
+      ? String(old.user_note_ru || old.user_notes_ru || "")
+      : (needsSplitReviewNote ? MANUAL_TIMING_SPLIT_REVIEW_NOTE_RU : "");
 
     scenes.push({
       scene_id: options.preserveSceneIds ? String(old.scene_id || sceneId) : sceneId,
@@ -428,27 +490,27 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       quality: String(old.quality || "manual_draft"),
       boundary_reason: String(old.boundary_reason || "manual_marker"),
       transition_out: String(old.transition_out || "manual_cut"),
-      story_time: String(old.story_time || ""),
+      story_time: shouldCarryStoryFields ? String(old.story_time || "") : "",
       scene_type: String(old.scene_type || ""),
-      drama_hint: String(old.drama_hint || ""),
-      short_note: String(old.short_note || ""),
-      scene_goal_ru: String(old.scene_goal_ru || ""),
-      photo_prompt_hint_ru: String(old.photo_prompt_hint_ru || ""),
-      prompt_hint_ru: String(old.prompt_hint_ru || old.photo_prompt_hint_ru || ""),
-      story_position_ru: String(old.story_position_ru || old.story_time || ""),
-      user_note_ru: String(old.user_note_ru || old.user_notes_ru || ""),
-      source_phrase_ids: normalizeManualTimingSourcePhraseIds(old.source_phrase_ids || old.sourcePhraseIds),
+      drama_hint: shouldCarryStoryFields ? String(old.drama_hint || "") : "",
+      short_note: shouldCarryStoryFields ? String(old.short_note || "") : "",
+      scene_goal_ru: shouldCarryStoryFields ? String(old.scene_goal_ru || "") : "",
+      photo_prompt_hint_ru: shouldCarryStoryFields ? String(old.photo_prompt_hint_ru || "") : "",
+      prompt_hint_ru: shouldCarryStoryFields ? String(old.prompt_hint_ru || old.photo_prompt_hint_ru || "") : "",
+      story_position_ru: shouldCarryStoryFields ? String(old.story_position_ru || old.story_time || "") : "",
+      user_note_ru: userNoteRu,
+      source_phrase_ids: shouldCarryStoryFields ? normalizeManualTimingSourcePhraseIds(old.source_phrase_ids || old.sourcePhraseIds) : [],
       story_block_id: String(old.story_block_id || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id),
       story_block_title_ru: String(old.story_block_title_ru || ""),
       story_block_color: String(old.story_block_color || ""),
-      story_block_position_ru: String(old.story_block_position_ru || ""),
-      scene_role_in_block_ru: String(old.scene_role_in_block_ru || ""),
-      block_progress_ru: String(old.block_progress_ru || ""),
-      original_text: String(old.original_text || ""),
-      translated_text_ru: String(old.translated_text_ru || ""),
-      meaning_hint_ru: String(old.meaning_hint_ru || ""),
-      source_text_en: String(old.source_text_en || ""),
-      adapted_text_en: String(old.adapted_text_en || ""),
+      story_block_position_ru: shouldCarryStoryFields ? String(old.story_block_position_ru || "") : "",
+      scene_role_in_block_ru: shouldCarryStoryFields ? String(old.scene_role_in_block_ru || "") : "",
+      block_progress_ru: shouldCarryStoryFields ? String(old.block_progress_ru || "") : "",
+      original_text: shouldCarryStoryFields ? String(old.original_text || "") : "",
+      translated_text_ru: shouldCarryStoryFields ? String(old.translated_text_ru || "") : "",
+      meaning_hint_ru: shouldCarryStoryFields ? String(old.meaning_hint_ru || "") : "",
+      source_text_en: shouldCarryStoryFields ? String(old.source_text_en || "") : "",
+      adapted_text_en: shouldCarryStoryFields ? String(old.adapted_text_en || "") : "",
       video_prompt: String(old.video_prompt || ""),
       negative_prompt: String(old.negative_prompt || ""),
       sound_prompt: String(old.sound_prompt || ""),
