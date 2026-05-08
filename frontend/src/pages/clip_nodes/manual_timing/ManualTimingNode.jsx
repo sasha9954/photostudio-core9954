@@ -25,10 +25,15 @@ function formatTimingStatus(status) {
   return "пусто";
 }
 
-function audioEquals(a = {}, b = {}) {
+function audioIdentityEquals(a = {}, b = {}) {
   return String(a?.url || "") === String(b?.url || "")
-    && String(a?.filename || "") === String(b?.filename || "")
-    && Number(a?.duration_sec || 0) === Number(b?.duration_sec || 0);
+    && String(a?.filename || "") === String(b?.filename || "");
+}
+
+function audioMetaEquals(a = {}, b = {}) {
+  return audioIdentityEquals(a, b)
+    && Number(a?.duration_sec || 0) === Number(b?.duration_sec || 0)
+    && Number(a?.duration_ms || 0) === Number(b?.duration_ms || 0);
 }
 
 export default function ManualTimingNode({ id, data }) {
@@ -62,7 +67,18 @@ export default function ManualTimingNode({ id, data }) {
 
   useEffect(() => {
     if (!effectiveAudio?.url) return;
-    if (audioEquals(effectiveAudio, model.audio || {})) return;
+    if (audioMetaEquals(effectiveAudio, model.audio || {})) return;
+
+    const sameAudioIdentity = audioIdentityEquals(effectiveAudio, model.audio || {});
+
+    if (sameAudioIdentity) {
+      patch({
+        audio: effectiveAudio,
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+
     patch({
       audio: effectiveAudio,
       markers: [],
@@ -73,7 +89,7 @@ export default function ManualTimingNode({ id, data }) {
       updatedAt: Date.now(),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveAudio?.url, effectiveAudio?.filename, effectiveAudio?.duration_sec]);
+  }, [effectiveAudio?.url, effectiveAudio?.filename, effectiveAudio?.duration_sec, effectiveAudio?.duration_ms]);
 
   const persistProject = () => {
     const project = {
