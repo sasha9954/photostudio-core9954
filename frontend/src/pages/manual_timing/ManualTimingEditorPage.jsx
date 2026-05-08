@@ -1072,6 +1072,8 @@ export default function ManualTimingEditorPage() {
           /> : null}
         </div>
 
+        {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}
+
         <div className="manualTimingWorkInfo">
           <div className="manualTimingSelectedSceneSummary">
             {selectedScene ? <>
@@ -1117,8 +1119,6 @@ export default function ManualTimingEditorPage() {
             </div>
           </div> : null}
         </div>
-
-        {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}
       </section>
 
       {storyBlockSummaries.length ? <section className="manualTimingStoryBlocks" aria-label="смысловые блоки">
