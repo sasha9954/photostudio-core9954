@@ -214,6 +214,20 @@ export function normalizeManualTimingSourcePhraseIds(value = []) {
   return [...new Set(value.map((id) => String(id || "").trim()).filter(Boolean))];
 }
 
+export const MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU = "Если audio_phrases содержит фразы со status='needs_transcription', не удаляй их. Нужно распознать/перевести эти фразы по аудио или предоставленному тексту, заполнить text_en, text_ru, meaning_ru, затем обновить связанные scenes через source_phrase_ids: translated_text_ru, original_text, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Если фраза важная и не помещается в текущую сцену по смыслу, предложи создать отдельную сцену, но не меняй тайминги без явного указания пользователя.";
+
+export function buildManualTimingChatGptTask(hasNeedsTranscription = false) {
+  if (!hasNeedsTranscription) return CHATGPT_STORY_SPLIT_TASK;
+
+  const rules = Array.isArray(CHATGPT_STORY_SPLIT_TASK.rules_ru) ? CHATGPT_STORY_SPLIT_TASK.rules_ru : [];
+  return {
+    ...CHATGPT_STORY_SPLIT_TASK,
+    rules_ru: rules.includes(MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU)
+      ? rules
+      : [...rules, MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU],
+  };
+}
+
 function rangesIntersect(aStart, aEnd, bStart, bEnd) {
   return Number(aStart) < Number(bEnd) - 0.001 && Number(aEnd) > Number(bStart) + 0.001;
 }
@@ -593,6 +607,7 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
 export function buildManualTimingSampleJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
+  const audioPhrases = normalizeManualTimingAudioPhrases(safeProject.audio_phrases);
   const existingScenes = Array.isArray(safeProject.scenes) ? safeProject.scenes : [];
   const scenes = existingScenes.length ? buildManualTimingExportJson(safeProject).scenes : [
     {
@@ -663,7 +678,7 @@ export function buildManualTimingSampleJson(project = {}) {
   }
 
   return {
-    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    chatgpt_task: buildManualTimingChatGptTask(audioPhrases.some((phrase) => String(phrase.status || "") === "needs_transcription")),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
@@ -672,7 +687,7 @@ export function buildManualTimingSampleJson(project = {}) {
     audio_duration_sec: Number(audio.duration_sec || 0),
     global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми. Если есть audio_phrases со status=needs_transcription, не удаляй их, распознай/переведи при наличии аудио или текста и предложи привязку к scene.source_phrase_ids.",
     story_blocks: storyBlocks,
-    audio_phrases: normalizeManualTimingAudioPhrases(safeProject.audio_phrases),
+    audio_phrases: audioPhrases,
     scenes,
   };
 }
@@ -910,12 +925,9 @@ export function buildManualTimingExportJson(project = {}) {
 
   const story_blocks = syncManualTimingStoryBlocksWithScenes(normalizedStoryBlocks, scenes).map(({ scene_count, ...block }) => block);
   const hasNeedsTranscription = audio_phrases.some((phrase) => String(phrase.status || "") === "needs_transcription");
-  const chatgptTask = hasNeedsTranscription
-    ? `${CHATGPT_STORY_SPLIT_TASK} В audio_phrases есть фразы со status=needs_transcription: если пользователь дал аудио или текст, распознай и переведи их; не удаляй эти фразы; предложи, к какой scene их привязать через source_phrase_ids.`
-    : CHATGPT_STORY_SPLIT_TASK;
 
   return {
-    chatgpt_task: chatgptTask,
+    chatgpt_task: buildManualTimingChatGptTask(hasNeedsTranscription),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
