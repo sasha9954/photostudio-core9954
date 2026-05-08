@@ -378,6 +378,7 @@ export default function ManualClipDirectorPage() {
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
   const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
+  const [isStoryPrepExpanded, setIsStoryPrepExpanded] = useState(false);
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
@@ -810,19 +811,29 @@ export default function ManualClipDirectorPage() {
       })}
     </div> : null}
 
-    <section className="storyPrepTemplatePanel manualDirectorStoryPrepPanel">
+    <section className={`storyPrepTemplatePanel manualDirectorStoryPrepPanel ${isStoryPrepExpanded ? "isExpanded" : ""}`}>
       <div className="storyPrepTemplateHeader">
-        <div>
+        <div className="storyPrepTemplateTitle">
           <h3>Шаблон подготовки сюжета</h3>
           <small>Живой production-чеклист: блоки, сцены, полные фразы, тайминги и материалы.</small>
         </div>
         <div className="storyPrepTemplateActions">
+          <button
+            type="button"
+            className="clipSB_btn storyPrepTemplateExpandBtn"
+            onClick={() => setIsStoryPrepExpanded((v) => !v)}
+            aria-pressed={isStoryPrepExpanded}
+            title={isStoryPrepExpanded ? "Свернуть preview" : "Развернуть preview"}
+          >
+            <span aria-hidden="true">{isStoryPrepExpanded ? "⤡" : "⛶"}</span>
+            <span>{isStoryPrepExpanded ? "Свернуть" : "Развернуть"}</span>
+          </button>
           <button className="clipSB_btn" onClick={refreshStoryPrepTemplate}>Обновить шаблон</button>
           <button className="clipSB_btn" onClick={onCopyStoryPrepTemplate}>Скопировать шаблон</button>
           <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
         </div>
       </div>
-      <textarea className="storyPrepTemplatePreview" value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+      <textarea className={`storyPrepTemplatePreview ${isStoryPrepExpanded ? "isExpanded" : ""}`} value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
     </section>
 
     <div className="manualDirectorGrid">

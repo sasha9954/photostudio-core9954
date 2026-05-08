@@ -521,6 +521,11 @@
   margin-bottom: 10px;
 }
 
+.storyPrepTemplateTitle {
+  min-width: 220px;
+  flex: 1 1 360px;
+}
+
 .storyPrepTemplateHeader h3 {
   margin: 0 0 4px;
 }
@@ -531,9 +536,19 @@
 
 .storyPrepTemplateActions {
   display: flex;
+  align-items: center;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.storyPrepTemplateActions .clipSB_btn {
+  white-space: nowrap;
+}
+
+.storyPrepTemplateExpandBtn {
+  min-width: 0;
 }
 
 .storyPrepTemplatePreview {
@@ -552,4 +567,10 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.storyPrepTemplatePreview.isExpanded,
+.storyPrepTemplatePanel.isExpanded .storyPrepTemplatePreview {
+  min-height: 70vh;
+  max-height: 80vh;
 }
