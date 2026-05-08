@@ -446,6 +446,35 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
   };
 }
 
+export function buildManualTimingAiSplitRequestJson(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeManualTimingAudio(safeProject.audio);
+
+  return {
+    mode: "manual_clip_board",
+    project_kind: String(safeProject.project_kind || "story"),
+    format: String(safeProject.format || "9:16"),
+    split_type: "ai_story_blocks_split_request",
+    audio_duration_sec: Number(audio.duration_sec || 0),
+    language_source: "en",
+    language_helper: "ru",
+    scene_duration_target_sec: {
+      min: 4,
+      max: 8,
+      preferred: 6,
+    },
+    route_policy: {
+      voiceover: "i2v",
+      singer_lipsync: "ia2v",
+      instrumental: "i2v",
+    },
+    global_hint: "Сделай новую разбивку по смысловым блокам. Можно менять тайминги. Нужно создать story_blocks и scenes. Для каждой сцены заполнить original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
+    story_request_ru: "",
+    story_blocks: [],
+    scenes: [],
+  };
+}
+
 export function buildManualTimingSampleJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);

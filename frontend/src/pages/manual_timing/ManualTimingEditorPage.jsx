@@ -7,6 +7,7 @@ import {
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   MANUAL_TIMING_ROUTES,
   MANUAL_TIMING_SECTIONS,
+  buildManualTimingAiSplitRequestJson,
   buildManualTimingExportJson,
   buildManualTimingSampleJson,
   buildManualTimingScenesFromMarkers,
@@ -767,6 +768,21 @@ export default function ManualTimingEditorPage() {
     downloadJsonPayload(buildManualTimingSampleJson(project), "manual_timing_sample_for_chatgpt.json");
   };
 
+  const onDownloadAiSplitRequestJson = () => {
+    downloadJsonPayload(buildManualTimingAiSplitRequestJson(project), "manual_timing_ai_split_request.json");
+  };
+
+  const onCopyAiSplitRequestJson = async () => {
+    const payload = buildManualTimingAiSplitRequestJson(project);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCopyStatus("JSON для AI-разбивки скопирован");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    } catch {
+      setCopyStatus("Не удалось скопировать JSON для AI-разбивки");
+    }
+  };
+
   const applyImportedTimingJson = (rawObject) => {
     const nextProject = normalizeManualTimingProjectFromJson(rawObject, project);
     persist(nextProject);
@@ -1066,6 +1082,8 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить JSON</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
