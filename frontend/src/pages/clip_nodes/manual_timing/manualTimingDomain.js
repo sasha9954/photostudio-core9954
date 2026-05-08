@@ -426,7 +426,7 @@ export function findBestSceneByTimelineOverlap(start, end, existingScenes = [], 
   // Для новой короткой сцены после split не нужно воровать чужой текст бездумно.
   if (best.score < 0.55) return null;
 
-  return best.scene;
+  return best;
 }
 
 const MANUAL_TIMING_SPLIT_REVIEW_NOTE_RU = "Новая сцена после разреза — проверь текст/смысл";
@@ -447,30 +447,50 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
     if (!(end > start)) continue;
     const sceneId = `seg_${String(i + 1).padStart(2, "0")}`;
     const timelineKey = `${start.toFixed(3)}|${end.toFixed(3)}`;
-    let old = byTimeline.get(timelineKey) || null;
+    let old = null;
+    let matchType = "none";
+    let overlapMatch = null;
 
-    if (!old) {
-      old = findBestSceneByTimelineOverlap(start, end, safeExistingScenes, usedOldSceneIds);
+    const exactOld = byTimeline.get(timelineKey) || null;
+    if (exactOld) {
+      old = exactOld;
+      matchType = "exact";
+    } else {
+      overlapMatch = findBestSceneByTimelineOverlap(start, end, safeExistingScenes, usedOldSceneIds);
+      if (overlapMatch?.scene) {
+        old = overlapMatch.scene;
+        matchType = "overlap";
+      }
     }
 
     if (!old && canUseIdFallback) {
       old = byId.get(sceneId) || null;
+      if (old) matchType = "id";
     }
 
-    const shouldCarryStoryFields = Boolean(old);
+    const shouldCarryTechnicalFields = Boolean(old);
+    const canCarryStoryFields =
+      matchType === "exact"
+      || matchType === "id"
+      || (
+        matchType === "overlap"
+        && overlapMatch
+        && overlapMatch.newRatio >= 0.82
+        && overlapMatch.oldRatio >= 0.82
+      );
     if (old?.scene_id) usedOldSceneIds.add(String(old.scene_id));
     old = old || {};
-    const needsSplitReviewNote = !shouldCarryStoryFields && sceneCountChanged && safeExistingScenes.length > 0;
-    const section = normalizeManualTimingSection(old.section || (i === 0 ? "intro" : "verse"));
+    const needsSplitReviewNote = matchType === "overlap" && !canCarryStoryFields;
+    const section = normalizeManualTimingSection(shouldCarryTechnicalFields ? old.section : (i === 0 ? "intro" : "verse"));
     const defaults = getSectionDefaults(section);
-    const route = normalizeManualTimingRoute(old.route || defaults.route);
-    const containsVocal = typeof old.contains_vocal === "boolean"
+    const route = normalizeManualTimingRoute(shouldCarryTechnicalFields ? old.route : defaults.route);
+    const containsVocal = shouldCarryTechnicalFields && typeof old.contains_vocal === "boolean"
       ? old.contains_vocal
-      : Boolean(old.contains_vocal_assumption ?? defaults.contains_vocal);
-    const containsInstrumental = typeof old.contains_instrumental === "boolean"
+      : Boolean((shouldCarryTechnicalFields ? old.contains_vocal_assumption : undefined) ?? defaults.contains_vocal);
+    const containsInstrumental = shouldCarryTechnicalFields && typeof old.contains_instrumental === "boolean"
       ? old.contains_instrumental
-      : Boolean(old.contains_instrumental_assumption ?? !containsVocal);
-    const userNoteRu = shouldCarryStoryFields
+      : Boolean((shouldCarryTechnicalFields ? old.contains_instrumental_assumption : undefined) ?? !containsVocal);
+    const userNoteRu = canCarryStoryFields
       ? String(old.user_note_ru || old.user_notes_ru || "")
       : (needsSplitReviewNote ? MANUAL_TIMING_SPLIT_REVIEW_NOTE_RU : "");
 
@@ -483,34 +503,34 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       section,
       route,
       contains_vocal: containsVocal,
-      contains_vocal_assumption: Boolean(old.contains_vocal_assumption ?? containsVocal),
-      contains_instrumental_assumption: Boolean(old.contains_instrumental_assumption ?? containsInstrumental),
-      use_sound_suggestion: Boolean(old.use_sound_suggestion || false),
-      energy: normalizeManualTimingEnergy(old.energy || "mid"),
+      contains_vocal_assumption: Boolean((shouldCarryTechnicalFields ? old.contains_vocal_assumption : undefined) ?? containsVocal),
+      contains_instrumental_assumption: Boolean((shouldCarryTechnicalFields ? old.contains_instrumental_assumption : undefined) ?? containsInstrumental),
+      use_sound_suggestion: shouldCarryTechnicalFields ? Boolean(old.use_sound_suggestion || false) : false,
+      energy: normalizeManualTimingEnergy(shouldCarryTechnicalFields ? old.energy : "mid"),
       quality: String(old.quality || "manual_draft"),
       boundary_reason: String(old.boundary_reason || "manual_marker"),
       transition_out: String(old.transition_out || "manual_cut"),
-      story_time: shouldCarryStoryFields ? String(old.story_time || "") : "",
+      story_time: canCarryStoryFields ? String(old.story_time || "") : "",
       scene_type: String(old.scene_type || ""),
-      drama_hint: shouldCarryStoryFields ? String(old.drama_hint || "") : "",
-      short_note: shouldCarryStoryFields ? String(old.short_note || "") : "",
-      scene_goal_ru: shouldCarryStoryFields ? String(old.scene_goal_ru || "") : "",
-      photo_prompt_hint_ru: shouldCarryStoryFields ? String(old.photo_prompt_hint_ru || "") : "",
-      prompt_hint_ru: shouldCarryStoryFields ? String(old.prompt_hint_ru || old.photo_prompt_hint_ru || "") : "",
-      story_position_ru: shouldCarryStoryFields ? String(old.story_position_ru || old.story_time || "") : "",
+      drama_hint: canCarryStoryFields ? String(old.drama_hint || "") : "",
+      short_note: canCarryStoryFields ? String(old.short_note || "") : "",
+      scene_goal_ru: canCarryStoryFields ? String(old.scene_goal_ru || "") : "",
+      photo_prompt_hint_ru: canCarryStoryFields ? String(old.photo_prompt_hint_ru || "") : "",
+      prompt_hint_ru: canCarryStoryFields ? String(old.prompt_hint_ru || old.photo_prompt_hint_ru || "") : "",
+      story_position_ru: canCarryStoryFields ? String(old.story_position_ru || old.story_time || "") : "",
       user_note_ru: userNoteRu,
-      source_phrase_ids: shouldCarryStoryFields ? normalizeManualTimingSourcePhraseIds(old.source_phrase_ids || old.sourcePhraseIds) : [],
-      story_block_id: String(old.story_block_id || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id),
-      story_block_title_ru: String(old.story_block_title_ru || ""),
-      story_block_color: String(old.story_block_color || ""),
-      story_block_position_ru: shouldCarryStoryFields ? String(old.story_block_position_ru || "") : "",
-      scene_role_in_block_ru: shouldCarryStoryFields ? String(old.scene_role_in_block_ru || "") : "",
-      block_progress_ru: shouldCarryStoryFields ? String(old.block_progress_ru || "") : "",
-      original_text: shouldCarryStoryFields ? String(old.original_text || "") : "",
-      translated_text_ru: shouldCarryStoryFields ? String(old.translated_text_ru || "") : "",
-      meaning_hint_ru: shouldCarryStoryFields ? String(old.meaning_hint_ru || "") : "",
-      source_text_en: shouldCarryStoryFields ? String(old.source_text_en || "") : "",
-      adapted_text_en: shouldCarryStoryFields ? String(old.adapted_text_en || "") : "",
+      source_phrase_ids: canCarryStoryFields ? normalizeManualTimingSourcePhraseIds(old.source_phrase_ids || old.sourcePhraseIds) : [],
+      story_block_id: String(shouldCarryTechnicalFields ? (old.story_block_id || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id) : MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id),
+      story_block_title_ru: shouldCarryTechnicalFields ? String(old.story_block_title_ru || "") : "",
+      story_block_color: shouldCarryTechnicalFields ? String(old.story_block_color || "") : "",
+      story_block_position_ru: canCarryStoryFields ? String(old.story_block_position_ru || "") : "",
+      scene_role_in_block_ru: canCarryStoryFields ? String(old.scene_role_in_block_ru || "") : "",
+      block_progress_ru: canCarryStoryFields ? String(old.block_progress_ru || "") : "",
+      original_text: canCarryStoryFields ? String(old.original_text || "") : "",
+      translated_text_ru: canCarryStoryFields ? String(old.translated_text_ru || "") : "",
+      meaning_hint_ru: canCarryStoryFields ? String(old.meaning_hint_ru || "") : "",
+      source_text_en: canCarryStoryFields ? String(old.source_text_en || "") : "",
+      adapted_text_en: canCarryStoryFields ? String(old.adapted_text_en || "") : "",
       video_prompt: String(old.video_prompt || ""),
       negative_prompt: String(old.negative_prompt || ""),
       sound_prompt: String(old.sound_prompt || ""),
