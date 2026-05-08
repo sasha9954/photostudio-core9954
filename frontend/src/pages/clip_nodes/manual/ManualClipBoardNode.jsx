@@ -10,6 +10,16 @@ import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplit
 const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
 const ACTIVE_PROJECT_ID_STORAGE_KEY = "manual_clip_board_active_project_id";
 
+function pickStoryBlocksFromModel(model = {}) {
+  const modelBlocks = Array.isArray(model?.story_blocks) ? model.story_blocks : [];
+  if (modelBlocks.length) return modelBlocks;
+
+  const rawBlocks = Array.isArray(model?.split_chat?.raw_ai_json?.story_blocks)
+    ? model.split_chat.raw_ai_json.story_blocks
+    : [];
+  return rawBlocks;
+}
+
 function getManualProjectStorageKey(nodeId = "") {
   const safeId = String(nodeId || "default").trim() || "default";
   return `manual_clip_board_project:${safeId}`;
@@ -538,7 +548,7 @@ export default function ManualClipBoardNode({ id, data }) {
   const storyPrepProject = useMemo(() => ({
     ...model,
     audio: effectiveAudio,
-    story_blocks: model.story_blocks || model.split_chat?.raw_ai_json?.story_blocks || [],
+    story_blocks: pickStoryBlocksFromModel(model),
     scenes: scenes.length ? scenes : (Array.isArray(model.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : []),
     global_hint: model.split_chat?.raw_ai_json?.global_hint || model.split_chat?.ai_summary || model.global_hint || "",
   }), [model, effectiveAudio, scenes]);
@@ -598,7 +608,7 @@ export default function ManualClipBoardNode({ id, data }) {
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
       prep_template_meta: STORY_PREP_TEMPLATE_META,
-      story_blocks: model.story_blocks || [],
+      story_blocks: pickStoryBlocksFromModel(model),
       scenes: nextScenes,
     };
     persistManualProject(payload);
