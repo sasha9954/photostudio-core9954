@@ -553,6 +553,7 @@ export default function ManualClipBoardNode({ id, data }) {
     global_hint: model.split_chat?.raw_ai_json?.global_hint || model.split_chat?.ai_summary || model.global_hint || "",
   }), [model, effectiveAudio, scenes]);
   const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
+  const [isStoryPrepExpanded, setIsStoryPrepExpanded] = useState(false);
 
   useEffect(() => {
     setStoryPrepTemplateText(buildStoryPrepTemplateText(storyPrepProject));
@@ -734,19 +735,29 @@ export default function ManualClipBoardNode({ id, data }) {
             </div> : null}
           </section>
 
-          <section className="manualPanel storyPrepTemplatePanel">
+          <section className={`manualPanel storyPrepTemplatePanel ${isStoryPrepExpanded ? "isExpanded" : ""}`}>
             <div className="storyPrepTemplateHeader">
-              <div>
+              <div className="storyPrepTemplateTitle">
                 <h4>Шаблон подготовки сюжета</h4>
                 <small>Динамически строится из текущего проекта, блоков, сцен, таймингов и фраз.</small>
               </div>
               <div className="storyPrepTemplateActions">
+                <button
+                  type="button"
+                  className="clipSB_btn storyPrepTemplateExpandBtn"
+                  onClick={() => setIsStoryPrepExpanded((v) => !v)}
+                  aria-pressed={isStoryPrepExpanded}
+                  title={isStoryPrepExpanded ? "Свернуть preview" : "Развернуть preview"}
+                >
+                  <span aria-hidden="true">{isStoryPrepExpanded ? "⤡" : "⛶"}</span>
+                  <span>{isStoryPrepExpanded ? "Свернуть" : "Развернуть"}</span>
+                </button>
                 <button className="clipSB_btn" onClick={refreshStoryPrepTemplate}>Обновить шаблон</button>
                 <button className="clipSB_btn" onClick={onCopyStoryPrepTemplate}>Скопировать шаблон</button>
                 <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
               </div>
             </div>
-            <textarea className="storyPrepTemplatePreview" value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+            <textarea className={`storyPrepTemplatePreview ${isStoryPrepExpanded ? "isExpanded" : ""}`} value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
           </section>
         </div>
       </div>}
