@@ -10,6 +10,9 @@ export const MANUAL_TIMING_UNKNOWN_STORY_BLOCK = {
   block_id: "block_unknown",
   title_ru: "Без блока",
   summary_ru: "",
+  block_goal_ru: "",
+  block_reveal_ru: "",
+  block_emotion_ru: "",
   color: "#64748B",
   scene_ids: [],
   start_sec: 0,
@@ -188,6 +191,9 @@ export function normalizeManualTimingStoryBlocks(storyBlocks = []) {
         block_id,
         title_ru: String(block?.title_ru || block?.titleRu || block?.title || (block_id === MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id ? MANUAL_TIMING_UNKNOWN_STORY_BLOCK.title_ru : block_id)),
         summary_ru: String(block?.summary_ru || block?.summaryRu || block?.summary || ""),
+        block_goal_ru: String(block?.block_goal_ru || block?.blockGoalRu || block?.goal_ru || ""),
+        block_reveal_ru: String(block?.block_reveal_ru || block?.blockRevealRu || block?.reveal_ru || ""),
+        block_emotion_ru: String(block?.block_emotion_ru || block?.blockEmotionRu || block?.emotion_ru || ""),
         color: normalizeStoryBlockColor(block?.color || (block_id === MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id ? MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color : "")),
         scene_ids: Array.isArray(block?.scene_ids || block?.sceneIds)
           ? (block?.scene_ids || block?.sceneIds).map((id) => String(id || "").trim()).filter(Boolean)
@@ -230,6 +236,9 @@ export function hydrateManualTimingScenesWithStoryBlocks(scenes = [], storyBlock
       story_block_title_ru: String(scene?.story_block_title_ru || block.title_ru || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.title_ru),
       story_block_color: normalizeStoryBlockColor(scene?.story_block_color || block.color || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color),
       story_block_position_ru: String(scene?.story_block_position_ru || computedPosition),
+      story_block_goal_ru: String(scene?.story_block_goal_ru || block.block_goal_ru || ""),
+      story_block_reveal_ru: String(scene?.story_block_reveal_ru || block.block_reveal_ru || ""),
+      story_block_emotion_ru: String(scene?.story_block_emotion_ru || block.block_emotion_ru || ""),
     };
   });
 }
@@ -319,6 +328,8 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       story_block_title_ru: String(old.story_block_title_ru || ""),
       story_block_color: String(old.story_block_color || ""),
       story_block_position_ru: String(old.story_block_position_ru || ""),
+      scene_role_in_block_ru: String(old.scene_role_in_block_ru || ""),
+      block_progress_ru: String(old.block_progress_ru || ""),
       original_text: String(old.original_text || ""),
       translated_text_ru: String(old.translated_text_ru || ""),
       meaning_hint_ru: String(old.meaning_hint_ru || ""),
@@ -435,6 +446,8 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
     story_block_title_ru: pickManualTimingText(scene, ["story_block_title_ru", "storyBlockTitleRu", "block_title_ru"]),
     story_block_color: pickManualTimingText(scene, ["story_block_color", "storyBlockColor", "block_color"]),
     story_block_position_ru: pickManualTimingText(scene, ["story_block_position_ru", "storyBlockPositionRu", "block_position_ru"]),
+    scene_role_in_block_ru: pickManualTimingText(scene, ["scene_role_in_block_ru", "sceneRoleInBlockRu", "role_in_block_ru", "scene_block_role_ru"]),
+    block_progress_ru: pickManualTimingText(scene, ["block_progress_ru", "blockProgressRu", "progress_in_block_ru", "story_block_progress_ru"]),
     original_text: pickManualTimingText(scene, ["original_text", "originalText"]),
     translated_text_ru: pickManualTimingText(scene, ["translated_text_ru", "translatedTextRu", "translation_ru"]),
     meaning_hint_ru: pickManualTimingText(scene, ["meaning_hint_ru", "meaningHintRu", "meaning_ru"]),
@@ -468,7 +481,7 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
       singer_lipsync: "ia2v",
       instrumental: "i2v",
     },
-    global_hint: "Сделай новую разбивку по смысловым блокам. Можно менять тайминги. Нужно создать story_blocks и scenes. Для каждой сцены заполнить original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
+    global_hint: "Сделай новую разбивку по смысловым блокам. Можно менять тайминги. Сначала придумай большие story_blocks; для каждого story_block заполни title_ru, summary_ru, block_goal_ru (что должен раскрыть весь блок), block_reveal_ru (что зритель должен понять к концу блока), block_emotion_ru (эмоциональная дуга блока), color, start_sec, end_sec, scene_ids. Затем создай scenes внутри блоков так, чтобы они пошагово раскрывали мысль блока. Для каждой сцены заполни original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
     story_request_ru: "",
     story_blocks: [],
     scenes: [],
@@ -505,10 +518,12 @@ export function buildManualTimingSampleJson(project = {}) {
       prompt_hint_ru: "Что учесть в видео-промте.",
       story_position_ru: "Позиция в истории.",
       user_note_ru: "Твоя заметка: звук, фраза, визуал, что не забыть.",
-      story_block_id: "block_unknown",
-      story_block_title_ru: "Без блока",
-      story_block_color: "#64748B",
+      story_block_id: "block_01",
+      story_block_title_ru: "Водопой и скрытая угроза",
+      story_block_color: "#F59E0B",
       story_block_position_ru: "сцена 1 из 1 в блоке",
+      scene_role_in_block_ru: "Какую функцию выполняет сцена внутри смыслового блока.",
+      block_progress_ru: "Как эта сцена продвигает раскрытие блока шаг за шагом.",
       original_text: "Original English phrase for this audio segment.",
       translated_text_ru: "Русский перевод фразы.",
       meaning_hint_ru: "Смысл сцены для режиссёра.",
@@ -520,14 +535,32 @@ export function buildManualTimingSampleJson(project = {}) {
     }
   ];
 
+  const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
+  const hasCustomStoryBlocks = normalizedStoryBlocks.some((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id);
+  const storyBlocks = hasCustomStoryBlocks ? normalizedStoryBlocks : [
+    {
+      block_id: "block_01",
+      title_ru: "Водопой и скрытая угроза",
+      summary_ru: "Животные приходят к воде, но рядом уже есть хищник.",
+      block_goal_ru: "Создать напряжение: мирная сцена должна постепенно превратиться в ощущение опасности.",
+      block_reveal_ru: "К концу блока зритель должен понять, что львица уже выбрала момент для атаки.",
+      block_emotion_ru: "спокойствие → тревога → предчувствие опасности",
+      color: "#F59E0B",
+      scene_ids: ["seg_01"],
+      start_sec: 0,
+      end_sec: 5,
+    },
+    { ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK },
+  ];
+
   return {
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
     format: String(safeProject.format || "9:16"),
     split_type: existingScenes.length ? "manual_timing_export_for_chatgpt" : "manual_timing_template_for_chatgpt",
     audio_duration_sec: Number(audio.duration_sec || 0),
-    global_hint: "Заполни/поправь scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, story_blocks, перевод/смысл и user_note_ru. Prompts оставь пустыми.",
-    story_blocks: normalizeManualTimingStoryBlocks(safeProject.story_blocks),
+    global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми.",
+    story_blocks: storyBlocks,
     scenes,
   };
 }
@@ -727,6 +760,8 @@ export function buildManualTimingExportJson(project = {}) {
     story_block_title_ru: String(scene?.story_block_title_ru || ""),
     story_block_color: normalizeStoryBlockColor(scene?.story_block_color || ""),
     story_block_position_ru: String(scene?.story_block_position_ru || ""),
+    scene_role_in_block_ru: String(scene?.scene_role_in_block_ru || ""),
+    block_progress_ru: String(scene?.block_progress_ru || ""),
     original_text: String(scene?.original_text || ""),
     translated_text_ru: String(scene?.translated_text_ru || ""),
     meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
