@@ -811,7 +811,7 @@ export default function ManualClipDirectorPage() {
       })}
     </div> : null}
 
-    <section className={`storyPrepTemplatePanel manualDirectorStoryPrepPanel ${isStoryPrepExpanded ? "isExpanded" : ""}`}>
+    <section className="storyPrepTemplatePanel manualDirectorStoryPrepPanel">
       <div className="storyPrepTemplateHeader">
         <div className="storyPrepTemplateTitle">
           <h3>Шаблон подготовки сюжета</h3>
@@ -833,7 +833,9 @@ export default function ManualClipDirectorPage() {
           <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
         </div>
       </div>
-      <textarea className={`storyPrepTemplatePreview ${isStoryPrepExpanded ? "isExpanded" : ""}`} value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+      {isStoryPrepExpanded ? (
+        <textarea className="storyPrepTemplatePreview" value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+      ) : null}
     </section>
 
     <div className="manualDirectorGrid">
