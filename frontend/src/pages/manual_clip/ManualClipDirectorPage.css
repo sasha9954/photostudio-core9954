@@ -43,8 +43,9 @@
 }
 
 .manualDirectorSceneItem { text-align:left; border:1px solid #34374a; border-radius:8px; padding:8px; background:#161822; color:#fff; display:flex; flex-direction:column; gap:4px; }
-.manualDirectorSceneItem.active { border-color:#6b86ff; }
+.manualDirectorSceneItem.active { border-color:#6b86ff; background:#1c2134; box-shadow: 0 0 0 1px rgba(107,134,255,.22); }
 .manualDirectorSceneItem.ready { border-color: #44c77a; box-shadow: 0 0 0 1px rgba(68,199,122,.22); }
+.manualDirectorSceneItem.active.ready { box-shadow: 0 0 0 1px rgba(107,134,255,.25), 0 0 0 2px rgba(68,199,122,.16); }
 .manualStatusBadge { display:inline-block; font-size:12px; opacity:.85; }
 .manualStatusBadge.ready { color:#44c77a; font-weight:600; opacity:1; }
 
@@ -332,6 +333,30 @@
 .manualDirectorSceneItem {
   --storyboard-block-color: transparent;
   border-left: 4px solid var(--storyboard-block-color);
+  opacity: 0.86;
+}
+
+.manualDirectorSceneItem:hover,
+.manualDirectorSceneItem.active {
+  border-left-color: var(--storyboard-block-color);
+  opacity: 1;
+}
+
+.manualDirectorSceneItem.active {
+  background: color-mix(in srgb, var(--storyboard-block-color) 15%, #1c2134);
+  box-shadow: 0 0 0 1px rgba(107, 134, 255, 0.22), 0 0 18px color-mix(in srgb, var(--storyboard-block-color) 18%, transparent);
+}
+
+.manualDirectorSceneItem.ready {
+  border-left-color: var(--storyboard-block-color);
+}
+
+.manualStoryBlockBadges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .manualStoryBlockBadge {
@@ -344,6 +369,53 @@
   padding: 2px 7px;
   font-size: 11px;
   font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manualStoryBlockNumberBadge {
+  background: color-mix(in srgb, var(--storyboard-block-color) 30%, rgba(255, 255, 255, 0.06));
+}
+
+.manualSceneRuPreview {
+  color: #cbd3ef;
+  line-height: 1.3;
+}
+
+.storyboardSceneBlockHeader {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.storyboardSceneBlockHeader h2 {
+  margin: 0;
+}
+
+.storyboardSceneBlockBadge {
+  --storyboard-block-color: #8aa4ff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--storyboard-block-color) 62%, rgba(255, 255, 255, 0.14));
+  border-left: 4px solid var(--storyboard-block-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--storyboard-block-color) 18%, rgba(255, 255, 255, 0.04));
+  color: #eef2ff;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.storyboardSceneBlockBadge span {
+  color: color-mix(in srgb, var(--storyboard-block-color) 72%, #ffffff);
+  font-weight: 800;
+}
+
+.storyboardSceneBlockBadge strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
