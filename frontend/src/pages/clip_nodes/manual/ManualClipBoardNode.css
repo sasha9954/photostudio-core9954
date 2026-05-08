@@ -105,3 +105,42 @@
   border-radius: 999px;
 }
 .manualPlanRow { padding:6px 8px; background:#12121a; border-radius:6px; }
+
+.storyPrepTemplatePanel {
+  grid-column: 1 / -1;
+  border-top-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.14);
+}
+
+.storyPrepTemplateHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.storyPrepTemplateHeader h4 {
+  margin: 0 0 4px;
+}
+
+.storyPrepTemplateHeader small {
+  color: #b8bfd9;
+}
+
+.storyPrepTemplateActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.storyPrepTemplatePreview {
+  min-height: 340px !important;
+  max-height: 520px;
+  overflow: auto;
+  resize: vertical;
+  white-space: pre;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}

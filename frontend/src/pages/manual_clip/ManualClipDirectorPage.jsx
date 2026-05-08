@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchJson } from "../../services/api.js";
+import { buildStoryPrepTemplateText, STORY_PREP_TEMPLATE_META } from "../clip_nodes/manual/manualClipBoardDomain";
 import "./ManualClipDirectorPage.css";
 
 const STORAGE_KEY = "manual_clip_board_active_project";
@@ -376,6 +377,7 @@ export default function ManualClipDirectorPage() {
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
+  const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
@@ -399,6 +401,40 @@ export default function ManualClipDirectorPage() {
 
   const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const storyPrepProject = useMemo(() => ({
+    ...(project || {}),
+    prep_template_meta: STORY_PREP_TEMPLATE_META,
+    story_blocks: storyBlocks,
+    scenes,
+  }), [project, storyBlocks, scenes]);
+
+  useEffect(() => {
+    if (!project) return;
+    setStoryPrepTemplateText(buildStoryPrepTemplateText(storyPrepProject));
+  }, [project, storyPrepProject]);
+
+  const refreshStoryPrepTemplate = () => {
+    setStoryPrepTemplateText(buildStoryPrepTemplateText(storyPrepProject));
+  };
+
+  const onCopyStoryPrepTemplate = async () => {
+    const text = storyPrepTemplateText || buildStoryPrepTemplateText(storyPrepProject);
+    await navigator.clipboard?.writeText(text);
+  };
+
+  const onDownloadStoryPrepTemplate = () => {
+    const text = storyPrepTemplateText || buildStoryPrepTemplateText(storyPrepProject);
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "story_prep_template.txt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
   const selectedSceneIndex = useMemo(() => scenes.findIndex((s) => s.scene_id === selectedScene?.scene_id), [scenes, selectedScene]);
   const storyPositionText = selectedScene
@@ -773,6 +809,21 @@ export default function ManualClipDirectorPage() {
         </button>;
       })}
     </div> : null}
+
+    <section className="storyPrepTemplatePanel manualDirectorStoryPrepPanel">
+      <div className="storyPrepTemplateHeader">
+        <div>
+          <h3>Шаблон подготовки сюжета</h3>
+          <small>Живой production-чеклист: блоки, сцены, полные фразы, тайминги и материалы.</small>
+        </div>
+        <div className="storyPrepTemplateActions">
+          <button className="clipSB_btn" onClick={refreshStoryPrepTemplate}>Обновить шаблон</button>
+          <button className="clipSB_btn" onClick={onCopyStoryPrepTemplate}>Скопировать шаблон</button>
+          <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
+        </div>
+      </div>
+      <textarea className="storyPrepTemplatePreview" value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
+    </section>
 
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">

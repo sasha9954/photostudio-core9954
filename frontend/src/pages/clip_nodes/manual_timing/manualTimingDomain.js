@@ -1,3 +1,4 @@
+import { CHATGPT_STORY_SPLIT_TASK, STORY_PREP_TEMPLATE_META } from "../manual/manualClipBoardDomain.js";
 export const MANUAL_TIMING_MODE = "manual_timing";
 export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
 export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
@@ -464,6 +465,8 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
   const audio = normalizeManualTimingAudio(safeProject.audio);
 
   return {
+    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "story"),
     format: String(safeProject.format || "9:16"),
@@ -560,6 +563,8 @@ export function buildManualTimingSampleJson(project = {}) {
   }
 
   return {
+    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
     format: String(safeProject.format || "9:16"),
@@ -779,6 +784,8 @@ export function buildManualTimingExportJson(project = {}) {
   }));
 
   return {
+    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
     format: String(safeProject.format || "9:16"),

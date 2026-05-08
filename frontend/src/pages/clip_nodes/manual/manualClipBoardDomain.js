@@ -4,6 +4,25 @@ export const ROUTES = ["ia2v", "i2v", "i2v_sound", "first_last", "first_last_sou
 export const PROJECT_KINDS = ["clip", "story"];
 export const SPLIT_SOURCES = ["ai", "json"];
 
+export const CHATGPT_STORY_SPLIT_TASK = {
+  task_type: "audio_story_split_or_storyboard_pass",
+  instruction_ru: "Это JSON для проекта PhotoStudio. Если scenes пустые или есть одна длинная сцена на всю длительность аудио — нужно сделать новую AI-разбивку: придумать story_blocks и scenes по смыслу аудио/идеи. Если scenes уже нарезаны пользователем — не менять scene_id, start_sec, end_sec и route, а только заполнить story_blocks и смысловые поля сцен.",
+  rules_ru: [
+    "Не заполнять video_prompt, negative_prompt, sound_prompt.",
+    "Для voice-over историй по умолчанию использовать i2v.",
+    "Для музыкального клипа ia2v использовать только там, где реально нужен lip-sync.",
+    "Каждый story_block должен иметь title_ru, summary_ru, block_goal_ru, block_reveal_ru, block_emotion_ru, color, start_sec, end_sec, scene_ids.",
+    "Каждая scene должна иметь original_text или adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru.",
+    "Вернуть готовый JSON в том же формате."
+  ],
+  output_ru: "Верни только готовый JSON без лишнего текста."
+};
+
+export const STORY_PREP_TEMPLATE_META = {
+  has_dynamic_template: true,
+  template_type: "story_prep_template",
+};
+
 export function getDefaultManualClipNodeData() {
   return {
     mode: MANUAL_CLIP_MODE,
@@ -92,12 +111,15 @@ export function buildManualClipSampleJson({ projectKind = "clip", durationSec = 
     ];
 
   return {
+    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: MANUAL_CLIP_MODE,
     project_kind: kind,
     format,
     split_type: "phrase_based",
     audio_duration_sec: Number(audioDuration.toFixed(3)),
     global_hint: globalHint,
+    story_blocks: [],
     scenes,
   };
 }
@@ -344,4 +366,234 @@ export function buildMontageManifest(data = {}) {
     audio: data?.audio || null,
     scenes,
   };
+}
+
+function formatStoryPrepSeconds(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? number.toFixed(2) : "0.00";
+}
+
+function compactStoryPrepText(...values) {
+  return values.map((value) => String(value || "").trim()).find(Boolean) || "—";
+}
+
+function slugStoryPrepProjectName(value = "") {
+  return String(value || "project")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9а-яё_-]+/gi, "_")
+    .replace(/^_+|_+$/g, "") || "project";
+}
+
+function sceneFolderName(idx = 0) {
+  return `seg_${String(idx + 1).padStart(2, "0")}`;
+}
+
+function inferSceneMaterials(scene = {}) {
+  const route = String(scene?.route || "").trim();
+  const text = [
+    scene?.translated_text_ru,
+    scene?.meaning_hint_ru,
+    scene?.scene_goal_ru,
+    scene?.photo_prompt_hint_ru,
+    scene?.prompt_hint_ru,
+    scene?.short_note,
+    scene?.drama_hint,
+  ].map((item) => String(item || "").trim()).filter(Boolean).join(" ");
+  const needsLipSync = route === "ia2v";
+  return {
+    sourcePhotos: compactStoryPrepText(scene?.photo_prompt_hint_ru, scene?.prompt_hint_ru, "Подобрать стартовое изображение под смысл сцены."),
+    generatedPhotos: compactStoryPrepText(scene?.scene_goal_ru, scene?.meaning_hint_ru, "При необходимости создать стартовый кадр для i2v."),
+    character: needsLipSync ? "Да: нужен персонаж/лицо для lip-sync и эмоции." : (text ? "Проверить по фразе и смыслу сцены." : "По необходимости."),
+    location: text ? "Определить локацию из фразы/meaning_hint/prompt_hint." : "По необходимости.",
+    props: text ? "Выписать предметы/props из фразы и подсказок." : "По необходимости.",
+    styleReference: "Нужен общий style reference проекта; для важных сцен добавить отдельные refs.",
+  };
+}
+
+function collectStoryPrepBlocks(project = {}, scenes = []) {
+  const rawBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
+  const blocks = rawBlocks.length
+    ? rawBlocks.map((block, idx) => normalizeStoryBlock(block, idx))
+    : [{
+      block_id: "block_unassigned",
+      id: "block_unassigned",
+      title_ru: "Без блока",
+      summary_ru: "Старый JSON без story_blocks — сцены перечислены плоским списком.",
+      block_goal_ru: "Сгруппировать сцены вручную при подготовке материалов.",
+      block_reveal_ru: "—",
+      block_emotion_ru: "—",
+      color: "#64748B",
+      scene_ids: scenes.map((scene, idx) => String(scene?.scene_id || sceneFolderName(idx))),
+      start_sec: Number(scenes[0]?.start_sec || 0),
+      end_sec: Number(scenes[scenes.length - 1]?.end_sec || 0),
+    }];
+
+  const sceneById = new Map(scenes.map((scene, idx) => [String(scene?.scene_id || sceneFolderName(idx)), { scene, idx }]));
+  const used = new Set();
+  const grouped = blocks.map((block, blockIdx) => {
+    const blockId = String(block.block_id || block.id || `block_${blockIdx + 1}`);
+    let blockScenes = [];
+    if (Array.isArray(block.scene_ids) && block.scene_ids.length) {
+      blockScenes = block.scene_ids.map((sceneId) => sceneById.get(String(sceneId))).filter(Boolean);
+    }
+    if (!blockScenes.length) {
+      blockScenes = scenes
+        .map((scene, idx) => ({ scene, idx }))
+        .filter(({ scene }) => String(scene?.story_block_id || "") === blockId);
+    }
+    blockScenes.forEach(({ scene, idx }) => used.add(String(scene?.scene_id || sceneFolderName(idx))));
+    return { block, blockScenes };
+  });
+
+  const unassigned = scenes
+    .map((scene, idx) => ({ scene, idx }))
+    .filter(({ scene, idx }) => !used.has(String(scene?.scene_id || sceneFolderName(idx))));
+  if (unassigned.length) {
+    grouped.push({
+      block: normalizeStoryBlock({
+        block_id: "block_unassigned",
+        title_ru: "Без блока",
+        summary_ru: "Сцены без story_block_id или без связи с существующими story_blocks.",
+        color: "#64748B",
+        scene_ids: unassigned.map(({ scene, idx }) => String(scene?.scene_id || sceneFolderName(idx))),
+        start_sec: Number(unassigned[0]?.scene?.start_sec || 0),
+        end_sec: Number(unassigned[unassigned.length - 1]?.scene?.end_sec || 0),
+      }, grouped.length),
+      blockScenes: unassigned,
+    });
+  }
+  return grouped;
+}
+
+export function buildStoryPrepTemplateText(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const scenes = Array.isArray(safeProject.scenes) ? safeProject.scenes : [];
+  const audio = normalizeManualAudio(safeProject.audio);
+  const title = compactStoryPrepText(safeProject.name, safeProject.title, safeProject.ruLabel, safeProject.project_name, "PhotoStudio project");
+  const idea = compactStoryPrepText(
+    safeProject.idea_ru,
+    safeProject.idea,
+    safeProject.global_hint,
+    safeProject.story_request_ru,
+    safeProject.split_chat?.user_request,
+    safeProject.split_chat?.ai_summary
+  );
+  const durationSec = Number(audio.duration_sec || safeProject.audio_duration_sec || 0);
+  const groupedBlocks = collectStoryPrepBlocks(safeProject, scenes);
+  const projectFolder = slugStoryPrepProjectName(title);
+  const lines = [];
+
+  lines.push("# ШАБЛОН ПОДГОТОВКИ СЮЖЕТА");
+  lines.push("");
+  lines.push("## 1. ОБЩАЯ ИНФОРМАЦИЯ");
+  lines.push(`- Название проекта: ${title}`);
+  lines.push(`- Тип проекта: ${compactStoryPrepText(safeProject.project_kind, safeProject.projectKind)}`);
+  lines.push(`- Формат: ${compactStoryPrepText(safeProject.format)}`);
+  lines.push(`- Аудио: ${compactStoryPrepText(audio.filename, safeProject.audio_filename, "не указано")}`);
+  lines.push(`- Длительность аудио: ${formatStoryPrepSeconds(durationSec)} сек`);
+  lines.push(`- Общее количество блоков: ${groupedBlocks.length}`);
+  lines.push(`- Общее количество сцен: ${scenes.length}`);
+  lines.push(`- Краткая идея / запрос: ${idea}`);
+  lines.push("");
+
+  lines.push("## 2. СПИСОК БЛОКОВ");
+  groupedBlocks.forEach(({ block, blockScenes }, blockIdx) => {
+    const start = block.start_sec || blockScenes[0]?.scene?.start_sec || 0;
+    const end = block.end_sec || blockScenes[blockScenes.length - 1]?.scene?.end_sec || start;
+    lines.push(`### Блок ${blockIdx + 1}: ${compactStoryPrepText(block.title_ru, block.block_id)}`);
+    lines.push(`- Время: ${formatStoryPrepSeconds(start)} – ${formatStoryPrepSeconds(end)} сек`);
+    lines.push(`- Сцен в блоке: ${blockScenes.length}`);
+    lines.push(`- Summary RU: ${compactStoryPrepText(block.summary_ru)}`);
+    lines.push(`- Block goal RU: ${compactStoryPrepText(block.block_goal_ru, block.goal_ru)}`);
+    lines.push(`- Block reveal RU: ${compactStoryPrepText(block.block_reveal_ru, block.reveal_ru)}`);
+    lines.push(`- Block emotion RU: ${compactStoryPrepText(block.block_emotion_ru, block.emotion_ru)}`);
+    lines.push(`- Материалы блока: refs/blocks/block_${String(blockIdx + 1).padStart(2, "0")}/, сцены: ${blockScenes.map(({ idx }) => `scenes/${sceneFolderName(idx)}/`).join(", ") || "—"}`);
+    lines.push("");
+  });
+
+  lines.push("## 3. СЦЕНЫ ВНУТРИ КАЖДОГО БЛОКА");
+  groupedBlocks.forEach(({ block, blockScenes }, blockIdx) => {
+    lines.push(`### Блок ${blockIdx + 1}: ${compactStoryPrepText(block.title_ru, block.block_id)}`);
+    if (!blockScenes.length) {
+      lines.push("- В этом блоке пока нет сцен.");
+      lines.push("");
+      return;
+    }
+    blockScenes.forEach(({ scene, idx }, localIdx) => {
+      const sceneId = String(scene?.scene_id || sceneFolderName(idx));
+      const phraseRu = compactStoryPrepText(scene?.translated_text_ru, scene?.short_note, scene?.drama_hint, scene?.scene_goal_ru);
+      const materials = inferSceneMaterials(scene);
+      lines.push(`#### Сцена ${idx + 1} (${sceneId})`);
+      lines.push(`- Номер внутри блока: ${localIdx + 1} из ${blockScenes.length}`);
+      lines.push(`- Route: ${compactStoryPrepText(scene?.route, "i2v")}`);
+      lines.push(`- Тайминг: ${formatStoryPrepSeconds(scene?.start_sec)} – ${formatStoryPrepSeconds(scene?.end_sec)} сек`);
+      lines.push(`- Полная фраза RU (translated_text_ru): ${phraseRu}`);
+      lines.push(`- Original/adapted/source EN: ${compactStoryPrepText(scene?.original_text, scene?.adapted_text_en, scene?.source_text_en)}`);
+      lines.push(`- Meaning hint RU: ${compactStoryPrepText(scene?.meaning_hint_ru)}`);
+      lines.push(`- Story block id/title: ${compactStoryPrepText(scene?.story_block_id, block.block_id)} / ${compactStoryPrepText(scene?.story_block_title_ru, block.title_ru)}`);
+      lines.push(`- Story block position RU: ${compactStoryPrepText(scene?.story_block_position_ru)}`);
+      lines.push(`- Scene role in block RU: ${compactStoryPrepText(scene?.scene_role_in_block_ru)}`);
+      lines.push(`- Block progress RU: ${compactStoryPrepText(scene?.block_progress_ru)}`);
+      lines.push(`- Scene goal RU: ${compactStoryPrepText(scene?.scene_goal_ru)}`);
+      lines.push(`- Photo prompt hint RU: ${compactStoryPrepText(scene?.photo_prompt_hint_ru)}`);
+      lines.push(`- Prompt hint RU: ${compactStoryPrepText(scene?.prompt_hint_ru)}`);
+      lines.push("- Что подготовить для сцены:");
+      lines.push(`  - Какие фото достать: ${materials.sourcePhotos}`);
+      lines.push(`  - Какие фото создать: ${materials.generatedPhotos}`);
+      lines.push(`  - Нужен ли персонаж: ${materials.character}`);
+      lines.push(`  - Нужна ли локация: ${materials.location}`);
+      lines.push(`  - Нужны ли props: ${materials.props}`);
+      lines.push(`  - Нужен ли style reference: ${materials.styleReference}`);
+      lines.push(`- Suggested folder: scenes/${sceneFolderName(idx)}/`);
+      lines.push("- Suggested files:");
+      lines.push("  - source_image.png");
+      lines.push("  - refs.txt");
+      lines.push("  - notes.txt");
+      lines.push("");
+    });
+  });
+
+  lines.push("## 4. СПИСОК НУЖНЫХ МАТЕРИАЛОВ");
+  lines.push("### ПЕРСОНАЖИ");
+  lines.push("- Выписать постоянных героев, лица, эмоции, возраст, одежду, особенности, фото для ia2v/lip-sync.");
+  lines.push("### ЛОКАЦИИ");
+  lines.push("- Для каждого блока и сцены собрать/создать окружение, время суток, погоду, географию, интерьер/экстерьер.");
+  lines.push("### ПРЕДМЕТЫ / PROPS");
+  lines.push("- Отдельно перечислить предметы из фраз, смысловых подсказок и prompt_hint_ru.");
+  lines.push("### СТИЛЬ / АТМОСФЕРА");
+  lines.push("- Общий visual style, цвет, свет, оптика, настроение, референсы по кадру.");
+  lines.push("### ДОПОЛНИТЕЛЬНЫЕ РЕФЕРЕНСЫ");
+  lines.push("- Карты, эпоха, костюмы, животные, транспорт, реквизит, moodboard.");
+  lines.push("");
+
+  lines.push("## 5. ПАПКИ ПРОЕКТА");
+  lines.push(`${projectFolder}/`);
+  lines.push("  audio/");
+  lines.push("  json/");
+  lines.push("  refs/");
+  lines.push("  scenes/");
+  scenes.forEach((scene, idx) => {
+    lines.push(`    ${sceneFolderName(idx)}/`);
+  });
+  if (!scenes.length) lines.push("    seg_01/");
+  lines.push("");
+
+  const hasAudio = Boolean(audio.url || audio.filename || durationSec > 0);
+  const hasBlocks = groupedBlocks.some(({ block }) => String(block.block_id || "") !== "block_unassigned") || Array.isArray(safeProject.story_blocks) && safeProject.story_blocks.length > 0;
+  const hasTimings = scenes.length > 0 && scenes.every((scene) => Number(scene?.end_sec) > Number(scene?.start_sec));
+  const hasRu = scenes.length > 0 && scenes.every((scene) => String(scene?.translated_text_ru || scene?.short_note || scene?.drama_hint || scene?.scene_goal_ru || "").trim());
+
+  lines.push("## 6. ЧЕКЛИСТ");
+  lines.push(`- [${hasAudio ? "x" : " "}] Есть аудио`);
+  lines.push(`- [${scenes.length ? "x" : " "}] Есть JSON / scenes`);
+  lines.push(`- [${hasBlocks ? "x" : " "}] Есть story_blocks`);
+  lines.push(`- [${hasTimings ? "x" : " "}] Есть тайминги для каждой сцены`);
+  lines.push(`- [${hasRu ? "x" : " "}] Есть фраза RU / fallback-смысл для каждой сцены`);
+  lines.push("- [ ] Есть понимание, какие фото нужны");
+  lines.push("- [ ] Есть стартовые изображения для i2v");
+  lines.push("- [ ] Есть фото лица / эмоции для ia2v");
+  lines.push("- [ ] Есть refs по локации и props");
+
+  return lines.join("\n");
 }
