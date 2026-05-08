@@ -183,6 +183,38 @@
   z-index: 5;
 }
 
+.manualTimingMissingPhraseMarker {
+  position: absolute;
+  top: 42px;
+  bottom: 5px;
+  min-width: 8px;
+  padding: 0;
+  border-radius: 999px;
+  border: 2px dashed rgba(255, 245, 170, 0.95);
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 193, 7, 0.95),
+    rgba(255, 193, 7, 0.95) 6px,
+    rgba(120, 64, 0, 0.84) 6px,
+    rgba(120, 64, 0, 0.84) 12px
+  );
+  box-shadow: 0 0 18px rgba(255, 193, 7, 0.36), inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  z-index: 7;
+}
+
+.manualTimingMissingPhraseMarker:hover {
+  filter: brightness(1.12);
+  transform: translateY(-1px);
+}
+
+.manualTimingMissingPhraseMarker.isCompact {
+  top: 20px;
+  bottom: auto;
+  height: 18px;
+  z-index: 5;
+}
+
 .manualTimingPlayerMarker,
 .manualTimingLastCutLine,
 .manualTimingPlayhead {
@@ -262,6 +294,7 @@
 .legendCut { background: #37d6c2; }
 .legendTail { background: rgba(90, 100, 125, 0.7); }
 .legendCandidate { background: rgba(120, 255, 220, 0.28); border: 1px solid rgba(120, 255, 220, 0.55); }
+.legendMissingPhrase { background: repeating-linear-gradient(-45deg, rgba(255, 193, 7, 0.95), rgba(255, 193, 7, 0.95) 5px, rgba(120, 64, 0, 0.82) 5px, rgba(120, 64, 0, 0.82) 10px); border: 1px dashed rgba(255, 245, 170, 0.95); }
 
 .manualTimingCompactActions {
   display: flex;
@@ -1155,6 +1188,25 @@
   color: #ffe0a0;
   font-size: 12px;
   font-weight: 700;
+}
+
+.manualTimingAudioPhraseTimingHint,
+.manualTimingAudioPhraseAssignmentHint {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: rgba(255, 201, 100, 0.1);
+  border: 1px dashed rgba(255, 201, 100, 0.28);
+  color: rgba(255, 236, 190, 0.9);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.manualTimingAudioPhraseTimingHint b {
+  color: #fff7df;
 }
 
 .manualTimingAudioPhraseTextGrid {

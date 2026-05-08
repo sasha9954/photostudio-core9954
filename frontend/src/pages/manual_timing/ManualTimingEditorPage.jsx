@@ -172,6 +172,22 @@ function isInstrumentalScene(scene = {}) {
   return String(scene?.section || "").toLowerCase() === "instrumental" || (!scene?.contains_vocal && scene?.contains_instrumental_assumption);
 }
 
+
+function getTimingSceneIdForAudioPhrase(phrase = null, scenes = []) {
+  if (!phrase) return "";
+  const start = Number(phrase?.start_sec || 0);
+  const end = Number(phrase?.end_sec || 0);
+  if (!(end > start)) return "";
+
+  const containingScene = (Array.isArray(scenes) ? scenes : []).find((scene) => {
+    const sceneStart = Number(scene?.start_sec || 0);
+    const sceneEnd = Number(scene?.end_sec || 0);
+    return start >= sceneStart - 0.001 && end <= sceneEnd + 0.001;
+  });
+
+  return String(containingScene?.scene_id || "");
+}
+
 function getSceneStoryText(scene = {}) {
   const originalRaw = String(scene?.original_text || scene?.adapted_text_en || scene?.source_text_en || "").trim();
   const ruRaw = String(scene?.translated_text_ru || "").trim();
@@ -268,6 +284,26 @@ export default function ManualTimingEditorPage() {
       sceneCount,
     };
   }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
+  const missingPhraseTimelineMarkers = useMemo(() => {
+    if (!(durationSec > 0)) return [];
+    return audioPhrases
+      .filter((phrase) => String(phrase.status || "") === "needs_transcription")
+      .map((phrase) => {
+        const start = clampTime(phrase.start_sec, durationSec);
+        const end = clampTime(phrase.end_sec, durationSec);
+        if (!(end > start)) return null;
+        return {
+          ...phrase,
+          start_sec: start,
+          end_sec: end,
+          left: `${Math.max(0, Math.min(100, (start / durationSec) * 100))}%`,
+          width: `${Math.max(0.35, Math.min(100, ((end - start) / durationSec) * 100))}%`,
+          timing_scene_id: getTimingSceneIdForAudioPhrase(phrase, scenes),
+        };
+      })
+      .filter(Boolean);
+  }, [audioPhrases, durationSec, scenes]);
+
   const timelineBlockRanges = useMemo(() => {
     if (!(durationSec > 0) || !storyBlocks.length) return [];
     const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
@@ -681,6 +717,7 @@ export default function ManualTimingEditorPage() {
       text_ru: "",
       meaning_ru: "",
       status: "needs_transcription",
+      assignment_status: "unassigned",
       note_ru: "Пропущенная фраза, нужно распознать",
     };
 
@@ -691,14 +728,6 @@ export default function ManualTimingEditorPage() {
     });
     setCopyStatus(`Добавлена пропущенная фраза ${nextPhrase.phrase_id}: ${nextPhrase.start_sec.toFixed(2)}–${nextPhrase.end_sec.toFixed(2)}`);
     window.setTimeout(() => setCopyStatus(""), 2000);
-  };
-
-  const linkPhraseToSelectedScene = (phraseId = "") => {
-    if (!selectedScene?.scene_id || !phraseId) return;
-    const nextSourcePhraseIds = [
-      ...new Set([...(Array.isArray(selectedScene.source_phrase_ids) ? selectedScene.source_phrase_ids : []), String(phraseId)]),
-    ];
-    updateScene(selectedScene.scene_id, { source_phrase_ids: nextSourcePhraseIds });
   };
 
   const onDeleteLastCut = () => {
@@ -1077,6 +1106,14 @@ export default function ManualTimingEditorPage() {
               style={{ left: `${lastCutPercent}%`, width: `${candidateWidthPercent}%` }}
               title={`Следующий отрезок: ${formatTimingSec(lastCutSec)} – ${formatTimingSec(currentTime)}`}
             /> : null}
+            {missingPhraseTimelineMarkers.map((phrase) => <button
+              key={`player-missing-${phrase.phrase_id}`}
+              type="button"
+              className="manualTimingMissingPhraseMarker"
+              style={{ left: phrase.left, width: phrase.width }}
+              onClick={(event) => { event.stopPropagation(); setAudioTime(phrase.start_sec, { pause: true, clearBound: true }); }}
+              title={`Пропущенная фраза, нужно распознать: ${phrase.phrase_id} ${formatTimingSec(phrase.start_sec)}–${formatTimingSec(phrase.end_sec)}${phrase.timing_scene_id ? ` · по таймингу внутри ${phrase.timing_scene_id}` : ""}`}
+            />)}
             {markerPercents.map((marker) => <div key={`player-marker-${marker.value}`} className="manualTimingPlayerMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
             <div className="manualTimingLastCutLine" style={{ left: `${lastCutPercent}%` }} title={`Старт следующего отрезка: ${formatTimingSec(lastCutSec)}`} />
             <div className="manualTimingPlayhead" style={{ left: `${playheadPercent}%` }}>
@@ -1088,6 +1125,7 @@ export default function ManualTimingEditorPage() {
             <span><i className="legendCut" /> сцены</span>
             <span><i className="legendTail" /> ещё не отрезано</span>
             <span><i className="legendCandidate" /> следующий отрезок</span>
+            <span><i className="legendMissingPhrase" /> пропущенная фраза</span>
           </div>
         </div>
 
@@ -1192,14 +1230,18 @@ export default function ManualTimingEditorPage() {
             {selectedSceneAudioPhrases.length ? <div className="manualTimingAudioPhrasesList">
               {selectedSceneAudioPhrases.map((phrase) => {
                 const isNeedsTranscription = String(phrase.status || "") === "needs_transcription";
-                const linked = Array.isArray(selectedScene.source_phrase_ids) && selectedScene.source_phrase_ids.includes(phrase.phrase_id);
+                const timingSceneId = getTimingSceneIdForAudioPhrase(phrase, scenes);
                 return <div key={phrase.phrase_id} className={`manualTimingAudioPhraseCard ${isNeedsTranscription ? "needsTranscription" : ""}`}>
                   <div className="manualTimingAudioPhraseTop">
                     <strong>{phrase.phrase_id}</strong>
                     <span>{phrase.start_sec.toFixed(2)} – {phrase.end_sec.toFixed(2)} сек</span>
                     <span>{phrase.status || "—"}</span>
+                    <span>{phrase.assignment_status || "—"}</span>
                   </div>
                   {isNeedsTranscription ? <div className="manualTimingAudioPhraseWarning">⚠ Нужно распознать и перевести</div> : null}
+                  <div className="manualTimingAudioPhraseTimingHint">
+                    По таймингу сейчас внутри: <b>{timingSceneId || "—"}</b>. Это подсказка, не привязка.
+                  </div>
                   <div className="manualTimingAudioPhraseTextGrid">
                     <div><span>text_en</span><p>{String(phrase.text_en || "").trim() || "—"}</p></div>
                     <div><span>text_ru</span><p>{String(phrase.text_ru || "").trim() || "—"}</p></div>
@@ -1207,9 +1249,7 @@ export default function ManualTimingEditorPage() {
                   </div>
                   <div className="manualTimingAudioPhraseActions">
                     <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => playRange(phrase.start_sec, phrase.end_sec)} disabled={!audio.url}>▶ фраза</button>
-                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => linkPhraseToSelectedScene(phrase.phrase_id)} disabled={linked}>
-                      {linked ? "Привязана" : "Привязать к выбранной сцене"}
-                    </button>
+                    <span className="manualTimingAudioPhraseAssignmentHint">Назначение решит ChatGPT после экспорта JSON</span>
                   </div>
                 </div>;
               })}
@@ -1305,6 +1345,14 @@ export default function ManualTimingEditorPage() {
               title={`${scene.scene_id} ${formatTimingSec(scene.start_sec)}–${formatTimingSec(scene.end_sec)}. Двойной клик — быстрая правка`}
             >{scene.scene_id}<span>{SECTION_LABELS[scene.section] || scene.section}/{scene.route}</span></button>;
           })}
+          {missingPhraseTimelineMarkers.map((phrase) => <button
+            key={`timeline-missing-${phrase.phrase_id}`}
+            type="button"
+            className="manualTimingMissingPhraseMarker isCompact"
+            style={{ left: phrase.left, width: phrase.width }}
+            onClick={(event) => { event.stopPropagation(); setAudioTime(phrase.start_sec, { pause: true, clearBound: true }); }}
+            title={`Пропущенная фраза, нужно распознать: ${phrase.phrase_id} ${formatTimingSec(phrase.start_sec)}–${formatTimingSec(phrase.end_sec)}${phrase.timing_scene_id ? ` · по таймингу внутри ${phrase.timing_scene_id}` : ""}`}
+          />)}
           {markerPercents.map((marker) => <div key={marker.value} className="manualTimingMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
         </div>
       </section>
