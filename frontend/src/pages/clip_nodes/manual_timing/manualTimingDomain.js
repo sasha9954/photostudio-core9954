@@ -12,6 +12,8 @@ export const MANUAL_TIMING_UNKNOWN_STORY_BLOCK = {
   summary_ru: "",
   color: "#64748B",
   scene_ids: [],
+  start_sec: 0,
+  end_sec: 0,
 };
 
 const MANUAL_TIMING_SECTION_LABELS_RU = {
@@ -190,6 +192,8 @@ export function normalizeManualTimingStoryBlocks(storyBlocks = []) {
         scene_ids: Array.isArray(block?.scene_ids || block?.sceneIds)
           ? (block?.scene_ids || block?.sceneIds).map((id) => String(id || "").trim()).filter(Boolean)
           : [],
+        start_sec: roundTimingSec(block?.start_sec ?? block?.startSec ?? 0),
+        end_sec: roundTimingSec(block?.end_sec ?? block?.endSec ?? 0),
       };
     })
     .filter(Boolean);
@@ -287,8 +291,8 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       : Boolean(old.contains_instrumental_assumption ?? !containsVocal);
 
     scenes.push({
-      scene_id: String(old.scene_id || sceneId),
-      index: Number(old.index || i + 1),
+      scene_id: options.preserveSceneIds ? String(old.scene_id || sceneId) : sceneId,
+      index: i + 1,
       start_sec: start,
       end_sec: end,
       duration_sec: roundTimingSec(end - start),
@@ -524,7 +528,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   const markers = normalizeManualTimingMarkers(markerValues, durationSec || importedScenes[importedScenes.length - 1]?.end_sec || 0);
   const finalDuration = durationSec || markers[markers.length - 1] || 0;
   const markerScenes = markers.length >= 2
-    ? buildManualTimingScenesFromMarkers(markers, importedScenes, { durationSec: finalDuration })
+    ? buildManualTimingScenesFromMarkers(markers, importedScenes, { durationSec: finalDuration, preserveSceneIds: true })
     : importedScenes;
   const scenes = hydrateManualTimingScenesWithStoryBlocks(markerScenes, storyBlocks);
 

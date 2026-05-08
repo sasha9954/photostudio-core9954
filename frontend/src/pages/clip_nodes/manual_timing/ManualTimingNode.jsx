@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualTimingNode.css";
 import {
+  MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   buildManualTimingExportJson,
   getDefaultManualTimingNodeData,
   normalizeManualTimingAudio,
@@ -37,7 +38,12 @@ export default function ManualTimingNode({ id, data }) {
   const connectedAudio = data?.connectedInputs?.audio_in || data?.connectedAudio || data?.audioInput || null;
   const normalizedConnectedAudio = normalizeManualTimingAudio(connectedAudio);
   const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : normalizeManualTimingAudio(model.audio);
-  const storyBlockCount = Array.isArray(model.story_blocks) ? model.story_blocks.length : 0;
+  const storyBlockCount = (Array.isArray(model.story_blocks) ? model.story_blocks : []).filter((block) => {
+    const blockId = String(block?.block_id || "");
+    const sceneIds = Array.isArray(block?.scene_ids) ? block.scene_ids : [];
+    const sceneCount = sceneIds.length || (Array.isArray(model.scenes) ? model.scenes : []).filter((scene) => String(scene?.story_block_id || "") === blockId).length;
+    return blockId !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || sceneCount > 0;
+  }).length;
 
   useEffect(() => {
     const stored = readManualTimingProjectForNode(id);
@@ -57,7 +63,12 @@ export default function ManualTimingNode({ id, data }) {
   useEffect(() => {
     if (!effectiveAudio?.url) return;
     if (audioEquals(effectiveAudio, model.audio || {})) return;
-    patch({ audio: effectiveAudio, timing_status: model.timing_status === "empty" ? "draft" : model.timing_status, updatedAt: Date.now() });
+    patch({
+      audio: effectiveAudio,
+      story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
+      timing_status: model.timing_status === "empty" ? "draft" : model.timing_status,
+      updatedAt: Date.now(),
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveAudio?.url, effectiveAudio?.filename, effectiveAudio?.duration_sec]);
 
@@ -107,6 +118,7 @@ export default function ManualTimingNode({ id, data }) {
         },
         timing_status: "draft",
         markers: [],
+        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
         scenes: [],
         selectedSceneId: "",
         updatedAt: Date.now(),
@@ -117,6 +129,7 @@ export default function ManualTimingNode({ id, data }) {
         audio: { url, filename: file.name, duration_sec: 0, duration_ms: 0 },
         timing_status: "draft",
         markers: [],
+        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
         scenes: [],
         selectedSceneId: "",
         updatedAt: Date.now(),
