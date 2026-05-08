@@ -490,9 +490,10 @@ function buildUnassignedStoryPrepBlock(scenes = [], summary = "Старый JSON
 
 function collectStoryPrepBlocks(project = {}, scenes = []) {
   const rawBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
-  const blocks = rawBlocks.length
-    ? rawBlocks.map((block, idx) => normalizeStoryBlock(block, idx))
-    : inferStoryPrepBlocksFromScenes(scenes);
+  const normalizedRawBlocks = rawBlocks.map((block, idx) => normalizeStoryBlock(block, idx));
+  const hasRealRawBlocks = normalizedRawBlocks.some((block) => !isFallbackStoryBlockId(block.block_id));
+
+  const blocks = hasRealRawBlocks ? normalizedRawBlocks : inferStoryPrepBlocksFromScenes(scenes);
 
   if (!blocks.length) {
     blocks.push(buildUnassignedStoryPrepBlock(scenes));
