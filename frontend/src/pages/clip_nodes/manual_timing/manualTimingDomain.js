@@ -203,6 +203,7 @@ export function normalizeManualTimingAudioPhrases(audioPhrases = []) {
         text_ru: String(phrase?.text_ru || phrase?.textRu || ""),
         meaning_ru: String(phrase?.meaning_ru || phrase?.meaningRu || ""),
         status: String(phrase?.status || "needs_transcription"),
+        assignment_status: String(phrase?.assignment_status || phrase?.assignmentStatus || (String(phrase?.status || "needs_transcription") === "needs_transcription" ? "unassigned" : "")),
         note_ru: String(phrase?.note_ru || phrase?.noteRu || ""),
       };
     })
@@ -214,10 +215,10 @@ export function normalizeManualTimingSourcePhraseIds(value = []) {
   return [...new Set(value.map((id) => String(id || "").trim()).filter(Boolean))];
 }
 
-export const MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU = "Если audio_phrases содержит фразы со status='needs_transcription', не удаляй их. Нужно распознать/перевести эти фразы по аудио или предоставленному тексту, заполнить text_en, text_ru, meaning_ru, затем обновить связанные scenes через source_phrase_ids: translated_text_ru, original_text, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Если фраза важная и не помещается в текущую сцену по смыслу, предложи создать отдельную сцену, но не меняй тайминги без явного указания пользователя.";
+export const MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU = "Если audio_phrases содержит status='needs_transcription' или assignment_status='unassigned', это пропущенные фразы аудио. Не удаляй их. Нужно распознать/перевести эти фразы по аудио или предоставленному тексту, заполнить text_en, text_ru, meaning_ru и решить, куда их вставить: в предыдущую сцену, следующую сцену или отдельную новую сцену. Не менять тайминги без явного указания пользователя; если нужна новая сцена, предложить это явно.";
 
-export function buildManualTimingChatGptTask(hasNeedsTranscription = false) {
-  if (!hasNeedsTranscription) return CHATGPT_STORY_SPLIT_TASK;
+export function buildManualTimingChatGptTask(hasUnresolvedAudioPhrases = false) {
+  if (!hasUnresolvedAudioPhrases) return CHATGPT_STORY_SPLIT_TASK;
 
   const rules = Array.isArray(CHATGPT_STORY_SPLIT_TASK.rules_ru) ? CHATGPT_STORY_SPLIT_TASK.rules_ru : [];
   return {
@@ -678,14 +679,17 @@ export function buildManualTimingSampleJson(project = {}) {
   }
 
   return {
-    chatgpt_task: buildManualTimingChatGptTask(audioPhrases.some((phrase) => String(phrase.status || "") === "needs_transcription")),
+    chatgpt_task: buildManualTimingChatGptTask(audioPhrases.some((phrase) => (
+      String(phrase.status || "") === "needs_transcription"
+      || String(phrase.assignment_status || "") === "unassigned"
+    ))),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
     format: String(safeProject.format || "9:16"),
     split_type: existingScenes.length ? "manual_timing_export_for_chatgpt" : "manual_timing_template_for_chatgpt",
     audio_duration_sec: Number(audio.duration_sec || 0),
-    global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми. Если есть audio_phrases со status=needs_transcription, не удаляй их, распознай/переведи при наличии аудио или текста и предложи привязку к scene.source_phrase_ids.",
+    global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми. Если есть audio_phrases со status=needs_transcription или assignment_status=unassigned, не удаляй их: распознай/переведи и реши, вставить в предыдущую сцену, следующую сцену или отдельную новую сцену; не меняй тайминги без явного указания пользователя.",
     story_blocks: storyBlocks,
     audio_phrases: audioPhrases,
     scenes,
@@ -841,20 +845,11 @@ export function buildManualTimingWarnings(project = {}) {
 
   audioPhrases.forEach((phrase) => {
     if (String(phrase.status || "") === "needs_transcription") {
-      warnings.push(`Есть нераспознанные фразы: ${phrase.phrase_id} (${phrase.start_sec.toFixed(2)}–${phrase.end_sec.toFixed(2)})`);
+      warnings.push(`Есть пропущенная фраза без расшифровки: ${phrase.phrase_id} (${phrase.start_sec.toFixed(2)}–${phrase.end_sec.toFixed(2)})`);
     }
 
-    const containingScene = scenes.find((scene) => {
-      const sceneStart = Number(scene?.start_sec || 0);
-      const sceneEnd = Number(scene?.end_sec || 0);
-      return phrase.start_sec >= sceneStart - 0.001 && phrase.end_sec <= sceneEnd + 0.001;
-    });
-
-    if (containingScene) {
-      const sourcePhraseIds = normalizeManualTimingSourcePhraseIds(containingScene.source_phrase_ids || containingScene.sourcePhraseIds);
-      if (!sourcePhraseIds.includes(phrase.phrase_id)) {
-        warnings.push(`Фраза внутри сцены, но не привязана: ${phrase.phrase_id} → ${containingScene.scene_id}`);
-      }
+    if (String(phrase.assignment_status || "") === "unassigned") {
+      warnings.push(`Пропущенная фраза ещё не назначена сцене: ${phrase.phrase_id}`);
     }
   });
 
@@ -924,10 +919,13 @@ export function buildManualTimingExportJson(project = {}) {
   }));
 
   const story_blocks = syncManualTimingStoryBlocksWithScenes(normalizedStoryBlocks, scenes).map(({ scene_count, ...block }) => block);
-  const hasNeedsTranscription = audio_phrases.some((phrase) => String(phrase.status || "") === "needs_transcription");
+  const hasUnresolvedAudioPhrases = audio_phrases.some((phrase) => (
+    String(phrase.status || "") === "needs_transcription"
+    || String(phrase.assignment_status || "") === "unassigned"
+  ));
 
   return {
-    chatgpt_task: buildManualTimingChatGptTask(hasNeedsTranscription),
+    chatgpt_task: buildManualTimingChatGptTask(hasUnresolvedAudioPhrases),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
