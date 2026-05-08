@@ -535,23 +535,29 @@ export function buildManualTimingSampleJson(project = {}) {
     }
   ];
 
-  const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
-  const hasCustomStoryBlocks = normalizedStoryBlocks.some((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id);
-  const storyBlocks = hasCustomStoryBlocks ? normalizedStoryBlocks : [
-    {
-      block_id: "block_01",
-      title_ru: "Водопой и скрытая угроза",
-      summary_ru: "Животные приходят к воде, но рядом уже есть хищник.",
-      block_goal_ru: "Создать напряжение: мирная сцена должна постепенно превратиться в ощущение опасности.",
-      block_reveal_ru: "К концу блока зритель должен понять, что львица уже выбрала момент для атаки.",
-      block_emotion_ru: "спокойствие → тревога → предчувствие опасности",
-      color: "#F59E0B",
-      scene_ids: ["seg_01"],
-      start_sec: 0,
-      end_sec: 5,
-    },
-    { ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK },
-  ];
+  let storyBlocks;
+
+  if (existingScenes.length) {
+    storyBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
+  } else {
+    const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
+    const hasCustomStoryBlocks = normalizedStoryBlocks.some((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id);
+    storyBlocks = hasCustomStoryBlocks ? normalizedStoryBlocks : [
+      {
+        block_id: "block_01",
+        title_ru: "Водопой и скрытая угроза",
+        summary_ru: "Животные приходят к воде, но рядом уже есть хищник.",
+        block_goal_ru: "Создать напряжение: мирная сцена должна постепенно превратиться в ощущение опасности.",
+        block_reveal_ru: "К концу блока зритель должен понять, что львица уже выбрала момент для атаки.",
+        block_emotion_ru: "спокойствие → тревога → предчувствие опасности",
+        color: "#F59E0B",
+        scene_ids: ["seg_01"],
+        start_sec: 0,
+        end_sec: 5,
+      },
+      { ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK },
+    ];
+  }
 
   return {
     mode: "manual_clip_board",
