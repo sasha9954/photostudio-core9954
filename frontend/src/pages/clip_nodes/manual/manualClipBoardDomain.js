@@ -411,23 +411,92 @@ function inferSceneMaterials(scene = {}) {
   };
 }
 
+function isFallbackStoryBlockId(blockId = "") {
+  const normalized = String(blockId || "").trim().toLowerCase();
+  return normalized === "block_unknown" || normalized === "block_unassigned";
+}
+
+function firstNonEmptyStoryPrepValue(...values) {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
+function inferStoryPrepBlocksFromScenes(scenes = []) {
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+  const sceneBlockIds = safeScenes
+    .map((scene) => String(scene?.story_block_id || "").trim())
+    .filter(Boolean);
+  const hasRealBlockIds = sceneBlockIds.some((blockId) => !isFallbackStoryBlockId(blockId));
+  if (!hasRealBlockIds) return [];
+
+  const blocksById = new Map();
+  safeScenes.forEach((scene, idx) => {
+    const blockId = String(scene?.story_block_id || "").trim();
+    if (!blockId || isFallbackStoryBlockId(blockId)) return;
+
+    if (!blocksById.has(blockId)) {
+      blocksById.set(blockId, {
+        block_id: blockId,
+        id: blockId,
+        title_ru: "",
+        summary_ru: "",
+        block_goal_ru: firstNonEmptyStoryPrepValue(scene?.story_block_goal_ru),
+        block_reveal_ru: firstNonEmptyStoryPrepValue(scene?.story_block_reveal_ru),
+        block_emotion_ru: firstNonEmptyStoryPrepValue(scene?.story_block_emotion_ru),
+        color: "",
+        scene_ids: [],
+        start_sec: Number(scene?.start_sec || 0),
+        end_sec: Number(scene?.end_sec || 0),
+      });
+    }
+
+    const block = blocksById.get(blockId);
+    block.title_ru = firstNonEmptyStoryPrepValue(block.title_ru, scene?.story_block_title_ru);
+    block.block_goal_ru = firstNonEmptyStoryPrepValue(block.block_goal_ru, scene?.story_block_goal_ru);
+    block.block_reveal_ru = firstNonEmptyStoryPrepValue(block.block_reveal_ru, scene?.story_block_reveal_ru);
+    block.block_emotion_ru = firstNonEmptyStoryPrepValue(block.block_emotion_ru, scene?.story_block_emotion_ru);
+    block.color = firstNonEmptyStoryPrepValue(block.color, scene?.story_block_color);
+    block.scene_ids.push(String(scene?.scene_id || sceneFolderName(idx)));
+
+    const startSec = Number(scene?.start_sec);
+    const endSec = Number(scene?.end_sec);
+    if (Number.isFinite(startSec)) block.start_sec = Math.min(block.start_sec, startSec);
+    if (Number.isFinite(endSec)) block.end_sec = Math.max(block.end_sec, endSec);
+  });
+
+  return Array.from(blocksById.values()).map((block, idx) => normalizeStoryBlock(block, idx));
+}
+
+function buildUnassignedStoryPrepBlock(scenes = [], summary = "Старый JSON без story_blocks — сцены перечислены плоским списком.", sceneIds = null) {
+  return normalizeStoryBlock({
+    block_id: "block_unassigned",
+    id: "block_unassigned",
+    title_ru: "Без блока",
+    summary_ru: summary,
+    block_goal_ru: "Сгруппировать сцены вручную при подготовке материалов.",
+    block_reveal_ru: "—",
+    block_emotion_ru: "—",
+    color: "#64748B",
+    scene_ids: Array.isArray(sceneIds)
+      ? sceneIds.map((sceneId) => String(sceneId || "").trim()).filter(Boolean)
+      : scenes.map((scene, idx) => String(scene?.scene_id || sceneFolderName(idx))),
+    start_sec: Number(scenes[0]?.start_sec || 0),
+    end_sec: Number(scenes[scenes.length - 1]?.end_sec || 0),
+  });
+}
+
 function collectStoryPrepBlocks(project = {}, scenes = []) {
   const rawBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
   const blocks = rawBlocks.length
     ? rawBlocks.map((block, idx) => normalizeStoryBlock(block, idx))
-    : [{
-      block_id: "block_unassigned",
-      id: "block_unassigned",
-      title_ru: "Без блока",
-      summary_ru: "Старый JSON без story_blocks — сцены перечислены плоским списком.",
-      block_goal_ru: "Сгруппировать сцены вручную при подготовке материалов.",
-      block_reveal_ru: "—",
-      block_emotion_ru: "—",
-      color: "#64748B",
-      scene_ids: scenes.map((scene, idx) => String(scene?.scene_id || sceneFolderName(idx))),
-      start_sec: Number(scenes[0]?.start_sec || 0),
-      end_sec: Number(scenes[scenes.length - 1]?.end_sec || 0),
-    }];
+    : inferStoryPrepBlocksFromScenes(scenes);
+
+  if (!blocks.length) {
+    blocks.push(buildUnassignedStoryPrepBlock(scenes));
+  }
 
   const sceneById = new Map(scenes.map((scene, idx) => [String(scene?.scene_id || sceneFolderName(idx)), { scene, idx }]));
   const used = new Set();
@@ -451,15 +520,11 @@ function collectStoryPrepBlocks(project = {}, scenes = []) {
     .filter(({ scene, idx }) => !used.has(String(scene?.scene_id || sceneFolderName(idx))));
   if (unassigned.length) {
     grouped.push({
-      block: normalizeStoryBlock({
-        block_id: "block_unassigned",
-        title_ru: "Без блока",
-        summary_ru: "Сцены без story_block_id или без связи с существующими story_blocks.",
-        color: "#64748B",
-        scene_ids: unassigned.map(({ scene, idx }) => String(scene?.scene_id || sceneFolderName(idx))),
-        start_sec: Number(unassigned[0]?.scene?.start_sec || 0),
-        end_sec: Number(unassigned[unassigned.length - 1]?.scene?.end_sec || 0),
-      }, grouped.length),
+      block: buildUnassignedStoryPrepBlock(
+        unassigned.map(({ scene }) => scene),
+        "Сцены без story_block_id или без связи с существующими story_blocks.",
+        unassigned.map(({ scene, idx }) => String(scene?.scene_id || sceneFolderName(idx)))
+      ),
       blockScenes: unassigned,
     });
   }
