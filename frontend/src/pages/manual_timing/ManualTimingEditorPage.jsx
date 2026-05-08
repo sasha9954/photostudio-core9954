@@ -735,6 +735,25 @@ export default function ManualTimingEditorPage() {
     window.setTimeout(() => setCopyStatus(""), 2000);
   };
 
+  const onDeleteLastMissingPhrase = () => {
+    const phrases = normalizeManualTimingAudioPhrases(project.audio_phrases);
+    if (!phrases.length) return;
+    persist({
+      ...project,
+      audio_phrases: phrases.slice(0, -1),
+    });
+  };
+
+  const onDeleteMissingPhrase = (phraseId) => {
+    const phrases = normalizeManualTimingAudioPhrases(project.audio_phrases);
+    const nextPhrases = phrases.filter((phrase) => String(phrase.phrase_id || "") !== String(phraseId || ""));
+    if (nextPhrases.length === phrases.length) return;
+    persist({
+      ...project,
+      audio_phrases: nextPhrases,
+    });
+  };
+
   const onDeleteLastCut = () => {
     if (markers.length <= 2) return;
     const nextMarkers = markers.filter((_, idx) => idx !== markers.length - 2);
@@ -949,11 +968,13 @@ export default function ManualTimingEditorPage() {
 
   const onReset = () => {
     const nextMarkers = durationSec > 0 ? [0, durationSec] : [];
-    const nextScenes = nextMarkers.length ? hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, [], { durationSec }), project.story_blocks) : [];
+    const nextStoryBlocks = [MANUAL_TIMING_UNKNOWN_STORY_BLOCK];
+    const nextScenes = nextMarkers.length ? hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, [], { durationSec }), nextStoryBlocks) : [];
     persist({
       ...project,
       markers: nextMarkers,
-      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
+      story_blocks: nextStoryBlocks,
+      audio_phrases: [],
       scenes: nextScenes,
       selectedSceneId: nextScenes[0]?.scene_id || "",
       timing_status: durationSec > 0 ? "draft" : "empty",
@@ -975,7 +996,16 @@ export default function ManualTimingEditorPage() {
     };
     const nextMarkers = normalizeManualTimingMarkers(project.markers?.length ? project.markers : [0, nextAudio.duration_sec], nextAudio.duration_sec);
     const nextScenes = hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, project.scenes, { durationSec: nextAudio.duration_sec }), project.story_blocks);
-    persist({ ...project, audio: nextAudio, markers: nextMarkers, story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks), scenes: nextScenes, selectedSceneId: project.selectedSceneId || nextScenes[0]?.scene_id || "", timing_status: project.timing_status === "empty" ? "draft" : project.timing_status });
+    persist({
+      ...project,
+      audio: nextAudio,
+      markers: nextMarkers,
+      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
+      audio_phrases: [],
+      scenes: nextScenes,
+      selectedSceneId: project.selectedSceneId || nextScenes[0]?.scene_id || "",
+      timing_status: project.timing_status === "empty" ? "draft" : project.timing_status,
+    });
   };
 
   const getTimelineTimeFromEvent = (event) => {
@@ -1182,6 +1212,7 @@ export default function ManualTimingEditorPage() {
           </div>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
           <button className="clipSB_btn clipSB_btnSecondary manualTimingMissingPhraseButton" onClick={onAddMissingPhrase} disabled={!audio.url || !(durationSec > 0)}>+ пропущенная фраза</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
@@ -1254,6 +1285,7 @@ export default function ManualTimingEditorPage() {
                   </div>
                   <div className="manualTimingAudioPhraseActions">
                     <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => playRange(phrase.start_sec, phrase.end_sec)} disabled={!audio.url}>▶ фраза</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onDeleteMissingPhrase(phrase.phrase_id)}>Удалить эту фразу</button>
                     <span className="manualTimingAudioPhraseAssignmentHint">Назначение решит ChatGPT после экспорта JSON</span>
                   </div>
                 </div>;
