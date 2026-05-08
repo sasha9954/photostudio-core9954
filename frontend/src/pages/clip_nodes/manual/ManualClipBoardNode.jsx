@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { fetchJson } from "../../../services/api.js";
 import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
-import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, buildStoryBlockLookup, normalizeManualAudio, normalizeScene, parseManualSplitJson, toBool } from "./manualClipBoardDomain";
+import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, buildStoryPrepTemplateText, getDefaultManualClipNodeData, buildStoryBlockLookup, normalizeManualAudio, normalizeScene, parseManualSplitJson, STORY_PREP_TEMPLATE_META, toBool } from "./manualClipBoardDomain";
 
 
 const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
@@ -492,6 +492,7 @@ export default function ManualClipBoardNode({ id, data }) {
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
       step: "scene_plan_ready",
+      prep_template_meta: STORY_PREP_TEMPLATE_META,
       story_blocks: storyBlocks,
       scenes: mergedScenes,
       selectedSceneId: mergedScenes[0]?.scene_id || "",
@@ -503,6 +504,7 @@ export default function ManualClipBoardNode({ id, data }) {
 
     patch({
       step: "scene_plan_ready",
+      prep_template_meta: STORY_PREP_TEMPLATE_META,
       story_blocks: storyBlocks,
       scenes: mergedScenes,
       selectedSceneId: mergedScenes[0]?.scene_id || "",
@@ -522,6 +524,7 @@ export default function ManualClipBoardNode({ id, data }) {
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
       step: model.step,
+      prep_template_meta: STORY_PREP_TEMPLATE_META,
       story_blocks: model.story_blocks || [],
       scenes,
       selectedSceneId: model.selectedSceneId || scenes[0]?.scene_id || "",
@@ -530,6 +533,41 @@ export default function ManualClipBoardNode({ id, data }) {
       split_audio_count: model.split_audio_count,
     };
     navigator.clipboard?.writeText(JSON.stringify(projectSnapshot, null, 2));
+  };
+
+  const storyPrepProject = useMemo(() => ({
+    ...model,
+    audio: effectiveAudio,
+    story_blocks: model.story_blocks || model.split_chat?.raw_ai_json?.story_blocks || [],
+    scenes: scenes.length ? scenes : (Array.isArray(model.split_chat?.raw_ai_json?.scenes) ? model.split_chat.raw_ai_json.scenes : []),
+    global_hint: model.split_chat?.raw_ai_json?.global_hint || model.split_chat?.ai_summary || model.global_hint || "",
+  }), [model, effectiveAudio, scenes]);
+  const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
+
+  useEffect(() => {
+    setStoryPrepTemplateText(buildStoryPrepTemplateText(storyPrepProject));
+  }, [storyPrepProject]);
+
+  const refreshStoryPrepTemplate = () => {
+    setStoryPrepTemplateText(buildStoryPrepTemplateText(storyPrepProject));
+  };
+
+  const onCopyStoryPrepTemplate = async () => {
+    const text = storyPrepTemplateText || buildStoryPrepTemplateText(storyPrepProject);
+    await navigator.clipboard?.writeText(text);
+  };
+
+  const onDownloadStoryPrepTemplate = () => {
+    const text = storyPrepTemplateText || buildStoryPrepTemplateText(storyPrepProject);
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "story_prep_template.txt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   const canBuildScenes = !!model?.split_chat?.raw_ai_json;
@@ -559,6 +597,8 @@ export default function ManualClipBoardNode({ id, data }) {
       split_chat: model.split_chat,
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
+      prep_template_meta: STORY_PREP_TEMPLATE_META,
+      story_blocks: model.story_blocks || [],
       scenes: nextScenes,
     };
     persistManualProject(payload);
@@ -682,6 +722,21 @@ export default function ManualClipBoardNode({ id, data }) {
               <button className="clipSB_btn" onClick={onCopyProjectJson}>Скопировать JSON проекта</button>
               <button className="clipSB_btn" onClick={onOpenDirectorBoard} disabled={!canOpenBoard}>Перейти в режиссёрскую доску</button>
             </div> : null}
+          </section>
+
+          <section className="manualPanel storyPrepTemplatePanel">
+            <div className="storyPrepTemplateHeader">
+              <div>
+                <h4>Шаблон подготовки сюжета</h4>
+                <small>Динамически строится из текущего проекта, блоков, сцен, таймингов и фраз.</small>
+              </div>
+              <div className="storyPrepTemplateActions">
+                <button className="clipSB_btn" onClick={refreshStoryPrepTemplate}>Обновить шаблон</button>
+                <button className="clipSB_btn" onClick={onCopyStoryPrepTemplate}>Скопировать шаблон</button>
+                <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
+              </div>
+            </div>
+            <textarea className="storyPrepTemplatePreview" value={storyPrepTemplateText} onChange={(e) => setStoryPrepTemplateText(e.target.value)} spellCheck={false} />
           </section>
         </div>
       </div>}

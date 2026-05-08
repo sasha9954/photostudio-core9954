@@ -502,3 +502,54 @@
   white-space: pre-wrap;
   min-width: 0;
 }
+
+.manualDirectorStoryPrepPanel {
+  margin: 10px 0 12px;
+  border: 1px solid #353544;
+  border-top: 3px solid #f59e0b;
+  border-radius: 10px;
+  padding: 12px;
+  background: #141722;
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.14);
+}
+
+.storyPrepTemplateHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.storyPrepTemplateHeader h3 {
+  margin: 0 0 4px;
+}
+
+.storyPrepTemplateHeader small {
+  color: #b8bfd9;
+}
+
+.storyPrepTemplateActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.storyPrepTemplatePreview {
+  width: 100%;
+  min-height: 260px;
+  max-height: 420px;
+  resize: vertical;
+  overflow: auto;
+  white-space: pre;
+  box-sizing: border-box;
+  background: #11141d;
+  color: #ebedf8;
+  border: 1px solid #3a3f58;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
