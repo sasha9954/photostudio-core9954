@@ -1212,7 +1212,7 @@ export default function ManualTimingEditorPage() {
               type="button"
               className="manualTimingBlockRange"
               style={getStoryBlockRangeStyle(blockRange)}
-              onClick={() => onStoryBlockClick(blockRange)}
+              onClick={(event) => { event.stopPropagation(); onStoryBlockClick(blockRange); }}
               title={`${blockRange.title}: ${formatTimingSec(blockRange.start_sec)} – ${formatTimingSec(blockRange.end_sec)}`}
             >
               <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
