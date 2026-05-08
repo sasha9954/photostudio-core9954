@@ -37,6 +37,7 @@ export default function ManualTimingNode({ id, data }) {
   const connectedAudio = data?.connectedInputs?.audio_in || data?.connectedAudio || data?.audioInput || null;
   const normalizedConnectedAudio = normalizeManualTimingAudio(connectedAudio);
   const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : normalizeManualTimingAudio(model.audio);
+  const storyBlockCount = Array.isArray(model.story_blocks) ? model.story_blocks.length : 0;
 
   useEffect(() => {
     const stored = readManualTimingProjectForNode(id);
@@ -131,6 +132,7 @@ export default function ManualTimingNode({ id, data }) {
         <div className="manualTimingNode_row"><b>Аудио:</b> {effectiveAudio.filename || "аудио не выбрано"}</div>
         <div className="manualTimingNode_row"><b>Длительность:</b> {formatDurationSec(effectiveAudio.duration_sec)}</div>
         <div className="manualTimingNode_row"><b>Сцен:</b> {Array.isArray(model.scenes) ? model.scenes.length : 0}</div>
+        <div className="manualTimingNode_row"><b>Смысловых блоков:</b> {storyBlockCount}</div>
         <div className="manualTimingNode_row"><b>Статус:</b> {formatTimingStatus(model.timing_status)}</div>
 
         <label className="manualTimingNode_label">Формат</label>
