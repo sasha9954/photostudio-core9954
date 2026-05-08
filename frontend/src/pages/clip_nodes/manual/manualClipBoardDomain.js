@@ -34,6 +34,7 @@ export function getDefaultManualClipNodeData() {
     },
     audio: { url: "", filename: "", duration_sec: 0, duration_ms: 0 },
     split_chat: { user_request: "", ai_summary: "", raw_ai_json: null },
+    story_blocks: [],
     split_settings: {
       target_scene_count: "auto",
       lipsync_ratio: "auto",
@@ -105,6 +106,31 @@ export function buildMockSplitJson({ projectKind = "clip", durationSec = 24, for
   return buildManualClipSampleJson({ projectKind, durationSec: Math.max(12, Number(durationSec) || 24), format });
 }
 
+
+export function normalizeStoryBlock(block = {}, idx = 0) {
+  const id = String(block?.block_id || block?.id || block?.story_block_id || `block_${idx + 1}`).trim();
+  return {
+    ...block,
+    block_id: id,
+    id: String(block?.id || id),
+    title_ru: String(block?.title_ru || block?.title || block?.name || id),
+    color: String(block?.color || block?.story_block_color || "#8aa4ff"),
+    goal_ru: String(block?.goal_ru || block?.story_block_goal_ru || ""),
+    reveal_ru: String(block?.reveal_ru || block?.story_block_reveal_ru || ""),
+    emotion_ru: String(block?.emotion_ru || block?.story_block_emotion_ru || ""),
+  };
+}
+
+export function buildStoryBlockLookup(storyBlocks = []) {
+  const lookup = new Map();
+  (Array.isArray(storyBlocks) ? storyBlocks : []).forEach((block, idx) => {
+    const normalized = normalizeStoryBlock(block, idx);
+    if (normalized.block_id) lookup.set(normalized.block_id, normalized);
+    if (normalized.id) lookup.set(normalized.id, normalized);
+  });
+  return lookup;
+}
+
 export function toBool(value, fallback = false) {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
@@ -123,7 +149,9 @@ export function parseManualSplitJson(rawText) {
     const rawScenes = Array.isArray(container?.scenes) ? container.scenes : [];
     if (rawScenes.length === 0) return { ok: false, error: "JSON должен содержать непустой массив scenes." };
 
-    const scenes = rawScenes.map((scene, idx) => normalizeScene(scene, idx));
+    const story_blocks = Array.isArray(container?.story_blocks) ? container.story_blocks.map(normalizeStoryBlock) : [];
+    const storyBlockLookup = buildStoryBlockLookup(story_blocks);
+    const scenes = rawScenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup));
     for (const scene of scenes) {
       if (!scene.scene_id) return { ok: false, error: "У каждой сцены должен быть scene_id." };
       if (!Number.isFinite(scene.start_sec) || !Number.isFinite(scene.end_sec)) return { ok: false, error: `Сцена ${scene.scene_id}: start_sec/end_sec должны быть числами.` };
@@ -142,6 +170,7 @@ export function parseManualSplitJson(rawText) {
       split_type: String(container?.split_type || "phrase_based"),
       audio_duration_sec: Number(container?.audio_duration_sec || inferredDuration || 0),
       global_hint: String(container?.global_hint || ""),
+      story_blocks,
       scenes,
     };
 
@@ -151,10 +180,12 @@ export function parseManualSplitJson(rawText) {
   }
 }
 
-export function normalizeScene(scene, idx) {
+export function normalizeScene(scene, idx, storyBlockLookup = null) {
   const start = Number(scene?.start_sec || 0);
   const end = Number(scene?.end_sec || start);
   const route = ROUTES.includes(scene?.route) ? scene.route : "ia2v";
+  const blockId = String(scene?.story_block_id || "").trim();
+  const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
   return {
     scene_id: String(scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(scene?.index || idx + 1),
@@ -182,6 +213,20 @@ export function normalizeScene(scene, idx) {
     prompt_hint_ru: String(scene?.prompt_hint_ru || scene?.photo_prompt_hint_ru || ""),
     user_note_ru: String(scene?.user_note_ru || scene?.user_notes_ru || ""),
     story_position_ru: String(scene?.story_position_ru || scene?.story_time || ""),
+    story_block_id: blockId,
+    story_block_title_ru: String(scene?.story_block_title_ru || block?.title_ru || ""),
+    story_block_color: String(scene?.story_block_color || block?.color || ""),
+    story_block_position_ru: String(scene?.story_block_position_ru || ""),
+    story_block_goal_ru: String(scene?.story_block_goal_ru || block?.goal_ru || ""),
+    story_block_reveal_ru: String(scene?.story_block_reveal_ru || block?.reveal_ru || ""),
+    story_block_emotion_ru: String(scene?.story_block_emotion_ru || block?.emotion_ru || ""),
+    original_text: String(scene?.original_text || ""),
+    translated_text_ru: String(scene?.translated_text_ru || ""),
+    meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
+    source_text_en: String(scene?.source_text_en || ""),
+    adapted_text_en: String(scene?.adapted_text_en || ""),
+    scene_role_in_block_ru: String(scene?.scene_role_in_block_ru || ""),
+    block_progress_ru: String(scene?.block_progress_ru || ""),
     image_url: String(scene?.image_url || scene?.start_image_url || ""),
     start_image_url: String(scene?.start_image_url || scene?.image_url || ""),
     end_image_url: String(scene?.end_image_url || ""),

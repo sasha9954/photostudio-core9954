@@ -4,7 +4,7 @@ import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
-import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, normalizeManualAudio, normalizeScene, parseManualSplitJson, toBool } from "./manualClipBoardDomain";
+import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, getDefaultManualClipNodeData, buildStoryBlockLookup, normalizeManualAudio, normalizeScene, parseManualSplitJson, toBool } from "./manualClipBoardDomain";
 
 
 const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
@@ -103,6 +103,21 @@ function mergeSceneDirectorWork(scene = {}, old = {}) {
     prompt_hint_ru: scene.prompt_hint_ru || old.prompt_hint_ru || "",
     user_note_ru: scene.user_note_ru || old.user_note_ru || "",
     story_position_ru: scene.story_position_ru || old.story_position_ru || "",
+    story_block_id: scene.story_block_id || old.story_block_id || "",
+    story_block_title_ru: scene.story_block_title_ru || old.story_block_title_ru || "",
+    story_block_color: scene.story_block_color || old.story_block_color || "",
+    story_block_position_ru: scene.story_block_position_ru || old.story_block_position_ru || "",
+    story_block_goal_ru: scene.story_block_goal_ru || old.story_block_goal_ru || "",
+    story_block_reveal_ru: scene.story_block_reveal_ru || old.story_block_reveal_ru || "",
+    story_block_emotion_ru: scene.story_block_emotion_ru || old.story_block_emotion_ru || "",
+    original_text: scene.original_text || old.original_text || "",
+    translated_text_ru: scene.translated_text_ru || old.translated_text_ru || "",
+    meaning_hint_ru: scene.meaning_hint_ru || old.meaning_hint_ru || "",
+    source_text_en: scene.source_text_en || old.source_text_en || "",
+    adapted_text_en: scene.adapted_text_en || old.adapted_text_en || "",
+    scene_role_in_block_ru: scene.scene_role_in_block_ru || old.scene_role_in_block_ru || "",
+    block_progress_ru: scene.block_progress_ru || old.block_progress_ru || "",
+    scene_goal_ru: scene.scene_goal_ru || old.scene_goal_ru || "",
     image_url: old.image_url || scene.image_url || "",
     image_preview_url: old.image_preview_url || scene.image_preview_url || "",
     image_upload_status: old.image_upload_status || scene.image_upload_status || "",
@@ -237,6 +252,7 @@ export default function ManualClipBoardNode({ id, data }) {
       split_chat: storedProject?.split_chat || data?.split_chat || model.split_chat,
       project_kind: storedProject?.project_kind || data?.project_kind || model.project_kind,
       last_split_source: storedProject?.last_split_source || data?.last_split_source || model.last_split_source,
+      story_blocks: storedProject?.story_blocks || data?.story_blocks || model.story_blocks || [],
       scenes: mergedScenes,
       selectedSceneId: storedProject?.selectedSceneId || data?.selectedSceneId || mergedScenes[0]?.scene_id || "",
       split_audio_status: storedProject?.split_audio_status || data?.split_audio_status || model.split_audio_status,
@@ -428,8 +444,10 @@ export default function ManualClipBoardNode({ id, data }) {
   const onBuildScenes = async () => {
     const splitJson = model?.split_chat?.raw_ai_json;
     const rawScenes = Array.isArray(splitJson?.scenes) ? splitJson.scenes : [];
+    const storyBlocks = Array.isArray(splitJson?.story_blocks) ? splitJson.story_blocks : [];
+    const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
     const normalized = rawScenes.map((s, idx) => {
-      const scene = normalizeScene(s, idx);
+      const scene = normalizeScene(s, idx, storyBlockLookup);
       return {
         ...scene,
         video_prompt: "",
@@ -474,6 +492,7 @@ export default function ManualClipBoardNode({ id, data }) {
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
       step: "scene_plan_ready",
+      story_blocks: storyBlocks,
       scenes: mergedScenes,
       selectedSceneId: mergedScenes[0]?.scene_id || "",
       split_audio_status: splitAudioStatus,
@@ -484,6 +503,7 @@ export default function ManualClipBoardNode({ id, data }) {
 
     patch({
       step: "scene_plan_ready",
+      story_blocks: storyBlocks,
       scenes: mergedScenes,
       selectedSceneId: mergedScenes[0]?.scene_id || "",
       split_audio_status: splitAudioStatus,
@@ -502,6 +522,7 @@ export default function ManualClipBoardNode({ id, data }) {
       project_kind: model.project_kind,
       last_split_source: model.last_split_source,
       step: model.step,
+      story_blocks: model.story_blocks || [],
       scenes,
       selectedSceneId: model.selectedSceneId || scenes[0]?.scene_id || "",
       split_audio_status: model.split_audio_status,

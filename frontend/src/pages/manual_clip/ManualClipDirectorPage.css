@@ -292,3 +292,141 @@
 .manualUserNoteEditor textarea {
   min-height: 72px;
 }
+
+.storyboardBlockStrip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 10px;
+  scrollbar-width: thin;
+}
+
+.storyboardBlockChip {
+  --storyboard-block-color: #8aa4ff;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--storyboard-block-color) 66%, rgba(255, 255, 255, 0.18));
+  border-left: 4px solid var(--storyboard-block-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--storyboard-block-color) 16%, rgba(16, 18, 28, 0.92));
+  color: #eef2ff;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.storyboardBlockChip:hover:not(:disabled),
+.storyboardBlockChipActive {
+  background: color-mix(in srgb, var(--storyboard-block-color) 28%, rgba(22, 24, 34, 0.92));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--storyboard-block-color) 55%, transparent), 0 0 16px color-mix(in srgb, var(--storyboard-block-color) 24%, transparent);
+}
+
+.storyboardBlockChip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.manualDirectorSceneItem {
+  --storyboard-block-color: transparent;
+  border-left: 4px solid var(--storyboard-block-color);
+}
+
+.manualStoryBlockBadge {
+  align-self: flex-start;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--storyboard-block-color) 62%, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--storyboard-block-color) 18%, rgba(255, 255, 255, 0.04));
+  color: #eef2ff;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.storyboardSceneMeaningCompact {
+  border: 1px solid rgba(138, 164, 255, 0.28);
+  border-radius: 12px;
+  background: rgba(138, 164, 255, 0.08);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.storyboardSceneMeaningHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: #f4f6ff;
+}
+
+.storyboardSceneMeaningHeader > span {
+  --storyboard-block-color: #8aa4ff;
+  border: 1px solid color-mix(in srgb, var(--storyboard-block-color) 62%, rgba(255, 255, 255, 0.14));
+  border-left: 4px solid var(--storyboard-block-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--storyboard-block-color) 18%, rgba(255, 255, 255, 0.04));
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.storyboardSceneMeaningHeader > em {
+  color: #aeb7d5;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.storyboardSceneMeaningBody {
+  display: grid;
+  gap: 6px;
+  color: #dce3ff;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.storyboardSceneMeaningBody p {
+  margin: 0;
+}
+
+.storyboardSceneMeaningDetails {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 6px;
+}
+
+.storyboardSceneMeaningDetails > summary {
+  cursor: pointer;
+  color: #b9c7ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.storyboardSceneMeaningGrid {
+  display: grid;
+  grid-template-columns: minmax(95px, 0.32fr) minmax(0, 1fr);
+  gap: 7px 10px;
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 8px;
+  padding-right: 4px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storyboardSceneMeaningGrid span {
+  color: #93a0c3;
+}
+
+.storyboardSceneMeaningGrid strong {
+  color: #edf1ff;
+  font-weight: 600;
+  white-space: pre-wrap;
+  min-width: 0;
+}
