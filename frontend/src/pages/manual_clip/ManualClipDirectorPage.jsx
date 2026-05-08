@@ -422,11 +422,20 @@ export default function ManualClipDirectorPage() {
     const blockId = String(block?.block_id || block?.id || `block_${idx + 1}`).trim();
     return !(blockId === "block_unknown" && !blockSceneCounts.get(blockId));
   }), [storyBlocks, blockSceneCounts]);
+  const storyBlockNumberById = useMemo(() => {
+    const numbers = new Map();
+    visibleStoryBlocks.forEach((block, idx) => {
+      const blockId = String(block?.block_id || block?.id || `block_${idx + 1}`).trim();
+      if (blockId) numbers.set(blockId, idx + 1);
+    });
+    return numbers;
+  }, [visibleStoryBlocks]);
   const selectedBlockSceneIndex = useMemo(() => {
     if (!selectedScene?.story_block_id) return 0;
     return scenes.filter((scene) => scene.story_block_id === selectedScene.story_block_id).findIndex((scene) => scene.scene_id === selectedScene.scene_id) + 1;
   }, [scenes, selectedScene]);
   const selectedBlockSceneCount = selectedScene?.story_block_id ? (blockSceneCounts.get(selectedScene.story_block_id) || 0) : 0;
+  const selectedBlockNumber = selectedScene?.story_block_id ? storyBlockNumberById.get(selectedScene.story_block_id) : null;
   const selectedSceneActionText = selectedScene ? (selectedScene.scene_goal_ru || selectedScene.prompt_hint_ru || selectedScene.photo_prompt_hint_ru || "") : "";
   const selectedSceneRuText = selectedScene ? (selectedScene.translated_text_ru || selectedScene.short_note || selectedScene.drama_hint || "") : "";
   const selectedSceneOriginalText = selectedScene ? (selectedScene.original_text || selectedScene.adapted_text_en || selectedScene.source_text_en || "") : "";
@@ -767,20 +776,37 @@ export default function ManualClipDirectorPage() {
 
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">
-        {scenes.map((scene, idx) => <button
-          key={scene.scene_id}
-          className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}
-          style={scene.story_block_color ? { "--storyboard-block-color": scene.story_block_color } : undefined}
-          onClick={() => setSelectedSceneId(scene.scene_id)}
-        >
-          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
-          {scene.story_block_title_ru ? <span className="manualStoryBlockBadge">{scene.story_block_title_ru}</span> : null}
-          <small>{truncateText(scene.short_note || scene.meaning_hint_ru || scene.scene_goal_ru || scene.drama_hint || "—", 96)}</small>
-        </button>)}
+        {scenes.map((scene, idx) => {
+          const sceneBlockNumber = scene.story_block_id ? storyBlockNumberById.get(scene.story_block_id) : null;
+          const sceneBlockTitle = String(scene.story_block_title_ru || "").trim();
+          const sceneRuPreview = truncateText(
+            scene.translated_text_ru || scene.short_note || scene.drama_hint || scene.scene_goal_ru || "—",
+            104
+          );
+          return <button
+            key={scene.scene_id}
+            className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}
+            style={scene.story_block_color ? { "--storyboard-block-color": scene.story_block_color } : undefined}
+            onClick={() => setSelectedSceneId(scene.scene_id)}
+          >
+            <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
+            {(sceneBlockNumber || sceneBlockTitle) ? <span className="manualStoryBlockBadges">
+              {sceneBlockNumber ? <span className="manualStoryBlockBadge manualStoryBlockNumberBadge">Блок {sceneBlockNumber}</span> : null}
+              {sceneBlockTitle ? <span className="manualStoryBlockBadge">{sceneBlockTitle}</span> : null}
+            </span> : null}
+            <small className="manualSceneRuPreview">{sceneRuPreview}</small>
+          </button>;
+        })}
       </aside>
 
       {selectedScene ? <section className="manualDirectorCenter">
-        <h2>Сцена {selectedScene.index}</h2>
+        <div className="storyboardSceneBlockHeader">
+          <h2>Сцена {selectedScene.index}</h2>
+          {selectedScene.story_block_title_ru ? <div className="storyboardSceneBlockBadge" style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>
+            {selectedBlockNumber ? <span>Блок {selectedBlockNumber}</span> : null}
+            <strong>Блок: {selectedScene.story_block_title_ru}</strong>
+          </div> : null}
+        </div>
         <label>Route
           <select value={selectedScene.route} onChange={(e) => {
             const route = e.target.value;
@@ -803,12 +829,13 @@ export default function ManualClipDirectorPage() {
         {isMeaningSceneVisible(selectedScene) ? <div className="storyboardSceneMeaningCompact">
           <div className="storyboardSceneMeaningHeader">
             <strong>Смысл сцены</strong>
-            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedScene.story_block_title_ru}</span> : null}
+            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
             {selectedBlockSceneCount ? <em>сцена {selectedBlockSceneIndex || 1} из {selectedBlockSceneCount}</em> : null}
           </div>
           <div className="storyboardSceneMeaningBody">
+            {selectedScene.story_block_title_ru ? <p><b>Блок:</b> {selectedScene.story_block_title_ru}</p> : null}
             {(selectedScene.story_block_position_ru || storyPositionText) ? <p><b>Позиция:</b> {selectedScene.story_block_position_ru || storyPositionText}</p> : null}
-            {selectedSceneRuText ? <p><b>RU:</b> {selectedSceneRuText}</p> : null}
+            {selectedSceneRuText ? <p><b>Фраза RU:</b> {selectedSceneRuText}</p> : null}
             {selectedSceneActionText ? <p><b>Что делать:</b> {selectedSceneActionText}</p> : null}
           </div>
           {selectedSceneMeaningDetails.length ? <details className="storyboardSceneMeaningDetails">
