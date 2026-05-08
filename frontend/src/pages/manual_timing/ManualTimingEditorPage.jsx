@@ -13,9 +13,11 @@ import {
   formatTimingSec,
   getDefaultManualTimingNodeData,
   getManualTimingSceneDurationWarning,
+  hydrateManualTimingScenesWithStoryBlocks,
   normalizeManualTimingAudio,
   normalizeManualTimingMarkers,
   normalizeManualTimingProjectFromJson,
+  normalizeManualTimingStoryBlocks,
   persistManualTimingProject,
   roundTimingSec,
   updateManualTimingSceneById,
@@ -76,13 +78,16 @@ function buildInitialProject() {
   const markers = duration > 0
     ? normalizeManualTimingMarkers(project.markers?.length ? project.markers : [0, duration], duration)
     : [];
-  const scenes = markers.length >= 2
+  const story_blocks = normalizeManualTimingStoryBlocks(project.story_blocks);
+  const rawScenes = markers.length >= 2
     ? buildManualTimingScenesFromMarkers(markers, project.scenes || [], { durationSec: duration })
     : (Array.isArray(project.scenes) ? project.scenes : []);
+  const scenes = hydrateManualTimingScenesWithStoryBlocks(rawScenes, story_blocks);
   return {
     ...project,
     audio,
     markers,
+    story_blocks,
     scenes,
     selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
     timing_status: project.timing_status || (scenes.length ? "draft" : "empty"),
@@ -156,6 +161,25 @@ function getDurationWarningClassName(durationWarning = null) {
   return "isSoft";
 }
 
+function isInstrumentalScene(scene = {}) {
+  return String(scene?.section || "").toLowerCase() === "instrumental" || (!scene?.contains_vocal && scene?.contains_instrumental_assumption);
+}
+
+function getSceneStoryText(scene = {}) {
+  const originalRaw = String(scene?.original_text || scene?.adapted_text_en || scene?.source_text_en || "").trim();
+  const ruRaw = String(scene?.translated_text_ru || "").trim();
+  const meaningRaw = String(scene?.meaning_hint_ru || "").trim();
+  const instrumental = isInstrumentalScene(scene) || !String(scene?.original_text || "").trim();
+  return {
+    blockTitle: String(scene?.story_block_title_ru || "Без блока"),
+    blockColor: String(scene?.story_block_color || "#64748B"),
+    position: String(scene?.story_block_position_ru || "—"),
+    original: instrumental ? "—" : (originalRaw || "—"),
+    ru: instrumental ? "—" : (ruRaw || "—"),
+    meaning: meaningRaw || (instrumental ? "Инструментальная / сюжетная сцена." : "—"),
+  };
+}
+
 export default function ManualTimingEditorPage() {
   const navigate = useNavigate();
   const audioRef = useRef(null);
@@ -179,7 +203,9 @@ export default function ManualTimingEditorPage() {
   const audio = normalizeManualTimingAudio(project.audio);
   const durationSec = Number(audio.duration_sec || 0);
   const markers = useMemo(() => normalizeManualTimingMarkers(project.markers, durationSec), [project.markers, durationSec]);
+  const storyBlocks = useMemo(() => normalizeManualTimingStoryBlocks(project.story_blocks), [project.story_blocks]);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null,
     [scenes, project.selectedSceneId]
@@ -210,6 +236,11 @@ export default function ManualTimingEditorPage() {
   const candidateWidthPercent = durationSec > 0 ? Math.max(0, Math.min(100 - lastCutPercent, ((Number(currentTime || 0) - Number(lastCutSec || 0)) / durationSec) * 100)) : 0;
   const openTailSceneId = project.timing_status === "confirmed" ? "" : scenes[scenes.length - 1]?.scene_id || "";
   const candidateDurationLabel = candidateDurationSec > 0.001 ? formatTimingSec(candidateDurationSec) : "—";
+  const storyBlockSummaries = useMemo(() => storyBlocks.map((block) => {
+    const sceneIds = Array.isArray(block.scene_ids) ? block.scene_ids : [];
+    const count = sceneIds.length || scenes.filter((scene) => String(scene.story_block_id || "") === String(block.block_id || "")).length;
+    return { ...block, sceneCount: count };
+  }), [storyBlocks, scenes]);
 
   useEffect(() => {
     currentTimeRef.current = Number(currentTime || 0);
@@ -381,12 +412,14 @@ export default function ManualTimingEditorPage() {
 
   const rebuildFromMarkers = (nextMarkers, existingScenes = scenes, extraPatch = {}) => {
     const safeMarkers = normalizeManualTimingMarkers(nextMarkers, durationSec);
-    const nextScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, { durationSec });
+    const nextRawScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, { durationSec });
+    const nextScenes = hydrateManualTimingScenesWithStoryBlocks(nextRawScenes, project.story_blocks);
     const selectedSceneId = extraPatch.selectedSceneId || project.selectedSceneId || nextScenes[0]?.scene_id || "";
     return persist({
       ...project,
       ...extraPatch,
       markers: safeMarkers,
+      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
       scenes: nextScenes,
       selectedSceneId,
       timing_status: extraPatch.timing_status || (nextScenes.length ? "draft" : project.timing_status || "draft"),
@@ -765,10 +798,11 @@ export default function ManualTimingEditorPage() {
 
   const onReset = () => {
     const nextMarkers = durationSec > 0 ? [0, durationSec] : [];
-    const nextScenes = nextMarkers.length ? buildManualTimingScenesFromMarkers(nextMarkers, [], { durationSec }) : [];
+    const nextScenes = nextMarkers.length ? hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, [], { durationSec }), project.story_blocks) : [];
     persist({
       ...project,
       markers: nextMarkers,
+      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
       scenes: nextScenes,
       selectedSceneId: nextScenes[0]?.scene_id || "",
       timing_status: durationSec > 0 ? "draft" : "empty",
@@ -789,8 +823,8 @@ export default function ManualTimingEditorPage() {
       duration_ms: Math.round(nextDuration * 1000),
     };
     const nextMarkers = normalizeManualTimingMarkers(project.markers?.length ? project.markers : [0, nextAudio.duration_sec], nextAudio.duration_sec);
-    const nextScenes = buildManualTimingScenesFromMarkers(nextMarkers, project.scenes, { durationSec: nextAudio.duration_sec });
-    persist({ ...project, audio: nextAudio, markers: nextMarkers, scenes: nextScenes, selectedSceneId: project.selectedSceneId || nextScenes[0]?.scene_id || "", timing_status: project.timing_status === "empty" ? "draft" : project.timing_status });
+    const nextScenes = hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, project.scenes, { durationSec: nextAudio.duration_sec }), project.story_blocks);
+    persist({ ...project, audio: nextAudio, markers: nextMarkers, story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks), scenes: nextScenes, selectedSceneId: project.selectedSceneId || nextScenes[0]?.scene_id || "", timing_status: project.timing_status === "empty" ? "draft" : project.timing_status });
   };
 
   const getTimelineTimeFromEvent = (event) => {
@@ -809,6 +843,12 @@ export default function ManualTimingEditorPage() {
   const onTimelineSegmentClick = (event, scene) => {
     event.stopPropagation();
     selectSceneAndSeekStart(scene, { pause: true });
+  };
+
+  const onStoryBlockClick = (block) => {
+    const firstSceneId = Array.isArray(block?.scene_ids) ? block.scene_ids.find(Boolean) : "";
+    const scene = scenes.find((item) => item.scene_id === firstSceneId) || scenes.find((item) => item.story_block_id === block?.block_id);
+    if (scene) selectSceneAndSeekStart(scene, { pause: true });
   };
 
   const getSegmentStyle = (scene, idx) => {
@@ -981,6 +1021,18 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingStatusItem"><span>Конец выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedBoundarySec) : "—"}</strong></div>
             <div className="manualTimingStatusItem isPrimary"><span>Длина выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedSceneDurationSec) : "—"}</strong>{selectedSceneDurationWarning ? <span className={`manualTimingDurationBadge ${getDurationWarningClassName(selectedSceneDurationWarning)}`}>⚠ {selectedSceneDurationWarning.label}</span> : null}</div>
           </div>
+          {selectedScene ? <div className="manualTimingSceneTextPanel">
+            <div className="manualTimingSceneTextHeader">
+              <strong>Текст и смысл сцены</strong>
+              <span className="manualTimingBlockBadge" style={{ "--story-block-color": selectedSceneText.blockColor }}>Story block: {selectedSceneText.blockTitle}</span>
+            </div>
+            <div className="manualTimingSceneTextGrid">
+              <div><span>Position</span><strong>{selectedSceneText.position || "—"}</strong></div>
+              <div><span>Original</span><p>{selectedSceneText.original}</p></div>
+              <div><span>RU</span><p>{selectedSceneText.ru}</p></div>
+              <div><span>Meaning</span><p>{selectedSceneText.meaning}</p></div>
+            </div>
+          </div> : null}
         </div>
 
         <div className="manualTimingNudgePanel">
@@ -1024,6 +1076,20 @@ export default function ManualTimingEditorPage() {
         {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}
       </section>
 
+      {storyBlockSummaries.length ? <section className="manualTimingStoryBlocks" aria-label="смысловые блоки">
+        {storyBlockSummaries.map((block) => <button
+          key={block.block_id}
+          type="button"
+          className="manualTimingStoryBlockChip"
+          style={{ "--story-block-color": block.color }}
+          onClick={() => onStoryBlockClick(block)}
+          title={block.summary_ru || block.title_ru}
+        >
+          <span>{block.title_ru || block.block_id}</span>
+          <b>{block.sceneCount} сцен{block.sceneCount === 1 ? "а" : ""}</b>
+        </button>)}
+      </section> : null}
+
       <section className="manualTimingTimeline" aria-label="шкала таймингов">
         <div className="manualTimingTimelineTrack">
           {scenes.map((scene, idx) => {
@@ -1051,9 +1117,11 @@ export default function ManualTimingEditorPage() {
           const isSelected = selectedScene?.scene_id === scene.scene_id;
           const canMerge = idx < scenes.length - 1;
           const durationWarning = getManualTimingSceneDurationWarning(scene);
-          return <div key={scene.scene_id} className={`manualTimingRow ${isSelected ? "isSelected" : ""}`} onClick={() => selectSceneAndSeekStart(scene, { pause: true })}>
+          const rowStory = getSceneStoryText(scene);
+          return <div key={scene.scene_id} className={`manualTimingRow ${isSelected ? "isSelected" : ""}`} style={{ "--story-block-color": rowStory.blockColor }} onClick={() => selectSceneAndSeekStart(scene, { pause: true })}>
             <div className="manualTimingRowMain">
               <strong>{scene.scene_id}</strong>
+              <span className="manualTimingBlockBadge">{rowStory.blockTitle}</span>
               <span>{formatTimingSec(scene.start_sec)} – {formatTimingSec(scene.end_sec)}</span>
               <span>длина: {formatTimingSec(scene.duration_sec)}</span>
               {durationWarning ? <span className={`manualTimingDurationBadge ${getDurationWarningClassName(durationWarning)}`}>⚠ {durationWarning.label}</span> : null}
