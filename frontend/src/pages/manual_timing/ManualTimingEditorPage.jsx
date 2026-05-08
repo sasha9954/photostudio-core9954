@@ -171,12 +171,22 @@ function getSceneStoryText(scene = {}) {
   const originalRaw = String(scene?.original_text || scene?.adapted_text_en || scene?.source_text_en || "").trim();
   const ruRaw = String(scene?.translated_text_ru || "").trim();
   const meaningRaw = String(scene?.meaning_hint_ru || "").trim();
+  const blockGoalRaw = String(scene?.story_block_goal_ru || scene?.block_goal_ru || "").trim();
+  const blockRevealRaw = String(scene?.story_block_reveal_ru || scene?.block_reveal_ru || "").trim();
+  const blockEmotionRaw = String(scene?.story_block_emotion_ru || scene?.block_emotion_ru || "").trim();
+  const sceneRoleRaw = String(scene?.scene_role_in_block_ru || "").trim();
+  const blockProgressRaw = String(scene?.block_progress_ru || "").trim();
   const hasAnyStoryText = Boolean(originalRaw || ruRaw || meaningRaw);
   const instrumental = isInstrumentalScene(scene) && !hasAnyStoryText;
   return {
     blockTitle: String(scene?.story_block_title_ru || "Без блока"),
     blockColor: String(scene?.story_block_color || "#64748B"),
     position: String(scene?.story_block_position_ru || "—"),
+    blockGoal: blockGoalRaw || "—",
+    blockReveal: blockRevealRaw || "—",
+    blockEmotion: blockEmotionRaw || "—",
+    sceneRole: sceneRoleRaw || "—",
+    blockProgress: blockProgressRaw || "—",
     original: originalRaw || "—",
     ru: ruRaw || "—",
     meaning: meaningRaw || (instrumental ? "Инструментальная / сюжетная сцена." : "—"),
@@ -1049,6 +1059,21 @@ export default function ManualTimingEditorPage() {
               <div><span>Original</span><p>{selectedSceneText.original}</p></div>
               <div><span>RU</span><p>{selectedSceneText.ru}</p></div>
               <div><span>Meaning</span><p>{selectedSceneText.meaning}</p></div>
+            </div>
+            <div className="manualTimingBlockMeaningPanel">
+              <div className="manualTimingBlockMeaningTitle">Блок</div>
+              <div className="manualTimingBlockMeaningGrid">
+                <div><span>Цель блока</span><p>{selectedSceneText.blockGoal}</p></div>
+                <div><span>Раскрытие блока</span><p>{selectedSceneText.blockReveal}</p></div>
+                <div><span>Эмоция блока</span><p>{selectedSceneText.blockEmotion}</p></div>
+              </div>
+            </div>
+            <div className="manualTimingBlockMeaningPanel">
+              <div className="manualTimingBlockMeaningTitle">Сцена внутри блока</div>
+              <div className="manualTimingBlockMeaningGrid">
+                <div><span>Роль сцены в блоке</span><p>{selectedSceneText.sceneRole}</p></div>
+                <div><span>Прогресс блока</span><p>{selectedSceneText.blockProgress}</p></div>
+              </div>
             </div>
           </div> : null}
         </div>

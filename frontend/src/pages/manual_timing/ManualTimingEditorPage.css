@@ -923,3 +923,51 @@
   opacity: 0.85;
   pointer-events: none;
 }
+
+.manualTimingBlockMeaningPanel {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border-radius: 12px;
+  background: rgba(18, 25, 42, 0.58);
+  border: 1px solid rgba(120, 150, 220, 0.12);
+}
+
+.manualTimingBlockMeaningTitle {
+  color: #dce9ff;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.manualTimingBlockMeaningGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
+}
+
+.manualTimingBlockMeaningGrid div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(120, 150, 220, 0.12);
+}
+
+.manualTimingBlockMeaningGrid span {
+  color: rgba(210, 225, 255, 0.66);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.manualTimingBlockMeaningGrid p {
+  margin: 0;
+  color: #f3f7ff;
+  line-height: 1.42;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
