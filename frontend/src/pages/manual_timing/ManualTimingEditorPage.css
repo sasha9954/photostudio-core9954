@@ -1078,3 +1078,117 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.manualTimingMissingPhraseButton {
+  border-color: rgba(255, 201, 100, 0.42);
+  color: #ffe3a9;
+}
+
+.manualTimingAudioPhrasesPanel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(59, 42, 17, 0.26);
+  border: 1px solid rgba(255, 201, 100, 0.18);
+}
+
+.manualTimingAudioPhrasesHeader {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  color: #fff4d2;
+}
+
+.manualTimingAudioPhrasesHeader span,
+.manualTimingAudioPhrasesEmpty {
+  color: rgba(255, 236, 190, 0.72);
+  font-size: 12px;
+}
+
+.manualTimingAudioPhrasesList {
+  display: grid;
+  gap: 8px;
+}
+
+.manualTimingAudioPhraseCard {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(10, 15, 28, 0.62);
+  border: 1px solid rgba(120, 150, 220, 0.16);
+}
+
+.manualTimingAudioPhraseCard.needsTranscription {
+  border-color: rgba(255, 201, 100, 0.45);
+  background: rgba(78, 50, 14, 0.42);
+}
+
+.manualTimingAudioPhraseTop,
+.manualTimingAudioPhraseActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.manualTimingAudioPhraseTop strong {
+  color: #fff7df;
+}
+
+.manualTimingAudioPhraseTop span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 245, 220, 0.84);
+  font-size: 12px;
+}
+
+.manualTimingAudioPhraseWarning {
+  padding: 7px 9px;
+  border-radius: 10px;
+  background: rgba(255, 201, 100, 0.14);
+  border: 1px solid rgba(255, 201, 100, 0.28);
+  color: #ffe0a0;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manualTimingAudioPhraseTextGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.manualTimingAudioPhraseTextGrid div {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.manualTimingAudioPhraseTextGrid span {
+  color: rgba(255, 236, 190, 0.7);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.manualTimingAudioPhraseTextGrid p {
+  margin: 0;
+  color: #f9fbff;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.manualTimingAudioPhraseActions .clipSB_btn {
+  width: auto;
+  min-width: 0;
+  padding: 6px 9px;
+  white-space: nowrap;
+}

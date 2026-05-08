@@ -96,6 +96,7 @@ export function getDefaultManualTimingNodeData() {
     timing_status: "empty",
     markers: [],
     story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
+    audio_phrases: [],
     scenes: [],
     selectedSceneId: "",
     updatedAt: 0,
@@ -177,6 +178,52 @@ export function getSectionDefaults(section = "") {
 function normalizeStoryBlockColor(value = "") {
   const raw = String(value || "").trim();
   return /^#[0-9a-f]{6}$/i.test(raw) || /^#[0-9a-f]{3}$/i.test(raw) ? raw : MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color;
+}
+
+export function normalizeManualTimingAudioPhrases(audioPhrases = []) {
+  const rawPhrases = Array.isArray(audioPhrases) ? audioPhrases : [];
+  const seen = new Set();
+
+  return rawPhrases
+    .map((phrase, idx) => {
+      const rawId = String(phrase?.phrase_id || phrase?.phraseId || phrase?.id || "").trim();
+      const phrase_id = rawId || `manual_missing_${String(idx + 1).padStart(3, "0")}`;
+      if (seen.has(phrase_id)) return null;
+      seen.add(phrase_id);
+
+      const start = roundTimingSec(phrase?.start_sec ?? phrase?.startSec ?? phrase?.start ?? 0);
+      const end = roundTimingSec(phrase?.end_sec ?? phrase?.endSec ?? phrase?.end ?? start);
+      if (!(end > start)) return null;
+
+      return {
+        phrase_id,
+        start_sec: start,
+        end_sec: end,
+        text_en: String(phrase?.text_en || phrase?.textEn || ""),
+        text_ru: String(phrase?.text_ru || phrase?.textRu || ""),
+        meaning_ru: String(phrase?.meaning_ru || phrase?.meaningRu || ""),
+        status: String(phrase?.status || "needs_transcription"),
+        note_ru: String(phrase?.note_ru || phrase?.noteRu || ""),
+      };
+    })
+    .filter(Boolean);
+}
+
+export function normalizeManualTimingSourcePhraseIds(value = []) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((id) => String(id || "").trim()).filter(Boolean))];
+}
+
+function rangesIntersect(aStart, aEnd, bStart, bEnd) {
+  return Number(aStart) < Number(bEnd) - 0.001 && Number(aEnd) > Number(bStart) + 0.001;
+}
+
+export function getManualTimingPhrasesForScene(audioPhrases = [], scene = null) {
+  if (!scene) return [];
+  const sceneStart = Number(scene?.start_sec || 0);
+  const sceneEnd = Number(scene?.end_sec || 0);
+  if (!(sceneEnd > sceneStart)) return [];
+  return normalizeManualTimingAudioPhrases(audioPhrases).filter((phrase) => rangesIntersect(phrase.start_sec, phrase.end_sec, sceneStart, sceneEnd));
 }
 
 export function normalizeManualTimingStoryBlocks(storyBlocks = []) {
@@ -375,6 +422,7 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       prompt_hint_ru: String(old.prompt_hint_ru || old.photo_prompt_hint_ru || ""),
       story_position_ru: String(old.story_position_ru || old.story_time || ""),
       user_note_ru: String(old.user_note_ru || old.user_notes_ru || ""),
+      source_phrase_ids: normalizeManualTimingSourcePhraseIds(old.source_phrase_ids || old.sourcePhraseIds),
       story_block_id: String(old.story_block_id || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id),
       story_block_title_ru: String(old.story_block_title_ru || ""),
       story_block_color: String(old.story_block_color || ""),
@@ -493,6 +541,7 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
     prompt_hint_ru: pickManualTimingText(scene, ["prompt_hint_ru", "photo_prompt_hint_ru", "promptHintRu", "visual_hint_ru"]),
     story_position_ru: pickManualTimingText(scene, ["story_position_ru", "story_time", "storyPositionRu"]),
     user_note_ru: pickManualTimingText(scene, ["user_note_ru", "user_notes_ru", "userNoteRu", "note_ru", "director_note_ru"]),
+    source_phrase_ids: normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds),
     story_block_id: pickManualTimingText(scene, ["story_block_id", "storyBlockId", "block_id"]) || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id,
     story_block_title_ru: pickManualTimingText(scene, ["story_block_title_ru", "storyBlockTitleRu", "block_title_ru"]),
     story_block_color: pickManualTimingText(scene, ["story_block_color", "storyBlockColor", "block_color"]),
@@ -571,6 +620,7 @@ export function buildManualTimingSampleJson(project = {}) {
       prompt_hint_ru: "Что учесть в видео-промте.",
       story_position_ru: "Позиция в истории.",
       user_note_ru: "Твоя заметка: звук, фраза, визуал, что не забыть.",
+      source_phrase_ids: [],
       story_block_id: "block_01",
       story_block_title_ru: "Водопой и скрытая угроза",
       story_block_color: "#F59E0B",
@@ -620,8 +670,9 @@ export function buildManualTimingSampleJson(project = {}) {
     format: String(safeProject.format || "9:16"),
     split_type: existingScenes.length ? "manual_timing_export_for_chatgpt" : "manual_timing_template_for_chatgpt",
     audio_duration_sec: Number(audio.duration_sec || 0),
-    global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми.",
+    global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми. Если есть audio_phrases со status=needs_transcription, не удаляй их, распознай/переведи при наличии аудио или текста и предложи привязку к scene.source_phrase_ids.",
     story_blocks: storyBlocks,
+    audio_phrases: normalizeManualTimingAudioPhrases(safeProject.audio_phrases),
     scenes,
   };
 }
@@ -633,6 +684,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   const rawDuration = Number(safeRaw.audio_duration_sec ?? safeRaw.audioDurationSec ?? safeRaw.duration_sec ?? safeRaw.durationSec ?? safeRaw.audio?.duration_sec ?? 0);
   const durationSec = roundTimingSec(baseAudio.duration_sec || rawDuration || 0);
   const storyBlocks = normalizeManualTimingStoryBlocks(safeRaw.story_blocks || safeBase.story_blocks);
+  const audioPhrases = normalizeManualTimingAudioPhrases(safeRaw.audio_phrases || safeRaw.audioPhrases || safeBase.audio_phrases);
   const rawScenes = Array.isArray(safeRaw.scenes) ? safeRaw.scenes : [];
   const importedScenes = rawScenes
     .map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx))
@@ -668,6 +720,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     timing_status: "draft",
     markers,
     story_blocks: storyBlocks,
+    audio_phrases: audioPhrases,
     scenes,
     selectedSceneId: scenes[0]?.scene_id || "",
     updatedAt: Date.now(),
@@ -738,6 +791,7 @@ export function getManualTimingSceneDurationWarning(scene = {}) {
 export function buildManualTimingWarnings(project = {}) {
   const audio = normalizeManualTimingAudio(project.audio);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const audioPhrases = normalizeManualTimingAudioPhrases(project.audio_phrases);
   const warnings = [];
   const duration = Number(audio.duration_sec || 0);
   const durationWarningBuckets = new Map();
@@ -770,6 +824,25 @@ export function buildManualTimingWarnings(project = {}) {
     }
   });
 
+  audioPhrases.forEach((phrase) => {
+    if (String(phrase.status || "") === "needs_transcription") {
+      warnings.push(`Есть нераспознанные фразы: ${phrase.phrase_id} (${phrase.start_sec.toFixed(2)}–${phrase.end_sec.toFixed(2)})`);
+    }
+
+    const containingScene = scenes.find((scene) => {
+      const sceneStart = Number(scene?.start_sec || 0);
+      const sceneEnd = Number(scene?.end_sec || 0);
+      return phrase.start_sec >= sceneStart - 0.001 && phrase.end_sec <= sceneEnd + 0.001;
+    });
+
+    if (containingScene) {
+      const sourcePhraseIds = normalizeManualTimingSourcePhraseIds(containingScene.source_phrase_ids || containingScene.sourcePhraseIds);
+      if (!sourcePhraseIds.includes(phrase.phrase_id)) {
+        warnings.push(`Фраза внутри сцены, но не привязана: ${phrase.phrase_id} → ${containingScene.scene_id}`);
+      }
+    }
+  });
+
   const durationWarningOrder = [
     ["too_short", "Короткие сцены"],
     ["short_but_ok", "Коротковатые сцены"],
@@ -790,6 +863,7 @@ export function buildManualTimingWarnings(project = {}) {
 export function buildManualTimingExportJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
+  const audio_phrases = normalizeManualTimingAudioPhrases(safeProject.audio_phrases);
   const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
   const hydratedScenes = hydrateManualTimingScenesWithStoryBlocks(Array.isArray(safeProject.scenes) ? safeProject.scenes : [], normalizedStoryBlocks);
   const scenes = hydratedScenes.map((scene, idx) => ({
@@ -817,6 +891,7 @@ export function buildManualTimingExportJson(project = {}) {
     prompt_hint_ru: String(scene?.prompt_hint_ru || scene?.photo_prompt_hint_ru || ""),
     story_position_ru: String(scene?.story_position_ru || scene?.story_time || ""),
     user_note_ru: String(scene?.user_note_ru || ""),
+    source_phrase_ids: normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds),
     story_block_id: String(scene?.story_block_id || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id),
     story_block_title_ru: String(scene?.story_block_title_ru || ""),
     story_block_color: normalizeStoryBlockColor(scene?.story_block_color || ""),
@@ -834,9 +909,13 @@ export function buildManualTimingExportJson(project = {}) {
   }));
 
   const story_blocks = syncManualTimingStoryBlocksWithScenes(normalizedStoryBlocks, scenes).map(({ scene_count, ...block }) => block);
+  const hasNeedsTranscription = audio_phrases.some((phrase) => String(phrase.status || "") === "needs_transcription");
+  const chatgptTask = hasNeedsTranscription
+    ? `${CHATGPT_STORY_SPLIT_TASK} В audio_phrases есть фразы со status=needs_transcription: если пользователь дал аудио или текст, распознай и переведи их; не удаляй эти фразы; предложи, к какой scene их привязать через source_phrase_ids.`
+    : CHATGPT_STORY_SPLIT_TASK;
 
   return {
-    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    chatgpt_task: chatgptTask,
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
@@ -845,6 +924,7 @@ export function buildManualTimingExportJson(project = {}) {
     audio_duration_sec: Number(audio.duration_sec || 0),
     global_hint: safeProject.timing_status === "confirmed" ? "Manual timing confirmed by user" : "Manual timing draft",
     story_blocks,
+    audio_phrases,
     scenes,
   };
 }
