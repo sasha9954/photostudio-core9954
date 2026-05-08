@@ -53,6 +53,48 @@ function isFirstLastRoute(route = "") {
 }
 
 
+function normalizeStoryBlock(block = {}, idx = 0) {
+  const id = String(block?.block_id || block?.id || block?.story_block_id || `block_${idx + 1}`).trim();
+  return {
+    ...block,
+    block_id: id,
+    id: String(block?.id || id),
+    title_ru: String(block?.title_ru || block?.title || block?.name || id),
+    color: String(block?.color || block?.story_block_color || "#8aa4ff"),
+    goal_ru: String(block?.goal_ru || block?.story_block_goal_ru || ""),
+    reveal_ru: String(block?.reveal_ru || block?.story_block_reveal_ru || ""),
+    emotion_ru: String(block?.emotion_ru || block?.story_block_emotion_ru || ""),
+  };
+}
+
+function buildStoryBlockLookup(storyBlocks = []) {
+  const lookup = new Map();
+  (Array.isArray(storyBlocks) ? storyBlocks : []).forEach((block, idx) => {
+    const normalized = normalizeStoryBlock(block, idx);
+    if (normalized.block_id) lookup.set(normalized.block_id, normalized);
+    if (normalized.id) lookup.set(normalized.id, normalized);
+  });
+  return lookup;
+}
+
+function truncateText(value = "", max = 120) {
+  const text = String(value || "").trim();
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+function isMeaningSceneVisible(scene = {}) {
+  return Boolean(
+    scene?.story_block_title_ru
+    || scene?.story_block_position_ru
+    || scene?.translated_text_ru
+    || scene?.scene_goal_ru
+    || scene?.prompt_hint_ru
+    || scene?.photo_prompt_hint_ru
+    || scene?.short_note
+  );
+}
+
 function resolveManualVideoRoutePayload(scene = {}) {
   const route = String(scene.route || "i2v").trim();
 
@@ -223,9 +265,11 @@ function toBool(value, fallback = false) {
   return fallback;
 }
 
-function normalizeScene(scene = {}, idx = 0) {
+function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
   const start = Number(scene.start_sec || 0);
   const end = Number(scene.end_sec || start);
+  const blockId = String(scene.story_block_id || "").trim();
+  const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
   return {
     scene_id: String(scene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(scene.index || idx + 1),
@@ -247,6 +291,20 @@ function normalizeScene(scene = {}, idx = 0) {
     prompt_hint_ru: String(scene.prompt_hint_ru || scene.photo_prompt_hint_ru || ""),
     user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || ""),
     story_position_ru: String(scene.story_position_ru || scene.story_time || ""),
+    story_block_id: blockId,
+    story_block_title_ru: String(scene.story_block_title_ru || block?.title_ru || ""),
+    story_block_color: String(scene.story_block_color || block?.color || ""),
+    story_block_position_ru: String(scene.story_block_position_ru || ""),
+    story_block_goal_ru: String(scene.story_block_goal_ru || block?.goal_ru || ""),
+    story_block_reveal_ru: String(scene.story_block_reveal_ru || block?.reveal_ru || ""),
+    story_block_emotion_ru: String(scene.story_block_emotion_ru || block?.emotion_ru || ""),
+    original_text: String(scene.original_text || ""),
+    translated_text_ru: String(scene.translated_text_ru || ""),
+    meaning_hint_ru: String(scene.meaning_hint_ru || ""),
+    source_text_en: String(scene.source_text_en || ""),
+    adapted_text_en: String(scene.adapted_text_en || ""),
+    scene_role_in_block_ru: String(scene.scene_role_in_block_ru || ""),
+    block_progress_ru: String(scene.block_progress_ru || ""),
     video_prompt: String(scene.video_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
@@ -293,8 +351,10 @@ export default function ManualClipDirectorPage() {
     if (!parsedProject) return;
     try {
       const parsed = parsedProject;
-      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map(normalizeScene) : [];
-      setProject({ ...parsed, scenes });
+      const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
+      const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
+      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
+      setProject({ ...parsed, story_blocks: storyBlocks, scenes });
       setSelectedSceneId(String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""));
     } catch {
       setProject(null);
@@ -306,6 +366,7 @@ export default function ManualClipDirectorPage() {
     persistManualProject(nextProject);
   };
 
+  const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
   const selectedSceneIndex = useMemo(() => scenes.findIndex((s) => s.scene_id === selectedScene?.scene_id), [scenes, selectedScene]);
@@ -317,6 +378,32 @@ export default function ManualClipDirectorPage() {
   const promptHintText = selectedScene
     ? (selectedScene.prompt_hint_ru || "Напишите prompt вручную под выбранное изображение.")
     : "Напишите prompt вручную под выбранное изображение.";
+  const blockSceneCounts = useMemo(() => {
+    const counts = new Map();
+    scenes.forEach((scene) => {
+      const blockId = String(scene?.story_block_id || "").trim();
+      if (!blockId) return;
+      counts.set(blockId, (counts.get(blockId) || 0) + 1);
+    });
+    return counts;
+  }, [scenes]);
+  const selectedBlockSceneIndex = useMemo(() => {
+    if (!selectedScene?.story_block_id) return 0;
+    return scenes.filter((scene) => scene.story_block_id === selectedScene.story_block_id).findIndex((scene) => scene.scene_id === selectedScene.scene_id) + 1;
+  }, [scenes, selectedScene]);
+  const selectedBlockSceneCount = selectedScene?.story_block_id ? (blockSceneCounts.get(selectedScene.story_block_id) || 0) : 0;
+  const selectedSceneActionText = selectedScene ? (selectedScene.scene_goal_ru || selectedScene.prompt_hint_ru || selectedScene.photo_prompt_hint_ru || "") : "";
+  const selectedSceneRuText = selectedScene ? (selectedScene.translated_text_ru || selectedScene.short_note || selectedScene.drama_hint || "") : "";
+  const selectedSceneOriginalText = selectedScene ? (selectedScene.original_text || selectedScene.adapted_text_en || selectedScene.source_text_en || "") : "";
+  const selectedSceneMeaningDetails = selectedScene ? [
+    ["Original", selectedSceneOriginalText],
+    ["Meaning", selectedScene.meaning_hint_ru],
+    ["Цель блока", selectedScene.story_block_goal_ru],
+    ["Раскрытие блока", selectedScene.story_block_reveal_ru],
+    ["Эмоция блока", selectedScene.story_block_emotion_ru],
+    ["Роль сцены в блоке", selectedScene.scene_role_in_block_ru],
+    ["Прогресс блока", selectedScene.block_progress_ru],
+  ].filter(([, value]) => String(value || "").trim()) : [];
   const userNoteItems = useMemo(() => {
     const raw = String(selectedScene?.user_note_ru || "");
     if (!raw.trim()) return [];
@@ -625,10 +712,35 @@ export default function ManualClipDirectorPage() {
       <button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Назад к AI-разбивке</button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
     </div>
+    {storyBlocks.length ? <div className="storyboardBlockStrip">
+      {storyBlocks.map((block, idx) => {
+        const blockId = String(block.block_id || block.id || `block_${idx + 1}`);
+        const firstScene = scenes.find((scene) => scene.story_block_id === blockId);
+        const isActive = selectedScene?.story_block_id === blockId;
+        return <button
+          key={`story-block-${blockId}-${idx}`}
+          type="button"
+          className={`storyboardBlockChip ${isActive ? "storyboardBlockChipActive" : ""}`}
+          style={{ "--storyboard-block-color": block.color || "#8aa4ff" }}
+          onClick={() => firstScene ? setSelectedSceneId(firstScene.scene_id) : undefined}
+          disabled={!firstScene}
+        >
+          {block.title_ru || blockId} · {blockSceneCounts.get(blockId) || 0}
+        </button>;
+      })}
+    </div> : null}
+
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">
-        {scenes.map((scene, idx) => <button key={scene.scene_id} className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`} onClick={() => setSelectedSceneId(scene.scene_id)}>
-          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span><small>{scene.drama_hint || scene.short_note || scene.scene_goal_ru || "—"}</small>
+        {scenes.map((scene, idx) => <button
+          key={scene.scene_id}
+          className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}
+          style={scene.story_block_color ? { "--storyboard-block-color": scene.story_block_color } : undefined}
+          onClick={() => setSelectedSceneId(scene.scene_id)}
+        >
+          <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
+          {scene.story_block_title_ru ? <span className="manualStoryBlockBadge">{scene.story_block_title_ru}</span> : null}
+          <small>{truncateText(scene.short_note || scene.meaning_hint_ru || scene.scene_goal_ru || scene.drama_hint || "—", 96)}</small>
         </button>)}
       </aside>
 
@@ -652,6 +764,28 @@ export default function ManualClipDirectorPage() {
           <div>Тайминг сцены: {Number(selectedScene.start_sec).toFixed(2)} – {Number(selectedScene.end_sec).toFixed(2)} c</div>
           <div>Длительность: {Number(selectedScene.duration_sec).toFixed(2)} c</div>
         </div>
+
+        {isMeaningSceneVisible(selectedScene) ? <div className="storyboardSceneMeaningCompact">
+          <div className="storyboardSceneMeaningHeader">
+            <strong>Смысл сцены</strong>
+            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedScene.story_block_title_ru}</span> : null}
+            {selectedBlockSceneCount ? <em>сцена {selectedBlockSceneIndex || 1} из {selectedBlockSceneCount}</em> : null}
+          </div>
+          <div className="storyboardSceneMeaningBody">
+            {(selectedScene.story_block_position_ru || storyPositionText) ? <p><b>Позиция:</b> {selectedScene.story_block_position_ru || storyPositionText}</p> : null}
+            {selectedSceneRuText ? <p><b>RU:</b> {selectedSceneRuText}</p> : null}
+            {selectedSceneActionText ? <p><b>Что делать:</b> {selectedSceneActionText}</p> : null}
+          </div>
+          {selectedSceneMeaningDetails.length ? <details className="storyboardSceneMeaningDetails">
+            <summary>Подробнее</summary>
+            <div className="storyboardSceneMeaningGrid">
+              {selectedSceneMeaningDetails.map(([label, value]) => <React.Fragment key={`${selectedScene.scene_id}-${label}`}>
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </React.Fragment>)}
+            </div>
+          </details> : null}
+        </div> : null}
 
         <div className="manualSceneGuidance">
           <strong>Подсказка сцены</strong>

@@ -107,6 +107,30 @@ function shouldTraceScenarioRoleScene(sceneId = "") {
   return normalizeText(sceneId) === needle;
 }
 
+function normalizeScenarioStoryBlock(block = {}, idx = 0) {
+  const id = normalizeText(block?.block_id ?? block?.id ?? block?.story_block_id ?? `block_${idx + 1}`);
+  return {
+    ...block,
+    block_id: id,
+    id: normalizeText(block?.id) || id,
+    title_ru: normalizeText(block?.title_ru ?? block?.title ?? block?.name ?? id),
+    color: normalizeText(block?.color ?? block?.story_block_color) || "#8aa4ff",
+    goal_ru: normalizeText(block?.goal_ru ?? block?.story_block_goal_ru),
+    reveal_ru: normalizeText(block?.reveal_ru ?? block?.story_block_reveal_ru),
+    emotion_ru: normalizeText(block?.emotion_ru ?? block?.story_block_emotion_ru),
+  };
+}
+
+function buildScenarioStoryBlockLookup(storyBlocks = []) {
+  const lookup = new Map();
+  (Array.isArray(storyBlocks) ? storyBlocks : []).forEach((block, idx) => {
+    const normalized = normalizeScenarioStoryBlock(block, idx);
+    if (normalized.block_id) lookup.set(normalized.block_id, normalized);
+    if (normalized.id) lookup.set(normalized.id, normalized);
+  });
+  return lookup;
+}
+
 function resolveScenarioNegativePrompt(source = {}) {
   const sceneContract = source?.sceneContract && typeof source.sceneContract === "object" ? source.sceneContract : {};
   return normalizeText(
@@ -1812,6 +1836,8 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     ? source.sceneContract
     : {};
   const mergedSceneContractSource = { ...nestedSceneContract, ...source };
+  const blockId = normalizeText(source.story_block_id);
+  const storyBlock = blockId && scenarioPackage?.storyBlockLookup?.get ? scenarioPackage.storyBlockLookup.get(blockId) : null;
   const sourceSegmentId = normalizeText(source.segment_id ?? source.segmentId);
   const sourceSceneId = normalizeText(source.sceneId ?? source.scene_id);
   const canonicalSegmentId = resolveCanonicalSegmentId(source, index);
@@ -1838,6 +1864,24 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
     summaryEn: summaryDual.en,
     sceneGoalRu: sceneGoalDual.ru,
     sceneGoalEn: sceneGoalDual.en,
+    story_block_id: blockId,
+    story_block_title_ru: normalizeText(source.story_block_title_ru) || storyBlock?.title_ru || "",
+    story_block_color: normalizeText(source.story_block_color) || storyBlock?.color || "",
+    story_block_position_ru: normalizeText(source.story_block_position_ru),
+    story_block_goal_ru: normalizeText(source.story_block_goal_ru) || storyBlock?.goal_ru || "",
+    story_block_reveal_ru: normalizeText(source.story_block_reveal_ru) || storyBlock?.reveal_ru || "",
+    story_block_emotion_ru: normalizeText(source.story_block_emotion_ru) || storyBlock?.emotion_ru || "",
+    original_text: normalizeText(source.original_text),
+    translated_text_ru: normalizeText(source.translated_text_ru),
+    meaning_hint_ru: normalizeText(source.meaning_hint_ru),
+    source_text_en: normalizeText(source.source_text_en),
+    adapted_text_en: normalizeText(source.adapted_text_en),
+    scene_role_in_block_ru: normalizeText(source.scene_role_in_block_ru),
+    block_progress_ru: normalizeText(source.block_progress_ru),
+    photo_prompt_hint_ru: normalizeText(source.photo_prompt_hint_ru),
+    prompt_hint_ru: normalizeText(source.prompt_hint_ru ?? source.photo_prompt_hint_ru),
+    short_note: normalizeText(source.short_note),
+    user_note_ru: normalizeText(source.user_note_ru ?? source.user_notes_ru),
     imagePromptRu: sourceFinalPayload.image_prompt ? canonicalImageFromFinalPayload : imageDual.ru,
     imagePromptEn: sourceFinalPayload.image_prompt ? canonicalImageFromFinalPayload : imageDual.en,
     videoPromptRu: sourceFinalPayload.video_prompt ? canonicalPositiveForScene : videoDual.ru,
@@ -2560,6 +2604,8 @@ export function normalizeScenarioStoryboardPackage({
         : (safeScene?.engine_hints && typeof safeScene.engine_hints === "object" ? safeScene.engine_hints : {}),
     };
   });
+  const storyBlocks = Array.isArray(storyboardOut?.story_blocks) ? storyboardOut.story_blocks.map(normalizeScenarioStoryBlock) : [];
+  const storyBlockLookup = buildScenarioStoryBlockLookup(storyBlocks);
   const globalVisualLock = buildGlobalVisualLock(storyboardOut || {}, directorOutput || {});
   const globalCameraProfile = buildGlobalCameraProfile(storyboardOut || {}, directorOutput || {});
   const format = resolveFormatAlias(
@@ -2646,6 +2692,7 @@ export function normalizeScenarioStoryboardPackage({
       mustAppearRoles,
       contextRefs,
       refDirectives,
+      storyBlockLookup,
     });
     const segmentId = String(
       normalizedSceneBase?.segment_id
@@ -2855,6 +2902,8 @@ export function normalizeScenarioStoryboardPackage({
     sceneContractVersion: "v1",
     sceneContractSource: canonicalSceneSource,
     scenes,
+    story_blocks: storyBlocks,
+    storyBlocks,
     format,
     storySummaryRu: storySummary.ru,
     storySummaryEn: storySummary.en,
