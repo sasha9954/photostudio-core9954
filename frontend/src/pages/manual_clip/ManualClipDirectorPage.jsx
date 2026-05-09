@@ -198,6 +198,15 @@ function resolveManualVideoRoutePayload(scene = {}) {
   }
 
   if (route === "i2v_text") {
+    const speechText = String(scene.narrator_text_en || scene.speaker_text_en || scene.narrator_text_ru || scene.speaker_text_ru || scene.original_text || "");
+    const voiceProfile = String(scene.voice_profile || scene.narrator_voice_profile_en || "");
+    const negativeVoiceTraits = String(scene.negative_voice_traits || "");
+    const soundPrompt = [
+      String(scene.sound_prompt || ""),
+      speechText ? `Spoken dialogue / narrator voice: "${speechText}"` : "",
+      voiceProfile ? `Voice style: ${voiceProfile}` : "",
+      negativeVoiceTraits ? `Avoid voice traits: ${negativeVoiceTraits}` : "",
+    ].filter(Boolean).join("\n");
     return {
       resolvedWorkflowKey: "i2v_sound",
       video_generation_route: "i2v_text",
@@ -212,11 +221,11 @@ function resolveManualVideoRoutePayload(scene = {}) {
       generated_speech_required: true,
       narratorText: String(scene.narrator_text_en || scene.original_text || ""),
       speakerText: String(scene.speaker_text_en || ""),
-      voiceProfile: String(scene.voice_profile || scene.narrator_voice_profile_en || ""),
-      negativeVoiceTraits: String(scene.negative_voice_traits || ""),
-      negative_voice_traits: String(scene.negative_voice_traits || ""),
-      soundPrompt: String(scene.sound_prompt || ""),
-      sound_prompt: String(scene.sound_prompt || "")
+      voiceProfile,
+      negativeVoiceTraits,
+      negative_voice_traits: negativeVoiceTraits,
+      soundPrompt,
+      sound_prompt: soundPrompt,
     };
   }
 

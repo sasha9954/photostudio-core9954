@@ -1487,6 +1487,11 @@ export default function ManualTimingEditorPage() {
   const onBuildStoryScenesFromAsr = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     if (!audioPhrases.length) return;
+    const nextMode = modeConfig.mode || project.project_mode;
+    const nextKind =
+      nextMode === MANUAL_TIMING_MUSIC_CLIP_MODE ? "clip" :
+      nextMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" :
+      MANUAL_TIMING_STORY_PROJECT_KIND;
     const hasCreatedMaterials = scenes.some(sceneHasCreatedMaterials);
     if (hasCreatedMaterials) {
       const confirmed = window.confirm("В сценах уже есть созданные материалы. Пересборка scenes может отвязать их. Продолжить?");
@@ -1498,7 +1503,7 @@ export default function ManualTimingEditorPage() {
       targetSceneDurationSec: { min: 4, preferred: 6, max: 9 },
       maxSceneDurationSec: 10,
       minSceneDurationSec: 2,
-      projectKind: project.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND,
+      projectKind: nextKind,
       route: "i2v",
     });
     const coverage = validateSceneCoverage(nextScenes, audioDurationSec);
@@ -1510,8 +1515,8 @@ export default function ManualTimingEditorPage() {
     );
     persist({
       ...project,
-      project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
-      project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
+      project_mode: nextMode,
+      project_kind: nextKind,
       audio: {
         ...audio,
         duration_sec: roundTimingSec(audioDurationSec),
@@ -1524,7 +1529,7 @@ export default function ManualTimingEditorPage() {
       timing_status: "draft",
     });
     const statusTail = coverage.ok ? "Покрытие audio_duration_sec проверено: без дыр и overlap." : coverage.errors.join(" ");
-    setAsrStatus(`Story scenes из ASR собраны: ${hydratedScenes.length} сцен, ${draftBlocks.length} черновых story_blocks. ${statusTail}`);
+    setAsrStatus(`${workflowLabels.buildScenes}: собрано ${hydratedScenes.length} сцен, ${draftBlocks.length} черновых story_blocks. ${statusTail}`);
     window.setTimeout(() => setAsrStatus(""), 7000);
   };
 
@@ -1659,15 +1664,15 @@ export default function ManualTimingEditorPage() {
     }
   };
 
-  const onCopyStoryPassJson = async () => {
+  const onCopyModePassJson = async () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const payload = buildManualTimingStoryPassJson(project);
+    const payload = buildManualTimingModePassJson(project);
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setCopyStatus("JSON для Story Pass скопирован");
+      setCopyStatus(`JSON для ${workflowLabels.pass} скопирован`);
       window.setTimeout(() => setCopyStatus(""), 1600);
     } catch {
-      setCopyStatus("Не удалось скопировать JSON для Story Pass");
+      setCopyStatus(`Не удалось скопировать JSON для ${workflowLabels.pass}`);
     }
   };
 
@@ -1936,7 +1941,7 @@ export default function ManualTimingEditorPage() {
         <div className="manualTimingWorkflowActions" aria-label={`Основной workflow ${workflowLabels.pass}`}>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>{workflowLabels.phraseMap}</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>{workflowLabels.buildScenes}</button>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Открыть режиссёрскую доску"}</button>
@@ -2131,7 +2136,7 @@ export default function ManualTimingEditorPage() {
               {isJsonImportOpen ? "Скрыть поле JSON" : workflowLabels.insertPass}
             </button>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
