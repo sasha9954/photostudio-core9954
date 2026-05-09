@@ -21,6 +21,7 @@ class ManualTimingAsrSettings:
     min_phrase_sec: float = 1.2
     padding_sec: float = 0.0
     model_size: str = "small"
+    split_on_punctuation: bool = True
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -53,6 +54,7 @@ def _clamp_settings(settings: ManualTimingAsrSettings) -> ManualTimingAsrSetting
         min_phrase_sec=min_phrase,
         padding_sec=padding,
         model_size=model_size,
+        split_on_punctuation=bool(getattr(settings, "split_on_punctuation", True)),
     )
 
 
@@ -157,10 +159,10 @@ def split_words_to_phrases(words: list[dict[str, Any]], settings: ManualTimingAs
         current_duration = _safe_float(prev.get("end_sec"), 0.0) - _safe_float(current[0].get("start_sec"), 0.0)
 
         pause_boundary = gap >= safe.min_pause_sec and current_duration >= safe.min_phrase_sec
-        punctuation_boundary = current_duration >= safe.min_phrase_sec and _is_punctuation_boundary(prev)
+        punctuation_boundary = safe.split_on_punctuation and current_duration >= safe.min_phrase_sec and _is_punctuation_boundary(prev)
         max_boundary = current_duration_if_added > safe.max_phrase_sec and (punctuation_boundary or current_duration >= safe.max_phrase_sec * 0.85)
 
-        if pause_boundary or max_boundary:
+        if pause_boundary or punctuation_boundary or max_boundary:
             close_current()
             current = [word]
         else:
@@ -220,5 +222,6 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
             "max_phrase_sec": safe.max_phrase_sec,
             "min_phrase_sec": safe.min_phrase_sec,
             "padding_sec": safe.padding_sec,
+            "split_on_punctuation": safe.split_on_punctuation,
         },
     }
