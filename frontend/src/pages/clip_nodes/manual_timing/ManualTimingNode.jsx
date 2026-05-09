@@ -241,13 +241,28 @@ export default function ManualTimingNode({ id, data }) {
       const durationSec = uploadedDurationSec > 0
         ? Number(uploadedDurationSec.toFixed(3))
         : Number(metadata.duration_sec || 0);
-      const uploadedAssetUrl = String(uploadedAsset?.url || uploadedAsset?.assetUrl || "").trim();
+      const uploadedAssetUrl = String(
+        uploadedAsset?.url
+        || uploadedAsset?.assetUrl
+        || uploadedAsset?.asset_url
+        || uploadedAsset?.publicUrl
+        || uploadedAsset?.public_url
+        || uploadedAsset?.path
+        || ""
+      ).trim();
+      const uploadedAssetFilename = String(
+        uploadedAsset?.name
+        || uploadedAsset?.filename
+        || uploadedAsset?.fileName
+        || file.name
+        || ""
+      ).trim();
       if (!uploadedAssetUrl) throw new Error("asset_url_missing");
 
       patch({
         audio: {
           url: uploadedAssetUrl,
-          filename: uploadedAsset?.name || file.name,
+          filename: uploadedAssetFilename,
           duration_sec: Number.isFinite(durationSec) ? durationSec : 0,
           duration_ms: Number.isFinite(durationSec) && durationSec > 0 ? Math.round(durationSec * 1000) : Number(metadata.duration_ms || 0),
         },
@@ -264,7 +279,7 @@ export default function ManualTimingNode({ id, data }) {
     } catch (error) {
       patch({
         audio_upload_status: "error",
-        audio_upload_error: `Не удалось загрузить audio как backend asset: ${error?.message || error}`,
+        audio_upload_error: `Не удалось загрузить аудио на backend. ASR не сможет работать с blob URL.${error?.message ? ` (${error.message})` : ""}`,
         updatedAt: Date.now(),
       });
     }

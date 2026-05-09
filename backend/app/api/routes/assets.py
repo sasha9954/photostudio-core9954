@@ -235,13 +235,24 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 
     response_mime = ct or EXTENSION_TO_MIME.get(ext, "application/octet-stream")
     url = asset_url(fn)
+    original_name = file.filename or fn
     return {
+        "ok": True,
         "url": url,
         "assetUrl": url,
+        "asset_url": url,
+        "publicUrl": url,
+        "public_url": url,
+        "path": url,
         "mime": response_mime,
+        "mime_type": response_mime,
         "bytes": len(raw),
+        "size_bytes": len(raw),
         "durationSec": duration_sec,
-        "name": file.filename or fn,
+        "duration_sec": duration_sec,
+        "name": original_name,
+        "filename": original_name,
+        "fileName": original_name,
         "kind": media_kind,
     }
 
