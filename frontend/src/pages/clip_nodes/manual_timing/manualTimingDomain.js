@@ -992,6 +992,11 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
     ].forEach((key) => {
       if (!String(nextScene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
     });
+    ["video_prompt", "negative_prompt", "sound_prompt"].forEach((key) => {
+      if (String(nextScene[key] || "").trim()) {
+        errors.push(`${sceneId}: Story Pass не должен заполнять ${key}.`);
+      }
+    });
   });
 
   if (!storyBlocks.length) {
