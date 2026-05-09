@@ -1,5 +1,6 @@
 import { CHATGPT_STORY_SPLIT_TASK, STORY_PREP_TEMPLATE_META } from "../manual/manualClipBoardDomain.js";
 import {
+  canUseLegacyManualProjectStorage,
   getAccountScopedStorageKey,
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
   MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY,
@@ -53,13 +54,16 @@ export function readManualTimingJsonStorage(key) {
 
 export function readManualTimingProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
-  const active = readManualTimingJsonStorage(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
-    || readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+  const active = readManualTimingJsonStorage(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY));
   if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
   const scoped = readManualTimingJsonStorage(getAccountScopedStorageKey(getManualTimingProjectStorageKey(safeId)));
   if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) return scoped;
-  const legacyScoped = readManualTimingJsonStorage(getManualTimingProjectStorageKey(safeId));
-  if (legacyScoped && (!safeId || String(legacyScoped?.nodeId || "") === safeId)) return legacyScoped;
+  if (canUseLegacyManualProjectStorage()) {
+    const legacyActive = readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+    if (legacyActive && (!safeId || String(legacyActive?.nodeId || "") === safeId)) return legacyActive;
+    const legacyScoped = readManualTimingJsonStorage(getManualTimingProjectStorageKey(safeId));
+    if (legacyScoped && (!safeId || String(legacyScoped?.nodeId || "") === safeId)) return legacyScoped;
+  }
   return null;
 }
 
@@ -68,13 +72,10 @@ export function persistManualTimingProject(project = {}) {
   try {
     const serialized = JSON.stringify(safeProject);
     localStorage.setItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY), serialized);
-    localStorage.setItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY, serialized);
     const nodeId = String(safeProject?.nodeId || "").trim();
     if (nodeId) {
       localStorage.setItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY), nodeId);
-      localStorage.setItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY, nodeId);
       localStorage.setItem(getAccountScopedStorageKey(getManualTimingProjectStorageKey(nodeId)), serialized);
-      localStorage.setItem(getManualTimingProjectStorageKey(nodeId), serialized);
     }
   } catch {}
 }
@@ -84,15 +85,17 @@ export function removeManualTimingProjectForNode(nodeId = "") {
   try {
     if (safeId) {
       localStorage.removeItem(getAccountScopedStorageKey(getManualTimingProjectStorageKey(safeId)));
-      localStorage.removeItem(getManualTimingProjectStorageKey(safeId));
+      if (canUseLegacyManualProjectStorage()) localStorage.removeItem(getManualTimingProjectStorageKey(safeId));
     }
     const active = readManualTimingJsonStorage(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
-      || readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+      || (canUseLegacyManualProjectStorage() ? readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY) : null);
     if (!safeId || String(active?.nodeId || "") === safeId) {
       localStorage.removeItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY));
       localStorage.removeItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY));
-      localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
-      localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY);
+      if (canUseLegacyManualProjectStorage()) {
+        localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+        localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY);
+      }
     }
   } catch {}
 }
@@ -1414,7 +1417,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
       duration_sec: finalDuration || baseAudio.duration_sec || 0,
       duration_ms: Math.round((finalDuration || baseAudio.duration_sec || 0) * 1000),
     },
-    timing_status: "draft",
+    timing_status: String(safeRaw.timing_status || "draft"),
     markers,
     story_blocks: storyBlocks,
     song_blocks: Array.isArray(safeRaw.song_blocks) ? safeRaw.song_blocks : (Array.isArray(safeBase.song_blocks) ? safeBase.song_blocks : []),

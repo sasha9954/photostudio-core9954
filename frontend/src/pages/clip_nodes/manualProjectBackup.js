@@ -17,6 +17,10 @@ export function getAccountScopedStorageKey(baseKey = "") {
   return `${String(baseKey || "manual_project")}:account:${getManualProjectAccountScopeId()}`;
 }
 
+export function canUseLegacyManualProjectStorage() {
+  return getManualProjectAccountScopeId() === "guest";
+}
+
 export function getManualTimingProjectStorageKey(nodeId = "") {
   const safeId = String(nodeId || "default").trim() || "default";
   return `manual_timing_project:${safeId}`;
@@ -132,15 +136,17 @@ function readActiveProjectPair(activeKey, activeIdKey, projectKeyFactory) {
       if (hasMeaningfulManualProject(scopedNodeProject)) return scopedNodeProject;
     }
   } catch {}
-  const legacyActive = readManualProjectJsonStorage(activeKey);
-  if (hasMeaningfulManualProject(legacyActive)) return legacyActive;
-  try {
-    const legacyNodeId = String(localStorage.getItem(activeIdKey) || "").trim();
-    if (legacyNodeId) {
-      const legacyNodeProject = readManualProjectJsonStorage(projectKeyFactory(legacyNodeId));
-      if (hasMeaningfulManualProject(legacyNodeProject)) return legacyNodeProject;
-    }
-  } catch {}
+  if (canUseLegacyManualProjectStorage()) {
+    const legacyActive = readManualProjectJsonStorage(activeKey);
+    if (hasMeaningfulManualProject(legacyActive)) return legacyActive;
+    try {
+      const legacyNodeId = String(localStorage.getItem(activeIdKey) || "").trim();
+      if (legacyNodeId) {
+        const legacyNodeProject = readManualProjectJsonStorage(projectKeyFactory(legacyNodeId));
+        if (hasMeaningfulManualProject(legacyNodeProject)) return legacyNodeProject;
+      }
+    } catch {}
+  }
   return null;
 }
 
