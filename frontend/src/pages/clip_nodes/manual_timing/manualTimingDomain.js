@@ -10,7 +10,7 @@ export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
 export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
 
 export const MANUAL_TIMING_SECTIONS = ["intro", "verse", "chorus", "bridge", "instrumental", "outro"];
-export const MANUAL_TIMING_ROUTES = ["ia2v", "i2v"];
+export const MANUAL_TIMING_ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text"];
 export const MANUAL_TIMING_ENERGY = ["soft", "mid", "high"];
 
 export const MANUAL_TIMING_UNKNOWN_STORY_BLOCK = {
@@ -122,6 +122,20 @@ function pickManualTimingModeAndKind(raw = {}, base = {}) {
 
   const splitType = String(raw?.split_type || raw?.splitType || "").toLowerCase();
   const task = typeof raw?.chatgpt_task === "string" ? raw.chatgpt_task : JSON.stringify(raw?.chatgpt_task || "");
+  if (splitType.includes("clip") || task.includes("Music Clip Pass") || Array.isArray(raw?.song_blocks)) {
+    return {
+      project_mode: MANUAL_TIMING_MUSIC_CLIP_MODE,
+      project_kind: MANUAL_TIMING_MUSIC_CLIP_PROJECT_KIND,
+    };
+  }
+
+  if (splitType.includes("podcast") || task.includes("Podcast / Dialogue Pass") || Array.isArray(raw?.speakers) || Array.isArray(raw?.topic_blocks)) {
+    return {
+      project_mode: MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
+      project_kind: MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND,
+    };
+  }
+
   const hasStoryImportShape = splitType.includes("story")
     || splitType.includes("asr")
     || task.includes("Story Pass")
@@ -909,6 +923,28 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
     video_prompt: String(scene?.video_prompt || ""),
     negative_prompt: String(scene?.negative_prompt || ""),
     sound_prompt: String(scene?.sound_prompt || ""),
+    song_block_id: pickManualTimingText(scene, ["song_block_id", "songBlockId"]),
+    song_block_type: pickManualTimingText(scene, ["song_block_type", "songBlockType"]),
+    song_block_title_ru: pickManualTimingText(scene, ["song_block_title_ru", "songBlockTitleRu"]),
+    lyrics_text: pickManualTimingText(scene, ["lyrics_text", "lyricsText"]),
+    visual_role_ru: pickManualTimingText(scene, ["visual_role_ru", "visualRoleRu"]),
+    performance_role_ru: pickManualTimingText(scene, ["performance_role_ru", "performanceRoleRu"]),
+    lip_sync_required: toManualTimingBool(scene?.lip_sync_required, false),
+    vocal_owner_role: pickManualTimingText(scene, ["vocal_owner_role", "vocalOwnerRole"]),
+    speaker_id: pickManualTimingText(scene, ["speaker_id", "speakerId"]),
+    speaker_name: pickManualTimingText(scene, ["speaker_name", "speakerName"]),
+    topic_block_id: pickManualTimingText(scene, ["topic_block_id", "topicBlockId"]),
+    topic_block_title_ru: pickManualTimingText(scene, ["topic_block_title_ru", "topicBlockTitleRu"]),
+    narrator_text_en: pickManualTimingText(scene, ["narrator_text_en", "narratorTextEn"]),
+    narrator_text_ru: pickManualTimingText(scene, ["narrator_text_ru", "narratorTextRu"]),
+    speaker_text_en: pickManualTimingText(scene, ["speaker_text_en", "speakerTextEn"]),
+    speaker_text_ru: pickManualTimingText(scene, ["speaker_text_ru", "speakerTextRu"]),
+    generated_speech_required: toManualTimingBool(scene?.generated_speech_required, false),
+    voice_profile_id: pickManualTimingText(scene, ["voice_profile_id", "voiceProfileId"]),
+    voice_profile: pickManualTimingText(scene, ["voice_profile", "voiceProfile"]),
+    narrator_voice_profile_en: pickManualTimingText(scene, ["narrator_voice_profile_en", "narratorVoiceProfileEn"]),
+    negative_voice_traits: pickManualTimingText(scene, ["negative_voice_traits", "negativeVoiceTraits"]),
+    broll_hint_ru: pickManualTimingText(scene, ["broll_hint_ru", "brollHintRu"]),
   };
 }
 
@@ -1069,6 +1105,168 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
   return { ok: !errors.length, errors };
 }
 
+
+export const MANUAL_TIMING_CLIP_PASS_TASK_RU = "Это JSON для Music Clip Pass. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids. Нужно определить структуру песни: intro, verse, pre_chorus, chorus, drop, bridge, instrumental, outro. Заполни song_blocks и смысловые поля сцен. Назначь route: ia2v только для реального lip-sync/вокальной фразы, i2v для сюжетных/визуальных сцен, i2v_sound для атмосферных сцен со звуком. video_prompt, negative_prompt, sound_prompt оставить пустыми.";
+
+export const MANUAL_TIMING_PODCAST_PASS_TASK_RU = "Это JSON для Podcast / Dialogue Pass. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids. Нужно определить speakers, topic_blocks, scene_type и поля сцен. Если сцена должна произносить текст через generated voice, заполни narrator_text_en/ru или speaker_text_en/ru из текста сцены. route может быть i2v, i2v_sound или i2v_text. video_prompt, negative_prompt, sound_prompt оставить пустыми.";
+
+function buildManualTimingLockedPassScenes(project = {}) {
+  return buildManualTimingExportJson(project).scenes.map((scene) => ({
+    ...scene,
+    video_prompt: "",
+    negative_prompt: "",
+    sound_prompt: "",
+  }));
+}
+
+export function buildManualTimingClipPassJson(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeManualTimingAudio(safeProject.audio);
+  const exportJson = buildManualTimingExportJson(safeProject);
+
+  return {
+    chatgpt_task: MANUAL_TIMING_CLIP_PASS_TASK_RU,
+    split_type: "asr_gap_aware_clip_pass",
+    project_mode: MANUAL_TIMING_MUSIC_CLIP_MODE,
+    project_kind: MANUAL_TIMING_MUSIC_CLIP_PROJECT_KIND,
+    audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
+    audio_phrases: exportJson.audio_phrases,
+    output_fields: {
+      song_blocks: ["block_id", "block_type", "title_ru", "summary_ru", "energy_ru", "emotional_function_ru", "start_sec", "end_sec", "scene_ids"],
+      scenes: ["song_block_id", "song_block_type", "song_block_title_ru", "lyrics_text", "translated_text_ru", "meaning_hint_ru", "scene_goal_ru", "visual_role_ru", "performance_role_ru", "photo_prompt_hint_ru", "prompt_hint_ru", "route", "lip_sync_required", "vocal_owner_role", "video_prompt", "negative_prompt", "sound_prompt"],
+    },
+    song_blocks: Array.isArray(safeProject.song_blocks) ? safeProject.song_blocks : [],
+    scenes: buildManualTimingLockedPassScenes(safeProject),
+  };
+}
+
+export function buildManualTimingPodcastPassJson(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeManualTimingAudio(safeProject.audio);
+  const exportJson = buildManualTimingExportJson(safeProject);
+
+  return {
+    chatgpt_task: MANUAL_TIMING_PODCAST_PASS_TASK_RU,
+    split_type: "asr_gap_aware_podcast_pass",
+    project_mode: MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
+    project_kind: MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND,
+    audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
+    audio_mode: String(safeProject.audio_mode || "master_with_generated_speech"),
+    audio_phrases: exportJson.audio_phrases,
+    speakers: Array.isArray(safeProject.speakers) ? safeProject.speakers : [],
+    topic_blocks: Array.isArray(safeProject.topic_blocks) ? safeProject.topic_blocks : [],
+    output_fields: {
+      speakers: ["speaker_id", "label_ru", "role_ru", "voice_profile_ru", "voice_profile_en"],
+      topic_blocks: ["block_id", "title_ru", "summary_ru", "topic_goal_ru", "topic_reveal_ru", "emotion_ru", "start_sec", "end_sec", "scene_ids"],
+      scenes: ["speaker_id", "speaker_name", "topic_block_id", "topic_block_title_ru", "scene_type", "route", "original_text", "translated_text_ru", "meaning_hint_ru", "narrator_text_en", "narrator_text_ru", "speaker_text_en", "speaker_text_ru", "generated_speech_required", "voice_profile_id", "scene_goal_ru", "broll_hint_ru", "photo_prompt_hint_ru", "prompt_hint_ru", "video_prompt", "negative_prompt", "sound_prompt"],
+    },
+    scenes: buildManualTimingLockedPassScenes(safeProject),
+  };
+}
+
+function isManualTimingClipPassPayload(raw = {}) {
+  const splitType = String(raw?.split_type || raw?.splitType || "");
+  return splitType === "asr_gap_aware_clip_pass";
+}
+
+function isManualTimingPodcastPassPayload(raw = {}) {
+  const splitType = String(raw?.split_type || raw?.splitType || "");
+  return splitType === "asr_gap_aware_podcast_pass";
+}
+
+function validateManualTimingLockedPassImport(raw = {}, basePayload = {}, passName = "Pass") {
+  const importedAudioPhrases = normalizeManualTimingAudioPhrases(raw?.audio_phrases || raw?.audioPhrases || []);
+  const baseAudioPhrases = normalizeManualTimingAudioPhrases(basePayload.audio_phrases);
+  const rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : [];
+  const importedScenes = rawScenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
+  const baseScenes = basePayload.scenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
+  const errors = [];
+
+  if (!sameManualTimingJson(importedAudioPhrases, baseAudioPhrases)) {
+    errors.push("audio_phrases изменились — pass не должен менять ASR-фразы.");
+  }
+  if (importedScenes.length !== baseScenes.length) {
+    errors.push(`Количество scenes изменилось: было ${baseScenes.length}, стало ${importedScenes.length}.`);
+  }
+
+  const byId = new Map(importedScenes.map((scene) => [String(scene.scene_id || ""), scene]));
+  baseScenes.forEach((baseScene) => {
+    const sceneId = String(baseScene.scene_id || "");
+    const nextScene = byId.get(sceneId);
+    if (!nextScene) {
+      errors.push(`${sceneId}: scene_id изменился или удалён.`);
+      return;
+    }
+    ["start_sec", "end_sec", "speech_start_sec", "speech_end_sec"].forEach((key) => {
+      if (roundTimingSec(nextScene[key]) !== roundTimingSec(baseScene[key])) {
+        errors.push(`${sceneId}: ${key} изменился (${baseScene[key]} → ${nextScene[key]}).`);
+      }
+    });
+    if (!sameManualTimingJson(normalizeManualTimingSourcePhraseIds(nextScene.source_phrase_ids), normalizeManualTimingSourcePhraseIds(baseScene.source_phrase_ids))) {
+      errors.push(`${sceneId}: source_phrase_ids изменились.`);
+    }
+    ["video_prompt", "negative_prompt", "sound_prompt"].forEach((key) => {
+      if (String(nextScene[key] || "").trim()) errors.push(`${sceneId}: ${passName} не должен заполнять ${key}.`);
+    });
+  });
+
+  return { importedScenes, errors };
+}
+
+export function validateManualTimingClipPassImport(raw = {}, baseProject = {}) {
+  if (!isManualTimingClipPassPayload(raw)) return { ok: true, errors: [] };
+
+  const basePayload = buildManualTimingClipPassJson(baseProject);
+  const { importedScenes, errors } = validateManualTimingLockedPassImport(raw, basePayload, "Clip Pass");
+  const songBlocks = Array.isArray(raw?.song_blocks) ? raw.song_blocks : [];
+  if (!songBlocks.length) errors.push("song_blocks должны быть заполнены.");
+  songBlocks.forEach((block, idx) => {
+    const blockId = String(block?.block_id || `song_block_${idx + 1}`);
+    ["block_type", "title_ru", "summary_ru", "energy_ru", "emotional_function_ru"].forEach((key) => {
+      if (!String(block?.[key] || "").trim()) errors.push(`${blockId}: не заполнено ${key}.`);
+    });
+    if (!Array.isArray(block?.scene_ids) || !block.scene_ids.length) errors.push(`${blockId}: не заполнены scene_ids.`);
+  });
+  const rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : [];
+  importedScenes.forEach((scene, idx) => {
+    const sceneId = String(scene.scene_id || "scene");
+    if (!String(rawScenes[idx]?.route || rawScenes[idx]?.video_generation_route || "").trim()) errors.push(`${sceneId}: не заполнено поле route.`);
+    ["song_block_id", "scene_goal_ru", "photo_prompt_hint_ru", "prompt_hint_ru"].forEach((key) => {
+      if (!String(scene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
+    });
+  });
+  return { ok: !errors.length, errors };
+}
+
+export function validateManualTimingPodcastPassImport(raw = {}, baseProject = {}) {
+  if (!isManualTimingPodcastPassPayload(raw)) return { ok: true, errors: [] };
+
+  const basePayload = buildManualTimingPodcastPassJson(baseProject);
+  const { importedScenes, errors } = validateManualTimingLockedPassImport(raw, basePayload, "Podcast Pass");
+  const speakers = Array.isArray(raw?.speakers) ? raw.speakers : [];
+  const topicBlocks = Array.isArray(raw?.topic_blocks) ? raw.topic_blocks : [];
+  if (!speakers.length) errors.push("speakers должны быть заполнены.");
+  if (!topicBlocks.length) errors.push("topic_blocks должны быть заполнены.");
+  topicBlocks.forEach((block, idx) => {
+    const blockId = String(block?.block_id || `topic_block_${idx + 1}`);
+    ["title_ru", "summary_ru", "topic_goal_ru", "topic_reveal_ru", "emotion_ru"].forEach((key) => {
+      if (!String(block?.[key] || "").trim()) errors.push(`${blockId}: не заполнено ${key}.`);
+    });
+    if (!Array.isArray(block?.scene_ids) || !block.scene_ids.length) errors.push(`${blockId}: не заполнены scene_ids.`);
+  });
+  importedScenes.forEach((scene) => {
+    const sceneId = String(scene.scene_id || "scene");
+    ["topic_block_id", "scene_type", "scene_goal_ru", "photo_prompt_hint_ru", "prompt_hint_ru"].forEach((key) => {
+      if (!String(scene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
+    });
+    if (String(scene.route || "") === "i2v_text") {
+      const speechText = String(scene.narrator_text_en || scene.narrator_text_ru || scene.speaker_text_en || scene.speaker_text_ru || "").trim();
+      if (!speechText) errors.push(`${sceneId}: route i2v_text требует narrator_text_en/ru или speaker_text_en/ru.`);
+    }
+  });
+  return { ok: !errors.length, errors };
+}
+
 export function buildManualTimingSampleJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
@@ -1209,6 +1407,10 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     timing_status: "draft",
     markers,
     story_blocks: storyBlocks,
+    song_blocks: Array.isArray(safeRaw.song_blocks) ? safeRaw.song_blocks : (Array.isArray(safeBase.song_blocks) ? safeBase.song_blocks : []),
+    speakers: Array.isArray(safeRaw.speakers) ? safeRaw.speakers : (Array.isArray(safeBase.speakers) ? safeBase.speakers : []),
+    topic_blocks: Array.isArray(safeRaw.topic_blocks) ? safeRaw.topic_blocks : (Array.isArray(safeBase.topic_blocks) ? safeBase.topic_blocks : []),
+    audio_mode: String(safeRaw.audio_mode || safeBase.audio_mode || ""),
     audio_phrases: audioPhrases,
     scenes,
     selectedSceneId: scenes[0]?.scene_id || "",
@@ -1423,6 +1625,28 @@ export function buildManualTimingExportJson(project = {}) {
     video_prompt: String(scene?.video_prompt || ""),
     negative_prompt: String(scene?.negative_prompt || ""),
     sound_prompt: String(scene?.sound_prompt || ""),
+    song_block_id: String(scene?.song_block_id || ""),
+    song_block_type: String(scene?.song_block_type || ""),
+    song_block_title_ru: String(scene?.song_block_title_ru || ""),
+    lyrics_text: String(scene?.lyrics_text || ""),
+    visual_role_ru: String(scene?.visual_role_ru || ""),
+    performance_role_ru: String(scene?.performance_role_ru || ""),
+    lip_sync_required: Boolean(scene?.lip_sync_required),
+    vocal_owner_role: String(scene?.vocal_owner_role || ""),
+    speaker_id: String(scene?.speaker_id || ""),
+    speaker_name: String(scene?.speaker_name || ""),
+    topic_block_id: String(scene?.topic_block_id || ""),
+    topic_block_title_ru: String(scene?.topic_block_title_ru || ""),
+    narrator_text_en: String(scene?.narrator_text_en || ""),
+    narrator_text_ru: String(scene?.narrator_text_ru || ""),
+    speaker_text_en: String(scene?.speaker_text_en || ""),
+    speaker_text_ru: String(scene?.speaker_text_ru || ""),
+    generated_speech_required: Boolean(scene?.generated_speech_required),
+    voice_profile_id: String(scene?.voice_profile_id || ""),
+    voice_profile: String(scene?.voice_profile || ""),
+    narrator_voice_profile_en: String(scene?.narrator_voice_profile_en || ""),
+    negative_voice_traits: String(scene?.negative_voice_traits || ""),
+    broll_hint_ru: String(scene?.broll_hint_ru || ""),
   }));
 
   const story_blocks = syncManualTimingStoryBlocksWithScenes(normalizedStoryBlocks, scenes).map(({ scene_count, ...block }) => block);
@@ -1445,6 +1669,10 @@ export function buildManualTimingExportJson(project = {}) {
     audio_duration_sec: Number(audio.duration_sec || 0),
     global_hint: safeProject.timing_status === "confirmed" ? "Manual timing confirmed by user" : "Manual timing draft",
     story_blocks,
+    song_blocks: Array.isArray(safeProject.song_blocks) ? safeProject.song_blocks : [],
+    speakers: Array.isArray(safeProject.speakers) ? safeProject.speakers : [],
+    topic_blocks: Array.isArray(safeProject.topic_blocks) ? safeProject.topic_blocks : [],
+    audio_mode: String(safeProject.audio_mode || ""),
     audio_phrases,
     scenes,
   };

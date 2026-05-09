@@ -9,7 +9,8 @@ import {
   MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
   MANUAL_TIMING_STORY_VOICEOVER_MODE,
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
-  buildManualTimingExportJson,
+  buildManualTimingClipPassJson,
+  buildManualTimingPodcastPassJson,
   buildManualTimingStoryPassJson,
   getDefaultManualTimingNodeData,
   getManualTimingProjectKindForMode,
@@ -41,12 +42,12 @@ function audioMetaEquals(a = {}, b = {}) {
     && Number(a?.duration_ms || 0) === Number(b?.duration_ms || 0);
 }
 
-function getManualTimingCopyButtonLabel(projectMode = "", hasAsrStoryScenes = false) {
+function getManualTimingCopyButtonLabel(projectMode = "") {
   if (projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
-    return hasAsrStoryScenes ? "Скопировать JSON для Story Pass" : "Скопировать JSON истории";
+    return "Скопировать JSON для Story Pass";
   }
-  if (projectMode === MANUAL_TIMING_MUSIC_CLIP_MODE) return "JSON клипа будет позже";
-  if (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return "JSON подкаста будет позже";
+  if (projectMode === MANUAL_TIMING_MUSIC_CLIP_MODE) return "Скопировать JSON для Clip Pass";
+  if (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return "Скопировать JSON для Podcast Pass";
   return "Скопировать JSON таймингов";
 }
 
@@ -129,15 +130,12 @@ export default function ManualTimingNode({ id, data }) {
   )).length;
   const projectMode = String(model.project_mode || "").trim();
   const isProjectModeSelected = Boolean(projectMode);
-  const isStoryVoiceover = projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE;
-  const hasAsrStoryScenes = Array.isArray(model.scenes)
-    && model.scenes.some((scene) => Array.isArray(scene?.source_phrase_ids) && scene.source_phrase_ids.length);
-  const isModeReadyForJson = isStoryVoiceover;
-  const copyJsonLabel = getManualTimingCopyButtonLabel(projectMode, hasAsrStoryScenes);
+  const isModeReadyForJson = [MANUAL_TIMING_STORY_VOICEOVER_MODE, MANUAL_TIMING_MUSIC_CLIP_MODE, MANUAL_TIMING_PODCAST_DIALOGUE_MODE].includes(projectMode);
+  const copyJsonLabel = getManualTimingCopyButtonLabel(projectMode);
   const isAudioUploading = model.audio_upload_status === "uploading";
   const audioUploadError = String(model.audio_upload_error || "").trim();
   const copyJsonTitle = isProjectModeSelected
-    ? (isModeReadyForJson ? "Скопировать JSON выбранного режима" : "Этот режим будет подключён позже")
+    ? (isModeReadyForJson ? "Скопировать JSON выбранного режима" : "Режим не поддерживается")
     : "Сначала выберите режим проекта";
 
 
@@ -204,9 +202,11 @@ export default function ManualTimingNode({ id, data }) {
   const onCopyTimingJson = async () => {
     if (!isProjectModeSelected || !isModeReadyForJson) return;
     const project = persistProject();
-    const hasAsrStoryScenes = Array.isArray(project.scenes)
-      && project.scenes.some((scene) => Array.isArray(scene?.source_phrase_ids) && scene.source_phrase_ids.length);
-    const payload = hasAsrStoryScenes ? buildManualTimingStoryPassJson(project) : buildManualTimingExportJson(project);
+    const payload = projectMode === MANUAL_TIMING_MUSIC_CLIP_MODE
+      ? buildManualTimingClipPassJson(project)
+      : (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE
+        ? buildManualTimingPodcastPassJson(project)
+        : buildManualTimingStoryPassJson(project));
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
     } catch {}
