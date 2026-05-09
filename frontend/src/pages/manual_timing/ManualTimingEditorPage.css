@@ -1117,6 +1117,60 @@
   color: #ffe3a9;
 }
 
+.manualTimingMissingPhraseDraftPanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(59, 42, 17, 0.28);
+  border: 1px solid rgba(255, 201, 100, 0.24);
+}
+
+.manualTimingMissingPhraseDraftHeader {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  color: #fff4d2;
+}
+
+.manualTimingMissingPhraseDraftHeader span {
+  color: rgba(255, 236, 190, 0.72);
+  font-size: 12px;
+}
+
+.manualTimingMissingPhraseDraftHint {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 201, 100, 0.12);
+  border: 1px dashed rgba(255, 201, 100, 0.34);
+  color: #ffe3a9;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.manualTimingMissingPhraseDraftValues,
+.manualTimingMissingPhraseDraftActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.manualTimingMissingPhraseDraftValues span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 245, 220, 0.84);
+  font-size: 12px;
+}
+
+.manualTimingMissingPhraseDraftValues b {
+  color: #fff7df;
+}
+
 .manualTimingAudioPhrasesPanel {
   display: grid;
   gap: 8px;
@@ -1158,6 +1212,11 @@
 .manualTimingAudioPhraseCard.needsTranscription {
   border-color: rgba(255, 201, 100, 0.45);
   background: rgba(78, 50, 14, 0.42);
+}
+
+.manualTimingAudioPhraseCard.isSelected {
+  border-color: rgba(255, 245, 170, 0.86);
+  box-shadow: 0 0 0 1px rgba(255, 245, 170, 0.24), 0 0 18px rgba(255, 193, 7, 0.18);
 }
 
 .manualTimingAudioPhraseTop,
