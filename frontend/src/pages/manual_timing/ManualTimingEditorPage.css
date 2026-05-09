@@ -1215,10 +1215,25 @@
   justify-content: space-between;
   flex-wrap: wrap;
   color: #fff4d2;
+  cursor: pointer;
+}
+
+.manualTimingAudioPhrasesHeader::-webkit-details-marker {
+  display: none;
+}
+
+.manualTimingAudioPhrasesHeader::before {
+  content: "▸";
+  color: rgba(255, 201, 100, 0.9);
+}
+
+.manualTimingAudioPhrasesPanel[open] .manualTimingAudioPhrasesHeader::before {
+  content: "▾";
 }
 
 .manualTimingAudioPhrasesHeader span,
-.manualTimingAudioPhrasesEmpty {
+.manualTimingAudioPhrasesEmpty,
+.manualTimingAudioPhrasesHint {
   color: rgba(255, 236, 190, 0.72);
   font-size: 12px;
 }

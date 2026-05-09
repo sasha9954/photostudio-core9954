@@ -541,7 +541,7 @@ export default function ManualTimingEditorPage() {
       ...(derived || { scene_ids: [], start_sec: 0, end_sec: 0 }),
       sceneCount,
     };
-  }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || block.sceneCount > 0), [storyBlocks, scenes]);
+  }).filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id), [storyBlocks, scenes]);
   const missingPhraseTimelineMarkers = useMemo(() => {
     if (!(durationSec > 0)) return [];
     return audioPhrases
@@ -571,8 +571,7 @@ export default function ManualTimingEditorPage() {
       const isUnknownBlock = blockId === unknownBlockId;
       const derived = deriveStoryBlockRangeFromScenes(block, scenes);
 
-      if (isUnknownBlock && storyBlocks.length === 1) return null;
-      if (isUnknownBlock && !derived) return null;
+      if (isUnknownBlock) return null;
       if (!derived) return null;
 
       const safeStart = clampTime(derived.start_sec, durationSec);
@@ -1850,11 +1849,12 @@ export default function ManualTimingEditorPage() {
               <div><span>Прогресс блока</span><p>{selectedSceneText.blockProgress}</p></div>
             </div>
           </div>
-          {audioPhrases.length ? <div className="manualTimingAudioPhrasesPanel">
-            <div className="manualTimingAudioPhrasesHeader">
-              <strong>Фразы аудио / пропущенные фразы</strong>
+          {audioPhrases.length ? <details className="manualTimingAudioPhrasesPanel">
+            <summary className="manualTimingAudioPhrasesHeader">
+              <strong>ASR-фразы выбранной сцены</strong>
               <span>{selectedSceneAudioPhrases.length ? `${selectedSceneAudioPhrases.length} в диапазоне сцены` : "нет фраз в диапазоне"}{selectedMissingPhrase && !selectedSceneAudioPhrases.some((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhrase.phrase_id || "")) ? " · показана выбранная метка" : ""}</span>
-            </div>
+            </summary>
+            <div className="manualTimingAudioPhrasesHint">Техническая ASR-карта: основной storyboard после Story Pass читается из текста и смысла сцены выше.</div>
             {selectedScenePhraseWarnings.length ? <div className="manualTimingPhraseWarnings">{selectedScenePhraseWarnings.map((warning, idx) => <div key={`phrase-warning-${idx}`}>⚠ {warning}</div>)}</div> : null}
             {visibleAudioPhrases.length ? <div className="manualTimingAudioPhrasesList">
               {visibleAudioPhrases.map((phrase) => {
@@ -1892,7 +1892,7 @@ export default function ManualTimingEditorPage() {
                 </div>;
               })}
             </div> : <div className="manualTimingAudioPhrasesEmpty">В диапазоне выбранной сцены нет audio_phrases.</div>}
-          </div> : null}
+          </details> : null}
         </div> : null}
 
         <div className="manualTimingJsonPanel">

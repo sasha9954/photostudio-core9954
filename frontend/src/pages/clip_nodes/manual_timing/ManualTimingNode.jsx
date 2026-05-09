@@ -124,12 +124,9 @@ export default function ManualTimingNode({ id, data }) {
   const connectedAudio = data?.connectedInputs?.audio_in || data?.connectedAudio || data?.audioInput || null;
   const normalizedConnectedAudio = normalizeManualTimingAudio(connectedAudio);
   const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : normalizeManualTimingAudio(model.audio);
-  const storyBlockCount = (Array.isArray(model.story_blocks) ? model.story_blocks : []).filter((block) => {
-    const blockId = String(block?.block_id || "");
-    const sceneIds = Array.isArray(block?.scene_ids) ? block.scene_ids : [];
-    const sceneCount = sceneIds.length || (Array.isArray(model.scenes) ? model.scenes : []).filter((scene) => String(scene?.story_block_id || "") === blockId).length;
-    return blockId !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || sceneCount > 0;
-  }).length;
+  const storyBlockCount = (Array.isArray(model.story_blocks) ? model.story_blocks : []).filter((block) => (
+    String(block?.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id
+  )).length;
   const projectMode = String(model.project_mode || "").trim();
   const isProjectModeSelected = Boolean(projectMode);
   const isStoryVoiceover = projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE;
