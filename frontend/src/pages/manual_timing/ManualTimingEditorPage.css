@@ -290,6 +290,19 @@
   border-radius: 999px;
 }
 
+.manualTimingInlinePlayback {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.manualTimingInlinePlayback .clipSB_btn {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
 .legendBlock { background: rgba(120, 150, 220, 0.42); border: 1px solid rgba(210, 225, 255, 0.26); }
 .legendCut { background: #37d6c2; }
 .legendTail { background: rgba(90, 100, 125, 0.7); }
