@@ -8,6 +8,8 @@ import {
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   MANUAL_TIMING_ROUTES,
   MANUAL_TIMING_SECTIONS,
+  MANUAL_TIMING_STORY_PROJECT_KIND,
+  MANUAL_TIMING_STORY_VOICEOVER_MODE,
   buildDraftStoryBlocksFromGapAwareScenes,
   buildGapAwareScenesFromAudioPhrases,
   buildManualTimingAiSplitRequestJson,
@@ -98,6 +100,8 @@ function buildInitialProject() {
   const scenes = hydrateManualTimingScenesWithStoryBlocks(rawScenes, story_blocks);
   return {
     ...project,
+    project_mode: project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
+    project_kind: project.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND,
     audio,
     markers,
     story_blocks,
@@ -179,6 +183,57 @@ function isInstrumentalScene(scene = {}) {
   return String(scene?.section || "").toLowerCase() === "instrumental" || (!scene?.contains_vocal && scene?.contains_instrumental_assumption);
 }
 
+function isStoryVoiceoverProject(project = {}) {
+  return String(project?.project_mode || project?.projectMode || "") === MANUAL_TIMING_STORY_VOICEOVER_MODE
+    || String(project?.project_kind || project?.projectKind || "") === MANUAL_TIMING_STORY_PROJECT_KIND;
+}
+
+function sceneHasCreatedMaterials(scene = {}) {
+  return ["image_url", "video_url", "video_prompt", "video_job_id", "audio_slice_url"].some((key) => String(scene?.[key] || "").trim())
+    || String(scene?.status || "").trim().toLowerCase() === "video_ready";
+}
+
+function isSingleFullLengthDraftScene(scenes = [], audioDurationSec = 0) {
+  if (!Array.isArray(scenes) || scenes.length !== 1) return false;
+  const scene = scenes[0] || {};
+  const duration = Number(audioDurationSec || 0);
+  const startsAtZero = Math.abs(Number(scene.start_sec || 0)) < 0.02;
+  const endsAtDuration = !(duration > 0) || Math.abs(Number(scene.end_sec || 0) - duration) < 0.05;
+  return String(scene.scene_id || "") === "seg_01" && startsAtZero && endsAtDuration;
+}
+
+function sceneHasStoryPassFields(scene = {}) {
+  return [
+    "translated_text_ru",
+    "meaning_hint_ru",
+    "scene_goal_ru",
+    "photo_prompt_hint_ru",
+    "prompt_hint_ru",
+    "scene_role_in_block_ru",
+    "block_progress_ru",
+  ].some((key) => String(scene?.[key] || "").trim());
+}
+
+function getStoryVoiceoverStatus(project = {}, audioPhrases = [], scenes = [], audioDurationSec = 0) {
+  if (!audioPhrases.length) return "Шаг 1: создайте Audio Phrase Map";
+  if (!scenes.length || isSingleFullLengthDraftScene(scenes, audioDurationSec)) return "Шаг 2: соберите story scenes из ASR";
+  const hasStorySourceIds = scenes.some((scene) => Array.isArray(scene?.source_phrase_ids) && scene.source_phrase_ids.length);
+  const hasStoryPass = scenes.some(sceneHasStoryPassFields);
+  if (hasStorySourceIds && !hasStoryPass) return "Шаг 3: скопируйте JSON для Story Pass";
+  return "Шаг 4: проверьте блоки и подтвердите";
+}
+
+function getReadableTimingStatus(project = {}, audioPhrases = [], scenes = [], audioDurationSec = 0) {
+  if (isStoryVoiceoverProject(project)) return getStoryVoiceoverStatus(project, audioPhrases, scenes, audioDurationSec);
+  return STATUS_LABELS[project.timing_status] || String(project.timing_status || "пусто");
+}
+
+function getCompactWarningsSummary(warnings = []) {
+  const count = Array.isArray(warnings) ? warnings.length : 0;
+  if (!count) return "Проверка: предупреждений нет";
+  const first = String(warnings[0] || "").trim();
+  return `Проверка: ${count} предупрежд.${first ? ` · ${first}` : ""}`;
+}
 
 function getTimingSceneIdForAudioPhrase(phrase = null, scenes = []) {
   if (!phrase) return "";
@@ -344,7 +399,7 @@ export default function ManualTimingEditorPage() {
   const [jumpTimeParts, setJumpTimeParts] = useState(() => ({ min: "0", sec: "00", ms: "000" }));
   const [missingPhraseDraft, setMissingPhraseDraft] = useState({ start_sec: null, end_sec: null });
   const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
-  const [asrStatus, setAsrStatus] = useState("idle");
+  const [asrStatus, setAsrStatus] = useState("");
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -356,6 +411,7 @@ export default function ManualTimingEditorPage() {
   const storyBlocks = useMemo(() => normalizeManualTimingStoryBlocks(project.story_blocks), [project.story_blocks]);
   const audioPhrases = useMemo(() => normalizeManualTimingAudioPhrases(project.audio_phrases), [project.audio_phrases]);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const isStoryVoiceover = isStoryVoiceoverProject(project);
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null,
@@ -370,6 +426,8 @@ export default function ManualTimingEditorPage() {
     [scenes, quickEditSceneId]
   );
   const warnings = useMemo(() => buildManualTimingWarnings(project), [project]);
+  const readableTimingStatus = getReadableTimingStatus(project, audioPhrases, scenes, durationSec);
+  const warningsSummary = getCompactWarningsSummary(warnings);
   const lastCutSec = getLastInternalMarker(markers);
   const candidateDurationSec = Math.max(0, Number(currentTime || 0) - Number(lastCutSec || 0));
   const selectedSceneStartSec = selectedScene ? Number(selectedScene.start_sec || 0) : 0;
@@ -479,7 +537,12 @@ export default function ManualTimingEditorPage() {
   }, [durationSec]);
 
   const persist = (nextProject) => {
-    const safeProject = { ...nextProject, updatedAt: Date.now() };
+    const safeProject = {
+      ...nextProject,
+      project_mode: nextProject?.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
+      project_kind: nextProject?.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND,
+      updatedAt: Date.now(),
+    };
     setProject(safeProject);
     persistManualTimingProject(safeProject);
     return safeProject;
@@ -1054,7 +1117,10 @@ export default function ManualTimingEditorPage() {
   };
 
   const updateScene = (sceneId, patch) => {
-    const nextScenes = updateManualTimingSceneById(scenes, sceneId, patch);
+    const safePatch = isStoryVoiceover
+      ? { ...patch, route: "i2v", contains_vocal: false, contains_vocal_assumption: false, contains_instrumental_assumption: true }
+      : patch;
+    const nextScenes = updateManualTimingSceneById(scenes, sceneId, safePatch);
     persist({ ...project, scenes: nextScenes, selectedSceneId: sceneId, timing_status: "draft" });
   };
 
@@ -1207,15 +1273,18 @@ export default function ManualTimingEditorPage() {
 
   const onBuildStoryScenesFromAsr = () => {
     if (!audioPhrases.length) return;
-    const confirmed = window.confirm("Это заменит текущие scenes/story_blocks на gap-aware story scenes из ASR. Продолжить?");
-    if (!confirmed) return;
+    const hasCreatedMaterials = scenes.some(sceneHasCreatedMaterials);
+    if (hasCreatedMaterials) {
+      const confirmed = window.confirm("В сценах уже есть созданные материалы. Пересборка scenes может отвязать их. Продолжить?");
+      if (!confirmed) return;
+    }
     const audioDurationSec = Number(audio.duration_sec || durationSec || Math.max(...audioPhrases.map((phrase) => Number(phrase.end_sec || 0)), 0));
     const nextScenes = buildGapAwareScenesFromAudioPhrases(audioPhrases, {
       audioDurationSec,
       targetSceneDurationSec: { min: 4, preferred: 6, max: 9 },
       maxSceneDurationSec: 10,
       minSceneDurationSec: 2,
-      projectKind: project.project_kind || "clip",
+      projectKind: project.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND,
       route: "i2v",
     });
     const coverage = validateSceneCoverage(nextScenes, audioDurationSec);
@@ -1227,6 +1296,8 @@ export default function ManualTimingEditorPage() {
     );
     persist({
       ...project,
+      project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
+      project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
       audio: {
         ...audio,
         duration_sec: roundTimingSec(audioDurationSec),
@@ -1445,13 +1516,13 @@ export default function ManualTimingEditorPage() {
   return (
     <>
     <div className="manualTimingPage pageCard">
-      <h1 className="pageTitle">Тайминг песни</h1>
+      <h1 className="pageTitle">{isStoryVoiceover ? "История / Voice-over" : "Тайминг песни"}</h1>
       <div className="manualTimingMetaGrid">
         <div><b>Файл:</b> {audio.filename || "аудио не выбрано"}</div>
         <div><b>Длительность:</b> {formatTimingSec(durationSec)}</div>
         <div><b>Курсор:</b> {formatTimingSec(currentTime)}</div>
         <div><b>Сцен:</b> {scenes.length}</div>
-        <div><b>Статус:</b> {STATUS_LABELS[project.timing_status] || String(project.timing_status || "пусто")}</div>
+        <div><b>Статус:</b> {readableTimingStatus}</div>
       </div>
 
       <section className="manualTimingTransport">
@@ -1548,101 +1619,126 @@ export default function ManualTimingEditorPage() {
           </div>
         </div>
 
-        <div className="manualTimingCompactActions">
-          <button className="clipSB_btn" onClick={() => navigate(-1)}>Назад</button>
-          <button className="clipSB_btn" onClick={onPlayPause} disabled={!audio.url}>{isPlaying ? "Пауза" : "▶ играть"}</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={() => playSegment(selectedScene)} disabled={!audio.url || !selectedScene}>▶ выбранный отрезок</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onStartOver} disabled={!audio.url}>В начало</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onPlayFromLastCut} disabled={!audio.url}>С последнего разреза</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onPlayAroundCursor} disabled={!audio.url}>±1 сек</button>
-          <div className="manualTimingJumpBox">
-            <span>Перейти к:</span>
-            <div className="manualTimingTimecodeInput" aria-label="Точный переход по времени">
-              <input
-                value={jumpTimeParts.min}
-                inputMode="numeric"
-                title="Минуты"
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => updateJumpPart("min", e.target.value)}
-                onBlur={() => normalizeJumpPartOnBlur("min")}
-                onKeyDown={onJumpKeyDown}
-                disabled={!audio.url || !(durationSec > 0)}
-              />
-              <span>:</span>
-              <input
-                value={jumpTimeParts.sec}
-                inputMode="numeric"
-                title="Секунды"
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => updateJumpPart("sec", e.target.value)}
-                onBlur={() => normalizeJumpPartOnBlur("sec")}
-                onKeyDown={onJumpKeyDown}
-                disabled={!audio.url || !(durationSec > 0)}
-              />
-              <span>.</span>
-              <input
-                value={jumpTimeParts.ms}
-                inputMode="numeric"
-                title="Миллисекунды"
-                onFocus={(e) => e.target.select()}
-                onChange={(e) => updateJumpPart("ms", e.target.value)}
-                onBlur={() => normalizeJumpPartOnBlur("ms")}
-                onKeyDown={onJumpKeyDown}
-                disabled={!audio.url || !(durationSec > 0)}
-              />
+        <div className={`manualTimingWarningsCompact ${warnings.length ? "hasWarnings" : ""}`}>
+          <span>{warningsSummary}</span>
+          {warnings.length ? <details className="manualTimingWarningsDetails">
+            <summary>Показать проверку</summary>
+            <div className="manualTimingWarningsList">
+              {warnings.map((warning, idx) => <div key={`${warning}-${idx}`}>• {warning}</div>)}
             </div>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onJumpToTime} disabled={!audio.url || !(durationSec > 0)}>ОК</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={useCurrentTimeForJump} disabled={!audio.url || !(durationSec > 0)}>из курсора</button>
-          </div>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
-          <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
+          </details> : null}
+        </div>
+
+        <div className="manualTimingWorkflowActions" aria-label="Основной workflow Story Voice-over">
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={!audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>Создать Audio Phrase Map</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={!audioPhrases.length}>Собрать story scenes из ASR</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson}>Скопировать JSON для Story Pass</button>
-          <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={!jsonImportText.trim()}>Применить Story Pass JSON</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
         </div>
 
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
         {audioPhrases.length ? <div className="manualTimingAsrNotice">ASR phrase map: audio_phrases покрывают только речь по word timestamps. Для storyboard используй “Собрать story scenes из ASR”: сцены станут gap-aware, покроют всю audio_duration_sec, а ChatGPT/Gemini затем заполнит перевод, story_blocks и смысловые поля без video_prompt/negative_prompt/sound_prompt.</div> : null}
 
-        {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingMissingPhraseDraftPanel">
-          <div className="manualTimingMissingPhraseDraftHeader">
-            <strong>Разметка пропущенной фразы</strong>
-            <span>отдельная audio_phrase, не разрезает сцены</span>
+        <details className="manualTimingAdvancedPanel">
+          <summary>Дополнительно / ручная правка</summary>
+          <div className="manualTimingCompactActions">
+            <button className="clipSB_btn" onClick={() => navigate(-1)}>Назад</button>
+            <button className="clipSB_btn" onClick={onPlayPause} disabled={!audio.url}>{isPlaying ? "Пауза" : "▶ играть"}</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => playSegment(selectedScene)} disabled={!audio.url || !selectedScene}>▶ выбранный отрезок</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onStartOver} disabled={!audio.url}>В начало</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onPlayFromLastCut} disabled={!audio.url}>С последнего разреза</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onPlayAroundCursor} disabled={!audio.url}>±1 сек</button>
+            <div className="manualTimingJumpBox">
+              <span>Перейти к:</span>
+              <div className="manualTimingTimecodeInput" aria-label="Точный переход по времени">
+                <input
+                  value={jumpTimeParts.min}
+                  inputMode="numeric"
+                  title="Минуты"
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => updateJumpPart("min", e.target.value)}
+                  onBlur={() => normalizeJumpPartOnBlur("min")}
+                  onKeyDown={onJumpKeyDown}
+                  disabled={!audio.url || !(durationSec > 0)}
+                />
+                <span>:</span>
+                <input
+                  value={jumpTimeParts.sec}
+                  inputMode="numeric"
+                  title="Секунды"
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => updateJumpPart("sec", e.target.value)}
+                  onBlur={() => normalizeJumpPartOnBlur("sec")}
+                  onKeyDown={onJumpKeyDown}
+                  disabled={!audio.url || !(durationSec > 0)}
+                />
+                <span>.</span>
+                <input
+                  value={jumpTimeParts.ms}
+                  inputMode="numeric"
+                  title="Миллисекунды"
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => updateJumpPart("ms", e.target.value)}
+                  onBlur={() => normalizeJumpPartOnBlur("ms")}
+                  onKeyDown={onJumpKeyDown}
+                  disabled={!audio.url || !(durationSec > 0)}
+                />
+              </div>
+              <button className="clipSB_btn clipSB_btnSecondary" onClick={onJumpToTime} disabled={!audio.url || !(durationSec > 0)}>ОК</button>
+              <button className="clipSB_btn clipSB_btnSecondary" onClick={useCurrentTimeForJump} disabled={!audio.url || !(durationSec > 0)}>из курсора</button>
+            </div>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
+            <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
+            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
+              Загрузить JSON файл
+              <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
+            </label>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
+            <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
           </div>
-          <div className="manualTimingMissingPhraseDraftHint">
-            Для пропущенной фразы НЕ нажимай “Поставить разрез”. Используй метку пропущенной фразы — она не меняет сцены.
-          </div>
-          <div className="manualTimingMissingPhraseDraftValues">
-            <span>Начало: <b>{hasTimingDraftValue(missingPhraseDraft.start_sec) ? formatTimingSec(missingPhraseDraft.start_sec) : "—"}</b></span>
-            <span>Конец: <b>{hasTimingDraftValue(missingPhraseDraft.end_sec) ? formatTimingSec(missingPhraseDraft.end_sec) : "—"}</b></span>
-          </div>
-          <div className="manualTimingMissingPhraseDraftActions">
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("start_sec")} disabled={!audio.url || !(durationSec > 0)}>Начало из курсора</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("end_sec")} disabled={!audio.url || !(durationSec > 0)}>Конец из курсора</button>
-            <button className="clipSB_btn clipSB_btnSecondary manualTimingMissingPhraseButton" type="button" onClick={onAddMissingPhrase} disabled={!audio.url || !(durationSec > 0)}>Создать метку</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={resetMissingPhraseDraft} disabled={!hasTimingDraftValue(missingPhraseDraft.start_sec) && !hasTimingDraftValue(missingPhraseDraft.end_sec)}>Сбросить диапазон</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
-          </div>
-        </div> : null}
 
-        <div className="manualTimingNudgePanel">
-          <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы — главный инструмент подгонки фразы</div>
-          <div className="manualTimingNudgeGuidance">Если в конце сцены слышно начало следующей фразы — выбери сцену и двигай её конечную границу назад кнопками микро-доводчика. Это меняет границу между текущей и следующей сценой.</div>
-          <div className="manualTimingNudgeButtons">
-            {NUDGE_STEPS.map((step) => <button
-              key={step}
-              className="clipSB_btn clipSB_btnSecondary"
-              disabled={!selectedBoundaryIsInternal}
-              onClick={() => nudgeSelectedBoundary(step)}
-            >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
+          {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingMissingPhraseDraftPanel">
+            <div className="manualTimingMissingPhraseDraftHeader">
+              <strong>Разметка пропущенной фразы</strong>
+              <span>отдельная audio_phrase, не разрезает сцены</span>
+            </div>
+            <div className="manualTimingMissingPhraseDraftHint">
+              Для пропущенной фразы НЕ нажимай “Поставить разрез”. Используй метку пропущенной фразы — она не меняет сцены.
+            </div>
+            <div className="manualTimingMissingPhraseDraftValues">
+              <span>Начало: <b>{hasTimingDraftValue(missingPhraseDraft.start_sec) ? formatTimingSec(missingPhraseDraft.start_sec) : "—"}</b></span>
+              <span>Конец: <b>{hasTimingDraftValue(missingPhraseDraft.end_sec) ? formatTimingSec(missingPhraseDraft.end_sec) : "—"}</b></span>
+            </div>
+            <div className="manualTimingMissingPhraseDraftActions">
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("start_sec")} disabled={!audio.url || !(durationSec > 0)}>Начало из курсора</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("end_sec")} disabled={!audio.url || !(durationSec > 0)}>Конец из курсора</button>
+              <button className="clipSB_btn clipSB_btnSecondary manualTimingMissingPhraseButton" type="button" onClick={onAddMissingPhrase} disabled={!audio.url || !(durationSec > 0)}>Создать метку</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={resetMissingPhraseDraft} disabled={!hasTimingDraftValue(missingPhraseDraft.start_sec) && !hasTimingDraftValue(missingPhraseDraft.end_sec)}>Сбросить диапазон</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
+            </div>
+          </div> : null}
+
+          <div className="manualTimingNudgePanel">
+            <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы — главный инструмент подгонки фразы</div>
+            <div className="manualTimingNudgeGuidance">Если в конце сцены слышно начало следующей фразы — выбери сцену и двигай её конечную границу назад кнопками микро-доводчика. Это меняет границу между текущей и следующей сценой.</div>
+            <div className="manualTimingNudgeButtons">
+              {NUDGE_STEPS.map((step) => <button
+                key={step}
+                className="clipSB_btn clipSB_btnSecondary"
+                disabled={!selectedBoundaryIsInternal}
+                onClick={() => nudgeSelectedBoundary(step)}
+              >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
+            </div>
+            <div className="manualTimingNudgeHint">− сдвигает конец сцены раньше, + сдвигает конец сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
           </div>
-          <div className="manualTimingNudgeHint">− сдвигает конец сцены раньше, + сдвигает конец сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
-        </div>
+        </details>
 
         {selectedScene ? <div className="manualTimingSceneTextPanel">
           <div className="manualTimingSceneTextHeader">
@@ -1718,28 +1814,20 @@ export default function ManualTimingEditorPage() {
 
         <div className="manualTimingJsonPanel">
           <div className="manualTimingJsonHeader">
-            <strong>JSON разметки</strong>
-            <span>Загрузи JSON с таймингами — сцены сразу появятся на шкале, а подсказки попадут в строки сцен.</span>
+            <strong>Story Pass JSON</strong>
+            <span>Вставь JSON после Story Pass: он может заполнить только перевод, смысловые блоки и подсказки, без video_prompt/negative_prompt/sound_prompt.</span>
           </div>
           <div className="manualTimingJsonActions">
-            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
-              Загрузить JSON файл
-              <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
-            </label>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)}>
-              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить JSON текстом"}
+              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить Story Pass JSON"}
             </button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить Story Pass JSON</button>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson}>Скопировать JSON для Story Pass</button>
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
             value={jsonImportText}
-            placeholder="Вставь сюда JSON с scenes/start_sec/end_sec/route/section/user_note_ru..."
+            placeholder="Вставь сюда Story Pass JSON: scenes/story_blocks с сохранёнными таймингами и заполненными смысловыми полями..."
             onChange={(e) => setJsonImportText(e.target.value)}
           /> : null}
         </div>
@@ -1812,10 +1900,6 @@ export default function ManualTimingEditorPage() {
         </div>
       </section>
 
-      {warnings.length ? <section className="manualTimingWarnings">
-        <strong>Проверка:</strong>
-        {warnings.map((warning, idx) => <div key={`${warning}-${idx}`}>• {warning}</div>)}
-      </section> : null}
 
       <section className="manualTimingRows">
         {scenes.map((scene, idx) => {
@@ -1833,9 +1917,9 @@ export default function ManualTimingEditorPage() {
             </div>
             <div className="manualTimingRowControls" onClick={(e) => e.stopPropagation()}>
               <label>Секция<select value={scene.section || "verse"} onChange={(e) => updateScene(scene.scene_id, { section: e.target.value })}>{MANUAL_TIMING_SECTIONS.map((item) => <option key={item} value={item}>{SECTION_LABELS[item] || item}</option>)}</select></label>
-              <label>Маршрут<select value={scene.route || "i2v"} onChange={(e) => updateScene(scene.scene_id, { route: e.target.value })}>{MANUAL_TIMING_ROUTES.map((item) => <option key={item} value={item}>{ROUTE_LABELS[item] || item}</option>)}</select></label>
+              <label>Маршрут<select value={scene.route || "i2v"} onChange={(e) => updateScene(scene.scene_id, { route: e.target.value })}>{(isStoryVoiceover ? ["i2v"] : MANUAL_TIMING_ROUTES).map((item) => <option key={item} value={item}>{ROUTE_LABELS[item] || item}</option>)}</select></label>
               <label>Энергия<select value={scene.energy || "mid"} onChange={(e) => updateScene(scene.scene_id, { energy: e.target.value })}>{MANUAL_TIMING_ENERGY.map((item) => <option key={item} value={item}>{ENERGY_LABELS[item] || item}</option>)}</select></label>
-              <label className="manualTimingCheck"><input type="checkbox" checked={Boolean(scene.contains_vocal)} onChange={(e) => updateScene(scene.scene_id, { contains_vocal: e.target.checked })} /> вокал</label>
+              {isStoryVoiceover ? <span className="manualTimingStoryRouteHint">ASR-речь, contains_vocal=false</span> : <label className="manualTimingCheck"><input type="checkbox" checked={Boolean(scene.contains_vocal)} onChange={(e) => updateScene(scene.scene_id, { contains_vocal: e.target.checked })} /> вокал</label>}
               <label className="manualTimingCheck"><input type="checkbox" checked={Boolean(scene.use_sound_suggestion)} onChange={(e) => updateScene(scene.scene_id, { use_sound_suggestion: e.target.checked })} /> звук потом</label>
             </div>
             <textarea
@@ -1883,7 +1967,7 @@ export default function ManualTimingEditorPage() {
 
           <label className="manualTimingQuickEditField">Маршрут
             <select value={quickEditDraft.route || "i2v"} onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), route: e.target.value }))}>
-              {MANUAL_TIMING_ROUTES.map((item) => <option key={item} value={item}>{ROUTE_LABELS[item] || item}</option>)}
+              {(isStoryVoiceover ? ["i2v"] : MANUAL_TIMING_ROUTES).map((item) => <option key={item} value={item}>{ROUTE_LABELS[item] || item}</option>)}
             </select>
           </label>
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 import re
+import time
 from typing import Any
 
 from pydub import AudioSegment
@@ -10,6 +12,7 @@ from pydub import AudioSegment
 
 _WORD_CLEAN_RE = re.compile(r"\s+")
 _SENTENCE_PUNCT_RE = re.compile(r"[.!?…:;]+[\"')\]]*$")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,13 +83,40 @@ def _normalize_word(raw: Any, idx: int) -> dict[str, Any] | None:
     }
 
 
+def _cuda_available() -> bool:
+    try:
+        import ctranslate2
+        return int(ctranslate2.get_cuda_device_count()) > 0
+    except Exception:
+        try:
+            import torch
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+
+
 def transcribe_words_faster_whisper(audio_path: str, settings: ManualTimingAsrSettings) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     # Lazy import keeps the API bootable in environments where ASR deps/models are not loaded yet.
     from faster_whisper import WhisperModel
 
     safe = _clamp_settings(settings)
-    device = (os.getenv("MANUAL_TIMING_ASR_DEVICE") or "cpu").strip() or "cpu"
+    requested_device = (os.getenv("MANUAL_TIMING_ASR_DEVICE") or "cpu").strip().lower() or "cpu"
+    device = requested_device
+    if requested_device == "cuda" and not _cuda_available():
+        if (os.getenv("MANUAL_TIMING_ASR_FALLBACK_CPU") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            logger.warning("Manual Timing ASR requested CUDA but CUDA is unavailable; falling back to CPU")
+            device = "cpu"
+        else:
+            raise RuntimeError("MANUAL_TIMING_ASR_DEVICE=cuda, но CUDA недоступна для backend. Проверьте GPU/драйверы/CUDA или включите MANUAL_TIMING_ASR_FALLBACK_CPU=true для fallback на CPU.")
     compute_type = (os.getenv("MANUAL_TIMING_ASR_COMPUTE_TYPE") or ("int8" if device == "cpu" else "float16")).strip()
+    started_at = time.monotonic()
+    logger.info(
+        "Manual Timing ASR starting: model=%s device=%s compute_type=%s audio_path=%s",
+        safe.model_size,
+        device,
+        compute_type,
+        audio_path,
+    )
     model = WhisperModel(safe.model_size, device=device, compute_type=compute_type)
     segments, info = model.transcribe(
         audio_path,
@@ -106,14 +136,25 @@ def transcribe_words_faster_whisper(audio_path: str, settings: ManualTimingAsrSe
     words.sort(key=lambda item: (float(item["start_sec"]), float(item["end_sec"])))
     for item in words:
         item.pop("_idx", None)
+    duration_sec = round(time.monotonic() - started_at, 3)
     metadata = {
         "backend": "faster-whisper",
         "model_size": safe.model_size,
+        "requested_device": requested_device,
         "device": device,
         "compute_type": compute_type,
+        "duration_sec": duration_sec,
         "language": getattr(info, "language", safe.language),
         "language_probability": _safe_float(getattr(info, "language_probability", 0.0), 0.0),
     }
+    logger.info(
+        "Manual Timing ASR finished: model=%s device=%s compute_type=%s duration=%.3fs word_count=%s",
+        safe.model_size,
+        device,
+        compute_type,
+        duration_sec,
+        len(words),
+    )
     return words, metadata
 
 
@@ -210,6 +251,17 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
     duration = get_audio_duration_sec(audio_path)
     words, metadata = transcribe_words_faster_whisper(audio_path, safe)
     phrases = split_words_to_phrases(words, safe, audio_duration_sec=duration)
+    metadata["phrase_count"] = len(phrases)
+    metadata["word_count"] = len(words)
+    logger.info(
+        "Manual Timing ASR phrase map: model=%s device=%s compute_type=%s duration=%.3fs phrase_count=%s word_count=%s",
+        metadata.get("model_size"),
+        metadata.get("device"),
+        metadata.get("compute_type"),
+        _safe_float(metadata.get("duration_sec"), 0.0),
+        len(phrases),
+        len(words),
+    )
     return {
         "ok": True,
         "audio_duration_sec": duration,
