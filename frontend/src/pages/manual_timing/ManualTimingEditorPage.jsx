@@ -67,6 +67,20 @@ const STATUS_LABELS = {
 
 const NUDGE_STEPS = [-0.2, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.2];
 const SHOW_MISSING_PHRASE_TOOLS = false;
+const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY = "manual_clip_board_active_project";
+const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY = "manual_clip_board_active_project_id";
+const MANUAL_CLIP_BOARD_ROUTE = "/studio/manual-clip-board";
+
+const STORY_PASS_REQUIRED_SCENE_FIELDS = [
+  "translated_text_ru",
+  "meaning_hint_ru",
+  "scene_goal_ru",
+  "photo_prompt_hint_ru",
+  "prompt_hint_ru",
+  "scene_role_in_block_ru",
+  "block_progress_ru",
+];
+
 const SEGMENT_COLORS = [
   "#37d6c2",
   "#6aa9ff",
@@ -263,15 +277,36 @@ function isSingleFullLengthDraftScene(scenes = [], audioDurationSec = 0) {
 }
 
 function sceneHasStoryPassFields(scene = {}) {
-  return [
-    "translated_text_ru",
-    "meaning_hint_ru",
-    "scene_goal_ru",
-    "photo_prompt_hint_ru",
-    "prompt_hint_ru",
-    "scene_role_in_block_ru",
-    "block_progress_ru",
-  ].some((key) => String(scene?.[key] || "").trim());
+  return STORY_PASS_REQUIRED_SCENE_FIELDS.some((key) => String(scene?.[key] || "").trim());
+}
+
+function sceneHasCompleteStoryPassFields(scene = {}) {
+  return STORY_PASS_REQUIRED_SCENE_FIELDS.every((key) => String(scene?.[key] || "").trim());
+}
+
+function hasRealStoryBlocks(storyBlocks = []) {
+  const unknownId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "block_unknown");
+  return (Array.isArray(storyBlocks) ? storyBlocks : []).some((block) => {
+    const blockId = String(block?.block_id || block?.id || "").trim();
+    return blockId && blockId !== unknownId;
+  });
+}
+
+function buildManualClipBoardStorageKey(nodeId = "") {
+  const safeId = String(nodeId || "default").trim() || "default";
+  return `manual_clip_board_project:${safeId}`;
+}
+
+function persistManualClipBoardProject(projectSnapshot = {}) {
+  try {
+    const serialized = JSON.stringify(projectSnapshot);
+    localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
+    const nodeId = String(projectSnapshot?.nodeId || "").trim();
+    if (nodeId) {
+      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
+      localStorage.setItem(buildManualClipBoardStorageKey(nodeId), serialized);
+    }
+  } catch {}
 }
 
 function getStoryVoiceoverStatus(project = {}, audioPhrases = [], scenes = [], audioDurationSec = 0) {
@@ -473,6 +508,11 @@ export default function ManualTimingEditorPage() {
   const modeConfig = getManualTimingModeConfig(project);
   const isProjectModeSelected = Boolean(modeConfig.mode);
   const mainActionsDisabled = !isProjectModeSelected || !isStoryVoiceover;
+  const storyPassReadyForDirector = isStoryVoiceover
+    && scenes.length > 0
+    && hasRealStoryBlocks(storyBlocks)
+    && scenes.every(sceneHasCompleteStoryPassFields);
+  const openDirectorBoardTitle = storyPassReadyForDirector ? "Открыть режиссёрскую доску" : "Сначала примените Story Pass JSON";
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null,
@@ -1383,6 +1423,39 @@ export default function ManualTimingEditorPage() {
     persist({ ...project, scenes: nextScenes, timing_status: "confirmed" });
   };
 
+
+  const buildDirectorProjectSnapshot = () => ({
+    ...project,
+    project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
+    project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
+    source: "manual_timing_story_voiceover",
+    step: "story_pass_ready",
+    format: project.format,
+    audio,
+    audio_phrases: audioPhrases,
+    story_blocks: storyBlocks,
+    scenes: scenes.map((scene) => ({
+      ...scene,
+      video_prompt: "",
+      negative_prompt: "",
+      sound_prompt: "",
+    })),
+    selectedSceneId: selectedScene?.scene_id || project.selectedSceneId || scenes[0]?.scene_id || "",
+    timing_status: project.timing_status || "confirmed",
+  });
+
+  const onOpenDirectorBoard = () => {
+    if (!storyPassReadyForDirector) {
+      setCopyStatus("Сначала примените Story Pass JSON");
+      return;
+    }
+    const projectSnapshot = buildDirectorProjectSnapshot();
+    persistManualTimingProject(projectSnapshot);
+    persistManualClipBoardProject(projectSnapshot);
+    setCopyStatus("Проект передан в режиссёрскую доску");
+    navigate(MANUAL_CLIP_BOARD_ROUTE);
+  };
+
   const onCopyTimingJson = async () => {
     if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     const payload = buildManualTimingExportJson(project);
@@ -1715,6 +1788,8 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson} disabled={mainActionsDisabled}>Скопировать JSON для Story Pass</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Pass JSON</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector} title={openDirectorBoardTitle}>Открыть режиссёрскую доску</button>
+          {!storyPassReadyForDirector && isStoryVoiceover ? <span className="manualTimingWorkflowStatus">Сначала примените Story Pass JSON</span> : null}
         </div>
 
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}

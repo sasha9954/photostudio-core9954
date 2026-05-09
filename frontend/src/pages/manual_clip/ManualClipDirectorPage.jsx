@@ -10,6 +10,8 @@ const ROUTES = ["ia2v", "i2v", "i2v_sound", "first_last", "first_last_sound"];
 const I2V_SOUND_GAIN_DEFAULT_DB = -6;
 const I2V_SOUND_GAIN_MIN_DB = -18;
 const I2V_SOUND_GAIN_MAX_DB = 10;
+const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
+
 
 function getManualProjectStorageKey(nodeId = "") {
   const safeId = String(nodeId || "default").trim() || "default";
@@ -113,6 +115,38 @@ function truncateText(value = "", max = 120) {
   const text = String(value || "").trim();
   if (text.length <= max) return text;
   return `${text.slice(0, Math.max(0, max - 1)).trim()}…`;
+}
+
+function isStoryVoiceoverProject(project = {}) {
+  return String(project?.project_mode || project?.projectMode || "") === MANUAL_TIMING_STORY_VOICEOVER_MODE;
+}
+
+function normalizeSourcePhraseIds(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean);
+}
+
+function getAudioPhrasesForScene(audioPhrases = [], scene = null) {
+  if (!scene) return [];
+  const sourceIds = normalizeSourcePhraseIds(scene.source_phrase_ids || scene.sourcePhraseIds);
+  const phrases = Array.isArray(audioPhrases) ? audioPhrases : [];
+  if (sourceIds.length) {
+    const byId = new Map(phrases.map((phrase) => [String(phrase?.phrase_id || phrase?.id || ""), phrase]));
+    return sourceIds.map((id) => byId.get(id)).filter(Boolean);
+  }
+  const sceneStart = Number(scene.start_sec || 0);
+  const sceneEnd = Number(scene.end_sec || 0);
+  return phrases.filter((phrase) => {
+    const start = Number(phrase?.start_sec || 0);
+    const end = Number(phrase?.end_sec || 0);
+    return end > sceneStart + 0.001 && start < sceneEnd - 0.001;
+  });
+}
+
+function formatDirectorSec(value = 0) {
+  const num = Number(value || 0);
+  return Number.isFinite(num) ? num.toFixed(2) : "0.00";
 }
 
 function isMeaningSceneVisible(scene = {}) {
@@ -308,6 +342,8 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     route: ROUTES.includes(scene.route) ? scene.route : "ia2v",
     start_sec: start,
     end_sec: end,
+    speech_start_sec: Number(scene.speech_start_sec ?? scene.speechStartSec ?? start) || start,
+    speech_end_sec: Number(scene.speech_end_sec ?? scene.speechEndSec ?? end) || end,
     duration_sec: Number((Math.max(0, end - start)).toFixed(3)),
     use_sound_suggestion: toBool(scene.use_sound_suggestion),
     contains_vocal_assumption: toBool(scene.contains_vocal_assumption),
@@ -337,6 +373,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     adapted_text_en: String(scene.adapted_text_en || ""),
     scene_role_in_block_ru: String(scene.scene_role_in_block_ru || ""),
     block_progress_ru: String(scene.block_progress_ru || ""),
+    source_phrase_ids: normalizeSourcePhraseIds(scene.source_phrase_ids || scene.sourcePhraseIds),
     video_prompt: String(scene.video_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
@@ -402,6 +439,8 @@ export default function ManualClipDirectorPage() {
 
   const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const audioPhrases = Array.isArray(project?.audio_phrases) ? project.audio_phrases : [];
+  const isStoryVoiceover = isStoryVoiceoverProject(project);
   const storyPrepProject = useMemo(() => ({
     ...(project || {}),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
@@ -477,14 +516,20 @@ export default function ManualClipDirectorPage() {
   const selectedSceneRuText = selectedScene ? (selectedScene.translated_text_ru || selectedScene.short_note || selectedScene.drama_hint || "") : "";
   const selectedSceneOriginalText = selectedScene ? (selectedScene.original_text || selectedScene.adapted_text_en || selectedScene.source_text_en || "") : "";
   const selectedSceneMeaningDetails = selectedScene ? [
+    ["scene_id", selectedScene.scene_id],
     ["Original", selectedSceneOriginalText],
     ["Meaning", selectedScene.meaning_hint_ru],
+    ["Цель сцены", selectedScene.scene_goal_ru],
+    ["Подсказка для фото", selectedScene.photo_prompt_hint_ru],
+    ["Подсказка для оживления", selectedScene.prompt_hint_ru],
     ["Цель блока", selectedScene.story_block_goal_ru],
     ["Раскрытие блока", selectedScene.story_block_reveal_ru],
     ["Эмоция блока", selectedScene.story_block_emotion_ru],
     ["Роль сцены в блоке", selectedScene.scene_role_in_block_ru],
     ["Прогресс блока", selectedScene.block_progress_ru],
   ].filter(([, value]) => String(value || "").trim()) : [];
+  const selectedSceneAudioPhrases = useMemo(() => getAudioPhrasesForScene(audioPhrases, selectedScene), [audioPhrases, selectedScene]);
+
   const userNoteItems = useMemo(() => {
     const raw = String(selectedScene?.user_note_ru || "");
     if (!raw.trim()) return [];
@@ -886,9 +931,36 @@ export default function ManualClipDirectorPage() {
         </label>
 
         <div className="manualTimingReadonly">
-          <div>Тайминг сцены: {Number(selectedScene.start_sec).toFixed(2)} – {Number(selectedScene.end_sec).toFixed(2)} c</div>
-          <div>Длительность: {Number(selectedScene.duration_sec).toFixed(2)} c</div>
+          <div>scene_id: {selectedScene.scene_id}</div>
+          <div>Тайминг сцены: {formatDirectorSec(selectedScene.start_sec)} → {formatDirectorSec(selectedScene.end_sec)} c</div>
+          <div>Длительность: {formatDirectorSec(selectedScene.duration_sec)} c</div>
+          {selectedScene.source_phrase_ids?.length ? <div>source_phrase_ids: {selectedScene.source_phrase_ids.join(", ")}</div> : null}
         </div>
+
+        {isStoryVoiceover ? <section className="manualDirectorStoryPassPanel">
+          <div className="manualDirectorStoryPassHeader">
+            <strong>Story Pass сцены</strong>
+            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
+          </div>
+          <div className="manualDirectorStoryPassGrid">
+            <span>translated_text_ru</span><strong>{selectedScene.translated_text_ru || "—"}</strong>
+            <span>original_text</span><strong>{selectedSceneOriginalText || "—"}</strong>
+            <span>meaning_hint_ru</span><strong>{selectedScene.meaning_hint_ru || "—"}</strong>
+            <span>scene_goal_ru</span><strong>{selectedScene.scene_goal_ru || "—"}</strong>
+            <span>photo_prompt_hint_ru</span><strong>{selectedScene.photo_prompt_hint_ru || "—"}</strong>
+            <span>prompt_hint_ru</span><strong>{selectedScene.prompt_hint_ru || "—"}</strong>
+            <span>scene_role_in_block_ru</span><strong>{selectedScene.scene_role_in_block_ru || "—"}</strong>
+            <span>block_progress_ru</span><strong>{selectedScene.block_progress_ru || "—"}</strong>
+          </div>
+          <details className="manualDirectorAsrDetails">
+            <summary>ASR-фразы сцены ({selectedSceneAudioPhrases.length})</summary>
+            {selectedSceneAudioPhrases.length ? <div className="manualDirectorAsrList">
+              {selectedSceneAudioPhrases.map((phrase, idx) => <div key={`${selectedScene.scene_id}-asr-${phrase.phrase_id || idx}`}>
+                <b>{phrase.phrase_id || idx + 1}</b> · {formatDirectorSec(phrase.start_sec)}→{formatDirectorSec(phrase.end_sec)} · {phrase.text_ru || phrase.text_en || phrase.text || "—"}
+              </div>)}
+            </div> : <div className="manualDirectorAsrList">ASR-фразы не найдены для source_phrase_ids этой сцены.</div>}
+          </details>
+        </section> : null}
 
         {isMeaningSceneVisible(selectedScene) ? <div className="storyboardSceneMeaningCompact">
           <div className="storyboardSceneMeaningHeader">
