@@ -8,7 +8,8 @@ import {
   getAccountScopedStorageKey,
   getManualClipBoardProjectStorageKey,
   hasMeaningfulManualProject,
-  readAnyLegacyManualProject,
+  readLegacyManualClipBoardProject,
+  readLegacyManualTimingProject,
   unwrapManualProjectBackupJson,
 } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualClipDirectorPage.css";
@@ -596,7 +597,7 @@ export default function ManualClipDirectorPage() {
   };
 
   const onRestoreLegacyManualProject = () => {
-    const legacyProject = readAnyLegacyManualProject();
+    const legacyProject = readLegacyManualClipBoardProject() || readLegacyManualTimingProject();
     if (!hasMeaningfulManualProject(legacyProject)) {
       setBackupStatus("Старый проект не найден");
       return;
