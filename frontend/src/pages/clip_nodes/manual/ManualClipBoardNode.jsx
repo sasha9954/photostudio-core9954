@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
 import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, buildStoryPrepTemplateText, getDefaultManualClipNodeData, buildStoryBlockLookup, normalizeManualAudio, normalizeScene, parseManualSplitJson, STORY_PREP_TEMPLATE_META, toBool } from "./manualClipBoardDomain";
+import { canUseLegacyManualProjectStorage, getAccountScopedStorageKey } from "../manualProjectBackup.js";
 
 
 const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
@@ -36,10 +37,16 @@ function readJsonStorage(key) {
 
 function readManualProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
-  const active = readJsonStorage(ACTIVE_PROJECT_STORAGE_KEY);
+  const active = readJsonStorage(getAccountScopedStorageKey(ACTIVE_PROJECT_STORAGE_KEY));
   if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
-  const scoped = readJsonStorage(getManualProjectStorageKey(safeId));
+  const scoped = readJsonStorage(getAccountScopedStorageKey(getManualProjectStorageKey(safeId)));
   if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) return scoped;
+  if (canUseLegacyManualProjectStorage()) {
+    const legacyActive = readJsonStorage(ACTIVE_PROJECT_STORAGE_KEY);
+    if (legacyActive && (!safeId || String(legacyActive?.nodeId || "") === safeId)) return legacyActive;
+    const legacyScoped = readJsonStorage(getManualProjectStorageKey(safeId));
+    if (legacyScoped && (!safeId || String(legacyScoped?.nodeId || "") === safeId)) return legacyScoped;
+  }
   return null;
 }
 
@@ -47,11 +54,11 @@ function persistManualProject(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   try {
     const serialized = JSON.stringify(safeProject);
-    localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, serialized);
+    localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_STORAGE_KEY), serialized);
     const nodeId = String(safeProject?.nodeId || "").trim();
     if (nodeId) {
-      localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
-      localStorage.setItem(getManualProjectStorageKey(nodeId), serialized);
+      localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY), nodeId);
+      localStorage.setItem(getAccountScopedStorageKey(getManualProjectStorageKey(nodeId)), serialized);
     }
   } catch {}
 }
@@ -59,11 +66,19 @@ function persistManualProject(project = {}) {
 function removeManualProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
   try {
-    if (safeId) localStorage.removeItem(getManualProjectStorageKey(safeId));
-    const active = readJsonStorage(ACTIVE_PROJECT_STORAGE_KEY);
+    if (safeId) {
+      localStorage.removeItem(getAccountScopedStorageKey(getManualProjectStorageKey(safeId)));
+      if (canUseLegacyManualProjectStorage()) localStorage.removeItem(getManualProjectStorageKey(safeId));
+    }
+    const active = readJsonStorage(getAccountScopedStorageKey(ACTIVE_PROJECT_STORAGE_KEY))
+      || (canUseLegacyManualProjectStorage() ? readJsonStorage(ACTIVE_PROJECT_STORAGE_KEY) : null);
     if (!safeId || String(active?.nodeId || "") === safeId) {
-      localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
-      localStorage.removeItem(ACTIVE_PROJECT_ID_STORAGE_KEY);
+      localStorage.removeItem(getAccountScopedStorageKey(ACTIVE_PROJECT_STORAGE_KEY));
+      localStorage.removeItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY));
+      if (canUseLegacyManualProjectStorage()) {
+        localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+        localStorage.removeItem(ACTIVE_PROJECT_ID_STORAGE_KEY);
+      }
     }
   } catch {}
 }

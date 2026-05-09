@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../services/api";
-import { buildManualProjectBackupJson, getAccountScopedStorageKey, unwrapManualProjectBackupJson } from "../clip_nodes/manualProjectBackup.js";
+import { buildManualProjectBackupJson, canUseLegacyManualProjectStorage, getAccountScopedStorageKey, unwrapManualProjectBackupJson } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
@@ -102,7 +102,7 @@ const SEGMENT_COLORS = [
 function readActiveProject() {
   try {
     const raw = localStorage.getItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
-      || localStorage.getItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+      || (canUseLegacyManualProjectStorage() ? localStorage.getItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY) : null);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -379,11 +379,11 @@ function buildManualClipBoardStorageKey(nodeId = "") {
 function persistManualClipBoardProject(projectSnapshot = {}) {
   try {
     const serialized = JSON.stringify(projectSnapshot);
-    localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
+    localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
     const nodeId = String(projectSnapshot?.nodeId || "").trim();
     if (nodeId) {
-      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
-      localStorage.setItem(buildManualClipBoardStorageKey(nodeId), serialized);
+      localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
+      localStorage.setItem(getAccountScopedStorageKey(buildManualClipBoardStorageKey(nodeId)), serialized);
     }
   } catch {}
 }
@@ -1688,14 +1688,25 @@ export default function ManualTimingEditorPage() {
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const importedObject = unwrapManualProjectBackupJson(rawObject);
     if (!isBackupImport) {
-      const validations = [
-        validateManualTimingStoryPassImport(importedObject, project),
-        validateManualTimingClipPassImport(importedObject, project),
-        validateManualTimingPodcastPassImport(importedObject, project),
-      ];
-      const failedValidation = validations.find((item) => !item.ok);
-      if (failedValidation) {
-        setCopyStatus(`${workflowLabels.pass} отклонён: ${failedValidation.errors.slice(0, 3).join(" ")}`);
+      const mode = String(importedObject.project_mode || project.project_mode || project.projectMode || "");
+      let validations = [];
+      if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
+        validations = [validateManualTimingClipPassImport(importedObject, project)];
+      } else if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) {
+        validations = [validateManualTimingPodcastPassImport(importedObject, project)];
+      } else if (mode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
+        validations = [validateManualTimingStoryPassImport(importedObject, project)];
+      } else {
+        validations = [
+          validateManualTimingStoryPassImport(importedObject, project),
+          validateManualTimingClipPassImport(importedObject, project),
+          validateManualTimingPodcastPassImport(importedObject, project),
+        ];
+      }
+      const passedValidation = validations.find((item) => item.ok);
+      if (!passedValidation) {
+        const validationErrors = validations.flatMap((item) => Array.isArray(item?.errors) ? item.errors : []);
+        setCopyStatus(`${workflowLabels.pass} отклонён: ${validationErrors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`);
         return;
       }
     }
