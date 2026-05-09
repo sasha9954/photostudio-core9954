@@ -509,10 +509,11 @@ export default function ManualTimingEditorPage() {
   const isProjectModeSelected = Boolean(modeConfig.mode);
   const mainActionsDisabled = !isProjectModeSelected || !isStoryVoiceover;
   const storyPassReadyForDirector = isStoryVoiceover
+    && project.timing_status === "confirmed"
     && scenes.length > 0
     && hasRealStoryBlocks(storyBlocks)
     && scenes.every(sceneHasCompleteStoryPassFields);
-  const openDirectorBoardTitle = storyPassReadyForDirector ? "Открыть режиссёрскую доску" : "Сначала примените Story Pass JSON";
+  const openDirectorBoardTitle = storyPassReadyForDirector ? "Открыть режиссёрскую доску" : "Сначала примените Story Pass JSON и подтвердите тайминг";
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null,
@@ -1789,7 +1790,7 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Pass JSON</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector} title={openDirectorBoardTitle}>Открыть режиссёрскую доску</button>
-          {!storyPassReadyForDirector && isStoryVoiceover ? <span className="manualTimingWorkflowStatus">Сначала примените Story Pass JSON</span> : null}
+          {!storyPassReadyForDirector && isStoryVoiceover ? <span className="manualTimingWorkflowStatus">Сначала примените Story Pass JSON и подтвердите тайминг</span> : null}
         </div>
 
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
