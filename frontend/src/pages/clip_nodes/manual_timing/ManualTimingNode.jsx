@@ -3,6 +3,7 @@ import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../../services/api";
 import { NodeShell } from "../comfy/comfyNodeShared";
+import { hasMeaningfulManualProject } from "../manualProjectBackup.js";
 import "./ManualTimingNode.css";
 import {
   MANUAL_TIMING_MUSIC_CLIP_MODE,
@@ -17,6 +18,7 @@ import {
   normalizeManualTimingAudio,
   persistManualTimingProject,
   readManualTimingProjectForNode,
+  removeManualTimingProjectForNode,
 } from "./manualTimingDomain";
 
 function formatDurationSec(value) {
@@ -221,6 +223,28 @@ export default function ManualTimingNode({ id, data }) {
     });
   };
 
+  const onCloseNode = () => {
+    const storedProject = readManualTimingProjectForNode(id);
+    const projectForCheck = storedProject && typeof storedProject === "object"
+      ? storedProject
+      : {
+        ...model,
+        nodeId: id,
+        audio: effectiveAudio,
+        markers: Array.isArray(model.markers) ? model.markers : [],
+        scenes: Array.isArray(model.scenes) ? model.scenes : [],
+        audio_phrases: Array.isArray(model.audio_phrases) ? model.audio_phrases : [],
+      };
+    if (hasMeaningfulManualProject(projectForCheck)) {
+      const confirmed = window.confirm("Удалить ноду тайминга? Проект останется доступен через backup/localStorage.");
+      if (!confirmed) return;
+      data?.onRemoveNode?.(id);
+      return;
+    }
+    removeManualTimingProjectForNode(id);
+    data?.onRemoveNode?.(id);
+  };
+
   const onAudioUpload = async (file) => {
     if (!file) return;
     patch({
@@ -283,7 +307,7 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   return (
-    <NodeShell title="Тайминг песни" subtitle="ручная разметка" accent="var(--accentB)">
+    <NodeShell title="Тайминг песни" subtitle="ручная разметка" accent="var(--accentB)" onClose={onCloseNode}>
       <Handle type="target" position={Position.Left} id="audio_in" />
       <div className={`manualTimingNode_block ${getManualTimingNodeModeClass(projectMode)}`}>
         <div className="manualTimingNode_row"><b>Аудио:</b> {effectiveAudio.filename || "аудио не выбрано"}</div>

@@ -124,6 +124,58 @@ export function hasMeaningfulManualProject(project = {}) {
   );
 }
 
+export function readLegacyManualTimingProject() {
+  const legacyActive = readManualProjectJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+  if (hasMeaningfulManualProject(legacyActive)) return legacyActive;
+  try {
+    const legacyNodeId = String(localStorage.getItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY) || "").trim();
+    if (legacyNodeId) {
+      const legacyNodeProject = readManualProjectJsonStorage(getManualTimingProjectStorageKey(legacyNodeId));
+      if (hasMeaningfulManualProject(legacyNodeProject)) return legacyNodeProject;
+    }
+  } catch {}
+  return null;
+}
+
+export function readLegacyManualClipBoardProject() {
+  const legacyActive = readManualProjectJsonStorage(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY);
+  if (hasMeaningfulManualProject(legacyActive)) return legacyActive;
+  try {
+    const legacyNodeId = String(localStorage.getItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY) || "").trim();
+    if (legacyNodeId) {
+      const legacyNodeProject = readManualProjectJsonStorage(getManualClipBoardProjectStorageKey(legacyNodeId));
+      if (hasMeaningfulManualProject(legacyNodeProject)) return legacyNodeProject;
+    }
+  } catch {}
+  return null;
+}
+
+export function readAnyLegacyManualProject() {
+  return readLegacyManualTimingProject() || readLegacyManualClipBoardProject();
+}
+
+export function migrateLegacyManualProjectToCurrentAccount(project, { target = "timing" } = {}) {
+  const safeProject = unwrapManualProjectBackupJson(project);
+  if (!hasMeaningfulManualProject(safeProject)) return false;
+  const isDirectorTarget = String(target || "").trim() === "director";
+  const activeKey = isDirectorTarget ? MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY : MANUAL_TIMING_ACTIVE_PROJECT_KEY;
+  const activeIdKey = isDirectorTarget ? MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY : MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY;
+  const projectKeyFactory = isDirectorTarget ? getManualClipBoardProjectStorageKey : getManualTimingProjectStorageKey;
+
+  try {
+    const serialized = JSON.stringify(safeProject);
+    localStorage.setItem(getAccountScopedStorageKey(activeKey), serialized);
+    const nodeId = String(safeProject?.nodeId || "").trim();
+    if (nodeId) {
+      localStorage.setItem(getAccountScopedStorageKey(activeIdKey), nodeId);
+      localStorage.setItem(getAccountScopedStorageKey(projectKeyFactory(nodeId)), serialized);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readActiveProjectPair(activeKey, activeIdKey, projectKeyFactory) {
   const scopedActiveKey = getAccountScopedStorageKey(activeKey);
   const scopedActiveIdKey = getAccountScopedStorageKey(activeIdKey);

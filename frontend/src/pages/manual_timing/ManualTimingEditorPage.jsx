@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../services/api";
-import { buildManualProjectBackupJson, canUseLegacyManualProjectStorage, getAccountScopedStorageKey, unwrapManualProjectBackupJson } from "../clip_nodes/manualProjectBackup.js";
+import { buildManualProjectBackupJson, canUseLegacyManualProjectStorage, getAccountScopedStorageKey, hasMeaningfulManualProject, readAnyLegacyManualProject, unwrapManualProjectBackupJson } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
@@ -1738,6 +1738,21 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const onRestoreLegacyManualProject = () => {
+    const legacyProject = readAnyLegacyManualProject();
+    if (!hasMeaningfulManualProject(legacyProject)) {
+      setCopyStatus("Старый проект не найден");
+      return;
+    }
+    const importedObject = unwrapManualProjectBackupJson(legacyProject);
+    const nextProject = normalizeManualTimingProjectFromJson(importedObject, project);
+    persist(nextProject);
+    setJsonImportText(JSON.stringify(buildManualTimingExportJson(nextProject), null, 2));
+    setCopyStatus(`Старый проект восстановлен: сцен ${nextProject.scenes?.length || 0}`);
+    window.setTimeout(() => setCopyStatus(""), 2200);
+    setAudioTime(0, { pause: true, clearBound: true });
+  };
+
   const onReset = () => {
     const nextMarkers = durationSec > 0 ? [0, durationSec] : [];
     const nextStoryBlocks = [MANUAL_TIMING_UNKNOWN_STORY_BLOCK];
@@ -1833,6 +1848,10 @@ export default function ManualTimingEditorPage() {
     }));
   }, [project.markers, durationSec]);
 
+  const legacyManualProject = useMemo(() => readAnyLegacyManualProject(), []);
+  const showLegacyRestore = hasMeaningfulManualProject(legacyManualProject)
+    && (!hasMeaningfulManualProject(project) || !isProjectModeSelected);
+
   return (
     <>
     <div className={`manualTimingPage pageCard ${modeConfig.className}`}>
@@ -1848,6 +1867,13 @@ export default function ManualTimingEditorPage() {
       </div>
       <div className="manualTimingModeHint">{modeConfig.hint}</div>
       {!isProjectModeSelected ? <div className="manualTimingModeMissing">Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.</div> : null}
+      {showLegacyRestore ? <div className="manualTimingLegacyRestore">
+        <div>
+          <b>Найден старый проект в браузере</b>
+          <span>Он не подхватывается автоматически для текущего аккаунта. Восстановите его вручную, если это ваш проект.</span>
+        </div>
+        <button className="clipSB_btn clipSB_btnPrimary" onClick={onRestoreLegacyManualProject}>Восстановить в текущий аккаунт</button>
+      </div> : null}
       <div className="manualTimingMetaGrid">
         <div><b>Файл:</b> {audio.filename || "аудио не выбрано"}</div>
         <div><b>Длительность:</b> {formatTimingSec(durationSec)}</div>
