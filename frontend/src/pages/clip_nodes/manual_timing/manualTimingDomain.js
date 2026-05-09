@@ -1047,11 +1047,19 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
     });
   });
 
-  if (!storyBlocks.length) {
+  const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+  const realStoryBlocks = storyBlocks.filter((block) => String(block.block_id || "") !== unknownBlockId);
+
+  if (!realStoryBlocks.length) {
     errors.push("story_blocks не заполнены.");
   }
   storyBlocks.forEach((block) => {
     const blockId = String(block.block_id || "block_without_id");
+
+    if (blockId === unknownBlockId) {
+      return;
+    }
+
     ["title_ru", "summary_ru", "block_goal_ru", "block_reveal_ru", "block_emotion_ru"].forEach((key) => {
       if (!String(block[key] || "").trim()) errors.push(`${blockId}: не заполнено ${key}.`);
     });
