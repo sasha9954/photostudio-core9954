@@ -1985,6 +1985,15 @@ export default function ManualTimingEditorPage() {
             {audioPhrases.length ? <span><i className="legendAsrPhrase" /> ASR phrase map</span> : null}
             {SHOW_MISSING_PHRASE_TOOLS && audioPhrases.length ? <span><i className="legendMissingPhrase" /> пропущенная фраза</span> : null}
           </div>
+          <div className="manualTimingInlinePlayback">
+            <button
+              className="clipSB_btn clipSB_btnSecondary"
+              onClick={onPlayPause}
+              disabled={!audio.url}
+            >
+              {isPlaying ? "⏸ пауза" : "▶ слушать"}
+            </button>
+          </div>
         </div>
 
         <div className={`manualTimingWarningsCompact ${warnings.length ? "hasWarnings" : ""}`}>
