@@ -1091,6 +1091,10 @@ export default function ManualTimingEditorPage() {
 
   const onCreateAudioPhraseMap = async () => {
     if (!audio.url) return;
+    if (String(audio.url || "").startsWith("blob:")) {
+      setAsrStatus("Ошибка ASR: backend не может читать blob URL. Нужно использовать backend/static asset URL или отправить файл через multipart.");
+      return;
+    }
     setAsrStatus("ASR: распознаю слова и собираю phrase map…");
     try {
       const res = await fetch(`${API_BASE}/api/manual-timing/audio-phrases`, {
@@ -1109,13 +1113,13 @@ export default function ManualTimingEditorPage() {
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
       const nextAudioPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "asr" })));
-      const nextDuration = Number(data.audio_duration_sec || audio.duration_sec || durationSec || 0);
-      const nextAudio = {
+      const exactDuration = Number(data.audio_duration_sec || 0);
+      const hasExactDuration = exactDuration > 0;
+      const nextAudio = hasExactDuration ? {
         ...audio,
-        duration_sec: nextDuration > 0 ? roundTimingSec(nextDuration) : audio.duration_sec,
-        duration_ms: nextDuration > 0 ? Math.round(nextDuration * 1000) : audio.duration_ms,
-      };
-      const asrScenes = hydrateManualTimingScenesWithStoryBlocks(buildAsrVerificationScenes(nextAudioPhrases), [MANUAL_TIMING_UNKNOWN_STORY_BLOCK]);
+        duration_sec: roundTimingSec(exactDuration),
+        duration_ms: Math.round(exactDuration * 1000),
+      } : audio;
       persist({
         ...project,
         audio: nextAudio,
@@ -1128,17 +1132,27 @@ export default function ManualTimingEditorPage() {
           split_settings: data.split_settings || {},
           asr: data.asr || {},
         },
-        markers: nextAudioPhrases.length ? [0, ...nextAudioPhrases.map((phrase) => phrase.end_sec)] : project.markers,
-        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
-        scenes: asrScenes,
-        selectedSceneId: asrScenes[0]?.scene_id || project.selectedSceneId || "",
-        timing_status: "draft",
       });
       setAsrStatus(`ASR phrase map готов: ${nextAudioPhrases.length} фраз, ${Array.isArray(data.words) ? data.words.length : 0} слов. Это проверочная карта, не финальный storyboard.`);
       window.setTimeout(() => setAsrStatus(""), 5000);
     } catch (error) {
       setAsrStatus(`Ошибка ASR: ${error?.message || error}`);
     }
+  };
+
+  const onOpenAsrVerificationScenes = () => {
+    if (!audioPhrases.length) return;
+    const confirmed = window.confirm("Это заменит текущие сцены на ASR-preview. Продолжить?");
+    if (!confirmed) return;
+    const asrScenes = hydrateManualTimingScenesWithStoryBlocks(buildAsrVerificationScenes(audioPhrases), [MANUAL_TIMING_UNKNOWN_STORY_BLOCK]);
+    persist({
+      ...project,
+      scenes: asrScenes,
+      selectedSceneId: asrScenes[0]?.scene_id || project.selectedSceneId || "",
+      timing_status: "draft",
+    });
+    setAsrStatus("ASR-preview сцены открыты для проверки. Это временная замена storyboard.");
+    window.setTimeout(() => setAsrStatus(""), 5000);
   };
 
   const onConfirmTiming = () => {
@@ -1480,6 +1494,7 @@ export default function ManualTimingEditorPage() {
           <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={!audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>Создать Audio Phrase Map</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
