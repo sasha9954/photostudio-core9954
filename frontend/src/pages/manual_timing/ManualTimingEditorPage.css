@@ -1550,3 +1550,13 @@
   border-color: rgba(248, 113, 113, 0.42);
   background: rgba(127, 29, 29, 0.18);
 }
+
+.manualTimingAdvancedDisabled {
+  padding: 12px 14px;
+  border: 1px dashed rgba(248, 113, 113, 0.42);
+  border-radius: 14px;
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.16);
+  font-size: 13px;
+  line-height: 1.4;
+}

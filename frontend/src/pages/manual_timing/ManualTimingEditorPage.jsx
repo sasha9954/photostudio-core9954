@@ -1721,7 +1721,9 @@ export default function ManualTimingEditorPage() {
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
         {audioPhrases.length ? <div className="manualTimingAsrNotice">ASR phrase map: audio_phrases покрывают только речь по word timestamps. Для storyboard используй “Собрать story scenes из ASR”: сцены станут gap-aware, покроют всю audio_duration_sec, а ChatGPT/Gemini затем заполнит перевод, story_blocks и смысловые поля без video_prompt/negative_prompt/sound_prompt.</div> : null}
 
-        <details className="manualTimingAdvancedPanel">
+        {!isProjectModeSelected ? <div className="manualTimingAdvancedDisabled">Ручные advanced-инструменты отключены: вернитесь в ноду и выберите тип проекта.</div> : null}
+
+        {isProjectModeSelected ? <details className="manualTimingAdvancedPanel">
           <summary>Дополнительно / ручная правка</summary>
           <div className="manualTimingCompactActions">
             <button className="clipSB_btn" onClick={() => navigate(-1)}>Назад</button>
@@ -1819,7 +1821,7 @@ export default function ManualTimingEditorPage() {
             </div>
             <div className="manualTimingNudgeHint">− сдвигает конец сцены раньше, + сдвигает конец сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
           </div>
-        </details>
+        </details> : null}
 
         {selectedScene ? <div className="manualTimingSceneTextPanel">
           <div className="manualTimingSceneTextHeader">
@@ -1899,7 +1901,7 @@ export default function ManualTimingEditorPage() {
             <span>Вставь JSON после Story Pass: он может заполнить только перевод, смысловые блоки и подсказки, без video_prompt/negative_prompt/sound_prompt.</span>
           </div>
           <div className="manualTimingJsonActions">
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)}>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)} disabled={!isProjectModeSelected}>
               {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить Story Pass JSON"}
             </button>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Pass JSON</button>
