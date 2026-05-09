@@ -981,7 +981,15 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
     if (!sameManualTimingJson(normalizeManualTimingSourcePhraseIds(nextScene.source_phrase_ids), normalizeManualTimingSourcePhraseIds(baseScene.source_phrase_ids))) {
       errors.push(`${sceneId}: source_phrase_ids изменились.`);
     }
-    ["translated_text_ru", "meaning_hint_ru", "scene_goal_ru"].forEach((key) => {
+    [
+      "translated_text_ru",
+      "meaning_hint_ru",
+      "scene_goal_ru",
+      "photo_prompt_hint_ru",
+      "prompt_hint_ru",
+      "scene_role_in_block_ru",
+      "block_progress_ru",
+    ].forEach((key) => {
       if (!String(nextScene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
     });
   });
@@ -991,8 +999,9 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
   }
   storyBlocks.forEach((block) => {
     const blockId = String(block.block_id || "block_without_id");
-    if (!String(block.title_ru || "").trim()) errors.push(`${blockId}: не заполнено title_ru.`);
-    if (!String(block.summary_ru || "").trim()) errors.push(`${blockId}: не заполнено summary_ru.`);
+    ["title_ru", "summary_ru", "block_goal_ru", "block_reveal_ru", "block_emotion_ru"].forEach((key) => {
+      if (!String(block[key] || "").trim()) errors.push(`${blockId}: не заполнено ${key}.`);
+    });
     if (!Array.isArray(block.scene_ids) || !block.scene_ids.length) errors.push(`${blockId}: не заполнены scene_ids.`);
   });
 
