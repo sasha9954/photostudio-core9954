@@ -1,5 +1,7 @@
 import { CHATGPT_STORY_SPLIT_TASK, STORY_PREP_TEMPLATE_META } from "../manual/manualClipBoardDomain.js";
 export const MANUAL_TIMING_MODE = "manual_timing";
+export const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
+export const MANUAL_TIMING_STORY_PROJECT_KIND = "story";
 export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
 export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
 
@@ -85,7 +87,8 @@ export function removeManualTimingProjectForNode(nodeId = "") {
 export function getDefaultManualTimingNodeData() {
   return {
     mode: MANUAL_TIMING_MODE,
-    project_kind: "clip",
+    project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
+    project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
     format: "9:16",
     audio: {
       url: "",
@@ -620,7 +623,7 @@ export function buildGapAwareScenesFromAudioPhrases(audioPhrases = [], options =
   const targetPreferred = Number(target.preferred || 6);
   const targetMax = Number(target.max || 9);
   const maxSceneDurationSec = Number(options.maxSceneDurationSec || 10);
-  const projectKind = String(options.projectKind || "clip");
+  const projectKind = String(options.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND);
   const route = normalizeManualTimingRoute(options.route || "i2v");
 
   const groups = [];
@@ -876,7 +879,8 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
-    project_kind: String(safeProject.project_kind || "story"),
+    project_mode: String(safeProject.project_mode || safeProject.projectMode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
+    project_kind: String(safeProject.project_kind || safeProject.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND),
     format: String(safeProject.format || "9:16"),
     split_type: "ai_story_blocks_split_request",
     audio_duration_sec: Number(audio.duration_sec || 0),
@@ -1096,7 +1100,8 @@ export function buildManualTimingSampleJson(project = {}) {
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
-    project_kind: String(safeProject.project_kind || "clip"),
+    project_mode: String(safeProject.project_mode || safeProject.projectMode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
+    project_kind: String(safeProject.project_kind || safeProject.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND),
     format: String(safeProject.format || "9:16"),
     split_type: existingScenes.length ? "manual_timing_export_for_chatgpt" : "manual_timing_template_for_chatgpt",
     audio_duration_sec: Number(audio.duration_sec || 0),
@@ -1140,7 +1145,8 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   return {
     ...getDefaultManualTimingNodeData(),
     ...safeBase,
-    project_kind: String(safeRaw.project_kind || safeRaw.projectKind || safeBase.project_kind || "clip"),
+    project_mode: String(safeRaw.project_mode || safeRaw.projectMode || safeBase.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
+    project_kind: String(safeRaw.project_kind || safeRaw.projectKind || safeBase.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND),
     format: String(safeRaw.format || safeBase.format || "9:16"),
     audio: {
       ...baseAudio,
@@ -1287,7 +1293,31 @@ export function buildManualTimingWarnings(project = {}) {
     warnings.push(`${title}: ${bucket.items.join(", ")}`);
   });
 
-  return warnings;
+  const isStoryVoiceover = String(project?.project_mode || project?.projectMode || "") === MANUAL_TIMING_STORY_VOICEOVER_MODE
+    || String(project?.project_kind || project?.projectKind || "") === MANUAL_TIMING_STORY_PROJECT_KIND;
+  if (isStoryVoiceover) {
+    if (!audioPhrases.length) warnings.push("Нет audio_phrases — сначала создайте Audio Phrase Map.");
+    const hasStoryScenes = scenes.some((scene) => normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds).length);
+    const hasImportedStoryPass = scenes.some((scene) => String(scene?.translated_text_ru || scene?.meaning_hint_ru || scene?.scene_goal_ru || scene?.prompt_hint_ru || "").trim());
+    if (hasStoryScenes && !hasImportedStoryPass) warnings.push("Story Pass ещё не заполнен — скопируйте JSON для Story Pass и импортируйте результат.");
+    if (hasStoryScenes) {
+      scenes.forEach((scene) => {
+        [
+          "translated_text_ru",
+          "meaning_hint_ru",
+          "scene_goal_ru",
+          "photo_prompt_hint_ru",
+          "prompt_hint_ru",
+          "scene_role_in_block_ru",
+          "block_progress_ru",
+        ].forEach((key) => {
+          if (!String(scene?.[key] || "").trim()) warnings.push(`${scene.scene_id || "scene"}: пустое смысловое поле ${key}.`);
+        });
+      });
+    }
+  }
+
+  return [...new Set(warnings)];
 }
 
 export function buildManualTimingExportJson(project = {}) {
@@ -1355,7 +1385,8 @@ export function buildManualTimingExportJson(project = {}) {
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
-    project_kind: String(safeProject.project_kind || "clip"),
+    project_mode: String(safeProject.project_mode || safeProject.projectMode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
+    project_kind: String(safeProject.project_kind || safeProject.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND),
     format: String(safeProject.format || "9:16"),
     split_type: safeProject.timing_status === "confirmed" ? "manual_timing_confirmed" : "manual_timing_draft",
     audio_duration_sec: Number(audio.duration_sec || 0),
