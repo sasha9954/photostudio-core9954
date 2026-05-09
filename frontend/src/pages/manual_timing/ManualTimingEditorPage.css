@@ -1575,3 +1575,10 @@
   font-size: 13px;
   line-height: 1.4;
 }
+
+.manualTimingWorkflowStatus {
+  color: #ffefbd;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
