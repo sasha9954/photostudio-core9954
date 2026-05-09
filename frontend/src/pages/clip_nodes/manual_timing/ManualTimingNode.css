@@ -2,8 +2,9 @@
   display: grid;
   gap: 8px;
   min-width: 280px;
+  max-width: 100%;
   box-sizing: border-box;
-  overflow: visible;
+  overflow: hidden;
   padding-bottom: 4px;
 }
 
@@ -40,14 +41,29 @@
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(234, 179, 8, 0.08));
 }
 
-.manualTimingNode_row { font-size: 12px; color: #d9e2ff; }
+.manualTimingNode_row { font-size: 12px; color: #d9e2ff; min-width: 0; overflow-wrap: anywhere; }
 .manualTimingNode_label { font-size: 11px; color: #9db0df; margin-top: 2px; }
-.manualTimingNode_select { width: 100%; background: rgba(10, 14, 24, 0.85); color: #eaf0ff; border: 1px solid rgba(130, 155, 214, 0.45); border-radius: 8px; padding: 7px 10px; }
+.manualTimingNode_select { width: 100%; min-width: 0; box-sizing: border-box; background: rgba(10, 14, 24, 0.85); color: #eaf0ff; border: 1px solid rgba(130, 155, 214, 0.45); border-radius: 8px; padding: 7px 10px; }
 .manualTimingNode_select.isError { border-color: rgba(248, 113, 113, 0.95); background: rgba(127, 29, 29, 0.32); box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16); }
 .manualTimingNode_modeError { color: #fecaca; font-size: 11px; margin-top: -4px; }
 .manualTimingNode_actions,
-.manualTimingNodeActions { display: grid; gap: 8px; margin-top: 4px; }
-.manualTimingNodeActions .clipSB_btn { width: 100%; }
+.manualTimingNodeActions {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.manualTimingNodeActions .clipSB_btn {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .manualTimingNode_upload {
   text-align: center;
 }

@@ -1530,8 +1530,25 @@
   background: linear-gradient(135deg, var(--manual-mode-accent-soft), rgba(15, 23, 42, 0.22));
 }
 
+.manualTimingModeTitleBlock {
+  min-width: 0;
+}
+
 .manualTimingModeHeader .pageTitle {
   margin-bottom: 4px;
+}
+
+.manualTimingModeHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+}
+
+.manualTimingBackButton {
+  white-space: nowrap;
 }
 
 .manualTimingModeSubtitle {
@@ -1581,4 +1598,21 @@
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .manualTimingModeHeader {
+    flex-direction: column;
+  }
+
+  .manualTimingModeHeaderActions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .manualTimingBackButton {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
 }
