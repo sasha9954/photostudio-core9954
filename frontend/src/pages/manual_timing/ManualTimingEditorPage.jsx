@@ -309,6 +309,31 @@ function persistManualClipBoardProject(projectSnapshot = {}) {
   } catch {}
 }
 
+async function sliceStoryVoiceoverAudioForScenes(projectSnapshot = {}) {
+  const scenes = Array.isArray(projectSnapshot?.scenes) ? projectSnapshot.scenes : [];
+  const res = await fetch(`${API_BASE}/api/manual-clip/slice-audio`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      audio_url: projectSnapshot?.audio?.url,
+      audio_filename: projectSnapshot?.audio?.filename,
+      project_kind: "story",
+      format: projectSnapshot?.format || "9:16",
+      scenes: scenes.map((scene) => ({
+        scene_id: scene.scene_id,
+        start_sec: scene.start_sec,
+        end_sec: scene.end_sec,
+      })),
+    }),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.ok === false) {
+    throw new Error(String(data?.detail || data?.message || `HTTP ${res.status}`));
+  }
+  return Array.isArray(data?.scenes) ? data.scenes : [];
+}
+
 function getStoryVoiceoverStatus(project = {}, audioPhrases = [], scenes = [], audioDurationSec = 0) {
   if (!audioPhrases.length) return "Шаг 1: создайте Audio Phrase Map";
   if (!scenes.length || isSingleFullLengthDraftScene(scenes, audioDurationSec)) return "Шаг 2: соберите story scenes из ASR";
@@ -493,6 +518,7 @@ export default function ManualTimingEditorPage() {
   const [missingPhraseDraft, setMissingPhraseDraft] = useState({ start_sec: null, end_sec: null });
   const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
   const [asrStatus, setAsrStatus] = useState("");
+  const [handoffStatus, setHandoffStatus] = useState("");
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -1445,15 +1471,50 @@ export default function ManualTimingEditorPage() {
     timing_status: project.timing_status || "confirmed",
   });
 
-  const onOpenDirectorBoard = () => {
+  const onOpenDirectorBoard = async () => {
     if (!storyPassReadyForDirector) {
       setCopyStatus("Сначала примените Story Pass JSON");
       return;
     }
-    const projectSnapshot = buildDirectorProjectSnapshot();
+    if (handoffStatus) return;
+
+    let projectSnapshot = buildDirectorProjectSnapshot();
+    let handoffWarning = "";
+    const needsAudioSlice = Boolean(projectSnapshot?.audio?.url)
+      && !(Array.isArray(projectSnapshot.scenes) && projectSnapshot.scenes.every((scene) => String(scene?.audio_slice_url || "").trim()));
+
+    if (needsAudioSlice) {
+      setHandoffStatus("Нарезаю аудио сцен…");
+      try {
+        const slicedScenes = await sliceStoryVoiceoverAudioForScenes(projectSnapshot);
+        const slicedById = new Map(slicedScenes.map((scene) => [String(scene?.scene_id || ""), scene]));
+        projectSnapshot = {
+          ...projectSnapshot,
+          scenes: projectSnapshot.scenes.map((scene) => {
+            const slicedScene = slicedById.get(String(scene?.scene_id || ""));
+            if (!slicedScene) return scene;
+            return {
+              ...scene,
+              audio_slice_url: String(slicedScene.audio_slice_url || scene.audio_slice_url || ""),
+              audio_slice_duration_sec: Number(slicedScene.audio_slice_duration_sec || scene.audio_slice_duration_sec || 0),
+            };
+          }),
+        };
+        if (!projectSnapshot.scenes.every((scene) => String(scene?.audio_slice_url || "").trim())) {
+          throw new Error("backend_returned_partial_audio_slices");
+        }
+      } catch (error) {
+        handoffWarning = `Проект передан, но аудио сцен не нарезано: ${String(error?.message || "audio_slice_failed")}`;
+        projectSnapshot = { ...projectSnapshot, handoff_warning: handoffWarning };
+        setCopyStatus(handoffWarning);
+        window.setTimeout(() => setCopyStatus(""), 5000);
+      }
+    }
+
     persistManualTimingProject(projectSnapshot);
     persistManualClipBoardProject(projectSnapshot);
-    setCopyStatus("Проект передан в режиссёрскую доску");
+    if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
+    setHandoffStatus("");
     navigate(MANUAL_CLIP_BOARD_ROUTE);
   };
 
@@ -1789,7 +1850,7 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson} disabled={mainActionsDisabled}>Скопировать JSON для Story Pass</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Pass JSON</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector} title={openDirectorBoardTitle}>Открыть режиссёрскую доску</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Открыть режиссёрскую доску"}</button>
           {!storyPassReadyForDirector && isStoryVoiceover ? <span className="manualTimingWorkflowStatus">Сначала примените Story Pass JSON и подтвердите тайминг</span> : null}
         </div>
 
