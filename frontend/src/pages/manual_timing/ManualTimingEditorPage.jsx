@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../../services/api";
 import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
@@ -224,6 +225,86 @@ function getSceneStoryText(scene = {}) {
   };
 }
 
+function buildAsrVerificationScenes(audioPhrases = []) {
+  return normalizeManualTimingAudioPhrases(audioPhrases).map((phrase, idx) => {
+    const sceneId = `asr_${String(idx + 1).padStart(3, "0")}`;
+    return {
+      scene_id: sceneId,
+      index: idx + 1,
+      start_sec: phrase.start_sec,
+      end_sec: phrase.end_sec,
+      duration_sec: roundTimingSec(phrase.end_sec - phrase.start_sec),
+      section: "verse",
+      route: "i2v",
+      contains_vocal: false,
+      contains_vocal_assumption: false,
+      contains_instrumental_assumption: true,
+      use_sound_suggestion: false,
+      energy: "mid",
+      quality: "asr_phrase_map_preview",
+      boundary_reason: "asr_phrase_boundary",
+      transition_out: "asr_phrase_cut",
+      story_time: "",
+      scene_type: "asr_phrase_preview",
+      drama_hint: "",
+      short_note: "ASR phrase map preview — не финальный storyboard",
+      scene_goal_ru: "",
+      photo_prompt_hint_ru: "",
+      prompt_hint_ru: "",
+      story_position_ru: "",
+      user_note_ru: "ASR phrase map: временная сцена для проверки тайминга фразы, не финальный storyboard.",
+      source_phrase_ids: [phrase.phrase_id],
+      story_block_id: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id,
+      story_block_title_ru: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.title_ru,
+      story_block_color: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color,
+      story_block_position_ru: "",
+      scene_role_in_block_ru: "",
+      block_progress_ru: "",
+      original_text: phrase.text_en || "",
+      translated_text_ru: phrase.text_ru || "",
+      meaning_hint_ru: phrase.meaning_ru || "",
+      source_text_en: phrase.text_en || "",
+      adapted_text_en: "",
+      video_prompt: "",
+      negative_prompt: "",
+      sound_prompt: "",
+    };
+  });
+}
+
+function getAsrPhraseStyle(phrase, durationSec) {
+  const start = clampTime(phrase.start_sec, durationSec);
+  const end = clampTime(phrase.end_sec, durationSec);
+  const width = durationSec > 0 ? ((end - start) / durationSec) * 100 : 0;
+  return {
+    left: `${durationSec > 0 ? Math.max(0, Math.min(100, (start / durationSec) * 100)) : 0}%`,
+    width: `${Math.max(0.35, Math.min(100, width))}%`,
+  };
+}
+
+function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = []) {
+  if (!scene || !scenePhrases.length) return [];
+  const warnings = [];
+  const sceneStart = Number(scene.start_sec || 0);
+  const sceneEnd = Number(scene.end_sec || 0);
+  const sorted = [...scenePhrases].sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
+  const last = sorted[sorted.length - 1];
+  const sourceIds = Array.isArray(scene.source_phrase_ids) ? scene.source_phrase_ids.map((id) => String(id || "")).filter(Boolean) : [];
+  if (sceneEnd > Number(last.end_sec || 0) + 0.08) {
+    warnings.push(`Конец сцены ${formatTimingSec(sceneEnd)} заходит за последнюю ASR-фразу ${last.phrase_id} (${formatTimingSec(last.end_sec)}).`);
+  }
+  if (sourceIds.length) {
+    const actualIds = sorted.map((phrase) => String(phrase.phrase_id || "")).filter(Boolean);
+    const sameIds = sourceIds.length === actualIds.length && sourceIds.every((id, idx) => id === actualIds[idx]);
+    if (!sameIds) warnings.push(`source_phrase_ids не совпадает с фразами внутри диапазона: ${sourceIds.join(", ") || "—"} vs ${actualIds.join(", ") || "—"}.`);
+    const sourceFirst = sorted.find((phrase) => String(phrase.phrase_id || "") === sourceIds[0]);
+    const sourceLast = sorted.find((phrase) => String(phrase.phrase_id || "") === sourceIds[sourceIds.length - 1]);
+    if (sourceFirst && Math.abs(sceneStart - Number(sourceFirst.start_sec || 0)) > 0.08) warnings.push(`start_sec сцены не равен start первой source_phrase (${formatTimingSec(sourceFirst.start_sec)}).`);
+    if (sourceLast && Math.abs(sceneEnd - Number(sourceLast.end_sec || 0)) > 0.08) warnings.push(`end_sec сцены не равен end последней source_phrase (${formatTimingSec(sourceLast.end_sec)}).`);
+  }
+  return warnings;
+}
+
 export default function ManualTimingEditorPage() {
   const navigate = useNavigate();
   const audioRef = useRef(null);
@@ -241,6 +322,7 @@ export default function ManualTimingEditorPage() {
   const [jumpTimeParts, setJumpTimeParts] = useState(() => ({ min: "0", sec: "00", ms: "000" }));
   const [missingPhraseDraft, setMissingPhraseDraft] = useState({ start_sec: null, end_sec: null });
   const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
+  const [asrStatus, setAsrStatus] = useState("idle");
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -280,6 +362,14 @@ export default function ManualTimingEditorPage() {
     () => getManualTimingPhrasesForScene(audioPhrases, selectedScene),
     [audioPhrases, selectedScene]
   );
+  const selectedScenePhraseWarnings = useMemo(
+    () => getScenePhraseAlignmentWarnings(selectedScene, selectedSceneAudioPhrases),
+    [selectedScene, selectedSceneAudioPhrases]
+  );
+  const asrPhraseMarkers = useMemo(() => {
+    if (!(durationSec > 0)) return [];
+    return audioPhrases.map((phrase) => ({ ...phrase, style: getAsrPhraseStyle(phrase, durationSec) }));
+  }, [audioPhrases, durationSec]);
   const selectedMissingPhrase = useMemo(
     () => audioPhrases.find((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhraseId || "")) || null,
     [audioPhrases, selectedMissingPhraseId]
@@ -999,6 +1089,58 @@ export default function ManualTimingEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quickEditSceneId, quickEditDraft]);
 
+  const onCreateAudioPhraseMap = async () => {
+    if (!audio.url) return;
+    setAsrStatus("ASR: распознаю слова и собираю phrase map…");
+    try {
+      const res = await fetch(`${API_BASE}/api/manual-timing/audio-phrases`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          audio_url: audio.url,
+          language: "en",
+          split_mode: "pause_based",
+          min_pause_sec: 0.45,
+          max_phrase_sec: 8.0,
+          min_phrase_sec: 1.2,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
+      const nextAudioPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "asr" })));
+      const nextDuration = Number(data.audio_duration_sec || audio.duration_sec || durationSec || 0);
+      const nextAudio = {
+        ...audio,
+        duration_sec: nextDuration > 0 ? roundTimingSec(nextDuration) : audio.duration_sec,
+        duration_ms: nextDuration > 0 ? Math.round(nextDuration * 1000) : audio.duration_ms,
+      };
+      const asrScenes = hydrateManualTimingScenesWithStoryBlocks(buildAsrVerificationScenes(nextAudioPhrases), [MANUAL_TIMING_UNKNOWN_STORY_BLOCK]);
+      persist({
+        ...project,
+        audio: nextAudio,
+        audio_words: Array.isArray(data.words) ? data.words : [],
+        audio_phrases: nextAudioPhrases,
+        asr_phrase_map: {
+          status: "ready",
+          source: "faster-whisper",
+          generatedAt: Date.now(),
+          split_settings: data.split_settings || {},
+          asr: data.asr || {},
+        },
+        markers: nextAudioPhrases.length ? [0, ...nextAudioPhrases.map((phrase) => phrase.end_sec)] : project.markers,
+        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
+        scenes: asrScenes,
+        selectedSceneId: asrScenes[0]?.scene_id || project.selectedSceneId || "",
+        timing_status: "draft",
+      });
+      setAsrStatus(`ASR phrase map готов: ${nextAudioPhrases.length} фраз, ${Array.isArray(data.words) ? data.words.length : 0} слов. Это проверочная карта, не финальный storyboard.`);
+      window.setTimeout(() => setAsrStatus(""), 5000);
+    } catch (error) {
+      setAsrStatus(`Ошибка ASR: ${error?.message || error}`);
+    }
+  };
+
   const onConfirmTiming = () => {
     const nextScenes = scenes.map((scene) => ({ ...scene, quality: "manual_confirmed" }));
     persist({ ...project, scenes: nextScenes, timing_status: "confirmed" });
@@ -1242,6 +1384,16 @@ export default function ManualTimingEditorPage() {
                 <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
               </button>)}
             </div> : null}
+            {asrPhraseMarkers.length ? <div className="manualTimingPhraseTrack" aria-label="ASR phrase markers">
+              {asrPhraseMarkers.map((phrase) => <button
+                key={`phrase-marker-${phrase.phrase_id}`}
+                type="button"
+                className="manualTimingPhraseMarker"
+                style={phrase.style}
+                onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }}
+                title={`${phrase.phrase_id}: ${formatTimingSec(phrase.start_sec)} – ${formatTimingSec(phrase.end_sec)} · ${phrase.text_en || "ASR phrase"}`}
+              />)}
+            </div> : null}
             {scenes.map((scene, idx) => {
               const isOpenTail = scene.scene_id === openTailSceneId;
               const isActive = selectedScene?.scene_id === scene.scene_id;
@@ -1273,6 +1425,7 @@ export default function ManualTimingEditorPage() {
             <span><i className="legendCut" /> сцены</span>
             <span><i className="legendTail" /> ещё не отрезано</span>
             <span><i className="legendCandidate" /> следующий отрезок</span>
+            {audioPhrases.length ? <span><i className="legendAsrPhrase" /> ASR phrase map</span> : null}
             {SHOW_MISSING_PHRASE_TOOLS && audioPhrases.length ? <span><i className="legendMissingPhrase" /> пропущенная фраза</span> : null}
           </div>
         </div>
@@ -1326,10 +1479,14 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
           <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={!audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>Создать Audio Phrase Map</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
         </div>
+
+        {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
+        {audioPhrases.length ? <div className="manualTimingAsrNotice">ASR phrase map: тайминги взяты из word timestamps. Это отдельный проверочный этап, не финальный storyboard; Gemini/ChatGPT должен только группировать phrase_id и брать границы сцен от фраз.</div> : null}
 
         {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingMissingPhraseDraftPanel">
           <div className="manualTimingMissingPhraseDraftHeader">
@@ -1393,11 +1550,12 @@ export default function ManualTimingEditorPage() {
               <div><span>Прогресс блока</span><p>{selectedSceneText.blockProgress}</p></div>
             </div>
           </div>
-          {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingAudioPhrasesPanel">
+          {audioPhrases.length ? <div className="manualTimingAudioPhrasesPanel">
             <div className="manualTimingAudioPhrasesHeader">
               <strong>Фразы аудио / пропущенные фразы</strong>
               <span>{selectedSceneAudioPhrases.length ? `${selectedSceneAudioPhrases.length} в диапазоне сцены` : "нет фраз в диапазоне"}{selectedMissingPhrase && !selectedSceneAudioPhrases.some((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhrase.phrase_id || "")) ? " · показана выбранная метка" : ""}</span>
             </div>
+            {selectedScenePhraseWarnings.length ? <div className="manualTimingPhraseWarnings">{selectedScenePhraseWarnings.map((warning, idx) => <div key={`phrase-warning-${idx}`}>⚠ {warning}</div>)}</div> : null}
             {visibleAudioPhrases.length ? <div className="manualTimingAudioPhrasesList">
               {visibleAudioPhrases.map((phrase) => {
                 const isNeedsTranscription = String(phrase.status || "") === "needs_transcription";

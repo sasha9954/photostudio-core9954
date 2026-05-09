@@ -204,6 +204,8 @@ export function normalizeManualTimingAudioPhrases(audioPhrases = []) {
         meaning_ru: String(phrase?.meaning_ru || phrase?.meaningRu || ""),
         status: String(phrase?.status || "needs_transcription"),
         assignment_status: String(phrase?.assignment_status || phrase?.assignmentStatus || (String(phrase?.status || "needs_transcription") === "needs_transcription" ? "unassigned" : "")),
+        confidence: Number.isFinite(Number(phrase?.confidence)) ? Number(Number(phrase.confidence).toFixed(4)) : 0,
+        source: String(phrase?.source || phrase?.timing_source || phrase?.timingSource || (String(phrase?.status || "") === "asr_raw" ? "asr" : "")),
         note_ru: String(phrase?.note_ru || phrase?.noteRu || ""),
       };
     })
@@ -216,16 +218,21 @@ export function normalizeManualTimingSourcePhraseIds(value = []) {
 }
 
 export const MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU = "Если audio_phrases содержит status='needs_transcription' или assignment_status='unassigned', это пропущенные фразы аудио. Не удаляй их. Нужно распознать/перевести эти фразы по аудио или предоставленному тексту, заполнить text_en, text_ru, meaning_ru и решить, куда их вставить: в предыдущую сцену, следующую сцену или отдельную новую сцену. Не менять тайминги без явного указания пользователя; если нужна новая сцена, предложить это явно.";
+export const MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU = "Если audio_phrases переданы из ASR (status='asr_raw' или source='asr'), не придумывай start_sec/end_sec и не используй Gemini/LLM как источник точных таймингов. audio_phrases — источник истины: группируй phrase_id в scenes через source_phrase_ids; scene.start_sec должен быть start_sec первой фразы группы, а scene.end_sec — end_sec последней фразы группы. Gemini/ChatGPT может переводить, объяснять смысл и группировать фразы, но не должен менять word/phrase тайминги.";
 
-export function buildManualTimingChatGptTask(hasUnresolvedAudioPhrases = false) {
-  if (!hasUnresolvedAudioPhrases) return CHATGPT_STORY_SPLIT_TASK;
-
+export function buildManualTimingChatGptTask(hasUnresolvedAudioPhrases = false, hasAsrAudioPhrases = false) {
   const rules = Array.isArray(CHATGPT_STORY_SPLIT_TASK.rules_ru) ? CHATGPT_STORY_SPLIT_TASK.rules_ru : [];
+  const nextRules = [...rules];
+  if (hasUnresolvedAudioPhrases && !nextRules.includes(MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU)) {
+    nextRules.push(MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU);
+  }
+  if (hasAsrAudioPhrases && !nextRules.includes(MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU)) {
+    nextRules.push(MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU);
+  }
+  if (nextRules.length === rules.length) return CHATGPT_STORY_SPLIT_TASK;
   return {
     ...CHATGPT_STORY_SPLIT_TASK,
-    rules_ru: rules.includes(MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU)
-      ? rules
-      : [...rules, MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU],
+    rules_ru: nextRules,
   };
 }
 
@@ -661,7 +668,10 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
   const audio = normalizeManualTimingAudio(safeProject.audio);
 
   return {
-    chatgpt_task: CHATGPT_STORY_SPLIT_TASK,
+    chatgpt_task: buildManualTimingChatGptTask(
+      false,
+      normalizeManualTimingAudioPhrases(safeProject.audio_phrases).some((phrase) => String(phrase.status || "") === "asr_raw" || String(phrase.source || "") === "asr")
+    ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "story"),
@@ -680,9 +690,10 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
       singer_lipsync: "ia2v",
       instrumental: "i2v",
     },
-    global_hint: "Сделай новую разбивку по смысловым блокам. Можно менять тайминги. Сначала придумай большие story_blocks; для каждого story_block заполни title_ru, summary_ru, block_goal_ru (что должен раскрыть весь блок), block_reveal_ru (что зритель должен понять к концу блока), block_emotion_ru (эмоциональная дуга блока), color, start_sec, end_sec, scene_ids. Затем создай scenes внутри блоков так, чтобы они пошагово раскрывали мысль блока. Для каждой сцены заполни original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
+    global_hint: "Сделай новую разбивку по смысловым блокам. Если есть audio_phrases из ASR, не придумывай тайминги: группируй phrase_id в scenes, а start_sec/end_sec сцены бери от первой/последней фразы. Сначала придумай большие story_blocks; для каждого story_block заполни title_ru, summary_ru, block_goal_ru (что должен раскрыть весь блок), block_reveal_ru (что зритель должен понять к концу блока), block_emotion_ru (эмоциональная дуга блока), color, start_sec, end_sec, scene_ids. Затем создай scenes внутри блоков так, чтобы они пошагово раскрывали мысль блока. Для каждой сцены заполни original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
     story_request_ru: "",
     story_blocks: [],
+    audio_phrases: normalizeManualTimingAudioPhrases(safeProject.audio_phrases),
     scenes: [],
   };
 }
@@ -761,10 +772,13 @@ export function buildManualTimingSampleJson(project = {}) {
   }
 
   return {
-    chatgpt_task: buildManualTimingChatGptTask(audioPhrases.some((phrase) => (
-      String(phrase.status || "") === "needs_transcription"
-      || String(phrase.assignment_status || "") === "unassigned"
-    ))),
+    chatgpt_task: buildManualTimingChatGptTask(
+      audioPhrases.some((phrase) => (
+        String(phrase.status || "") === "needs_transcription"
+        || String(phrase.assignment_status || "") === "unassigned"
+      )),
+      audioPhrases.some((phrase) => String(phrase.status || "") === "asr_raw" || String(phrase.source || "") === "asr")
+    ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
@@ -1007,7 +1021,10 @@ export function buildManualTimingExportJson(project = {}) {
   ));
 
   return {
-    chatgpt_task: buildManualTimingChatGptTask(hasUnresolvedAudioPhrases),
+    chatgpt_task: buildManualTimingChatGptTask(
+      hasUnresolvedAudioPhrases,
+      audio_phrases.some((phrase) => String(phrase.status || "") === "asr_raw" || String(phrase.source || "") === "asr")
+    ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
     project_kind: String(safeProject.project_kind || "clip"),
