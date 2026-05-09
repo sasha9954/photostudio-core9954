@@ -1,8 +1,53 @@
-.manualTimingNode_block { display: grid; gap: 8px; min-width: 280px; }
+.manualTimingNode_block {
+  display: grid;
+  gap: 8px;
+  min-width: 280px;
+  box-sizing: border-box;
+  overflow: visible;
+  padding-bottom: 4px;
+}
+
+.manualTimingNode_block.mode-unselected {
+  padding: 10px;
+  margin: -4px;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 12px;
+  background: rgba(127, 29, 29, 0.16);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.08), 0 12px 32px rgba(127, 29, 29, 0.16);
+}
+
+.manualTimingNode_block.mode-story_voiceover {
+  padding: 10px;
+  margin: -4px;
+  border: 1px solid rgba(45, 212, 191, 0.34);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(20, 184, 166, 0.14), rgba(15, 23, 42, 0.1));
+}
+
+.manualTimingNode_block.mode-music_clip {
+  padding: 10px;
+  margin: -4px;
+  border: 1px solid rgba(217, 70, 239, 0.32);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.13), rgba(236, 72, 153, 0.08));
+}
+
+.manualTimingNode_block.mode-podcast_dialogue {
+  padding: 10px;
+  margin: -4px;
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(234, 179, 8, 0.08));
+}
+
 .manualTimingNode_row { font-size: 12px; color: #d9e2ff; }
 .manualTimingNode_label { font-size: 11px; color: #9db0df; margin-top: 2px; }
 .manualTimingNode_select { width: 100%; background: rgba(10, 14, 24, 0.85); color: #eaf0ff; border: 1px solid rgba(130, 155, 214, 0.45); border-radius: 8px; padding: 7px 10px; }
-.manualTimingNode_actions { display: grid; gap: 6px; margin-top: 4px; }
+.manualTimingNode_select.isError { border-color: rgba(248, 113, 113, 0.95); background: rgba(127, 29, 29, 0.32); box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16); }
+.manualTimingNode_modeError { color: #fecaca; font-size: 11px; margin-top: -4px; }
+.manualTimingNode_actions,
+.manualTimingNodeActions { display: grid; gap: 8px; margin-top: 4px; }
+.manualTimingNodeActions .clipSB_btn { width: 100%; }
 .manualTimingNode_upload {
   text-align: center;
 }

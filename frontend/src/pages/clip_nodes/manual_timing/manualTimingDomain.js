@@ -2,6 +2,10 @@ import { CHATGPT_STORY_SPLIT_TASK, STORY_PREP_TEMPLATE_META } from "../manual/ma
 export const MANUAL_TIMING_MODE = "manual_timing";
 export const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 export const MANUAL_TIMING_STORY_PROJECT_KIND = "story";
+export const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
+export const MANUAL_TIMING_MUSIC_CLIP_PROJECT_KIND = "clip";
+export const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
+export const MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND = "podcast";
 export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
 export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
 
@@ -87,8 +91,8 @@ export function removeManualTimingProjectForNode(nodeId = "") {
 export function getDefaultManualTimingNodeData() {
   return {
     mode: MANUAL_TIMING_MODE,
-    project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
-    project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
+    project_mode: "",
+    project_kind: "",
     format: "9:16",
     audio: {
       url: "",
@@ -104,6 +108,46 @@ export function getDefaultManualTimingNodeData() {
     selectedSceneId: "",
     updatedAt: 0,
   };
+}
+
+
+function pickManualTimingModeAndKind(raw = {}, base = {}) {
+  const rawMode = String(raw?.project_mode || raw?.projectMode || "").trim();
+  const rawKind = String(raw?.project_kind || raw?.projectKind || "").trim();
+  if (rawMode || rawKind) return { project_mode: rawMode, project_kind: rawKind };
+
+  const baseMode = String(base?.project_mode || base?.projectMode || "").trim();
+  const baseKind = String(base?.project_kind || base?.projectKind || "").trim();
+  if (baseMode || baseKind) return { project_mode: baseMode, project_kind: baseKind };
+
+  const splitType = String(raw?.split_type || raw?.splitType || "").toLowerCase();
+  const task = typeof raw?.chatgpt_task === "string" ? raw.chatgpt_task : JSON.stringify(raw?.chatgpt_task || "");
+  const hasStoryImportShape = splitType.includes("story")
+    || splitType.includes("asr")
+    || task.includes("Story Pass")
+    || task.includes("story_blocks")
+    || task.includes("ASR")
+    || Array.isArray(raw?.story_blocks)
+    || Array.isArray(raw?.storyBlocks)
+    || Array.isArray(raw?.audio_phrases)
+    || Array.isArray(raw?.audioPhrases);
+
+  if (hasStoryImportShape) {
+    return {
+      project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
+      project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
+    };
+  }
+
+  return { project_mode: "", project_kind: "" };
+}
+
+export function getManualTimingProjectKindForMode(mode = "") {
+  const value = String(mode || "").trim();
+  if (value === MANUAL_TIMING_STORY_VOICEOVER_MODE) return MANUAL_TIMING_STORY_PROJECT_KIND;
+  if (value === MANUAL_TIMING_MUSIC_CLIP_MODE) return MANUAL_TIMING_MUSIC_CLIP_PROJECT_KIND;
+  if (value === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND;
+  return "";
 }
 
 export function normalizeManualTimingAudio(audio = null) {
@@ -879,8 +923,8 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
-    project_mode: String(safeProject.project_mode || safeProject.projectMode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
-    project_kind: String(safeProject.project_kind || safeProject.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND),
+    project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
+    project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
     format: String(safeProject.format || "9:16"),
     split_type: "ai_story_blocks_split_request",
     audio_duration_sec: Number(audio.duration_sec || 0),
@@ -1100,8 +1144,8 @@ export function buildManualTimingSampleJson(project = {}) {
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
-    project_mode: String(safeProject.project_mode || safeProject.projectMode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
-    project_kind: String(safeProject.project_kind || safeProject.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND),
+    project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
+    project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
     format: String(safeProject.format || "9:16"),
     split_type: existingScenes.length ? "manual_timing_export_for_chatgpt" : "manual_timing_template_for_chatgpt",
     audio_duration_sec: Number(audio.duration_sec || 0),
@@ -1115,6 +1159,7 @@ export function buildManualTimingSampleJson(project = {}) {
 export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {}) {
   const safeRaw = raw && typeof raw === "object" ? raw : {};
   const safeBase = baseProject && typeof baseProject === "object" ? baseProject : {};
+  const modeAndKind = pickManualTimingModeAndKind(safeRaw, safeBase);
   const baseAudio = normalizeManualTimingAudio(safeBase.audio);
   const rawDuration = Number(safeRaw.audio_duration_sec ?? safeRaw.audioDurationSec ?? safeRaw.duration_sec ?? safeRaw.durationSec ?? safeRaw.audio?.duration_sec ?? 0);
   const durationSec = roundTimingSec(baseAudio.duration_sec || rawDuration || 0);
@@ -1145,8 +1190,8 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   return {
     ...getDefaultManualTimingNodeData(),
     ...safeBase,
-    project_mode: String(safeRaw.project_mode || safeRaw.projectMode || safeBase.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
-    project_kind: String(safeRaw.project_kind || safeRaw.projectKind || safeBase.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND),
+    project_mode: modeAndKind.project_mode,
+    project_kind: modeAndKind.project_kind,
     format: String(safeRaw.format || safeBase.format || "9:16"),
     audio: {
       ...baseAudio,
@@ -1385,8 +1430,8 @@ export function buildManualTimingExportJson(project = {}) {
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
     mode: "manual_clip_board",
-    project_mode: String(safeProject.project_mode || safeProject.projectMode || MANUAL_TIMING_STORY_VOICEOVER_MODE),
-    project_kind: String(safeProject.project_kind || safeProject.projectKind || MANUAL_TIMING_STORY_PROJECT_KIND),
+    project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
+    project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
     format: String(safeProject.format || "9:16"),
     split_type: safeProject.timing_status === "confirmed" ? "manual_timing_confirmed" : "manual_timing_draft",
     audio_duration_sec: Number(audio.duration_sec || 0),

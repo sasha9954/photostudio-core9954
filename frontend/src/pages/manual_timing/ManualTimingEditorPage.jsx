@@ -5,6 +5,8 @@ import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
   MANUAL_TIMING_ENERGY,
+  MANUAL_TIMING_MUSIC_CLIP_MODE,
+  MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   MANUAL_TIMING_ROUTES,
   MANUAL_TIMING_SECTIONS,
@@ -28,6 +30,7 @@ import {
   normalizeManualTimingAudioPhrases,
   normalizeManualTimingMarkers,
   normalizeManualTimingProjectFromJson,
+  normalizeManualTimingSourcePhraseIds,
   normalizeManualTimingStoryBlocks,
   persistManualTimingProject,
   roundTimingSec,
@@ -100,8 +103,8 @@ function buildInitialProject() {
   const scenes = hydrateManualTimingScenesWithStoryBlocks(rawScenes, story_blocks);
   return {
     ...project,
-    project_mode: project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
-    project_kind: project.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND,
+    project_mode: project.project_mode || "",
+    project_kind: project.project_kind || "",
     audio,
     markers,
     story_blocks,
@@ -188,8 +191,65 @@ function isStoryVoiceoverProject(project = {}) {
     || String(project?.project_kind || project?.projectKind || "") === MANUAL_TIMING_STORY_PROJECT_KIND;
 }
 
+function getManualTimingModeConfig(project = {}) {
+  const mode = String(project?.project_mode || project?.projectMode || "").trim();
+  if (mode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
+    return {
+      mode,
+      className: "mode-story_voiceover",
+      title: "Тайминг · История / Voice-over",
+      badge: "История",
+      subtitle: "ASR → gap-aware scenes → Story Pass",
+      hint: "Озвученная история: ASR режет речь, сцены покрывают паузы, Story Pass заполняет смысловые блоки.",
+    };
+  }
+  if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
+    return {
+      mode,
+      className: "mode-music_clip",
+      title: "Тайминг · Клип / Music video",
+      badge: "Клип",
+      subtitle: "режим будет подключён позже",
+      hint: "Музыкальный клип: UI готов к режиму, workflow подключим позже.",
+    };
+  }
+  if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) {
+    return {
+      mode,
+      className: "mode-podcast_dialogue",
+      title: "Тайминг · Подкаст / Dialogue",
+      badge: "Подкаст",
+      subtitle: "режим будет подключён позже",
+      hint: "Подкаст / диалог: UI готов к режиму, workflow подключим позже.",
+    };
+  }
+  return {
+    mode: "",
+    className: "mode-unselected",
+    title: "Тайминг · режим не выбран",
+    badge: "Не выбран",
+    subtitle: "выберите тип проекта в ноде",
+    hint: "Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.",
+  };
+}
+
+function getCompactWarningItems(project = {}, warnings = []) {
+  const safeWarnings = Array.isArray(warnings) ? warnings : [];
+  const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const audioPhrases = normalizeManualTimingAudioPhrases(project.audio_phrases);
+  const items = [];
+  const hasStoryScenes = scenes.some((scene) => normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds).length);
+  const hasImportedStoryPass = scenes.some(sceneHasStoryPassFields);
+  if (hasStoryScenes && !hasImportedStoryPass) items.push("Story Pass ещё не заполнен");
+  if (safeWarnings.some((warning) => /длин|больше 9|long/i.test(String(warning || "")))) items.push("Есть длинные сцены");
+  if (!audioPhrases.length) items.push("Нет audio_phrases");
+  if (!items.length && safeWarnings.length) items.push(`Есть предупреждения: ${safeWarnings.length}`);
+  if (!items.length) items.push("Проверка: предупреждений нет");
+  return [...new Set(items)];
+}
+
 function sceneHasCreatedMaterials(scene = {}) {
-  return ["image_url", "video_url", "video_prompt", "video_job_id", "audio_slice_url"].some((key) => String(scene?.[key] || "").trim())
+  return ["image_url", "image_preview_url", "video_url", "video_prompt", "negative_prompt", "sound_prompt", "video_job_id", "audio_slice_url"].some((key) => String(scene?.[key] || "").trim())
     || String(scene?.status || "").trim().toLowerCase() === "video_ready";
 }
 
@@ -228,11 +288,9 @@ function getReadableTimingStatus(project = {}, audioPhrases = [], scenes = [], a
   return STATUS_LABELS[project.timing_status] || String(project.timing_status || "пусто");
 }
 
-function getCompactWarningsSummary(warnings = []) {
-  const count = Array.isArray(warnings) ? warnings.length : 0;
-  if (!count) return "Проверка: предупреждений нет";
-  const first = String(warnings[0] || "").trim();
-  return `Проверка: ${count} предупрежд.${first ? ` · ${first}` : ""}`;
+function getCompactWarningsSummary(compactItems = []) {
+  const items = Array.isArray(compactItems) ? compactItems : [];
+  return items.join(" · ");
 }
 
 function getTimingSceneIdForAudioPhrase(phrase = null, scenes = []) {
@@ -412,6 +470,9 @@ export default function ManualTimingEditorPage() {
   const audioPhrases = useMemo(() => normalizeManualTimingAudioPhrases(project.audio_phrases), [project.audio_phrases]);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const isStoryVoiceover = isStoryVoiceoverProject(project);
+  const modeConfig = getManualTimingModeConfig(project);
+  const isProjectModeSelected = Boolean(modeConfig.mode);
+  const mainActionsDisabled = !isProjectModeSelected || !isStoryVoiceover;
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null,
@@ -426,8 +487,9 @@ export default function ManualTimingEditorPage() {
     [scenes, quickEditSceneId]
   );
   const warnings = useMemo(() => buildManualTimingWarnings(project), [project]);
+  const compactWarningItems = useMemo(() => getCompactWarningItems(project, warnings), [project, warnings]);
   const readableTimingStatus = getReadableTimingStatus(project, audioPhrases, scenes, durationSec);
-  const warningsSummary = getCompactWarningsSummary(warnings);
+  const warningsSummary = getCompactWarningsSummary(compactWarningItems);
   const lastCutSec = getLastInternalMarker(markers);
   const candidateDurationSec = Math.max(0, Number(currentTime || 0) - Number(lastCutSec || 0));
   const selectedSceneStartSec = selectedScene ? Number(selectedScene.start_sec || 0) : 0;
@@ -539,8 +601,8 @@ export default function ManualTimingEditorPage() {
   const persist = (nextProject) => {
     const safeProject = {
       ...nextProject,
-      project_mode: nextProject?.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
-      project_kind: nextProject?.project_kind || MANUAL_TIMING_STORY_PROJECT_KIND,
+      project_mode: nextProject?.project_mode || "",
+      project_kind: nextProject?.project_kind || "",
       updatedAt: Date.now(),
     };
     setProject(safeProject);
@@ -1183,6 +1245,7 @@ export default function ManualTimingEditorPage() {
   }, [quickEditSceneId, quickEditDraft]);
 
   const onCreateAudioPhraseMap = async () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     if (!audio.url) return;
     if (String(audio.url || "").startsWith("blob:")) {
       setAsrStatus("Ошибка ASR: backend не может читать blob URL. Нужно использовать backend/static asset URL или отправить файл через multipart.");
@@ -1272,6 +1335,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onBuildStoryScenesFromAsr = () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     if (!audioPhrases.length) return;
     const hasCreatedMaterials = scenes.some(sceneHasCreatedMaterials);
     if (hasCreatedMaterials) {
@@ -1315,11 +1379,13 @@ export default function ManualTimingEditorPage() {
   };
 
   const onConfirmTiming = () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     const nextScenes = scenes.map((scene) => ({ ...scene, quality: "manual_confirmed" }));
     persist({ ...project, scenes: nextScenes, timing_status: "confirmed" });
   };
 
   const onCopyTimingJson = async () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     const payload = buildManualTimingExportJson(project);
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
@@ -1349,18 +1415,22 @@ export default function ManualTimingEditorPage() {
   };
 
   const onDownloadTimingJson = () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     downloadJsonPayload(buildManualTimingExportJson(project), "manual_timing_export.json");
   };
 
   const onDownloadSampleJson = () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     downloadJsonPayload(buildManualTimingSampleJson(project), "manual_timing_sample_for_chatgpt.json");
   };
 
   const onDownloadAiSplitRequestJson = () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     downloadJsonPayload(buildManualTimingAiSplitRequestJson(project), "manual_timing_ai_split_request.json");
   };
 
   const onCopyAiSplitRequestJson = async () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     const payload = buildManualTimingAiSplitRequestJson(project);
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
@@ -1372,6 +1442,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onCopyStoryPassJson = async () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     const payload = buildManualTimingStoryPassJson(project);
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
@@ -1397,6 +1468,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onImportTimingJson = () => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     try {
       const raw = JSON.parse(jsonImportText || "{}");
       applyImportedTimingJson(raw);
@@ -1406,6 +1478,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onImportJsonFile = async (event) => {
+    if (mainActionsDisabled) { setCopyStatus(isProjectModeSelected ? "Этот режим будет подключён позже" : "Режим проекта не выбран"); return; }
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -1515,8 +1588,16 @@ export default function ManualTimingEditorPage() {
 
   return (
     <>
-    <div className="manualTimingPage pageCard">
-      <h1 className="pageTitle">{isStoryVoiceover ? "История / Voice-over" : "Тайминг песни"}</h1>
+    <div className={`manualTimingPage pageCard ${modeConfig.className}`}>
+      <div className="manualTimingModeHeader">
+        <div>
+          <h1 className="pageTitle">{modeConfig.title}</h1>
+          <div className="manualTimingModeSubtitle">{modeConfig.subtitle}</div>
+        </div>
+        <span className="manualTimingModeBadge">{modeConfig.badge}</span>
+      </div>
+      <div className="manualTimingModeHint">{modeConfig.hint}</div>
+      {!isProjectModeSelected ? <div className="manualTimingModeMissing">Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.</div> : null}
       <div className="manualTimingMetaGrid">
         <div><b>Файл:</b> {audio.filename || "аудио не выбрано"}</div>
         <div><b>Длительность:</b> {formatTimingSec(durationSec)}</div>
@@ -1622,7 +1703,7 @@ export default function ManualTimingEditorPage() {
         <div className={`manualTimingWarningsCompact ${warnings.length ? "hasWarnings" : ""}`}>
           <span>{warningsSummary}</span>
           {warnings.length ? <details className="manualTimingWarningsDetails">
-            <summary>Показать проверку</summary>
+            <summary>Показать подробную проверку</summary>
             <div className="manualTimingWarningsList">
               {warnings.map((warning, idx) => <div key={`${warning}-${idx}`}>• {warning}</div>)}
             </div>
@@ -1630,11 +1711,11 @@ export default function ManualTimingEditorPage() {
         </div>
 
         <div className="manualTimingWorkflowActions" aria-label="Основной workflow Story Voice-over">
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={!audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>Создать Audio Phrase Map</button>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={!audioPhrases.length}>Собрать story scenes из ASR</button>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson}>Скопировать JSON для Story Pass</button>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={!jsonImportText.trim()}>Применить Story Pass JSON</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>Создать Audio Phrase Map</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>Собрать story scenes из ASR</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson} disabled={mainActionsDisabled}>Скопировать JSON для Story Pass</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Pass JSON</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
         </div>
 
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
@@ -1692,15 +1773,15 @@ export default function ManualTimingEditorPage() {
             <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={mainActionsDisabled}>Скопировать JSON</button>
             <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
               Загрузить JSON файл
               <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
             </label>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson}>Скачать текущий JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson} disabled={mainActionsDisabled}>Скачать текущий JSON</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson} disabled={mainActionsDisabled}>Скачать JSON образец</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson} disabled={mainActionsDisabled}>Скачать JSON для AI-разбивки</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson} disabled={mainActionsDisabled}>Скопировать JSON для AI</button>
             <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
           </div>
 
@@ -1821,8 +1902,8 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)}>
               {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить Story Pass JSON"}
             </button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={!jsonImportText.trim()}>Применить Story Pass JSON</button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson}>Скопировать JSON для Story Pass</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Pass JSON</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson} disabled={mainActionsDisabled}>Скопировать JSON для Story Pass</button>
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
