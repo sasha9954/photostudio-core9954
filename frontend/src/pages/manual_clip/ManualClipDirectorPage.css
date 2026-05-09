@@ -186,6 +186,19 @@
   overflow: auto;
 }
 
+.manualSceneTextDisplay {
+  border: 1px solid #34374a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #0f1320;
+  color: #d7dcf5;
+  font-size: 13px;
+  line-height: 1.4;
+  max-height: 125px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 .manualPromptBlock textarea {
   min-height: 105px;
   max-height: 165px;
