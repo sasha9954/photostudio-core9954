@@ -163,6 +163,16 @@ function isMeaningSceneVisible(scene = {}) {
   );
 }
 
+function resolveI2vTextSceneText(scene = {}) {
+  return String(
+    scene?.lyrics_text
+    || scene?.original_text
+    || scene?.translated_text_ru
+    || scene?.meaning_hint_ru
+    || ""
+  ).trim();
+}
+
 function resolveManualVideoRoutePayload(scene = {}) {
   const route = String(scene.route || "i2v").trim();
 
@@ -198,15 +208,7 @@ function resolveManualVideoRoutePayload(scene = {}) {
   }
 
   if (route === "i2v_text") {
-    const speechText = String(scene.narrator_text_en || scene.speaker_text_en || scene.narrator_text_ru || scene.speaker_text_ru || scene.original_text || "");
-    const voiceProfile = String(scene.voice_profile || scene.narrator_voice_profile_en || "");
-    const negativeVoiceTraits = String(scene.negative_voice_traits || "");
-    const soundPrompt = [
-      String(scene.sound_prompt || ""),
-      speechText ? `Spoken dialogue / narrator voice: "${speechText}"` : "",
-      voiceProfile ? `Voice style: ${voiceProfile}` : "",
-      negativeVoiceTraits ? `Avoid voice traits: ${negativeVoiceTraits}` : "",
-    ].filter(Boolean).join("\n");
+    const soundPrompt = String(scene.sound_prompt || "").trim();
     return {
       resolvedWorkflowKey: "i2v_sound",
       video_generation_route: "i2v_text",
@@ -219,11 +221,6 @@ function resolveManualVideoRoutePayload(scene = {}) {
       generatedAudioPolicy: "mix_generated_audio_under_master",
       generatedAudioGainDb: Number(scene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
       generated_speech_required: true,
-      narratorText: String(scene.narrator_text_en || scene.original_text || ""),
-      speakerText: String(scene.speaker_text_en || ""),
-      voiceProfile,
-      negativeVoiceTraits,
-      negative_voice_traits: negativeVoiceTraits,
       soundPrompt,
       sound_prompt: soundPrompt,
     };
@@ -808,7 +805,6 @@ export default function ManualClipDirectorPage() {
       });
       return;
     }
-    if (runningKey) videoStartInFlightRef.current.add(runningKey);
     const firstLast = isFirstLastRoute(scene.route);
     const safeImageUrl = String(firstLast ? (scene.start_image_url || scene.image_url || "") : (scene.image_url || "")).trim();
     const safeStartImageUrl = String(scene.start_image_url || scene.image_url || "").trim();
@@ -843,12 +839,14 @@ export default function ManualClipDirectorPage() {
       return;
     }
 
-    if (scene.route === "i2v_text" && !String(scene.narrator_text_en || scene.narrator_text_ru || scene.speaker_text_en || scene.speaker_text_ru || scene.original_text || "").trim()) {
-      updateScene(scene.scene_id, { error: "Для i2v_text заполните текст для произношения", status: scene.status || "draft" });
+    if (scene.route === "i2v_text" && !String(scene.sound_prompt || "").trim()) {
+      updateScene(scene.scene_id, { error: "Для i2v_text заполните поле «Промт речи и звука»: кто говорит, точная фраза, стиль голоса и фон.", status: scene.status || "draft" });
       return;
     }
 
+    if (runningKey) videoStartInFlightRef.current.add(runningKey);
     const routePayload = resolveManualVideoRoutePayload(scene);
+    const sceneTextPreview = scene.route === "i2v_text" ? resolveI2vTextSceneText(scene) : "";
     const requestedDurationSec = Number(scene.duration_sec || scene.audio_slice_duration_sec || 5);
     updateScene(scene.scene_id, { status: "video_queued", video_error: "", error: "", video_job_id: "" });
     try {
@@ -902,6 +900,7 @@ export default function ManualClipDirectorPage() {
           generatedAudioPolicy: payload.generatedAudioPolicy,
           generatedAudioGainDb: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
           soundPromptPreview: String(payload.soundPrompt || "").slice(0, 180),
+          sceneTextPreview: String(sceneTextPreview || "").slice(0, 180),
           narratorTextPreview: String(payload.narratorText || "").slice(0, 180),
           speakerTextPreview: String(payload.speakerText || "").slice(0, 180),
         },
@@ -1106,15 +1105,17 @@ export default function ManualClipDirectorPage() {
           updateScene(selectedScene.scene_id, { negative_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
         }} /></label>
         {selectedScene.route === "i2v_text" ? <section className="manualSoundBox">
-          <strong>Текст для произношения</strong>
-          <div className="manualRouteHint">i2v_text использует backend workflow i2v_sound, но генерирует звук + речь/диктора/реплику. Заполните текст и voice profile; мастер-аудио останется основой монтажа.</div>
-          <label className="manualPromptBlock">narrator_text_en<textarea value={selectedScene.narrator_text_en} onChange={(e) => updateScene(selectedScene.scene_id, { narrator_text_en: e.target.value, generated_speech_required: true })} /></label>
-          <label className="manualPromptBlock">narrator_text_ru<textarea value={selectedScene.narrator_text_ru} onChange={(e) => updateScene(selectedScene.scene_id, { narrator_text_ru: e.target.value, generated_speech_required: true })} /></label>
-          <label className="manualPromptBlock">speaker_text_en<textarea value={selectedScene.speaker_text_en} onChange={(e) => updateScene(selectedScene.scene_id, { speaker_text_en: e.target.value, generated_speech_required: true })} /></label>
-          <label className="manualPromptBlock">speaker_text_ru<textarea value={selectedScene.speaker_text_ru} onChange={(e) => updateScene(selectedScene.scene_id, { speaker_text_ru: e.target.value, generated_speech_required: true })} /></label>
-          <label className="manualPromptBlock">voice_profile<textarea value={selectedScene.voice_profile} placeholder="calm documentary narrator, warm male voice, clear English pronunciation" onChange={(e) => updateScene(selectedScene.scene_id, { voice_profile: e.target.value })} /></label>
-          <label className="manualPromptBlock">sound_prompt<textarea value={selectedScene.sound_prompt} placeholder="room tone, subtle ambience, no music overpowering the voice" onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value })} /></label>
-          <label className="manualNegativePromptBlock">negative voice traits<textarea value={selectedScene.negative_voice_traits} placeholder="robotic voice, slurred words, distorted speech" onChange={(e) => updateScene(selectedScene.scene_id, { negative_voice_traits: e.target.value })} /></label>
+          <strong>Текст сцены</strong>
+          <div className="manualSceneTextDisplay" aria-readonly="true">{resolveI2vTextSceneText(selectedScene) || "—"}</div>
+          <strong>Промт речи и звука</strong>
+          <label className="manualPromptBlock">
+            <textarea
+              value={selectedScene.sound_prompt}
+              placeholder={'Narrator voice-over says exactly: "..."\nCalm documentary male narrator, clear pronunciation.\nQuiet room tone, subtle ambience, no music overpowering the voice.\nAvoid robotic voice, slurred words, distorted speech.'}
+              onChange={(e) => updateScene(selectedScene.scene_id, { sound_prompt: e.target.value, generated_speech_required: true })}
+            />
+          </label>
+          <div className="manualRouteHint">В этом поле одной инструкцией укажите: кто говорит, точную фразу, стиль голоса и фоновые звуки. Текст сцены выше показан только как подсказка — его можно скопировать в prompt.</div>
         </section> : null}
         {(selectedScene.route === "i2v_sound" || selectedScene.route === "first_last_sound") ? <section className="manualSoundBox">
           <strong>Сценический звук</strong>
