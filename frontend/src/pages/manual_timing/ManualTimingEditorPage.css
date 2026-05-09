@@ -1331,3 +1331,64 @@
   padding: 6px 9px;
   white-space: nowrap;
 }
+
+.manualTimingPhraseTrack {
+  position: absolute;
+  inset: 31px 0 auto 0;
+  height: 10px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.manualTimingPhraseMarker {
+  position: absolute;
+  top: 0;
+  height: 10px;
+  min-width: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 214, 102, 0.72);
+  box-shadow: 0 0 0 1px rgba(255, 247, 210, 0.42), 0 0 12px rgba(255, 214, 102, 0.24);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.manualTimingPhraseMarker:hover {
+  background: rgba(255, 238, 150, 0.95);
+}
+
+.legendAsrPhrase {
+  background: rgba(255, 214, 102, 0.72);
+  border: 1px solid rgba(255, 247, 210, 0.42);
+}
+
+.manualTimingAsrStatus,
+.manualTimingAsrNotice,
+.manualTimingPhraseWarnings {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.manualTimingAsrStatus {
+  background: rgba(96, 165, 250, 0.13);
+  border: 1px solid rgba(147, 197, 253, 0.28);
+  color: #d8ecff;
+  font-weight: 700;
+}
+
+.manualTimingAsrNotice {
+  background: rgba(255, 214, 102, 0.11);
+  border: 1px solid rgba(255, 214, 102, 0.28);
+  color: #ffefbd;
+}
+
+.manualTimingPhraseWarnings {
+  display: grid;
+  gap: 5px;
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  color: #ffd6d6;
+}
