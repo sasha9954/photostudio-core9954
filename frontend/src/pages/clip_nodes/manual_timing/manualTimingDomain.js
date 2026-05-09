@@ -1,4 +1,13 @@
 import { CHATGPT_STORY_SPLIT_TASK, STORY_PREP_TEMPLATE_META } from "../manual/manualClipBoardDomain.js";
+import {
+  getAccountScopedStorageKey,
+  MANUAL_TIMING_ACTIVE_PROJECT_KEY,
+  MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY,
+  getManualTimingProjectStorageKey,
+  readManualProjectJsonStorage,
+  unwrapManualProjectBackupJson,
+} from "../manualProjectBackup.js";
+export { MANUAL_TIMING_ACTIVE_PROJECT_KEY, MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY };
 export const MANUAL_TIMING_MODE = "manual_timing";
 export const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 export const MANUAL_TIMING_STORY_PROJECT_KIND = "story";
@@ -6,8 +15,6 @@ export const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 export const MANUAL_TIMING_MUSIC_CLIP_PROJECT_KIND = "clip";
 export const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 export const MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND = "podcast";
-export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
-export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
 
 export const MANUAL_TIMING_SECTIONS = ["intro", "verse", "chorus", "bridge", "instrumental", "outro"];
 export const MANUAL_TIMING_ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text"];
@@ -40,26 +47,19 @@ function sectionLabelRu(section = "") {
   return MANUAL_TIMING_SECTION_LABELS_RU[key] || key || "не указана";
 }
 
-export function getManualTimingProjectStorageKey(nodeId = "") {
-  const safeId = String(nodeId || "default").trim() || "default";
-  return `manual_timing_project:${safeId}`;
-}
-
 export function readManualTimingJsonStorage(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  return readManualProjectJsonStorage(key);
 }
 
 export function readManualTimingProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
-  const active = readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+  const active = readManualTimingJsonStorage(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
+    || readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
   if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
-  const scoped = readManualTimingJsonStorage(getManualTimingProjectStorageKey(safeId));
+  const scoped = readManualTimingJsonStorage(getAccountScopedStorageKey(getManualTimingProjectStorageKey(safeId)));
   if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) return scoped;
+  const legacyScoped = readManualTimingJsonStorage(getManualTimingProjectStorageKey(safeId));
+  if (legacyScoped && (!safeId || String(legacyScoped?.nodeId || "") === safeId)) return legacyScoped;
   return null;
 }
 
@@ -67,10 +67,13 @@ export function persistManualTimingProject(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   try {
     const serialized = JSON.stringify(safeProject);
+    localStorage.setItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY), serialized);
     localStorage.setItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY, serialized);
     const nodeId = String(safeProject?.nodeId || "").trim();
     if (nodeId) {
+      localStorage.setItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY), nodeId);
       localStorage.setItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY, nodeId);
+      localStorage.setItem(getAccountScopedStorageKey(getManualTimingProjectStorageKey(nodeId)), serialized);
       localStorage.setItem(getManualTimingProjectStorageKey(nodeId), serialized);
     }
   } catch {}
@@ -79,9 +82,15 @@ export function persistManualTimingProject(project = {}) {
 export function removeManualTimingProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
   try {
-    if (safeId) localStorage.removeItem(getManualTimingProjectStorageKey(safeId));
-    const active = readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+    if (safeId) {
+      localStorage.removeItem(getAccountScopedStorageKey(getManualTimingProjectStorageKey(safeId)));
+      localStorage.removeItem(getManualTimingProjectStorageKey(safeId));
+    }
+    const active = readManualTimingJsonStorage(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
+      || readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
     if (!safeId || String(active?.nodeId || "") === safeId) {
+      localStorage.removeItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY));
+      localStorage.removeItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY));
       localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
       localStorage.removeItem(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY);
     }
@@ -1363,11 +1372,11 @@ export function buildManualTimingSampleJson(project = {}) {
 }
 
 export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {}) {
-  const safeRaw = raw && typeof raw === "object" ? raw : {};
+  const safeRaw = unwrapManualProjectBackupJson(raw && typeof raw === "object" ? raw : {});
   const safeBase = baseProject && typeof baseProject === "object" ? baseProject : {};
   const modeAndKind = pickManualTimingModeAndKind(safeRaw, safeBase);
-  const baseAudio = normalizeManualTimingAudio(safeBase.audio);
-  const rawDuration = Number(safeRaw.audio_duration_sec ?? safeRaw.audioDurationSec ?? safeRaw.duration_sec ?? safeRaw.durationSec ?? safeRaw.audio?.duration_sec ?? 0);
+  const baseAudio = normalizeManualTimingAudio(safeRaw.audio || safeRaw.audio_metadata || safeBase.audio);
+  const rawDuration = Number(safeRaw.audio_duration_sec ?? safeRaw.audioDurationSec ?? safeRaw.duration_sec ?? safeRaw.durationSec ?? safeRaw.audio?.duration_sec ?? safeRaw.audio_metadata?.duration_sec ?? 0);
   const durationSec = roundTimingSec(baseAudio.duration_sec || rawDuration || 0);
   const storyBlocks = normalizeManualTimingStoryBlocks(safeRaw.story_blocks || safeBase.story_blocks);
   const audioPhrases = normalizeManualTimingAudioPhrases(safeRaw.audio_phrases || safeRaw.audioPhrases || safeBase.audio_phrases);
@@ -1386,6 +1395,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     markerValues.push(durationSec);
   }
 
+  if (Array.isArray(safeRaw.markers)) markerValues.push(...safeRaw.markers);
   const markers = normalizeManualTimingMarkers(markerValues, durationSec || importedScenes[importedScenes.length - 1]?.end_sec || 0);
   const finalDuration = durationSec || markers[markers.length - 1] || 0;
   const markerScenes = markers.length >= 2
@@ -1413,8 +1423,8 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     audio_mode: String(safeRaw.audio_mode || safeBase.audio_mode || ""),
     audio_phrases: audioPhrases,
     scenes,
-    selectedSceneId: scenes[0]?.scene_id || "",
-    updatedAt: Date.now(),
+    selectedSceneId: String(safeRaw.selectedSceneId || scenes[0]?.scene_id || ""),
+    updatedAt: safeRaw.updatedAt || Date.now(),
   };
 }
 
