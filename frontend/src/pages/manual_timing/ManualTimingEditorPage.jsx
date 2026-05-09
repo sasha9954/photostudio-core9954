@@ -1818,11 +1818,14 @@ export default function ManualTimingEditorPage() {
     <>
     <div className={`manualTimingPage pageCard ${modeConfig.className}`}>
       <div className="manualTimingModeHeader">
-        <div>
+        <div className="manualTimingModeTitleBlock">
           <h1 className="pageTitle">{modeConfig.title}</h1>
           <div className="manualTimingModeSubtitle">{modeConfig.subtitle}</div>
         </div>
-        <span className="manualTimingModeBadge">{modeConfig.badge}</span>
+        <div className="manualTimingModeHeaderActions">
+          <button className="clipSB_btn clipSB_btnSecondary manualTimingBackButton" onClick={() => navigate(-1)}>← Назад к ноде</button>
+          <span className="manualTimingModeBadge">{modeConfig.badge}</span>
+        </div>
       </div>
       <div className="manualTimingModeHint">{modeConfig.hint}</div>
       {!isProjectModeSelected ? <div className="manualTimingModeMissing">Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.</div> : null}
