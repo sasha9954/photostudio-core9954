@@ -2,6 +2,7 @@ import React from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { authLogin, authRegister } from "../services/authApi.js";
 import { useAuth } from "../app/AuthContext.jsx";
+import { persistLastAuthUserIdentity } from "../app/authIdentity.js";
 
 export default function LoginPage(){
   const nav = useNavigate();
@@ -38,11 +39,10 @@ export default function LoginPage(){
 
     setBusy(true);
     try{
-      if(mode==="login"){
-        await authLogin({ email, password });
-      }else{
-        await authRegister({ email, password, name: name || email.split("@")[0] });
-      }
+      const authRes = mode === "login"
+        ? await authLogin({ email, password })
+        : await authRegister({ email, password, name: name || email.split("@")[0] });
+      persistLastAuthUserIdentity(authRes?.user);
       const me = await refresh();
       if(!me?.ok){
         throw new Error("Сессия не активировалась. Проверь сетевой конфиг: фронт должен ходить в backend через VITE_API_BASE_URL и открываться с разрешённого origin. Обнови страницу и попробуй ещё раз.");
