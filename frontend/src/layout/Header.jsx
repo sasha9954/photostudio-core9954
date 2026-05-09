@@ -2,6 +2,7 @@ import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../app/AuthContext.jsx";
 import { authLogout } from "../services/authApi.js";
+import { hasMeaningfulManualProject, readAnyActiveManualProject } from "../pages/clip_nodes/manualProjectBackup.js";
 
 const PAGE_TITLES = {
   "/home": "Главная",
@@ -34,6 +35,13 @@ export default function Header() {
     return PAGE_TITLES[p] || "PhotoStudio";
   })();
 async function onLogout(){
+    const activeManualProject = readAnyActiveManualProject();
+    if (hasMeaningfulManualProject(activeManualProject)) {
+      const shouldLogout = window.confirm(
+        "Перед выходом скачайте backup проекта. При смене аккаунта проект может быть недоступен.\n\nПродолжить выход?"
+      );
+      if (!shouldLogout) return;
+    }
     try{ await authLogout(); }catch{}
     await refresh();
     nav("/home");

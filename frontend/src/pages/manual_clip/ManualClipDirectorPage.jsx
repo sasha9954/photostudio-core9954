@@ -2,6 +2,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchJson } from "../../services/api.js";
 import { buildStoryPrepTemplateText, STORY_PREP_TEMPLATE_META } from "../clip_nodes/manual/manualClipBoardDomain";
+import {
+  buildManualProjectBackupJson,
+  getAccountScopedStorageKey,
+  getManualClipBoardProjectStorageKey,
+  unwrapManualProjectBackupJson,
+} from "../clip_nodes/manualProjectBackup.js";
 import "./ManualClipDirectorPage.css";
 
 const STORAGE_KEY = "manual_clip_board_active_project";
@@ -15,11 +21,6 @@ const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
 
-function getManualProjectStorageKey(nodeId = "") {
-  const safeId = String(nodeId || "default").trim() || "default";
-  return `manual_clip_board_project:${safeId}`;
-}
-
 function readJsonStorage(key) {
   try {
     const raw = localStorage.getItem(key);
@@ -30,10 +31,17 @@ function readJsonStorage(key) {
 }
 
 function readManualActiveProject() {
-  const active = readJsonStorage(STORAGE_KEY);
+  const active = readJsonStorage(getAccountScopedStorageKey(STORAGE_KEY)) || readJsonStorage(STORAGE_KEY);
   if (active) return active;
-  const activeNodeId = String(localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY) || "").trim();
-  if (activeNodeId) return readJsonStorage(getManualProjectStorageKey(activeNodeId));
+  const activeNodeId = String(
+    localStorage.getItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY))
+    || localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY)
+    || ""
+  ).trim();
+  if (activeNodeId) {
+    return readJsonStorage(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(activeNodeId)))
+      || readJsonStorage(getManualClipBoardProjectStorageKey(activeNodeId));
+  }
   return null;
 }
 
@@ -41,11 +49,14 @@ function persistManualProject(nextProject = {}) {
   const safeProject = nextProject && typeof nextProject === "object" ? nextProject : {};
   try {
     const serialized = JSON.stringify(safeProject);
+    localStorage.setItem(getAccountScopedStorageKey(STORAGE_KEY), serialized);
     localStorage.setItem(STORAGE_KEY, serialized);
     const nodeId = String(safeProject?.nodeId || "").trim();
     if (nodeId) {
+      localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY), nodeId);
       localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
-      localStorage.setItem(getManualProjectStorageKey(nodeId), serialized);
+      localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
+      localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
     }
   } catch {}
 }
@@ -469,12 +480,13 @@ export default function ManualClipDirectorPage() {
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
   const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
   const [isStoryPrepExpanded, setIsStoryPrepExpanded] = useState(false);
+  const [backupStatus, setBackupStatus] = useState("");
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
     if (!parsedProject) return;
     try {
-      const parsed = parsedProject;
+      const parsed = unwrapManualProjectBackupJson(parsedProject);
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
       const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
@@ -526,6 +538,47 @@ export default function ManualClipDirectorPage() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadJsonPayload = (payload, filename = "manual_project_backup.json") => {
+    try {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setBackupStatus("Backup проекта скачан");
+      window.setTimeout(() => setBackupStatus(""), 1800);
+    } catch {
+      setBackupStatus("Не удалось скачать backup проекта");
+    }
+  };
+
+  const onDownloadProjectBackup = () => {
+    downloadJsonPayload(buildManualProjectBackupJson({ ...(project || {}), selectedSceneId }, { source: "manual_director_board" }));
+  };
+
+  const onImportProjectBackupFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const parsed = unwrapManualProjectBackupJson(JSON.parse(await file.text()));
+      const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
+      const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
+      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
+      const nextProject = { ...parsed, story_blocks: storyBlocks, scenes, selectedSceneId: String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""), updatedAt: Date.now() };
+      persistProject(nextProject);
+      setSelectedSceneId(nextProject.selectedSceneId);
+      setBackupStatus(`Backup восстановлен: сцен ${scenes.length}`);
+      window.setTimeout(() => setBackupStatus(""), 2200);
+    } catch (error) {
+      setBackupStatus(`Ошибка backup JSON: ${error?.message || "неверный формат"}`);
+    }
   };
 
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
@@ -913,12 +966,15 @@ export default function ManualClipDirectorPage() {
     }
   };
 
-  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску».</p><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button></div></div>;
+  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">
       <button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Назад к AI-разбивке</button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
+      <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
+      <label className="clipSB_btn manualUploadBtn">Импорт backup JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
+      {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
     </div>
     {visibleStoryBlocks.length ? <div className="storyboardBlockStrip">
       {visibleStoryBlocks.map((block, idx) => {

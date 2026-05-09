@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../services/api";
+import { buildManualProjectBackupJson, getAccountScopedStorageKey, unwrapManualProjectBackupJson } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
@@ -100,7 +101,8 @@ const SEGMENT_COLORS = [
 
 function readActiveProject() {
   try {
-    const raw = localStorage.getItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
+    const raw = localStorage.getItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
+      || localStorage.getItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -1642,6 +1644,11 @@ export default function ManualTimingEditorPage() {
     downloadJsonPayload(buildManualTimingExportJson(project), "manual_timing_export.json");
   };
 
+  const onDownloadProjectBackup = () => {
+    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
+    downloadJsonPayload(buildManualProjectBackupJson(project, { source: "manual_timing_editor" }), "manual_project_backup.json");
+  };
+
   const onDownloadSampleJson = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     downloadJsonPayload(buildManualTimingSampleJson(project), "manual_timing_sample_for_chatgpt.json");
@@ -1677,17 +1684,22 @@ export default function ManualTimingEditorPage() {
   };
 
   const applyImportedTimingJson = (rawObject) => {
-    const validations = [
-      validateManualTimingStoryPassImport(rawObject, project),
-      validateManualTimingClipPassImport(rawObject, project),
-      validateManualTimingPodcastPassImport(rawObject, project),
-    ];
-    const failedValidation = validations.find((item) => !item.ok);
-    if (failedValidation) {
-      setCopyStatus(`${workflowLabels.pass} отклонён: ${failedValidation.errors.slice(0, 3).join(" ")}`);
-      return;
+    const isBackupImport = rawObject?.backup_type === "photostudio_manual_project_backup";
+    if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
+    const importedObject = unwrapManualProjectBackupJson(rawObject);
+    if (!isBackupImport) {
+      const validations = [
+        validateManualTimingStoryPassImport(importedObject, project),
+        validateManualTimingClipPassImport(importedObject, project),
+        validateManualTimingPodcastPassImport(importedObject, project),
+      ];
+      const failedValidation = validations.find((item) => !item.ok);
+      if (failedValidation) {
+        setCopyStatus(`${workflowLabels.pass} отклонён: ${failedValidation.errors.slice(0, 3).join(" ")}`);
+        return;
+      }
     }
-    const nextProject = normalizeManualTimingProjectFromJson(rawObject, project);
+    const nextProject = normalizeManualTimingProjectFromJson(importedObject, project);
     persist(nextProject);
     setJsonImportText(JSON.stringify(buildManualTimingExportJson(nextProject), null, 2));
     setCopyStatus(`JSON загружен: сцен ${nextProject.scenes?.length || 0}`);
@@ -1696,7 +1708,6 @@ export default function ManualTimingEditorPage() {
   };
 
   const onImportTimingJson = () => {
-    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     try {
       const raw = JSON.parse(jsonImportText || "{}");
       applyImportedTimingJson(raw);
@@ -1706,7 +1717,6 @@ export default function ManualTimingEditorPage() {
   };
 
   const onImportJsonFile = async (event) => {
-    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -2010,9 +2020,10 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={mainActionsDisabled}>Скопировать JSON</button>
             <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
-              Загрузить JSON файл
+              Импорт backup / JSON
               <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
             </label>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup} disabled={mainActionsDisabled}>Скачать backup проекта</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson} disabled={mainActionsDisabled}>Скачать текущий JSON</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson} disabled={mainActionsDisabled}>Скачать JSON образец</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson} disabled={mainActionsDisabled}>Скачать JSON для AI-разбивки</button>
