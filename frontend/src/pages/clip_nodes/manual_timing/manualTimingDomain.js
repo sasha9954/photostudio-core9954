@@ -218,7 +218,7 @@ export function normalizeManualTimingSourcePhraseIds(value = []) {
 }
 
 export const MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU = "Если audio_phrases содержит status='needs_transcription' или assignment_status='unassigned', это пропущенные фразы аудио. Не удаляй их. Нужно распознать/перевести эти фразы по аудио или предоставленному тексту, заполнить text_en, text_ru, meaning_ru и решить, куда их вставить: в предыдущую сцену, следующую сцену или отдельную новую сцену. Не менять тайминги без явного указания пользователя; если нужна новая сцена, предложить это явно.";
-export const MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU = "Если audio_phrases переданы из ASR (status='asr_raw' или source='asr'), не придумывай start_sec/end_sec и не используй Gemini/LLM как источник точных таймингов. audio_phrases — источник истины: группируй phrase_id в scenes через source_phrase_ids; scene.start_sec должен быть start_sec первой фразы группы, а scene.end_sec — end_sec последней фразы группы. Gemini/ChatGPT может переводить, объяснять смысл и группировать фразы, но не должен менять word/phrase тайминги.";
+export const MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU = "Если audio_phrases переданы из ASR (status='asr_raw' или source='asr'), audio_phrases — источник истины по точным таймингам речи: не менять start_sec/end_sec у audio_phrases, не придумывать новые phrase timing и не использовать Gemini/LLM как источник word/phrase таймингов. Нужно сгруппировать phrase_id в gap-aware монтажные scenes через source_phrase_ids: scene.start_sec/end_sec покрывают паузы и всю длительность audio_duration_sec без дыр/overlap, speech_start_sec/speech_end_sec равны первой/последней ASR-фразе внутри scene. Переведи все audio_phrases на русский, заполни story_blocks и смысловые поля scenes (original_text, translated_text_ru, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru, block_progress_ru), но оставь video_prompt, negative_prompt, sound_prompt пустыми. Верни готовый JSON в том же формате.";
 
 export function buildManualTimingChatGptTask(hasUnresolvedAudioPhrases = false, hasAsrAudioPhrases = false) {
   const rules = Array.isArray(CHATGPT_STORY_SPLIT_TASK.rules_ru) ? CHATGPT_STORY_SPLIT_TASK.rules_ru : [];
@@ -507,6 +507,10 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       start_sec: start,
       end_sec: end,
       duration_sec: roundTimingSec(end - start),
+      speech_start_sec: shouldCarryTechnicalFields ? roundTimingSec(old.speech_start_sec ?? old.speechStartSec ?? start) : start,
+      speech_end_sec: shouldCarryTechnicalFields ? roundTimingSec(old.speech_end_sec ?? old.speechEndSec ?? end) : end,
+      pre_silence_sec: shouldCarryTechnicalFields ? roundTimingSec(old.pre_silence_sec ?? old.preSilenceSec ?? Math.max(0, Number(old.speech_start_sec ?? start) - start)) : 0,
+      post_silence_sec: shouldCarryTechnicalFields ? roundTimingSec(old.post_silence_sec ?? old.postSilenceSec ?? Math.max(0, end - Number(old.speech_end_sec ?? end))) : 0,
       section,
       route,
       contains_vocal: containsVocal,
@@ -545,6 +549,192 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
   }
 
   return scenes;
+}
+
+
+export function validateSceneCoverage(scenes = [], audioDurationSec = 0) {
+  const safeScenes = (Array.isArray(scenes) ? scenes : [])
+    .map((scene, idx) => ({ ...scene, __idx: idx, start_sec: roundTimingSec(scene?.start_sec), end_sec: roundTimingSec(scene?.end_sec) }))
+    .filter((scene) => Number.isFinite(scene.start_sec) && Number.isFinite(scene.end_sec))
+    .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
+  const duration = roundTimingSec(audioDurationSec);
+  const tolerance = 0.01;
+  const warnings = [];
+  const errors = [];
+
+  if (!safeScenes.length) {
+    errors.push("Нет scenes для проверки покрытия аудио.");
+    return { ok: false, warnings, errors };
+  }
+
+  if (Math.abs(Number(safeScenes[0].start_sec || 0)) > tolerance) {
+    errors.push("Первая scene должна начинаться с 0.");
+  }
+  if (duration > 0 && Math.abs(Number(safeScenes[safeScenes.length - 1].end_sec || 0) - duration) > tolerance) {
+    errors.push("Последняя scene должна заканчиваться на audio_duration_sec.");
+  }
+
+  safeScenes.forEach((scene, idx) => {
+    if (!(Number(scene.end_sec) > Number(scene.start_sec))) {
+      errors.push(`${scene.scene_id || `scene_${idx + 1}`}: end_sec должен быть больше start_sec.`);
+    }
+    if (idx === 0) return;
+    const prev = safeScenes[idx - 1];
+    const delta = roundTimingSec(Number(scene.start_sec || 0) - Number(prev.end_sec || 0));
+    if (delta > tolerance) {
+      errors.push(`Есть непокрытый участок аудио между scenes: ${prev.scene_id || idx} → ${scene.scene_id || idx + 1} (${delta.toFixed(3)} сек).`);
+    } else if (delta < -tolerance) {
+      errors.push(`Scenes перекрываются: ${prev.scene_id || idx} → ${scene.scene_id || idx + 1} (${Math.abs(delta).toFixed(3)} сек).`);
+    }
+  });
+
+  const coveredSec = safeScenes.reduce((sum, scene) => sum + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)), 0);
+  if (duration > 0 && Math.abs(roundTimingSec(coveredSec) - duration) > Math.max(tolerance, safeScenes.length * tolerance)) {
+    warnings.push(`Сумма длительностей scenes (${roundTimingSec(coveredSec).toFixed(3)} сек) не равна полной длительности аудио (${duration.toFixed(3)} сек).`);
+  }
+
+  return { ok: errors.length === 0, warnings, errors };
+}
+
+function joinPhraseText(phrases = [], key = "text_en") {
+  return phrases.map((phrase) => String(phrase?.[key] || "").trim()).filter(Boolean).join(" ");
+}
+
+export function buildGapAwareScenesFromAudioPhrases(audioPhrases = [], options = {}) {
+  const phrases = normalizeManualTimingAudioPhrases(audioPhrases)
+    .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
+  if (!phrases.length) return [];
+
+  const lastPhraseEnd = Math.max(...phrases.map((phrase) => Number(phrase.end_sec || 0)));
+  const audioDurationSec = roundTimingSec(Math.max(Number(options.audioDurationSec || 0), lastPhraseEnd));
+  const target = options.targetSceneDurationSec || {};
+  const targetMin = Number(target.min || options.minSceneDurationSec || 4);
+  const targetPreferred = Number(target.preferred || 6);
+  const targetMax = Number(target.max || 9);
+  const maxSceneDurationSec = Number(options.maxSceneDurationSec || 10);
+  const projectKind = String(options.projectKind || "clip");
+  const route = normalizeManualTimingRoute(options.route || "i2v");
+
+  const groups = [];
+  let current = [];
+  const flush = () => {
+    if (current.length) groups.push(current);
+    current = [];
+  };
+
+  phrases.forEach((phrase, idx) => {
+    if (!current.length) {
+      current.push(phrase);
+      return;
+    }
+
+    const first = current[0];
+    const prev = current[current.length - 1];
+    const nextBoundaryProbe = idx < phrases.length - 1
+      ? (Number(phrase.end_sec || 0) + Number(phrases[idx + 1].start_sec || phrase.end_sec || 0)) / 2
+      : audioDurationSec;
+    const currentBoundaryProbe = (Number(prev.end_sec || 0) + Number(phrase.start_sec || prev.end_sec || 0)) / 2;
+    const durationIfAdded = Math.max(0, nextBoundaryProbe - Number(first.start_sec || 0));
+    const durationWithout = Math.max(0, currentBoundaryProbe - Number(first.start_sec || 0));
+    const gapFromPrev = Math.max(0, Number(phrase.start_sec || 0) - Number(prev.end_sec || 0));
+    const shouldSplit = (
+      durationWithout >= targetMin
+      && (
+        durationIfAdded > maxSceneDurationSec
+        || durationIfAdded > targetMax
+        || (durationWithout >= targetPreferred && gapFromPrev >= 0.35)
+      )
+    );
+
+    if (shouldSplit) flush();
+    current.push(phrase);
+  });
+  flush();
+
+  const boundaries = [0];
+  for (let i = 0; i < groups.length - 1; i += 1) {
+    const prevLast = groups[i][groups[i].length - 1];
+    const nextFirst = groups[i + 1][0];
+    const boundary = roundTimingSec((Number(prevLast.end_sec || 0) + Number(nextFirst.start_sec || prevLast.end_sec || 0)) / 2);
+    boundaries.push(Math.max(boundaries[boundaries.length - 1], Math.min(audioDurationSec, boundary)));
+  }
+  boundaries.push(audioDurationSec);
+
+  return groups.map((group, idx) => {
+    const start = roundTimingSec(boundaries[idx]);
+    const end = roundTimingSec(boundaries[idx + 1]);
+    const speechStart = roundTimingSec(group[0]?.start_sec || start);
+    const speechEnd = roundTimingSec(group[group.length - 1]?.end_sec || speechStart);
+    const sourcePhraseIds = group.map((phrase) => phrase.phrase_id);
+    const storyBlockId = `block_draft_${String(Math.floor(idx / 4) + 1).padStart(2, "0")}`;
+    const duration = roundTimingSec(end - start);
+    return {
+      scene_id: `seg_${String(idx + 1).padStart(2, "0")}`,
+      index: idx + 1,
+      start_sec: start,
+      end_sec: end,
+      duration_sec: duration,
+      speech_start_sec: speechStart,
+      speech_end_sec: speechEnd,
+      pre_silence_sec: roundTimingSec(Math.max(0, speechStart - start)),
+      post_silence_sec: roundTimingSec(Math.max(0, end - speechEnd)),
+      section: idx === 0 ? "intro" : "verse",
+      route,
+      contains_vocal: false,
+      contains_vocal_assumption: false,
+      contains_instrumental_assumption: true,
+      use_sound_suggestion: false,
+      energy: "mid",
+      quality: "asr_gap_aware_story_draft",
+      boundary_reason: "asr_gap_aware_midpoint_pause",
+      transition_out: "manual_cut",
+      story_time: "",
+      scene_type: projectKind === "story" ? "story_scene_from_asr" : "clip_scene_from_asr",
+      drama_hint: "",
+      short_note: "Gap-aware ASR story scene — паузы включены в монтажную длительность.",
+      source_phrase_ids: sourcePhraseIds,
+      original_text: joinPhraseText(group, "text_en"),
+      translated_text_ru: joinPhraseText(group, "text_ru"),
+      meaning_hint_ru: joinPhraseText(group, "meaning_ru"),
+      story_block_id: storyBlockId,
+      story_block_title_ru: "",
+      story_block_position_ru: "",
+      scene_role_in_block_ru: "",
+      block_progress_ru: "",
+      scene_goal_ru: "",
+      photo_prompt_hint_ru: "",
+      prompt_hint_ru: "",
+      story_position_ru: "",
+      user_note_ru: "Собрано из ASR audio_phrases: scene duration включает паузы; video generation должна использовать duration_sec.",
+      source_text_en: joinPhraseText(group, "text_en"),
+      adapted_text_en: "",
+      video_prompt: "",
+      negative_prompt: "",
+      sound_prompt: "",
+    };
+  });
+}
+
+export function buildDraftStoryBlocksFromGapAwareScenes(scenes = []) {
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+  const colorPalette = ["#2563EB", "#7C3AED", "#059669", "#D97706", "#DC2626", "#0891B2"];
+  const blockIds = [...new Set(safeScenes.map((scene) => String(scene?.story_block_id || "").trim()).filter(Boolean))];
+  return blockIds.map((blockId, idx) => {
+    const blockScenes = safeScenes.filter((scene) => String(scene?.story_block_id || "") === blockId);
+    const sceneIds = blockScenes.map((scene) => scene.scene_id);
+    return {
+      block_id: blockId,
+      title_ru: `Черновой story block ${idx + 1}`,
+      summary_ru: "Черновой блок из ASR. Название, summary и драматургию должен заполнить LLM-pass.",
+      block_goal_ru: "",
+      block_reveal_ru: "",
+      block_emotion_ru: "",
+      color: colorPalette[idx % colorPalette.length],
+      start_sec: roundTimingSec(blockScenes[0]?.start_sec || 0),
+      end_sec: roundTimingSec(blockScenes[blockScenes.length - 1]?.end_sec || 0),
+      scene_ids: sceneIds,
+    };
+  });
 }
 
 export function updateManualTimingSceneById(scenes = [], sceneId = "", patch = {}) {
@@ -626,6 +816,10 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
     start_sec: start,
     end_sec: end,
     duration_sec: roundTimingSec(scene?.duration_sec ?? scene?.durationSec ?? (end - start)),
+    speech_start_sec: roundTimingSec(scene?.speech_start_sec ?? scene?.speechStartSec ?? scene?.speech_start ?? start),
+    speech_end_sec: roundTimingSec(scene?.speech_end_sec ?? scene?.speechEndSec ?? scene?.speech_end ?? end),
+    pre_silence_sec: roundTimingSec(scene?.pre_silence_sec ?? scene?.preSilenceSec ?? Math.max(0, (scene?.speech_start_sec ?? scene?.speechStartSec ?? start) - start)),
+    post_silence_sec: roundTimingSec(scene?.post_silence_sec ?? scene?.postSilenceSec ?? Math.max(0, end - (scene?.speech_end_sec ?? scene?.speechEndSec ?? end))),
     section,
     route,
     contains_vocal: containsVocal,
@@ -690,7 +884,7 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
       singer_lipsync: "ia2v",
       instrumental: "i2v",
     },
-    global_hint: "Сделай новую разбивку по смысловым блокам. Если есть audio_phrases из ASR, не придумывай тайминги: группируй phrase_id в scenes, а start_sec/end_sec сцены бери от первой/последней фразы. Сначала придумай большие story_blocks; для каждого story_block заполни title_ru, summary_ru, block_goal_ru (что должен раскрыть весь блок), block_reveal_ru (что зритель должен понять к концу блока), block_emotion_ru (эмоциональная дуга блока), color, start_sec, end_sec, scene_ids. Затем создай scenes внутри блоков так, чтобы они пошагово раскрывали мысль блока. Для каждой сцены заполни original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
+    global_hint: "Сделай новую разбивку по смысловым блокам. Если есть audio_phrases из ASR, не меняй start_sec/end_sec у audio_phrases: группируй phrase_id в gap-aware scenes через source_phrase_ids. scene.start_sec/end_sec должны покрывать все паузы и всю audio_duration_sec без дыр/overlap; speech_start_sec/speech_end_sec должны соответствовать первой/последней ASR-фразе в scene. Сначала придумай story_blocks; для каждого story_block заполни title_ru, summary_ru, block_goal_ru, block_reveal_ru, block_emotion_ru, color, start_sec, end_sec, scene_ids. Для каждой scene заполни original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
     story_request_ru: "",
     story_blocks: [],
     audio_phrases: normalizeManualTimingAudioPhrases(safeProject.audio_phrases),
@@ -785,7 +979,7 @@ export function buildManualTimingSampleJson(project = {}) {
     format: String(safeProject.format || "9:16"),
     split_type: existingScenes.length ? "manual_timing_export_for_chatgpt" : "manual_timing_template_for_chatgpt",
     audio_duration_sec: Number(audio.duration_sec || 0),
-    global_hint: "Заполни/поправь story_blocks и scenes: тайминги start_sec/end_sec, section, route, contains_vocal, energy, перевод/смысл и user_note_ru. Для каждого story_block добавь block_goal_ru, block_reveal_ru, block_emotion_ru. Для каждой scene добавь scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми. Если есть audio_phrases со status=needs_transcription или assignment_status=unassigned, не удаляй их: распознай/переведи и реши, вставить в предыдущую сцену, следующую сцену или отдельную новую сцену; не меняй тайминги без явного указания пользователя.",
+    global_hint: "Заполни/поправь story_blocks и scenes: перевод/смысл, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru и block_progress_ru. Prompts оставь пустыми. Если есть audio_phrases из ASR, audio_phrases являются источником истины по речи: не меняй их start_sec/end_sec; scenes должны быть gap-aware, покрывать всю audio_duration_sec без дыр/overlap, а requestedDurationSec для будущей video generation должен соответствовать scene.duration_sec, а не speech duration. Если есть audio_phrases со status=needs_transcription или assignment_status=unassigned, не удаляй их: распознай/переведи и реши, куда назначить phrase_id; не меняй тайминги без явного указания пользователя.",
     story_blocks: storyBlocks,
     audio_phrases: audioPhrases,
     scenes,
@@ -913,8 +1107,8 @@ export function buildManualTimingWarnings(project = {}) {
 
   if (!scenes.length) warnings.push("Нет сегментов разметки.");
   if (scenes.length) {
-    if (Math.abs(Number(scenes[0]?.start_sec || 0)) > 0.001) warnings.push("Первая сцена не начинается с 0.000 сек.");
-    if (duration > 0 && Math.abs(Number(scenes[scenes.length - 1]?.end_sec || 0) - duration) > 0.05) warnings.push("Последняя сцена не заканчивается на длительности аудио.");
+    const coverage = validateSceneCoverage(scenes, duration);
+    warnings.push(...coverage.errors, ...coverage.warnings);
   }
 
   scenes.forEach((scene, idx) => {
@@ -939,7 +1133,16 @@ export function buildManualTimingWarnings(project = {}) {
     }
   });
 
+  const assignedPhraseIds = new Set();
+  scenes.forEach((scene) => {
+    normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds).forEach((phraseId) => assignedPhraseIds.add(phraseId));
+  });
+
   audioPhrases.forEach((phrase) => {
+    if (String(phrase.source || "") === "asr" && !assignedPhraseIds.has(String(phrase.phrase_id || ""))) {
+      warnings.push(`ASR-фраза не назначена ни одной scene через source_phrase_ids: ${phrase.phrase_id}`);
+    }
+
     if (String(phrase.status || "") === "needs_transcription") {
       warnings.push(`Есть пропущенная фраза без расшифровки: ${phrase.phrase_id} (${phrase.start_sec.toFixed(2)}–${phrase.end_sec.toFixed(2)})`);
     }
@@ -978,6 +1181,10 @@ export function buildManualTimingExportJson(project = {}) {
     start_sec: roundTimingSec(scene?.start_sec),
     end_sec: roundTimingSec(scene?.end_sec),
     duration_sec: roundTimingSec(scene?.duration_sec || (Number(scene?.end_sec || 0) - Number(scene?.start_sec || 0))),
+    speech_start_sec: roundTimingSec(scene?.speech_start_sec ?? scene?.speechStartSec ?? scene?.start_sec),
+    speech_end_sec: roundTimingSec(scene?.speech_end_sec ?? scene?.speechEndSec ?? scene?.end_sec),
+    pre_silence_sec: roundTimingSec(scene?.pre_silence_sec ?? scene?.preSilenceSec ?? Math.max(0, Number(scene?.speech_start_sec ?? scene?.start_sec ?? 0) - Number(scene?.start_sec ?? 0))),
+    post_silence_sec: roundTimingSec(scene?.post_silence_sec ?? scene?.postSilenceSec ?? Math.max(0, Number(scene?.end_sec ?? 0) - Number(scene?.speech_end_sec ?? scene?.end_sec ?? 0))),
     section: normalizeManualTimingSection(scene?.section),
     route: normalizeManualTimingRoute(scene?.route),
     contains_vocal: Boolean(scene?.contains_vocal),
