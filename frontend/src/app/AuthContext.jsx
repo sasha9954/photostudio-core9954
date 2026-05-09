@@ -1,5 +1,6 @@
 import React from "react";
 import { authMe } from "../services/authApi.js";
+import { persistLastAuthUserIdentity } from "./authIdentity.js";
 
 const AuthCtx = React.createContext(null);
 
@@ -10,19 +11,14 @@ export function AuthProvider({ children }){
 
   const refresh = React.useCallback(async ()=>{
     const res = await authMe();
-    if(res?.ok){
+    if(res?.ok && res?.user){
       setUser(res.user);
       setCredits(res.user?.credits ?? 0);
 
       // Persist last known account identity locally.
       // Helps keep account-scoped UI state stable across reloads
       // even if backend /auth/me is temporarily unavailable.
-      try {
-        if (res?.user?.email) localStorage.setItem("ps:lastEmail", String(res.user.email).trim().toLowerCase());
-        if (res?.user?.id) localStorage.setItem("ps:lastUserId", String(res.user.id));
-      } catch {
-        // ignore
-      }
+      persistLastAuthUserIdentity(res.user);
     }else{
       setUser(null);
       setCredits(0);
