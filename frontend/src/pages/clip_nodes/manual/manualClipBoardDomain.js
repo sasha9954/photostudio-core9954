@@ -245,6 +245,13 @@ export function normalizeScene(scene, idx, storyBlockLookup = null) {
     start_sec: start,
     end_sec: end,
     duration_sec: Number((Math.max(0, end - start)).toFixed(3)),
+    speech_start_sec: Number(scene?.speech_start_sec ?? scene?.speechStartSec ?? start) || start,
+    speech_end_sec: Number(scene?.speech_end_sec ?? scene?.speechEndSec ?? end) || end,
+    pre_silence_sec: Number(scene?.pre_silence_sec ?? scene?.preSilenceSec ?? Math.max(0, Number(scene?.speech_start_sec ?? start) - start)) || 0,
+    post_silence_sec: Number(scene?.post_silence_sec ?? scene?.postSilenceSec ?? Math.max(0, end - Number(scene?.speech_end_sec ?? end))) || 0,
+    source_phrase_ids: Array.isArray(scene?.source_phrase_ids || scene?.sourcePhraseIds)
+      ? (scene?.source_phrase_ids || scene?.sourcePhraseIds).map((id) => String(id || "").trim()).filter(Boolean)
+      : [],
     route,
     energy: String(scene?.energy || "mid"),
     quality: String(scene?.quality || "check"),
@@ -593,7 +600,9 @@ export function buildStoryPrepTemplateText(project = {}) {
       lines.push(`#### Сцена ${idx + 1} (${sceneId})`);
       lines.push(`- Номер внутри блока: ${localIdx + 1} из ${blockScenes.length}`);
       lines.push(`- Route: ${compactStoryPrepText(scene?.route, "i2v")}`);
-      lines.push(`- Тайминг: ${formatStoryPrepSeconds(scene?.start_sec)} – ${formatStoryPrepSeconds(scene?.end_sec)} сек`);
+      lines.push(`- Монтажный тайминг: ${formatStoryPrepSeconds(scene?.start_sec)} – ${formatStoryPrepSeconds(scene?.end_sec)} сек (requestedDurationSec = scene.end_sec - scene.start_sec)`);
+      lines.push(`- Речь внутри сцены: ${formatStoryPrepSeconds(scene?.speech_start_sec ?? scene?.start_sec)} – ${formatStoryPrepSeconds(scene?.speech_end_sec ?? scene?.end_sec)} сек; паузы pre/post: ${formatStoryPrepSeconds(scene?.pre_silence_sec)} / ${formatStoryPrepSeconds(scene?.post_silence_sec)} сек`);
+      lines.push(`- Source phrase ids: ${Array.isArray(scene?.source_phrase_ids) ? scene.source_phrase_ids.join(", ") : "—"}`);
       lines.push(`- Полная фраза RU (translated_text_ru): ${phraseRu}`);
       lines.push(`- Original/adapted/source EN: ${compactStoryPrepText(scene?.original_text, scene?.adapted_text_en, scene?.source_text_en)}`);
       lines.push(`- Meaning hint RU: ${compactStoryPrepText(scene?.meaning_hint_ru)}`);

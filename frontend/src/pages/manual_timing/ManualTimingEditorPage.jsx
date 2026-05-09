@@ -8,6 +8,8 @@ import {
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   MANUAL_TIMING_ROUTES,
   MANUAL_TIMING_SECTIONS,
+  buildDraftStoryBlocksFromGapAwareScenes,
+  buildGapAwareScenesFromAudioPhrases,
   buildManualTimingAiSplitRequestJson,
   buildManualTimingExportJson,
   buildManualTimingSampleJson,
@@ -27,6 +29,7 @@ import {
   persistManualTimingProject,
   roundTimingSec,
   updateManualTimingSceneById,
+  validateSceneCoverage,
 } from "../clip_nodes/manual_timing/manualTimingDomain";
 
 const SECTION_LABELS = {
@@ -282,27 +285,44 @@ function getAsrPhraseStyle(phrase, durationSec) {
   };
 }
 
-function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = []) {
-  if (!scene || !scenePhrases.length) return [];
+function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = [], allAudioPhrases = [], allScenes = [], audioDurationSec = 0) {
+  if (!scene) return [];
   const warnings = [];
   const sceneStart = Number(scene.start_sec || 0);
   const sceneEnd = Number(scene.end_sec || 0);
-  const sorted = [...scenePhrases].sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
-  const last = sorted[sorted.length - 1];
+  const sceneDuration = Number(scene.duration_sec || (sceneEnd - sceneStart));
+  const speechStart = Number(scene.speech_start_sec ?? sceneStart);
+  const speechEnd = Number(scene.speech_end_sec ?? sceneEnd);
+  const preSilence = Number(scene.pre_silence_sec ?? Math.max(0, speechStart - sceneStart));
+  const postSilence = Number(scene.post_silence_sec ?? Math.max(0, sceneEnd - speechEnd));
+  const sorted = [...(Array.isArray(scenePhrases) ? scenePhrases : [])].sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
   const sourceIds = Array.isArray(scene.source_phrase_ids) ? scene.source_phrase_ids.map((id) => String(id || "")).filter(Boolean) : [];
-  if (sceneEnd > Number(last.end_sec || 0) + 0.08) {
-    warnings.push(`Конец сцены ${formatTimingSec(sceneEnd)} заходит за последнюю ASR-фразу ${last.phrase_id} (${formatTimingSec(last.end_sec)}).`);
-  }
-  if (sourceIds.length) {
+  const coverage = validateSceneCoverage(allScenes, audioDurationSec);
+
+  if (!coverage.ok) warnings.push(...coverage.errors);
+  if (!sourceIds.length) warnings.push(`${scene.scene_id}: source_phrase_ids пустые — scene не связана с ASR-фразами.`);
+  if (sceneDuration < 2) warnings.push(`${scene.scene_id}: scene слишком короткая для монтажной сцены (${sceneDuration.toFixed(2)} сек).`);
+  if (sceneDuration > 10) warnings.push(`${scene.scene_id}: scene слишком длинная (${sceneDuration.toFixed(2)} сек).`);
+  if (preSilence > 1.25) warnings.push(`${scene.scene_id}: большая pre-silence ${preSilence.toFixed(2)} сек.`);
+  if (postSilence > 1.25) warnings.push(`${scene.scene_id}: большая post-silence ${postSilence.toFixed(2)} сек.`);
+
+  const phraseIdsInsideScene = normalizeManualTimingAudioPhrases(allAudioPhrases)
+    .filter((phrase) => Number(phrase.start_sec || 0) < sceneEnd - 0.001 && Number(phrase.end_sec || 0) > sceneStart + 0.001)
+    .map((phrase) => String(phrase.phrase_id || ""))
+    .filter(Boolean);
+  const missingInsideSource = phraseIdsInsideScene.filter((phraseId) => !sourceIds.includes(phraseId));
+  if (missingInsideSource.length) warnings.push(`${scene.scene_id}: внутри scene есть ASR phrase, но её нет в source_phrase_ids: ${missingInsideSource.join(", ")}.`);
+
+  if (sourceIds.length && sorted.length) {
     const actualIds = sorted.map((phrase) => String(phrase.phrase_id || "")).filter(Boolean);
     const sameIds = sourceIds.length === actualIds.length && sourceIds.every((id, idx) => id === actualIds[idx]);
     if (!sameIds) warnings.push(`source_phrase_ids не совпадает с фразами внутри диапазона: ${sourceIds.join(", ") || "—"} vs ${actualIds.join(", ") || "—"}.`);
     const sourceFirst = sorted.find((phrase) => String(phrase.phrase_id || "") === sourceIds[0]);
     const sourceLast = sorted.find((phrase) => String(phrase.phrase_id || "") === sourceIds[sourceIds.length - 1]);
-    if (sourceFirst && Math.abs(sceneStart - Number(sourceFirst.start_sec || 0)) > 0.08) warnings.push(`start_sec сцены не равен start первой source_phrase (${formatTimingSec(sourceFirst.start_sec)}).`);
-    if (sourceLast && Math.abs(sceneEnd - Number(sourceLast.end_sec || 0)) > 0.08) warnings.push(`end_sec сцены не равен end последней source_phrase (${formatTimingSec(sourceLast.end_sec)}).`);
+    if (sourceFirst && Math.abs(speechStart - Number(sourceFirst.start_sec || 0)) > 0.08) warnings.push(`speech_start_sec не равен start первой source_phrase (${formatTimingSec(sourceFirst.start_sec)}).`);
+    if (sourceLast && Math.abs(speechEnd - Number(sourceLast.end_sec || 0)) > 0.08) warnings.push(`speech_end_sec не равен end последней source_phrase (${formatTimingSec(sourceLast.end_sec)}).`);
   }
-  return warnings;
+  return [...new Set(warnings)];
 }
 
 export default function ManualTimingEditorPage() {
@@ -355,6 +375,11 @@ export default function ManualTimingEditorPage() {
   const selectedSceneDurationSec = selectedScene
     ? Number(selectedScene.duration_sec || (selectedSceneEndSec - selectedSceneStartSec))
     : 0;
+  const selectedSceneSpeechStartSec = selectedScene ? Number(selectedScene.speech_start_sec ?? selectedSceneStartSec) : 0;
+  const selectedSceneSpeechEndSec = selectedScene ? Number(selectedScene.speech_end_sec ?? selectedSceneEndSec) : 0;
+  const selectedScenePreSilenceSec = selectedScene ? Number(selectedScene.pre_silence_sec ?? Math.max(0, selectedSceneSpeechStartSec - selectedSceneStartSec)) : 0;
+  const selectedScenePostSilenceSec = selectedScene ? Number(selectedScene.post_silence_sec ?? Math.max(0, selectedSceneEndSec - selectedSceneSpeechEndSec)) : 0;
+  const selectedSceneSourcePhraseIds = selectedScene && Array.isArray(selectedScene.source_phrase_ids) ? selectedScene.source_phrase_ids : [];
   const selectedSceneDurationWarning = selectedScene
     ? getManualTimingSceneDurationWarning(selectedScene)
     : null;
@@ -363,8 +388,8 @@ export default function ManualTimingEditorPage() {
     [audioPhrases, selectedScene]
   );
   const selectedScenePhraseWarnings = useMemo(
-    () => getScenePhraseAlignmentWarnings(selectedScene, selectedSceneAudioPhrases),
-    [selectedScene, selectedSceneAudioPhrases]
+    () => getScenePhraseAlignmentWarnings(selectedScene, selectedSceneAudioPhrases, audioPhrases, scenes, durationSec),
+    [selectedScene, selectedSceneAudioPhrases, audioPhrases, scenes, durationSec]
   );
   const asrPhraseMarkers = useMemo(() => {
     if (!(durationSec > 0)) return [];
@@ -1178,6 +1203,44 @@ export default function ManualTimingEditorPage() {
     window.setTimeout(() => setAsrStatus(""), 5000);
   };
 
+  const onBuildStoryScenesFromAsr = () => {
+    if (!audioPhrases.length) return;
+    const confirmed = window.confirm("Это заменит текущие scenes/story_blocks на gap-aware story scenes из ASR. Продолжить?");
+    if (!confirmed) return;
+    const audioDurationSec = Number(audio.duration_sec || durationSec || Math.max(...audioPhrases.map((phrase) => Number(phrase.end_sec || 0)), 0));
+    const nextScenes = buildGapAwareScenesFromAudioPhrases(audioPhrases, {
+      audioDurationSec,
+      targetSceneDurationSec: { min: 4, preferred: 6, max: 9 },
+      maxSceneDurationSec: 10,
+      minSceneDurationSec: 2,
+      projectKind: project.project_kind || "clip",
+      route: "i2v",
+    });
+    const coverage = validateSceneCoverage(nextScenes, audioDurationSec);
+    const draftBlocks = buildDraftStoryBlocksFromGapAwareScenes(nextScenes);
+    const hydratedScenes = hydrateManualTimingScenesWithStoryBlocks(nextScenes, draftBlocks);
+    const nextMarkers = normalizeManualTimingMarkers(
+      hydratedScenes.flatMap((scene) => [scene.start_sec, scene.end_sec]),
+      audioDurationSec
+    );
+    persist({
+      ...project,
+      audio: {
+        ...audio,
+        duration_sec: roundTimingSec(audioDurationSec),
+        duration_ms: Math.round(audioDurationSec * 1000),
+      },
+      markers: nextMarkers,
+      scenes: hydratedScenes,
+      story_blocks: draftBlocks,
+      selectedSceneId: hydratedScenes[0]?.scene_id || project.selectedSceneId || "",
+      timing_status: "draft",
+    });
+    const statusTail = coverage.ok ? "Покрытие audio_duration_sec проверено: без дыр и overlap." : coverage.errors.join(" ");
+    setAsrStatus(`Story scenes из ASR собраны: ${hydratedScenes.length} сцен, ${draftBlocks.length} черновых story_blocks. ${statusTail}`);
+    window.setTimeout(() => setAsrStatus(""), 7000);
+  };
+
   const onConfirmTiming = () => {
     const nextScenes = scenes.map((scene) => ({ ...scene, quality: "manual_confirmed" }));
     persist({ ...project, scenes: nextScenes, timing_status: "confirmed" });
@@ -1518,13 +1581,14 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={!audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>Создать Audio Phrase Map</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={!audioPhrases.length}>Собрать story scenes из ASR</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
         </div>
 
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
-        {audioPhrases.length ? <div className="manualTimingAsrNotice">ASR phrase map: тайминги взяты из word timestamps. Это отдельный проверочный этап, не финальный storyboard; Gemini/ChatGPT должен только группировать phrase_id и брать границы сцен от фраз.</div> : null}
+        {audioPhrases.length ? <div className="manualTimingAsrNotice">ASR phrase map: audio_phrases покрывают только речь по word timestamps. Для storyboard используй “Собрать story scenes из ASR”: сцены станут gap-aware, покроют всю audio_duration_sec, а ChatGPT/Gemini затем заполнит перевод, story_blocks и смысловые поля без video_prompt/negative_prompt/sound_prompt.</div> : null}
 
         {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingMissingPhraseDraftPanel">
           <div className="manualTimingMissingPhraseDraftHeader">
@@ -1605,6 +1669,7 @@ export default function ManualTimingEditorPage() {
                     <span>{phrase.start_sec.toFixed(2)} – {phrase.end_sec.toFixed(2)} сек</span>
                     <span>{phrase.status || "—"}</span>
                     <span>{phrase.assignment_status || "—"}</span>
+                    <span>confidence {Number(phrase.confidence || 0).toFixed(2)}</span>
                   </div>
                   {isNeedsTranscription ? <div className="manualTimingAudioPhraseWarning">⚠ Нужно распознать и перевести</div> : null}
                   <div className="manualTimingAudioPhraseTimingHint">
@@ -1677,6 +1742,9 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingStatusItem"><span>Начало выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedSceneStartSec) : "—"}</strong></div>
             <div className="manualTimingStatusItem"><span>Конец выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedBoundarySec) : "—"}</strong></div>
             <div className="manualTimingStatusItem isPrimary"><span>Длина выбранной сцены</span><strong className="manualTimingStatusValue">{selectedScene ? formatTimingSec(selectedSceneDurationSec) : "—"}</strong>{selectedSceneDurationWarning ? <span className={`manualTimingDurationBadge ${getDurationWarningClassName(selectedSceneDurationWarning)}`}>⚠ {selectedSceneDurationWarning.label}</span> : null}</div>
+            <div className="manualTimingStatusItem"><span>Речь внутри сцены</span><strong className="manualTimingStatusValue">{selectedScene ? `${formatTimingSec(selectedSceneSpeechStartSec)} → ${formatTimingSec(selectedSceneSpeechEndSec)}` : "—"}</strong></div>
+            <div className="manualTimingStatusItem"><span>Паузы pre / post</span><strong className="manualTimingStatusValue">{selectedScene ? `${formatTimingSec(selectedScenePreSilenceSec)} / ${formatTimingSec(selectedScenePostSilenceSec)}` : "—"}</strong></div>
+            <div className="manualTimingStatusItem"><span>source_phrase_ids</span><strong className="manualTimingStatusValue">{selectedSceneSourcePhraseIds.length ? selectedSceneSourcePhraseIds.join(", ") : "—"}</strong></div>
           </div>
         </div>
       </section>
