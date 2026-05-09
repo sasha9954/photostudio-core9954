@@ -4,13 +4,17 @@ import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualTimingNode.css";
 import {
+  MANUAL_TIMING_MUSIC_CLIP_MODE,
+  MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
+  MANUAL_TIMING_STORY_VOICEOVER_MODE,
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   buildManualTimingExportJson,
+  buildManualTimingStoryPassJson,
   getDefaultManualTimingNodeData,
+  getManualTimingProjectKindForMode,
   normalizeManualTimingAudio,
   persistManualTimingProject,
   readManualTimingProjectForNode,
-  removeManualTimingProjectForNode,
 } from "./manualTimingDomain";
 
 function formatDurationSec(value) {
@@ -36,6 +40,17 @@ function audioMetaEquals(a = {}, b = {}) {
     && Number(a?.duration_ms || 0) === Number(b?.duration_ms || 0);
 }
 
+function getManualTimingCopyButtonLabel(projectMode = "") {
+  if (projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE) return "Скопировать JSON истории";
+  if (projectMode === MANUAL_TIMING_MUSIC_CLIP_MODE) return "JSON клипа будет позже";
+  if (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return "JSON подкаста будет позже";
+  return "Скопировать JSON таймингов";
+}
+
+function getManualTimingNodeModeClass(projectMode = "") {
+  return projectMode ? `mode-${projectMode}` : "mode-unselected";
+}
+
 export default function ManualTimingNode({ id, data }) {
   const navigate = useNavigate();
   const patch = (p) => data?.onPatchNodeData?.(id, p);
@@ -49,6 +64,15 @@ export default function ManualTimingNode({ id, data }) {
     const sceneCount = sceneIds.length || (Array.isArray(model.scenes) ? model.scenes : []).filter((scene) => String(scene?.story_block_id || "") === blockId).length;
     return blockId !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || sceneCount > 0;
   }).length;
+  const projectMode = String(model.project_mode || "").trim();
+  const isProjectModeSelected = Boolean(projectMode);
+  const isStoryVoiceover = projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE;
+  const isModeReadyForJson = isStoryVoiceover;
+  const copyJsonLabel = getManualTimingCopyButtonLabel(projectMode);
+  const copyJsonTitle = isProjectModeSelected
+    ? (isModeReadyForJson ? "Скопировать JSON выбранного режима" : "Этот режим будет подключён позже")
+    : "Сначала выберите режим проекта";
+
 
   useEffect(() => {
     const stored = readManualTimingProjectForNode(id);
@@ -111,21 +135,21 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onCopyTimingJson = async () => {
-    const payload = buildManualTimingExportJson(persistProject());
+    if (!isProjectModeSelected || !isModeReadyForJson) return;
+    const project = persistProject();
+    const hasAsrStoryScenes = Array.isArray(project.scenes)
+      && project.scenes.some((scene) => Array.isArray(scene?.source_phrase_ids) && scene.source_phrase_ids.length);
+    const payload = hasAsrStoryScenes ? buildManualTimingStoryPassJson(project) : buildManualTimingExportJson(project);
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
     } catch {}
   };
 
-  const onResetTiming = () => {
-    removeManualTimingProjectForNode(id);
+  const onProjectModeChange = (event) => {
+    const nextMode = event.target.value;
     patch({
-      markers: [],
-      scenes: [],
-      audio_phrases: [],
-      story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
-      timing_status: "empty",
-      selectedSceneId: "",
+      project_mode: nextMode,
+      project_kind: getManualTimingProjectKindForMode(nextMode),
       updatedAt: Date.now(),
     });
   };
@@ -171,7 +195,7 @@ export default function ManualTimingNode({ id, data }) {
   return (
     <NodeShell title="Тайминг песни" subtitle="ручная разметка" accent="var(--accentB)">
       <Handle type="target" position={Position.Left} id="audio_in" />
-      <div className="manualTimingNode_block">
+      <div className={`manualTimingNode_block ${getManualTimingNodeModeClass(projectMode)}`}>
         <div className="manualTimingNode_row"><b>Аудио:</b> {effectiveAudio.filename || "аудио не выбрано"}</div>
         <div className="manualTimingNode_row"><b>Длительность:</b> {formatDurationSec(effectiveAudio.duration_sec)}</div>
         <div className="manualTimingNode_row"><b>Сцен:</b> {Array.isArray(model.scenes) ? model.scenes.length : 0}</div>
@@ -186,15 +210,22 @@ export default function ManualTimingNode({ id, data }) {
         </select>
 
         <label className="manualTimingNode_label">Тип проекта</label>
-        <select className="manualTimingNode_select" value={model.project_kind || "clip"} onChange={(e) => patch({ project_kind: e.target.value, updatedAt: Date.now() })}>
-          <option value="clip">клип</option>
-          <option value="story">история</option>
+        <select
+          className={`manualTimingNode_select ${!isProjectModeSelected ? "isError" : ""}`}
+          value={projectMode}
+          onChange={onProjectModeChange}
+          aria-invalid={!isProjectModeSelected}
+        >
+          <option value="">— выберите режим —</option>
+          <option value={MANUAL_TIMING_STORY_VOICEOVER_MODE}>История / Voice-over</option>
+          <option value={MANUAL_TIMING_MUSIC_CLIP_MODE}>Клип / Music video</option>
+          <option value={MANUAL_TIMING_PODCAST_DIALOGUE_MODE}>Подкаст / Dialogue</option>
         </select>
+        {!isProjectModeSelected ? <div className="manualTimingNode_modeError">Выберите режим</div> : null}
 
-        <div className="manualTimingNode_actions">
-          <button className="clipSB_btn" onClick={onOpenEditor}>Открыть редактор</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON таймингов</button>
-          <button className="clipSB_btn clipSB_btnDanger" onClick={onResetTiming}>Сбросить тайминги</button>
+        <div className="manualTimingNodeActions manualTimingNode_actions">
+          <button className="clipSB_btn" onClick={onOpenEditor} disabled={!isProjectModeSelected}>Открыть редактор</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={!isProjectModeSelected || !isModeReadyForJson} title={copyJsonTitle}>{copyJsonLabel}</button>
           <label className="clipSB_btn clipSB_btnSecondary manualTimingNode_upload">
             Загрузить аудио
             <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} hidden />
