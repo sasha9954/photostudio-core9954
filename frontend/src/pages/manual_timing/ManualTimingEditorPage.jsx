@@ -12,6 +12,7 @@ import {
   buildGapAwareScenesFromAudioPhrases,
   buildManualTimingAiSplitRequestJson,
   buildManualTimingExportJson,
+  buildManualTimingStoryPassJson,
   buildManualTimingSampleJson,
   buildManualTimingScenesFromMarkers,
   buildManualTimingWarnings,
@@ -29,6 +30,7 @@ import {
   persistManualTimingProject,
   roundTimingSec,
   updateManualTimingSceneById,
+  validateManualTimingStoryPassImport,
   validateSceneCoverage,
 } from "../clip_nodes/manual_timing/manualTimingDomain";
 
@@ -1298,7 +1300,23 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const onCopyStoryPassJson = async () => {
+    const payload = buildManualTimingStoryPassJson(project);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCopyStatus("JSON для Story Pass скопирован");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    } catch {
+      setCopyStatus("Не удалось скопировать JSON для Story Pass");
+    }
+  };
+
   const applyImportedTimingJson = (rawObject) => {
+    const storyPassValidation = validateManualTimingStoryPassImport(rawObject, project);
+    if (!storyPassValidation.ok) {
+      setCopyStatus(`Story Pass отклонён: ${storyPassValidation.errors.slice(0, 3).join(" ")}`);
+      return;
+    }
     const nextProject = normalizeManualTimingProjectFromJson(rawObject, project);
     persist(nextProject);
     setJsonImportText(JSON.stringify(buildManualTimingExportJson(nextProject), null, 2));
@@ -1584,6 +1602,7 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={!audioPhrases.length}>Собрать story scenes из ASR</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson}>Скопировать JSON для Story Pass</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
         </div>
 
@@ -1715,6 +1734,7 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson}>Скачать JSON образец</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson}>Скачать JSON для AI-разбивки</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson}>Скопировать JSON для AI</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryPassJson}>Скопировать JSON для Story Pass</button>
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
@@ -1881,7 +1901,7 @@ export default function ManualTimingEditorPage() {
           <textarea
             className="manualTimingQuickEditTextarea"
             value={String(quickEditDraft.user_note_ru || "")}
-            placeholder="Например: поезд начало, Привоз, банда во дворе, милиция, звук мигалок..."
+            placeholder="Например: завязка, важная реплика, смена эмоции, пауза, звук за кадром..."
             onChange={(e) => setQuickEditDraft((prev) => ({ ...(prev || {}), user_note_ru: e.target.value }))}
           />
         </label>

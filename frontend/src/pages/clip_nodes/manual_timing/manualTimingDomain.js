@@ -218,7 +218,7 @@ export function normalizeManualTimingSourcePhraseIds(value = []) {
 }
 
 export const MANUAL_TIMING_NEEDS_TRANSCRIPTION_RULE_RU = "Если audio_phrases содержит status='needs_transcription' или assignment_status='unassigned', это пропущенные фразы аудио. Не удаляй их. Нужно распознать/перевести эти фразы по аудио или предоставленному тексту, заполнить text_en, text_ru, meaning_ru и решить, куда их вставить: в предыдущую сцену, следующую сцену или отдельную новую сцену. Не менять тайминги без явного указания пользователя; если нужна новая сцена, предложить это явно.";
-export const MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU = "Если audio_phrases переданы из ASR (status='asr_raw' или source='asr'), audio_phrases — источник истины по точным таймингам речи: не менять start_sec/end_sec у audio_phrases, не придумывать новые phrase timing и не использовать Gemini/LLM как источник word/phrase таймингов. Нужно сгруппировать phrase_id в gap-aware монтажные scenes через source_phrase_ids: scene.start_sec/end_sec покрывают паузы и всю длительность audio_duration_sec без дыр/overlap, speech_start_sec/speech_end_sec равны первой/последней ASR-фразе внутри scene. Переведи все audio_phrases на русский, заполни story_blocks и смысловые поля scenes (original_text, translated_text_ru, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru, block_progress_ru), но оставь video_prompt, negative_prompt, sound_prompt пустыми. Верни готовый JSON в том же формате.";
+export const MANUAL_TIMING_ASR_SOURCE_OF_TRUTH_RULE_RU = "Локальный ASR/faster-whisper не должен понимать смысл истории и не должен делать финальные story_blocks: он возвращает только audio_phrases, word timestamps и точные start_sec/end_sec речи. Gap-aware builder локально собирает scenes с source_phrase_ids, continuous coverage от 0 до audio_duration_sec, speech_start_sec/speech_end_sec, pre_silence_sec/post_silence_sec и технические draft blocks. LLM Story Pass делает только перевод, meaning_hint_ru, story_blocks по смыслу, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru и block_progress_ru; video_prompt, negative_prompt, sound_prompt оставить пустыми. Не менять audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec и source_phrase_ids. Если кажется, что scenes нужно объединить или разделить, не делать это самостоятельно: заполнить user_note_ru с предложением, а тайминги оставить без изменений.";
 
 export function buildManualTimingChatGptTask(hasUnresolvedAudioPhrases = false, hasAsrAudioPhrases = false) {
   const rules = Array.isArray(CHATGPT_STORY_SPLIT_TASK.rules_ru) ? CHATGPT_STORY_SPLIT_TASK.rules_ru : [];
@@ -900,6 +900,105 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
   };
 }
 
+export const MANUAL_TIMING_STORY_PASS_TASK_RU = "Это JSON после ASR + gap-aware scene builder. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids. Нужно только пересобрать story_blocks по смыслу и заполнить перевод/смысловые поля сцен. video_prompt, negative_prompt, sound_prompt оставить пустыми. Если LLM считает, что scenes нужно объединить или разделить, он НЕ должен делать это сам. Он должен заполнить поле user_note_ru с предложением, а тайминги оставить без изменений.";
+
+export function buildManualTimingStoryPassJson(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeManualTimingAudio(safeProject.audio);
+  const exportJson = buildManualTimingExportJson(safeProject);
+
+  return {
+    chatgpt_task: MANUAL_TIMING_STORY_PASS_TASK_RU,
+    split_type: "asr_gap_aware_story_pass",
+    audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
+    audio_phrases: exportJson.audio_phrases,
+    scenes: exportJson.scenes.map((scene) => ({
+      ...scene,
+      video_prompt: "",
+      negative_prompt: "",
+      sound_prompt: "",
+    })),
+    story_blocks: exportJson.story_blocks,
+  };
+}
+
+function canonicalManualTimingJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalManualTimingJson);
+  if (value && typeof value === "object") {
+    return Object.keys(value).sort().reduce((acc, key) => {
+      acc[key] = canonicalManualTimingJson(value[key]);
+      return acc;
+    }, {});
+  }
+  return value;
+}
+
+function sameManualTimingJson(a, b) {
+  return JSON.stringify(canonicalManualTimingJson(a)) === JSON.stringify(canonicalManualTimingJson(b));
+}
+
+function isManualTimingStoryPassPayload(raw = {}) {
+  const splitType = String(raw?.split_type || raw?.splitType || "");
+  const task = typeof raw?.chatgpt_task === "string"
+    ? raw.chatgpt_task
+    : JSON.stringify(raw?.chatgpt_task || "");
+  return splitType === "asr_gap_aware_story_pass" || task.includes("после ASR + gap-aware scene builder");
+}
+
+export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) {
+  if (!isManualTimingStoryPassPayload(raw)) return { ok: true, errors: [] };
+
+  const basePayload = buildManualTimingStoryPassJson(baseProject);
+  const importedAudioPhrases = normalizeManualTimingAudioPhrases(raw?.audio_phrases || raw?.audioPhrases || []);
+  const baseAudioPhrases = normalizeManualTimingAudioPhrases(basePayload.audio_phrases);
+  const rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : [];
+  const importedScenes = rawScenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
+  const baseScenes = basePayload.scenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
+  const storyBlocks = normalizeManualTimingStoryBlocks(raw?.story_blocks || []);
+  const errors = [];
+
+  if (!sameManualTimingJson(importedAudioPhrases, baseAudioPhrases)) {
+    errors.push("audio_phrases изменились — Story Pass не должен менять ASR-фразы.");
+  }
+
+  if (importedScenes.length !== baseScenes.length) {
+    errors.push(`Количество scenes изменилось: было ${baseScenes.length}, стало ${importedScenes.length}.`);
+  }
+
+  const byId = new Map(importedScenes.map((scene) => [String(scene.scene_id || ""), scene]));
+  baseScenes.forEach((baseScene) => {
+    const sceneId = String(baseScene.scene_id || "");
+    const nextScene = byId.get(sceneId);
+    if (!nextScene) {
+      errors.push(`scene_id изменился или удалён: ${sceneId}.`);
+      return;
+    }
+    ["start_sec", "end_sec", "speech_start_sec", "speech_end_sec"].forEach((key) => {
+      if (roundTimingSec(nextScene[key]) !== roundTimingSec(baseScene[key])) {
+        errors.push(`${sceneId}: ${key} изменился (${baseScene[key]} → ${nextScene[key]}).`);
+      }
+    });
+    if (!sameManualTimingJson(normalizeManualTimingSourcePhraseIds(nextScene.source_phrase_ids), normalizeManualTimingSourcePhraseIds(baseScene.source_phrase_ids))) {
+      errors.push(`${sceneId}: source_phrase_ids изменились.`);
+    }
+    ["translated_text_ru", "meaning_hint_ru", "scene_goal_ru"].forEach((key) => {
+      if (!String(nextScene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
+    });
+  });
+
+  if (!storyBlocks.length) {
+    errors.push("story_blocks не заполнены.");
+  }
+  storyBlocks.forEach((block) => {
+    const blockId = String(block.block_id || "block_without_id");
+    if (!String(block.title_ru || "").trim()) errors.push(`${blockId}: не заполнено title_ru.`);
+    if (!String(block.summary_ru || "").trim()) errors.push(`${blockId}: не заполнено summary_ru.`);
+    if (!Array.isArray(block.scene_ids) || !block.scene_ids.length) errors.push(`${blockId}: не заполнены scene_ids.`);
+  });
+
+  return { ok: !errors.length, errors };
+}
+
 export function buildManualTimingSampleJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
@@ -933,7 +1032,7 @@ export function buildManualTimingSampleJson(project = {}) {
       user_note_ru: "Твоя заметка: звук, фраза, визуал, что не забыть.",
       source_phrase_ids: [],
       story_block_id: "block_01",
-      story_block_title_ru: "Водопой и скрытая угроза",
+      story_block_title_ru: "Смысловой блок 1",
       story_block_color: "#F59E0B",
       story_block_position_ru: "сцена 1 из 1 в блоке",
       scene_role_in_block_ru: "Какую функцию выполняет сцена внутри смыслового блока.",
@@ -959,11 +1058,11 @@ export function buildManualTimingSampleJson(project = {}) {
     storyBlocks = hasCustomStoryBlocks ? normalizedStoryBlocks : [
       {
         block_id: "block_01",
-        title_ru: "Водопой и скрытая угроза",
-        summary_ru: "Животные приходят к воде, но рядом уже есть хищник.",
-        block_goal_ru: "Создать напряжение: мирная сцена должна постепенно превратиться в ощущение опасности.",
-        block_reveal_ru: "К концу блока зритель должен понять, что львица уже выбрала момент для атаки.",
-        block_emotion_ru: "спокойствие → тревога → предчувствие опасности",
+        title_ru: "Смысловой блок 1",
+        summary_ru: "Кратко опиши общий смысл первого блока без привязки к конкретному сюжету.",
+        block_goal_ru: "Опиши драматургическую задачу блока по фактическому аудио.",
+        block_reveal_ru: "Опиши, какое новое понимание должен получить зритель к концу блока.",
+        block_emotion_ru: "эмоциональная дуга блока по фактическому аудио",
         color: "#F59E0B",
         scene_ids: ["seg_01"],
         start_sec: 0,
