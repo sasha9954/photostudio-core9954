@@ -500,6 +500,14 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
     const userNoteRu = canCarryStoryFields
       ? String(old.user_note_ru || old.user_notes_ru || "")
       : (needsSplitReviewNote ? MANUAL_TIMING_SPLIT_REVIEW_NOTE_RU : "");
+    const speechStart = shouldCarryTechnicalFields
+      ? roundTimingSec(old.speech_start_sec ?? old.speechStartSec ?? start)
+      : start;
+    const speechEnd = shouldCarryTechnicalFields
+      ? roundTimingSec(old.speech_end_sec ?? old.speechEndSec ?? end)
+      : end;
+    const preSilence = roundTimingSec(Math.max(0, speechStart - start));
+    const postSilence = roundTimingSec(Math.max(0, end - speechEnd));
 
     scenes.push({
       scene_id: options.preserveSceneIds ? String(old.scene_id || sceneId) : sceneId,
@@ -507,10 +515,10 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       start_sec: start,
       end_sec: end,
       duration_sec: roundTimingSec(end - start),
-      speech_start_sec: shouldCarryTechnicalFields ? roundTimingSec(old.speech_start_sec ?? old.speechStartSec ?? start) : start,
-      speech_end_sec: shouldCarryTechnicalFields ? roundTimingSec(old.speech_end_sec ?? old.speechEndSec ?? end) : end,
-      pre_silence_sec: shouldCarryTechnicalFields ? roundTimingSec(old.pre_silence_sec ?? old.preSilenceSec ?? Math.max(0, Number(old.speech_start_sec ?? start) - start)) : 0,
-      post_silence_sec: shouldCarryTechnicalFields ? roundTimingSec(old.post_silence_sec ?? old.postSilenceSec ?? Math.max(0, end - Number(old.speech_end_sec ?? end))) : 0,
+      speech_start_sec: speechStart,
+      speech_end_sec: speechEnd,
+      pre_silence_sec: preSilence,
+      post_silence_sec: postSilence,
       section,
       route,
       contains_vocal: containsVocal,
