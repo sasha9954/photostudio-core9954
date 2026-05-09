@@ -55,6 +55,7 @@ const STATUS_LABELS = {
 };
 
 const NUDGE_STEPS = [-0.2, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.2];
+const SHOW_MISSING_PHRASE_TOOLS = false;
 const SEGMENT_COLORS = [
   "#37d6c2",
   "#6aa9ff",
@@ -520,10 +521,42 @@ export default function ManualTimingEditorPage() {
     }, 30);
   };
 
-  const rebuildFromMarkers = (nextMarkers, existingScenes = scenes, extraPatch = {}) => {
+  const rebuildFromMarkers = (nextMarkers, existingScenes = scenes, extraPatch = {}, options = {}) => {
     const safeMarkers = normalizeManualTimingMarkers(nextMarkers, durationSec);
-    const nextRawScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, { durationSec });
-    const nextScenes = hydrateManualTimingScenesWithStoryBlocks(nextRawScenes, project.story_blocks);
+    const nextRawScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, {
+      durationSec,
+      allowIdFallback: Boolean(options.allowIdFallback),
+    });
+    const hydratedScenes = hydrateManualTimingScenesWithStoryBlocks(nextRawScenes, project.story_blocks);
+    const nextScenes = options.allowIdFallback && hydratedScenes.length === (Array.isArray(existingScenes) ? existingScenes.length : 0)
+      ? hydratedScenes.map((scene) => {
+        const oldScene = (Array.isArray(existingScenes) ? existingScenes : []).find((item) => String(item?.scene_id || "") === String(scene?.scene_id || ""));
+        if (!oldScene) return scene;
+        return {
+          ...scene,
+          story_time: String(oldScene.story_time || ""),
+          drama_hint: String(oldScene.drama_hint || ""),
+          short_note: String(oldScene.short_note || ""),
+          scene_goal_ru: String(oldScene.scene_goal_ru || ""),
+          photo_prompt_hint_ru: String(oldScene.photo_prompt_hint_ru || ""),
+          prompt_hint_ru: String(oldScene.prompt_hint_ru || oldScene.photo_prompt_hint_ru || ""),
+          story_position_ru: String(oldScene.story_position_ru || oldScene.story_time || ""),
+          user_note_ru: String(oldScene.user_note_ru || oldScene.user_notes_ru || ""),
+          source_phrase_ids: Array.isArray(oldScene.source_phrase_ids) ? oldScene.source_phrase_ids : [],
+          story_block_id: String(oldScene.story_block_id || scene.story_block_id || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id),
+          story_block_title_ru: String(oldScene.story_block_title_ru || scene.story_block_title_ru || ""),
+          story_block_color: String(oldScene.story_block_color || scene.story_block_color || ""),
+          story_block_position_ru: String(oldScene.story_block_position_ru || scene.story_block_position_ru || ""),
+          scene_role_in_block_ru: String(oldScene.scene_role_in_block_ru || ""),
+          block_progress_ru: String(oldScene.block_progress_ru || ""),
+          original_text: String(oldScene.original_text || ""),
+          translated_text_ru: String(oldScene.translated_text_ru || ""),
+          meaning_hint_ru: String(oldScene.meaning_hint_ru || ""),
+          source_text_en: String(oldScene.source_text_en || ""),
+          adapted_text_en: String(oldScene.adapted_text_en || ""),
+        };
+      })
+      : hydratedScenes;
     const selectedSceneId = extraPatch.selectedSceneId || project.selectedSceneId || nextScenes[0]?.scene_id || "";
     return persist({
       ...project,
@@ -866,7 +899,7 @@ export default function ManualTimingEditorPage() {
 
     const nextMarkers = shiftMarkersFromBoundary(markers, markerIndex, nextTime);
     const actualTime = Number(nextMarkers[markerIndex] || currentMarker);
-    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: selectedScene.scene_id, timing_status: "draft" });
+    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: selectedScene.scene_id, timing_status: "draft" }, { allowIdFallback: true });
     setAudioTime(actualTime, { pause: true, clearBound: true });
   };
 
@@ -1229,15 +1262,7 @@ export default function ManualTimingEditorPage() {
               style={{ left: `${lastCutPercent}%`, width: `${candidateWidthPercent}%` }}
               title={`Следующий отрезок: ${formatTimingSec(lastCutSec)} – ${formatTimingSec(currentTime)}`}
             /> : null}
-            {missingPhraseTimelineMarkers.map((phrase) => <button
-              key={`player-missing-${phrase.phrase_id}`}
-              type="button"
-              className="manualTimingMissingPhraseMarker"
-              style={{ left: phrase.left, width: phrase.width }}
-              onClick={(event) => { event.stopPropagation(); selectMissingPhrase(phrase); }}
-              title={`Пропущенная фраза, нужно распознать: ${phrase.phrase_id} ${formatTimingSec(phrase.start_sec)}–${formatTimingSec(phrase.end_sec)}${phrase.timing_scene_id ? ` · по таймингу внутри ${phrase.timing_scene_id}` : ""}`}
-            />)}
-            {markerPercents.map((marker) => <div key={`player-marker-${marker.value}`} className="manualTimingPlayerMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
+            {markerPercents.map((marker) => <div key={"player-marker-" + marker.value} className="manualTimingPlayerMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
             <div className="manualTimingLastCutLine" style={{ left: `${lastCutPercent}%` }} title={`Старт следующего отрезка: ${formatTimingSec(lastCutSec)}`} />
             <div className="manualTimingPlayhead" style={{ left: `${playheadPercent}%` }}>
               <span>{formatTimingSec(currentTime)}</span>
@@ -1248,7 +1273,7 @@ export default function ManualTimingEditorPage() {
             <span><i className="legendCut" /> сцены</span>
             <span><i className="legendTail" /> ещё не отрезано</span>
             <span><i className="legendCandidate" /> следующий отрезок</span>
-            <span><i className="legendMissingPhrase" /> пропущенная фраза</span>
+            {SHOW_MISSING_PHRASE_TOOLS && audioPhrases.length ? <span><i className="legendMissingPhrase" /> пропущенная фраза</span> : null}
           </div>
         </div>
 
@@ -1299,13 +1324,14 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnSecondary" onClick={useCurrentTimeForJump} disabled={!audio.url || !(durationSec > 0)}>из курсора</button>
           </div>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
+          <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
         </div>
 
-        <div className="manualTimingMissingPhraseDraftPanel">
+        {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingMissingPhraseDraftPanel">
           <div className="manualTimingMissingPhraseDraftHeader">
             <strong>Разметка пропущенной фразы</strong>
             <span>отдельная audio_phrase, не разрезает сцены</span>
@@ -1324,10 +1350,11 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={resetMissingPhraseDraft} disabled={!hasTimingDraftValue(missingPhraseDraft.start_sec) && !hasTimingDraftValue(missingPhraseDraft.end_sec)}>Сбросить диапазон</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
           </div>
-        </div>
+        </div> : null}
 
         <div className="manualTimingNudgePanel">
-          <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы</div>
+          <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы — главный инструмент подгонки фразы</div>
+          <div className="manualTimingNudgeGuidance">Если в конце сцены слышно начало следующей фразы — выбери сцену и двигай её конечную границу назад кнопками микро-доводчика. Это меняет границу между текущей и следующей сценой.</div>
           <div className="manualTimingNudgeButtons">
             {NUDGE_STEPS.map((step) => <button
               key={step}
@@ -1336,7 +1363,7 @@ export default function ManualTimingEditorPage() {
               onClick={() => nudgeSelectedBoundary(step)}
             >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
           </div>
-          <div className="manualTimingNudgeHint">Выбери сцену ниже. Доводчик двигает её конечную границу. Если двигать раннюю границу, следующие разрезы сдвинутся на такое же расстояние.</div>
+          <div className="manualTimingNudgeHint">− сдвигает конец сцены раньше, + сдвигает конец сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
         </div>
 
         {selectedScene ? <div className="manualTimingSceneTextPanel">
@@ -1344,6 +1371,7 @@ export default function ManualTimingEditorPage() {
             <strong>Текст и смысл сцены</strong>
             <span className="manualTimingBlockBadge" style={{ "--story-block-color": selectedSceneText.blockColor }}>Story block: {selectedSceneText.blockTitle}</span>
           </div>
+          <div className="manualTimingSceneTextHint">Текст сцены ниже — источник смысла. Тайминг должен заканчиваться на последнем слове этой фразы, без захода на следующую.</div>
           <div className="manualTimingSceneTextGrid">
             <div><span>Position</span><strong>{selectedSceneText.position || "—"}</strong></div>
             <div><span>Original</span><p>{selectedSceneText.original}</p></div>
@@ -1365,7 +1393,7 @@ export default function ManualTimingEditorPage() {
               <div><span>Прогресс блока</span><p>{selectedSceneText.blockProgress}</p></div>
             </div>
           </div>
-          <div className="manualTimingAudioPhrasesPanel">
+          {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingAudioPhrasesPanel">
             <div className="manualTimingAudioPhrasesHeader">
               <strong>Фразы аудио / пропущенные фразы</strong>
               <span>{selectedSceneAudioPhrases.length ? `${selectedSceneAudioPhrases.length} в диапазоне сцены` : "нет фраз в диапазоне"}{selectedMissingPhrase && !selectedSceneAudioPhrases.some((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhrase.phrase_id || "")) ? " · показана выбранная метка" : ""}</span>
@@ -1405,7 +1433,7 @@ export default function ManualTimingEditorPage() {
                 </div>;
               })}
             </div> : <div className="manualTimingAudioPhrasesEmpty">В диапазоне выбранной сцены нет audio_phrases.</div>}
-          </div>
+          </div> : null}
         </div> : null}
 
         <div className="manualTimingJsonPanel">
@@ -1496,14 +1524,6 @@ export default function ManualTimingEditorPage() {
               title={`${scene.scene_id} ${formatTimingSec(scene.start_sec)}–${formatTimingSec(scene.end_sec)}. Двойной клик — быстрая правка`}
             >{scene.scene_id}<span>{SECTION_LABELS[scene.section] || scene.section}/{scene.route}</span></button>;
           })}
-          {missingPhraseTimelineMarkers.map((phrase) => <button
-            key={`timeline-missing-${phrase.phrase_id}`}
-            type="button"
-            className="manualTimingMissingPhraseMarker isCompact"
-            style={{ left: phrase.left, width: phrase.width }}
-            onClick={(event) => { event.stopPropagation(); selectMissingPhrase(phrase); }}
-            title={`Пропущенная фраза, нужно распознать: ${phrase.phrase_id} ${formatTimingSec(phrase.start_sec)}–${formatTimingSec(phrase.end_sec)}${phrase.timing_scene_id ? ` · по таймингу внутри ${phrase.timing_scene_id}` : ""}`}
-          />)}
           {markerPercents.map((marker) => <div key={marker.value} className="manualTimingMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
         </div>
       </section>
