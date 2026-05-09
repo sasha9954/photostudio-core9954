@@ -339,7 +339,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
   return {
     scene_id: String(scene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(scene.index || idx + 1),
-    route: ROUTES.includes(scene.route) ? scene.route : "ia2v",
+    route: ROUTES.includes(scene.route) ? scene.route : "i2v",
     start_sec: start,
     end_sec: end,
     speech_start_sec: Number(scene.speech_start_sec ?? scene.speechStartSec ?? start) || start,
@@ -962,7 +962,7 @@ export default function ManualClipDirectorPage() {
           </details>
         </section> : null}
 
-        {isMeaningSceneVisible(selectedScene) ? <div className="storyboardSceneMeaningCompact">
+        {!isStoryVoiceover && isMeaningSceneVisible(selectedScene) ? <div className="storyboardSceneMeaningCompact">
           <div className="storyboardSceneMeaningHeader">
             <strong>Смысл сцены</strong>
             {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
