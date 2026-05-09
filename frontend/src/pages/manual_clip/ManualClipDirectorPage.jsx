@@ -7,6 +7,8 @@ import {
   canUseLegacyManualProjectStorage,
   getAccountScopedStorageKey,
   getManualClipBoardProjectStorageKey,
+  hasMeaningfulManualProject,
+  readAnyLegacyManualProject,
   unwrapManualProjectBackupJson,
 } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualClipDirectorPage.css";
@@ -575,20 +577,43 @@ export default function ManualClipDirectorPage() {
     downloadJsonPayload(buildManualProjectBackupJson({ ...(project || {}), selectedSceneId }, { source: "manual_director_board" }));
   };
 
+  const restoreManualProjectObject = (rawProject, successPrefix = "Backup восстановлен") => {
+    const parsed = unwrapManualProjectBackupJson(rawProject);
+    const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
+    const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
+    const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
+    const nextProject = {
+      ...parsed,
+      story_blocks: storyBlocks,
+      scenes,
+      selectedSceneId: String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""),
+      updatedAt: Date.now(),
+    };
+    persistProject(nextProject);
+    setSelectedSceneId(nextProject.selectedSceneId);
+    setBackupStatus(`${successPrefix}: сцен ${scenes.length}`);
+    window.setTimeout(() => setBackupStatus(""), 2200);
+  };
+
+  const onRestoreLegacyManualProject = () => {
+    const legacyProject = readAnyLegacyManualProject();
+    if (!hasMeaningfulManualProject(legacyProject)) {
+      setBackupStatus("Старый проект не найден");
+      return;
+    }
+    try {
+      restoreManualProjectObject(legacyProject, "Старый проект восстановлен");
+    } catch (error) {
+      setBackupStatus(`Ошибка восстановления: ${error?.message || "неверный формат"}`);
+    }
+  };
+
   const onImportProjectBackupFile = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
     try {
-      const parsed = unwrapManualProjectBackupJson(JSON.parse(await file.text()));
-      const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
-      const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
-      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
-      const nextProject = { ...parsed, story_blocks: storyBlocks, scenes, selectedSceneId: String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""), updatedAt: Date.now() };
-      persistProject(nextProject);
-      setSelectedSceneId(nextProject.selectedSceneId);
-      setBackupStatus(`Backup восстановлен: сцен ${scenes.length}`);
-      window.setTimeout(() => setBackupStatus(""), 2200);
+      restoreManualProjectObject(JSON.parse(await file.text()), "Backup восстановлен");
     } catch (error) {
       setBackupStatus(`Ошибка backup JSON: ${error?.message || "неверный формат"}`);
     }
@@ -979,7 +1004,7 @@ export default function ManualClipDirectorPage() {
     }
   };
 
-  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
+  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><div className="manualDirectorEmptyActions"><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label><button className="clipSB_btn clipSB_btnSecondary" onClick={onRestoreLegacyManualProject}>Восстановить старый проект</button></div>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">

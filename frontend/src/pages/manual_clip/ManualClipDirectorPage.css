@@ -667,3 +667,24 @@
   font-size: 12px;
   line-height: 1.35;
 }
+
+.manualDirectorEmptyActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 18px;
+}
+
+.manualDirectorEmptyActions .clipSB_btn,
+.manualDirectorEmptyActions .manualUploadBtn {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+}
+
+.manualDirectorBackupStatus {
+  display: block;
+  margin-top: 10px;
+}
