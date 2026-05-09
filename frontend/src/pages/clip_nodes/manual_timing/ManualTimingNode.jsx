@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../../../services/api";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualTimingNode.css";
 import {
@@ -40,11 +41,76 @@ function audioMetaEquals(a = {}, b = {}) {
     && Number(a?.duration_ms || 0) === Number(b?.duration_ms || 0);
 }
 
-function getManualTimingCopyButtonLabel(projectMode = "") {
-  if (projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE) return "Скопировать JSON истории";
+function getManualTimingCopyButtonLabel(projectMode = "", hasAsrStoryScenes = false) {
+  if (projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
+    return hasAsrStoryScenes ? "Скопировать JSON для Story Pass" : "Скопировать JSON истории";
+  }
   if (projectMode === MANUAL_TIMING_MUSIC_CLIP_MODE) return "JSON клипа будет позже";
   if (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return "JSON подкаста будет позже";
   return "Скопировать JSON таймингов";
+}
+
+async function uploadManualTimingAudioAsset(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+
+  const res = await fetch(`${API_BASE}/api/assets/upload`, {
+    method: "POST",
+    body: fd,
+    credentials: "include",
+  });
+  if (!res.ok) {
+    let message = `upload_failed:${res.status}`;
+    try {
+      const data = await res.json();
+      message = data?.detail || data?.message || message;
+    } catch {
+      try {
+        message = await res.text() || message;
+      } catch {
+        // keep default upload message
+      }
+    }
+    throw new Error(message);
+  }
+  return await res.json();
+}
+
+function readAudioFileMetadata(file) {
+  return new Promise((resolve) => {
+    if (!file) {
+      resolve({ duration_sec: 0, duration_ms: 0 });
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const audioEl = new Audio();
+    let settled = false;
+
+    const finish = (durationSec = 0) => {
+      if (settled) return;
+      settled = true;
+      const safeDurationSec = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
+        ? Number(Number(durationSec).toFixed(3))
+        : 0;
+      try {
+        audioEl.removeAttribute("src");
+        audioEl.load();
+      } catch {
+        // ignore metadata cleanup errors
+      }
+      URL.revokeObjectURL(url);
+      resolve({
+        duration_sec: safeDurationSec,
+        duration_ms: safeDurationSec > 0 ? Math.round(safeDurationSec * 1000) : 0,
+      });
+    };
+
+    audioEl.preload = "metadata";
+    audioEl.onloadedmetadata = () => finish(audioEl.duration || 0);
+    audioEl.onerror = () => finish(0);
+    audioEl.src = url;
+  });
 }
 
 function getManualTimingNodeModeClass(projectMode = "") {
@@ -67,8 +133,12 @@ export default function ManualTimingNode({ id, data }) {
   const projectMode = String(model.project_mode || "").trim();
   const isProjectModeSelected = Boolean(projectMode);
   const isStoryVoiceover = projectMode === MANUAL_TIMING_STORY_VOICEOVER_MODE;
+  const hasAsrStoryScenes = Array.isArray(model.scenes)
+    && model.scenes.some((scene) => Array.isArray(scene?.source_phrase_ids) && scene.source_phrase_ids.length);
   const isModeReadyForJson = isStoryVoiceover;
-  const copyJsonLabel = getManualTimingCopyButtonLabel(projectMode);
+  const copyJsonLabel = getManualTimingCopyButtonLabel(projectMode, hasAsrStoryScenes);
+  const isAudioUploading = model.audio_upload_status === "uploading";
+  const audioUploadError = String(model.audio_upload_error || "").trim();
   const copyJsonTitle = isProjectModeSelected
     ? (isModeReadyForJson ? "Скопировать JSON выбранного режима" : "Этот режим будет подключён позже")
     : "Сначала выберите режим проекта";
@@ -154,19 +224,32 @@ export default function ManualTimingNode({ id, data }) {
     });
   };
 
-  const onAudioUpload = (file) => {
+  const onAudioUpload = async (file) => {
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    const audioEl = new Audio();
-    audioEl.preload = "metadata";
-    audioEl.onloadedmetadata = () => {
-      const durationSec = Number(audioEl.duration || 0);
+    patch({
+      audio_upload_status: "uploading",
+      audio_upload_error: "",
+      updatedAt: Date.now(),
+    });
+
+    try {
+      const [metadata, uploadedAsset] = await Promise.all([
+        readAudioFileMetadata(file),
+        uploadManualTimingAudioAsset(file),
+      ]);
+      const uploadedDurationSec = Number(uploadedAsset?.durationSec || uploadedAsset?.duration_sec || 0);
+      const durationSec = uploadedDurationSec > 0
+        ? Number(uploadedDurationSec.toFixed(3))
+        : Number(metadata.duration_sec || 0);
+      const uploadedAssetUrl = String(uploadedAsset?.url || uploadedAsset?.assetUrl || "").trim();
+      if (!uploadedAssetUrl) throw new Error("asset_url_missing");
+
       patch({
         audio: {
-          url,
-          filename: file.name,
-          duration_sec: Number.isFinite(durationSec) ? Number(durationSec.toFixed(3)) : 0,
-          duration_ms: Number.isFinite(durationSec) ? Math.round(durationSec * 1000) : 0,
+          url: uploadedAssetUrl,
+          filename: uploadedAsset?.name || file.name,
+          duration_sec: Number.isFinite(durationSec) ? durationSec : 0,
+          duration_ms: Number.isFinite(durationSec) && durationSec > 0 ? Math.round(durationSec * 1000) : Number(metadata.duration_ms || 0),
         },
         timing_status: "draft",
         markers: [],
@@ -174,22 +257,17 @@ export default function ManualTimingNode({ id, data }) {
         audio_phrases: [],
         scenes: [],
         selectedSceneId: "",
+        audio_upload_status: "ready",
+        audio_upload_error: "",
         updatedAt: Date.now(),
       });
-    };
-    audioEl.onerror = () => {
+    } catch (error) {
       patch({
-        audio: { url, filename: file.name, duration_sec: 0, duration_ms: 0 },
-        timing_status: "draft",
-        markers: [],
-        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
-        audio_phrases: [],
-        scenes: [],
-        selectedSceneId: "",
+        audio_upload_status: "error",
+        audio_upload_error: `Не удалось загрузить audio как backend asset: ${error?.message || error}`,
         updatedAt: Date.now(),
       });
-    };
-    audioEl.src = url;
+    }
   };
 
   return (
@@ -223,12 +301,14 @@ export default function ManualTimingNode({ id, data }) {
         </select>
         {!isProjectModeSelected ? <div className="manualTimingNode_modeError">Выберите режим</div> : null}
 
+        {audioUploadError ? <div className="manualTimingNode_uploadError">{audioUploadError}</div> : null}
+
         <div className="manualTimingNodeActions manualTimingNode_actions">
           <button className="clipSB_btn" onClick={onOpenEditor} disabled={!isProjectModeSelected}>Открыть редактор</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={!isProjectModeSelected || !isModeReadyForJson} title={copyJsonTitle}>{copyJsonLabel}</button>
-          <label className="clipSB_btn clipSB_btnSecondary manualTimingNode_upload">
-            Загрузить аудио
-            <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} hidden />
+          <label className={`clipSB_btn clipSB_btnSecondary manualTimingNode_upload ${isAudioUploading ? "isDisabled" : ""}`}>
+            {isAudioUploading ? "Загрузка…" : "Загрузить аудио"}
+            <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} disabled={isAudioUploading} hidden />
           </label>
         </div>
       </div>
