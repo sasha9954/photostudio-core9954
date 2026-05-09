@@ -1145,9 +1145,23 @@ export default function ManualTimingEditorPage() {
     const confirmed = window.confirm("Это заменит текущие сцены на ASR-preview. Продолжить?");
     if (!confirmed) return;
     const asrScenes = hydrateManualTimingScenesWithStoryBlocks(buildAsrVerificationScenes(audioPhrases), [MANUAL_TIMING_UNKNOWN_STORY_BLOCK]);
+    const asrPreviewBlock = {
+      ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
+      block_id: "block_asr_phrase_map",
+      title_ru: "ASR Phrase Map",
+      summary_ru: "Проверочная карта фраз по word timestamps.",
+      block_goal_ru: "Проверить точные границы произнесённых фраз.",
+      block_reveal_ru: "После проверки фразы будут сгруппированы в смысловые сцены.",
+      block_emotion_ru: "техническая проверка",
+      color: "#64748B",
+      scene_ids: asrScenes.map((scene) => scene.scene_id),
+      start_sec: asrScenes[0]?.start_sec || 0,
+      end_sec: asrScenes[asrScenes.length - 1]?.end_sec || audio.duration_sec || 0,
+    };
     persist({
       ...project,
       scenes: asrScenes,
+      story_blocks: [asrPreviewBlock],
       selectedSceneId: asrScenes[0]?.scene_id || project.selectedSceneId || "",
       timing_status: "draft",
     });
