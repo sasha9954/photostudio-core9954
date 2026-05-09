@@ -1144,7 +1144,7 @@ export default function ManualTimingEditorPage() {
     if (!audioPhrases.length) return;
     const confirmed = window.confirm("Это заменит текущие сцены на ASR-preview. Продолжить?");
     if (!confirmed) return;
-    const asrScenes = hydrateManualTimingScenesWithStoryBlocks(buildAsrVerificationScenes(audioPhrases), [MANUAL_TIMING_UNKNOWN_STORY_BLOCK]);
+    const rawAsrScenes = buildAsrVerificationScenes(audioPhrases);
     const asrPreviewBlock = {
       ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
       block_id: "block_asr_phrase_map",
@@ -1154,10 +1154,19 @@ export default function ManualTimingEditorPage() {
       block_reveal_ru: "После проверки фразы будут сгруппированы в смысловые сцены.",
       block_emotion_ru: "техническая проверка",
       color: "#64748B",
-      scene_ids: asrScenes.map((scene) => scene.scene_id),
-      start_sec: asrScenes[0]?.start_sec || 0,
-      end_sec: asrScenes[asrScenes.length - 1]?.end_sec || audio.duration_sec || 0,
+      scene_ids: rawAsrScenes.map((scene) => scene.scene_id),
+      start_sec: rawAsrScenes[0]?.start_sec || 0,
+      end_sec: rawAsrScenes[rawAsrScenes.length - 1]?.end_sec || audio.duration_sec || 0,
     };
+    const asrScenes = hydrateManualTimingScenesWithStoryBlocks(
+      rawAsrScenes.map((scene) => ({
+        ...scene,
+        story_block_id: asrPreviewBlock.block_id,
+        story_block_title_ru: asrPreviewBlock.title_ru,
+        story_block_color: asrPreviewBlock.color,
+      })),
+      [asrPreviewBlock]
+    );
     persist({
       ...project,
       scenes: asrScenes,
