@@ -1,7 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../services/api";
-import { buildManualProjectBackupJson, canUseLegacyManualProjectStorage, getAccountScopedStorageKey, hasMeaningfulManualProject, readAnyLegacyManualProject, unwrapManualProjectBackupJson } from "../clip_nodes/manualProjectBackup.js";
+import {
+  buildManualProjectBackupJson,
+  canUseLegacyManualProjectStorage,
+  getAccountScopedStorageKey,
+  hasMeaningfulManualProject,
+  readLegacyManualClipBoardProject,
+  readLegacyManualTimingProject,
+  unwrapManualProjectBackupJson,
+} from "../clip_nodes/manualProjectBackup.js";
 import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
@@ -1739,7 +1747,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onRestoreLegacyManualProject = () => {
-    const legacyProject = readAnyLegacyManualProject();
+    const legacyProject = readLegacyManualTimingProject() || readLegacyManualClipBoardProject();
     if (!hasMeaningfulManualProject(legacyProject)) {
       setCopyStatus("Старый проект не найден");
       return;
@@ -1848,7 +1856,10 @@ export default function ManualTimingEditorPage() {
     }));
   }, [project.markers, durationSec]);
 
-  const legacyManualProject = useMemo(() => readAnyLegacyManualProject(), []);
+  const legacyManualProject = useMemo(
+    () => readLegacyManualTimingProject() || readLegacyManualClipBoardProject(),
+    []
+  );
   const showLegacyRestore = hasMeaningfulManualProject(legacyManualProject)
     && (!hasMeaningfulManualProject(project) || !isProjectModeSelected);
 
