@@ -193,6 +193,10 @@ function isUnresolvedAudioPhrase(phrase = {}) {
     || String(phrase?.assignment_status || "") === "unassigned";
 }
 
+function hasTimingDraftValue(value) {
+  return value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
 function getSceneStoryText(scene = {}) {
   const originalRaw = String(scene?.original_text || scene?.adapted_text_en || scene?.source_text_en || "").trim();
   const ruRaw = String(scene?.translated_text_ru || "").trim();
@@ -234,6 +238,8 @@ export default function ManualTimingEditorPage() {
   const [quickEditSceneId, setQuickEditSceneId] = useState("");
   const [quickEditDraft, setQuickEditDraft] = useState(null);
   const [jumpTimeParts, setJumpTimeParts] = useState(() => ({ min: "0", sec: "00", ms: "000" }));
+  const [missingPhraseDraft, setMissingPhraseDraft] = useState({ start_sec: null, end_sec: null });
+  const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -273,6 +279,15 @@ export default function ManualTimingEditorPage() {
     () => getManualTimingPhrasesForScene(audioPhrases, selectedScene),
     [audioPhrases, selectedScene]
   );
+  const selectedMissingPhrase = useMemo(
+    () => audioPhrases.find((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhraseId || "")) || null,
+    [audioPhrases, selectedMissingPhraseId]
+  );
+  const visibleAudioPhrases = useMemo(() => {
+    if (!selectedMissingPhrase) return selectedSceneAudioPhrases;
+    const hasSelected = selectedSceneAudioPhrases.some((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhrase.phrase_id || ""));
+    return hasSelected ? selectedSceneAudioPhrases : [selectedMissingPhrase, ...selectedSceneAudioPhrases];
+  }, [selectedMissingPhrase, selectedSceneAudioPhrases]);
   const selectedBoundarySec = selectedSceneEndSec;
   const selectedBoundaryIsInternal = selectedSceneIndex >= 0 && selectedSceneIndex < scenes.length - 1;
   const playheadPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(currentTime || 0) / durationSec) * 100)) : 0;
@@ -530,6 +545,10 @@ export default function ManualTimingEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedScene?.scene_id, scenes.length]);
 
+  useEffect(() => {
+    if (selectedMissingPhraseId && !selectedMissingPhrase) setSelectedMissingPhraseId("");
+  }, [selectedMissingPhraseId, selectedMissingPhrase]);
+
   const onTimeUpdate = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
@@ -701,15 +720,38 @@ export default function ManualTimingEditorPage() {
     return `manual_missing_${String(idx).padStart(3, "0")}`;
   };
 
+  const setMissingPhraseDraftBoundary = (key) => {
+    const activeDuration = durationSecRef.current || durationSec;
+    if (!(activeDuration > 0)) return;
+    const time = roundTimingSec(clampTime(currentTimeRef.current ?? currentTime, activeDuration));
+    setMissingPhraseDraft((prev) => ({ ...(prev || {}), [key]: time }));
+  };
+
+  const resetMissingPhraseDraft = () => {
+    setMissingPhraseDraft({ start_sec: null, end_sec: null });
+  };
+
   const onAddMissingPhrase = () => {
     const activeDuration = durationSecRef.current || durationSec;
     if (!(activeDuration > 0)) return;
-    const start = roundTimingSec(clampTime(currentTimeRef.current ?? currentTime, activeDuration));
-    const selectedEnd = selectedScene ? Number(selectedScene.end_sec || 0) : 0;
-    const rawEnd = selectedEnd > start + 0.05 ? Math.min(start + 3, selectedEnd) : start + 3;
-    const end = roundTimingSec(clampTime(rawEnd, activeDuration));
+    if (!hasTimingDraftValue(missingPhraseDraft.start_sec)) {
+      setCopyStatus("Сначала нажмите “Начало из курсора” для пропущенной фразы");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+    if (!hasTimingDraftValue(missingPhraseDraft.end_sec)) {
+      setCopyStatus("Поставьте конец пропущенной фразы: кнопка “Конец из курсора”");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+
+    const draftStart = Number(missingPhraseDraft.start_sec);
+    const draftEnd = Number(missingPhraseDraft.end_sec);
+
+    const start = roundTimingSec(clampTime(Math.min(draftStart, draftEnd), activeDuration));
+    const end = roundTimingSec(clampTime(Math.max(draftStart, draftEnd), activeDuration));
     if (!(end > start + 0.02)) {
-      setCopyStatus("Не удалось создать фразу: курсор слишком близко к концу аудио");
+      setCopyStatus("Диапазон пропущенной фразы слишком короткий");
       window.setTimeout(() => setCopyStatus(""), 1800);
       return;
     }
@@ -731,17 +773,62 @@ export default function ManualTimingEditorPage() {
       audio_phrases: normalizeManualTimingAudioPhrases([...audioPhrases, nextPhrase]),
       timing_status: project.timing_status === "empty" ? "draft" : project.timing_status,
     });
+    setSelectedMissingPhraseId(nextPhrase.phrase_id);
+    resetMissingPhraseDraft();
     setCopyStatus(`Добавлена пропущенная фраза ${nextPhrase.phrase_id}: ${nextPhrase.start_sec.toFixed(2)}–${nextPhrase.end_sec.toFixed(2)}`);
     window.setTimeout(() => setCopyStatus(""), 2000);
+  };
+
+  const updateAudioPhraseById = (phraseId, patch = {}) => {
+    const phrases = normalizeManualTimingAudioPhrases(project.audio_phrases);
+    const fallbackDuration = Math.max(durationSecRef.current || 0, durationSec || 0, ...phrases.map((phrase) => Number(phrase.end_sec || 0)));
+    const activeDuration = fallbackDuration > 0 ? fallbackDuration : 0;
+    const nextPhrases = phrases.map((phrase) => {
+      if (String(phrase.phrase_id || "") !== String(phraseId || "")) return phrase;
+      const nextStart = Object.prototype.hasOwnProperty.call(patch, "start_sec")
+        ? roundTimingSec(clampTime(patch.start_sec, activeDuration))
+        : phrase.start_sec;
+      const nextEnd = Object.prototype.hasOwnProperty.call(patch, "end_sec")
+        ? roundTimingSec(clampTime(patch.end_sec, activeDuration))
+        : phrase.end_sec;
+      return normalizeManualTimingAudioPhrases([{ ...phrase, ...patch, start_sec: Math.min(nextStart, nextEnd), end_sec: Math.max(nextStart, nextEnd) }])[0] || phrase;
+    });
+
+    persist({
+      ...project,
+      audio_phrases: nextPhrases,
+    });
+    setSelectedMissingPhraseId(String(phraseId || ""));
+  };
+
+  const updateAudioPhraseBoundaryFromCursor = (phraseId, key) => {
+    const activeDuration = durationSecRef.current || durationSec;
+    if (!(activeDuration > 0)) return;
+    const time = roundTimingSec(clampTime(currentTimeRef.current ?? currentTime, activeDuration));
+    updateAudioPhraseById(phraseId, { [key]: time });
+  };
+
+  const nudgeAudioPhraseBoundary = (phraseId, key, delta) => {
+    const phrase = audioPhrases.find((item) => String(item.phrase_id || "") === String(phraseId || ""));
+    if (!phrase) return;
+    updateAudioPhraseById(phraseId, { [key]: roundTimingSec(Number(phrase[key] || 0) + Number(delta || 0)) });
+  };
+
+  const selectMissingPhrase = (phrase) => {
+    if (!phrase) return;
+    setSelectedMissingPhraseId(String(phrase.phrase_id || ""));
+    setAudioTime(phrase.start_sec, { pause: true, clearBound: true });
   };
 
   const onDeleteLastMissingPhrase = () => {
     const phrases = normalizeManualTimingAudioPhrases(project.audio_phrases);
     if (!phrases.length) return;
+    const deletedPhraseId = phrases[phrases.length - 1]?.phrase_id || "";
     persist({
       ...project,
       audio_phrases: phrases.slice(0, -1),
     });
+    if (String(selectedMissingPhraseId || "") === String(deletedPhraseId || "")) setSelectedMissingPhraseId("");
   };
 
   const onDeleteMissingPhrase = (phraseId) => {
@@ -752,6 +839,7 @@ export default function ManualTimingEditorPage() {
       ...project,
       audio_phrases: nextPhrases,
     });
+    if (String(selectedMissingPhraseId || "") === String(phraseId || "")) setSelectedMissingPhraseId("");
   };
 
   const onDeleteLastCut = () => {
@@ -1146,7 +1234,7 @@ export default function ManualTimingEditorPage() {
               type="button"
               className="manualTimingMissingPhraseMarker"
               style={{ left: phrase.left, width: phrase.width }}
-              onClick={(event) => { event.stopPropagation(); setAudioTime(phrase.start_sec, { pause: true, clearBound: true }); }}
+              onClick={(event) => { event.stopPropagation(); selectMissingPhrase(phrase); }}
               title={`Пропущенная фраза, нужно распознать: ${phrase.phrase_id} ${formatTimingSec(phrase.start_sec)}–${formatTimingSec(phrase.end_sec)}${phrase.timing_scene_id ? ` · по таймингу внутри ${phrase.timing_scene_id}` : ""}`}
             />)}
             {markerPercents.map((marker) => <div key={`player-marker-${marker.value}`} className="manualTimingPlayerMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
@@ -1211,12 +1299,31 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnSecondary" onClick={useCurrentTimeForJump} disabled={!audio.url || !(durationSec > 0)}>из курсора</button>
           </div>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
-          <button className="clipSB_btn clipSB_btnSecondary manualTimingMissingPhraseButton" onClick={onAddMissingPhrase} disabled={!audio.url || !(durationSec > 0)}>+ пропущенная фраза</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={!scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson}>Скопировать JSON</button>
           <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
+        </div>
+
+        <div className="manualTimingMissingPhraseDraftPanel">
+          <div className="manualTimingMissingPhraseDraftHeader">
+            <strong>Разметка пропущенной фразы</strong>
+            <span>отдельная audio_phrase, не разрезает сцены</span>
+          </div>
+          <div className="manualTimingMissingPhraseDraftHint">
+            Для пропущенной фразы НЕ нажимай “Поставить разрез”. Используй метку пропущенной фразы — она не меняет сцены.
+          </div>
+          <div className="manualTimingMissingPhraseDraftValues">
+            <span>Начало: <b>{hasTimingDraftValue(missingPhraseDraft.start_sec) ? formatTimingSec(missingPhraseDraft.start_sec) : "—"}</b></span>
+            <span>Конец: <b>{hasTimingDraftValue(missingPhraseDraft.end_sec) ? formatTimingSec(missingPhraseDraft.end_sec) : "—"}</b></span>
+          </div>
+          <div className="manualTimingMissingPhraseDraftActions">
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("start_sec")} disabled={!audio.url || !(durationSec > 0)}>Начало из курсора</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("end_sec")} disabled={!audio.url || !(durationSec > 0)}>Конец из курсора</button>
+            <button className="clipSB_btn clipSB_btnSecondary manualTimingMissingPhraseButton" type="button" onClick={onAddMissingPhrase} disabled={!audio.url || !(durationSec > 0)}>Создать метку</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={resetMissingPhraseDraft} disabled={!hasTimingDraftValue(missingPhraseDraft.start_sec) && !hasTimingDraftValue(missingPhraseDraft.end_sec)}>Сбросить диапазон</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
+          </div>
         </div>
 
         <div className="manualTimingNudgePanel">
@@ -1261,13 +1368,14 @@ export default function ManualTimingEditorPage() {
           <div className="manualTimingAudioPhrasesPanel">
             <div className="manualTimingAudioPhrasesHeader">
               <strong>Фразы аудио / пропущенные фразы</strong>
-              <span>{selectedSceneAudioPhrases.length ? `${selectedSceneAudioPhrases.length} в диапазоне сцены` : "нет фраз в диапазоне"}</span>
+              <span>{selectedSceneAudioPhrases.length ? `${selectedSceneAudioPhrases.length} в диапазоне сцены` : "нет фраз в диапазоне"}{selectedMissingPhrase && !selectedSceneAudioPhrases.some((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhrase.phrase_id || "")) ? " · показана выбранная метка" : ""}</span>
             </div>
-            {selectedSceneAudioPhrases.length ? <div className="manualTimingAudioPhrasesList">
-              {selectedSceneAudioPhrases.map((phrase) => {
+            {visibleAudioPhrases.length ? <div className="manualTimingAudioPhrasesList">
+              {visibleAudioPhrases.map((phrase) => {
                 const isNeedsTranscription = String(phrase.status || "") === "needs_transcription";
                 const timingSceneId = getTimingSceneIdForAudioPhrase(phrase, scenes);
-                return <div key={phrase.phrase_id} className={`manualTimingAudioPhraseCard ${isNeedsTranscription ? "needsTranscription" : ""}`}>
+                const isSelectedPhrase = String(selectedMissingPhraseId || "") === String(phrase.phrase_id || "");
+                return <div key={phrase.phrase_id} className={`manualTimingAudioPhraseCard ${isNeedsTranscription ? "needsTranscription" : ""} ${isSelectedPhrase ? "isSelected" : ""}`}>
                   <div className="manualTimingAudioPhraseTop">
                     <strong>{phrase.phrase_id}</strong>
                     <span>{phrase.start_sec.toFixed(2)} – {phrase.end_sec.toFixed(2)} сек</span>
@@ -1284,7 +1392,13 @@ export default function ManualTimingEditorPage() {
                     <div><span>note_ru</span><p>{String(phrase.note_ru || "").trim() || "—"}</p></div>
                   </div>
                   <div className="manualTimingAudioPhraseActions">
-                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => playRange(phrase.start_sec, phrase.end_sec)} disabled={!audio.url}>▶ фраза</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => { setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }} disabled={!audio.url}>▶ фраза</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => updateAudioPhraseBoundaryFromCursor(phrase.phrase_id, "start_sec")} disabled={!audio.url || !(durationSec > 0)}>Начало = курсор</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => updateAudioPhraseBoundaryFromCursor(phrase.phrase_id, "end_sec")} disabled={!audio.url || !(durationSec > 0)}>Конец = курсор</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => nudgeAudioPhraseBoundary(phrase.phrase_id, "start_sec", -0.05)}>start -0.05</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => nudgeAudioPhraseBoundary(phrase.phrase_id, "start_sec", 0.05)}>start +0.05</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => nudgeAudioPhraseBoundary(phrase.phrase_id, "end_sec", -0.05)}>end -0.05</button>
+                    <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => nudgeAudioPhraseBoundary(phrase.phrase_id, "end_sec", 0.05)}>end +0.05</button>
                     <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onDeleteMissingPhrase(phrase.phrase_id)}>Удалить эту фразу</button>
                     <span className="manualTimingAudioPhraseAssignmentHint">Назначение решит ChatGPT после экспорта JSON</span>
                   </div>
@@ -1387,7 +1501,7 @@ export default function ManualTimingEditorPage() {
             type="button"
             className="manualTimingMissingPhraseMarker isCompact"
             style={{ left: phrase.left, width: phrase.width }}
-            onClick={(event) => { event.stopPropagation(); setAudioTime(phrase.start_sec, { pause: true, clearBound: true }); }}
+            onClick={(event) => { event.stopPropagation(); selectMissingPhrase(phrase); }}
             title={`Пропущенная фраза, нужно распознать: ${phrase.phrase_id} ${formatTimingSec(phrase.start_sec)}–${formatTimingSec(phrase.end_sec)}${phrase.timing_scene_id ? ` · по таймингу внутри ${phrase.timing_scene_id}` : ""}`}
           />)}
           {markerPercents.map((marker) => <div key={marker.value} className="manualTimingMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
