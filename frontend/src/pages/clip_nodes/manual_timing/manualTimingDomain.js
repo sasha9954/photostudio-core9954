@@ -996,7 +996,14 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
   };
 }
 
-export const MANUAL_TIMING_STORY_PASS_TASK_RU = "Это JSON после ASR + gap-aware scene builder. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids. Нужно только пересобрать story_blocks по смыслу и заполнить перевод/смысловые поля сцен. video_prompt, negative_prompt, sound_prompt оставить пустыми. Если LLM считает, что scenes нужно объединить или разделить, он НЕ должен делать это сам. Он должен заполнить поле user_note_ru с предложением, а тайминги оставить без изменений.";
+export const MANUAL_TIMING_STORY_PASS_TASK_RU = `STORY PASS / РЕЖИССЁРСКАЯ СБОРКА ИСТОРИИ.
+Это НЕ простой перевод. Нужно понять историю целиком, пересобрать story_blocks по смысловым событиям и драматургии, сохранить причинно-следственный порядок, развитие напряжения и финальный смысл. Блоки не должны быть механически по 3–4 сцены: каждый блок должен быть законченным этапом истории.
+
+Это JSON после ASR + gap-aware scene builder. Не меняй audio_phrases, timings/start_sec/end_sec, speech_start_sec, speech_end_sec, scene_id и source_phrase_ids. Тайминги, scene_id, source_phrase_ids и audio_phrases нельзя менять ни при каких условиях.
+
+Для каждой сцены заполни translated_text_ru, meaning_hint_ru, scene_role_in_block_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru и block_progress_ru: перевод, смысл, роль в блоке, цель сцены, подсказку для фото и подсказку для будущего i2v. video_prompt, negative_prompt, sound_prompt оставить пустыми.
+
+Ошибки ASR исправляй по смыслу в translated_text_ru / meaning_hint_ru и отмечай исправления в user_note_ru. Если кажется, что scenes нужно объединить или разделить, НЕ делай это сам: заполни user_note_ru с предложением, а тайминги и идентификаторы оставь без изменений.`;
 
 export function buildManualTimingStoryPassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
@@ -1038,7 +1045,9 @@ function isManualTimingStoryPassPayload(raw = {}) {
   const task = typeof raw?.chatgpt_task === "string"
     ? raw.chatgpt_task
     : JSON.stringify(raw?.chatgpt_task || "");
-  return splitType === "asr_gap_aware_story_pass" || task.includes("после ASR + gap-aware scene builder");
+  return splitType === "asr_gap_aware_story_pass"
+    || task.includes("после ASR + gap-aware scene builder")
+    || task.includes("РЕЖИССЁРСКАЯ СБОРКА ИСТОРИИ");
 }
 
 export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) {
