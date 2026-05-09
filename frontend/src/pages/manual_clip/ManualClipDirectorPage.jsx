@@ -4,6 +4,7 @@ import { fetchJson } from "../../services/api.js";
 import { buildStoryPrepTemplateText, STORY_PREP_TEMPLATE_META } from "../clip_nodes/manual/manualClipBoardDomain";
 import {
   buildManualProjectBackupJson,
+  canUseLegacyManualProjectStorage,
   getAccountScopedStorageKey,
   getManualClipBoardProjectStorageKey,
   unwrapManualProjectBackupJson,
@@ -31,17 +32,25 @@ function readJsonStorage(key) {
 }
 
 function readManualActiveProject() {
-  const active = readJsonStorage(getAccountScopedStorageKey(STORAGE_KEY)) || readJsonStorage(STORAGE_KEY);
+  const active = readJsonStorage(getAccountScopedStorageKey(STORAGE_KEY));
   if (active) return active;
-  const activeNodeId = String(
-    localStorage.getItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY))
-    || localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY)
-    || ""
-  ).trim();
-  if (activeNodeId) {
-    return readJsonStorage(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(activeNodeId)))
-      || readJsonStorage(getManualClipBoardProjectStorageKey(activeNodeId));
+
+  const scopedActiveNodeId = String(localStorage.getItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY)) || "").trim();
+  if (scopedActiveNodeId) {
+    const scopedNodeProject = readJsonStorage(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(scopedActiveNodeId)));
+    if (scopedNodeProject) return scopedNodeProject;
   }
+
+  if (canUseLegacyManualProjectStorage()) {
+    const legacyActive = readJsonStorage(STORAGE_KEY);
+    if (legacyActive) return legacyActive;
+    const legacyActiveNodeId = String(localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY) || "").trim();
+    if (legacyActiveNodeId) {
+      const legacyNodeProject = readJsonStorage(getManualClipBoardProjectStorageKey(legacyActiveNodeId));
+      if (legacyNodeProject) return legacyNodeProject;
+    }
+  }
+
   return null;
 }
 
@@ -50,13 +59,17 @@ function persistManualProject(nextProject = {}) {
   try {
     const serialized = JSON.stringify(safeProject);
     localStorage.setItem(getAccountScopedStorageKey(STORAGE_KEY), serialized);
-    localStorage.setItem(STORAGE_KEY, serialized);
     const nodeId = String(safeProject?.nodeId || "").trim();
     if (nodeId) {
       localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY), nodeId);
-      localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
       localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
-      localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
+    }
+    if (canUseLegacyManualProjectStorage()) {
+      localStorage.setItem(STORAGE_KEY, serialized);
+      if (nodeId) {
+        localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
+        localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
+      }
     }
   } catch {}
 }

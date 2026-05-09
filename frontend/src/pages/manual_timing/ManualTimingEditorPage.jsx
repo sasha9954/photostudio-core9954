@@ -353,10 +353,8 @@ function sceneHasCompleteClipPassFields(scene = {}) {
 }
 
 function sceneHasCompletePodcastPassFields(scene = {}) {
-  const hasRequired = ["topic_block_id", "scene_type", "scene_goal_ru", "photo_prompt_hint_ru", "prompt_hint_ru"].every((key) => String(scene?.[key] || "").trim());
-  if (!hasRequired) return false;
-  if (String(scene?.route || "") !== "i2v_text") return true;
-  return Boolean(String(scene?.narrator_text_en || scene?.narrator_text_ru || scene?.speaker_text_en || scene?.speaker_text_ru || "").trim());
+  return ["topic_block_id", "scene_type", "scene_goal_ru", "photo_prompt_hint_ru", "prompt_hint_ru"]
+    .every((key) => String(scene?.[key] || "").trim());
 }
 
 function hasNonEmptyArray(value = []) {
