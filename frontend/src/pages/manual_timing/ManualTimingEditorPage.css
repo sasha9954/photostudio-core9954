@@ -303,6 +303,13 @@
   align-items: center;
 }
 
+.manualTimingCutHint {
+  max-width: 360px;
+  color: rgba(255, 232, 170, 0.88);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .manualTimingCompactActions .clipSB_btn,
 .manualTimingNudgeButtons .clipSB_btn,
 .manualTimingRowActions .clipSB_btn {
@@ -395,9 +402,30 @@
   flex-wrap: wrap;
 }
 
+.manualTimingNudgeGuidance {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(120, 255, 220, 0.08);
+  border: 1px solid rgba(120, 255, 220, 0.18);
+  color: #dffef7;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .manualTimingNudgeHint {
   color: rgba(210, 225, 255, 0.72);
   font-size: 11px;
+  line-height: 1.4;
+}
+
+.manualTimingSceneTextHint {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(106, 169, 255, 0.08);
+  border: 1px solid rgba(106, 169, 255, 0.16);
+  color: rgba(226, 238, 255, 0.9);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .manualTimingCopyStatus {
