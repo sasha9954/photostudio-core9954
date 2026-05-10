@@ -581,6 +581,35 @@ class ClipVideoIn(BaseModel):
     generated_audio_gain_db: int | float | None = None
 
 
+
+
+def _clip_video_payload_signature(payload: ClipVideoIn, *, resolved_workflow_key: str = "") -> str:
+    import hashlib
+
+    payload_gain = _safe_float(getattr(payload, "generatedAudioGainDb", None))
+    fallback_gain = _safe_float(getattr(payload, "generated_audio_gain_db", None))
+    data = {
+        "sceneId": str(payload.sceneId or ""),
+        "provider": str(payload.provider or ""),
+        "resolvedWorkflowKey": str(resolved_workflow_key or payload.resolvedWorkflowKey or payload.ltxMode or ""),
+        "imageUrl": str(payload.imageUrl or ""),
+        "startImageUrl": str(payload.startImageUrl or ""),
+        "endImageUrl": str(payload.endImageUrl or ""),
+        "audioSliceUrl": str(payload.audioSliceUrl or ""),
+        "videoPrompt": str(payload.videoPrompt or getattr(payload, "video_prompt", "") or ""),
+        "videoNegativePrompt": str(payload.videoNegativePrompt or payload.video_negative_prompt or ""),
+        "soundPrompt": str(payload.soundPrompt or payload.sound_prompt or ""),
+        "negativeAudioPrompt": str(payload.negativeAudioPrompt or payload.negative_audio_prompt or ""),
+        "requestedDurationSec": float(_safe_positive_float(payload.requestedDurationSec) or 0),
+        "targetDurationSec": float(_safe_positive_float(payload.targetDurationSec) or 0),
+        "keepGeneratedAudio": bool(payload.keepGeneratedAudio or payload.keep_generated_audio),
+        "generatedAudioPolicy": str(payload.generatedAudioPolicy or payload.generated_audio_policy or ""),
+        "generatedAudioGainDb": float(payload_gain if payload_gain is not None else (fallback_gain if fallback_gain is not None else -16)),
+    }
+    raw = json.dumps(data, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 class AssembleSceneIn(BaseModel):
     sceneId: str | None = None
     videoUrl: str
@@ -3264,22 +3293,22 @@ def _compose_manual_clip_effective_prompt(
             duration_line,
         )
     elif route_kind == "i2v_sound":
-        sound_line = sound_prompt or "natural background sound that matches the visible action and space"
+        sound_line = sound_prompt or "raw diegetic location audio matching the visible environment only"
         boost = (
             ""
             "Use the uploaded image as the exact first frame and identity anchor. Keep one simple readable action for the whole shot. "
-            "Generate realistic grounded motion and matching diegetic scene audio. The sound must feel like background/atmosphere under the master music, not a loud separate track. "
+            "Generate realistic grounded motion and diegetic location audio only. The audio must sound like real sounds physically present in the visible location. "
+            "Do not create non-diegetic soundtrack, musical bed, score, melody, instruments, rhythm, vocals, narrator, speech or human voice. "
+            "If the requested sound is nature ambience, keep only wind, grass, insects, birds, water, mud, dust and distant animal movement. No background music layer. "
             f"Sound design instruction: {sound_line}. "
             f"Target generated-scene-audio mix level: {float(generated_audio_gain_db):.1f} dB under the master track. "
             "Preserve the same face, outfit, location, lighting, and realism. Keep the camera stable; no orbit, no roll, no spinning."
         )
         prompt_builder_mode = "manual_clip_ltx_i2v_sound_compact"
         duration_line = f"Target duration is about {seconds:.2f} seconds. Keep motion continuous and readable for the full shot."
-        sound_prompt_block = sound_prompt if sound_prompt else ""
         effective_prompt = _join_prompt_parts(
             base_prompt,
             transition_prompt,
-            sound_prompt_block,
             boost,
             duration_line,
         )
@@ -17324,6 +17353,13 @@ def _clip_video_queue_worker_loop():
             now_ts = time.time()
             with CLIP_VIDEO_JOBS_LOCK:
                 job = CLIP_VIDEO_JOBS.get(job_id) or {}
+                current_status = str(job.get("status") or "").lower()
+                if current_status in {"superseded", "cancelled"}:
+                    print(
+                        "[CLIP VIDEO JOB WORKER] "
+                        f"skip jobId={job_id} status={current_status} requestSignature={str(job.get('requestSignature') or '')[:12]}"
+                    )
+                    continue
                 job.update({
                     "status": "running",
                     "queueStatus": "running",
@@ -17437,6 +17473,7 @@ def clip_video_start(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
     provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
+    request_signature = _clip_video_payload_signature(payload, resolved_workflow_key=resolved_workflow_hint)
     resolved_duration_sec, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
     with CLIP_VIDEO_JOBS_LOCK:
         for existing_job_id, existing_job in reversed(list(CLIP_VIDEO_JOBS.items())):
@@ -17448,28 +17485,51 @@ def clip_video_start(payload: ClipVideoIn):
             requested_workflow = _normalize_ltx_workflow_key(str(resolved_workflow_hint or ""))
             if existing_workflow and requested_workflow and existing_workflow != requested_workflow:
                 continue
-            if str(existing_job.get("status") or "").lower() not in {"queued", "running"}:
+            existing_status = str(existing_job.get("status") or "").lower()
+            if existing_status not in {"queued", "running"}:
                 continue
+            existing_signature = str(existing_job.get("requestSignature") or "")
+            same_signature = bool(existing_signature and existing_signature == request_signature)
+            if same_signature:
+                print(
+                    "[CLIP VIDEO JOB DEDUPE] "
+                    f"sceneId={scene_id} existingJobId={existing_job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} "
+                    f"requestSignature={request_signature[:12]} sameSignature=True"
+                )
+                return {
+                    "ok": True,
+                    "jobId": existing_job_id,
+                    "job_id": existing_job_id,
+                    "id": existing_job_id,
+                    "sceneId": scene_id,
+                    "status": str(existing_job.get("status") or "queued"),
+                    "queueStatus": str(existing_job.get("queueStatus") or existing_job.get("status") or "queued"),
+                    "queuePosition": existing_job.get("queuePosition"),
+                    "providerJobId": existing_job.get("providerJobId"),
+                    "comfyPromptId": existing_job.get("comfyPromptId") or existing_job.get("providerJobId"),
+                    "resolvedWorkflowKey": resolved_workflow_hint,
+                    "statusEndpoint": f"/api/clip/video/status/{existing_job_id}",
+                    "jobStored": True,
+                    "requestSignature": request_signature,
+                    "deduplicated": True,
+                    "sameSignature": True,
+                    "payloadSoundPromptPreview": str(existing_job.get("payloadSoundPromptPreview") or existing_job.get("soundPromptPreview") or ""),
+                    "payloadNegativeAudioPromptPreview": str(existing_job.get("payloadNegativeAudioPromptPreview") or existing_job.get("negativeAudioPromptPreview") or ""),
+                }
+
             print(
-                "[CLIP VIDEO JOB DEDUPE] "
-                f"sceneId={scene_id} existingJobId={existing_job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
+                "[CLIP VIDEO JOB SIGNATURE MISMATCH] "
+                f"sceneId={scene_id} existingJobId={existing_job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} "
+                f"oldRequestSignature={(existing_signature or 'missing')[:12]} newRequestSignature={request_signature[:12]} status={existing_status}"
             )
-            return {
-                "ok": True,
-                "jobId": existing_job_id,
-                "job_id": existing_job_id,
-                "id": existing_job_id,
-                "sceneId": scene_id,
-                "status": str(existing_job.get("status") or "queued"),
-                "queueStatus": str(existing_job.get("queueStatus") or existing_job.get("status") or "queued"),
-                "queuePosition": existing_job.get("queuePosition"),
-                "providerJobId": existing_job.get("providerJobId"),
-                "comfyPromptId": existing_job.get("comfyPromptId") or existing_job.get("providerJobId"),
-                "resolvedWorkflowKey": resolved_workflow_hint,
-                "statusEndpoint": f"/api/clip/video/status/{existing_job_id}",
-                "jobStored": True,
-                "deduplicated": True,
-            }
+            if existing_status == "queued":
+                existing_job.update({
+                    "status": "superseded",
+                    "queueStatus": "superseded",
+                    "supersededBy": "pending_new_job",
+                    "updatedAt": time.time(),
+                })
+                CLIP_VIDEO_JOBS[existing_job_id] = existing_job
 
     job_id = uuid4().hex
     queued_at = time.time()
@@ -17530,6 +17590,10 @@ def clip_video_start(payload: ClipVideoIn):
             "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
             "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
             "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
+            "requestSignature": request_signature,
+            "payloadPromptPreview": str(getattr(payload, "videoPrompt", None) or getattr(payload, "video_prompt", "") or "")[:300],
+            "payloadSoundPromptPreview": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300],
+            "payloadNegativeAudioPromptPreview": str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300],
             "soundPromptPreview": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300],
             "negativeAudioPromptPreview": str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300],
             "updatedAt": queued_at,
@@ -17539,12 +17603,12 @@ def clip_video_start(payload: ClipVideoIn):
 
     print(
         "[CLIP VIDEO JOB] "
-        f"created sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
+        f"created sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} requestSignature={request_signature[:12]}"
     )
 
     print(
         "[CLIP VIDEO JOB] "
-        f"queued sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} queuePosition={queue_position}"
+        f"queued sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} queuePosition={queue_position} requestSignature={request_signature[:12]}"
     )
     CLIP_VIDEO_QUEUE.put({"job_id": job_id, "payload": payload})
     ensure_clip_video_queue_worker_started()
@@ -17562,6 +17626,11 @@ def clip_video_start(payload: ClipVideoIn):
         "resolvedWorkflowKey": resolved_workflow_hint,
         "statusEndpoint": f"/api/clip/video/status/{job_id}",
         "jobStored": bool(job_stored),
+        "requestSignature": request_signature,
+        "deduplicated": False,
+        "sameSignature": False,
+        "payloadSoundPromptPreview": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300],
+        "payloadNegativeAudioPromptPreview": str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300],
     }
 
 

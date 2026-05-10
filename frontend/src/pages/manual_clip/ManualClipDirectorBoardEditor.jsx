@@ -1447,7 +1447,15 @@ export default function ManualClipDirectorBoardEditor({
     const routePayload = resolveManualVideoRoutePayload(scene);
     const sceneTextPreview = scene.route === "i2v_text" ? resolveI2vTextSceneText(scene) : "";
     const requestedDurationSec = Number(scene.duration_sec || scene.audio_slice_duration_sec || 5);
-    updateScene(scene.scene_id, { status: "video_queued", video_error: "", error: "", video_job_id: "" });
+    updateScene(scene.scene_id, {
+      status: "video_queued",
+      video_error: "",
+      error: "",
+      video_job_id: "",
+      video_url: "",
+      video_has_audio: false,
+      video_request_payload_preview: null,
+    });
     try {
       const payload = {
         sceneId: scene.scene_id,
@@ -1500,8 +1508,12 @@ export default function ManualClipDirectorBoardEditor({
           keepGeneratedAudio: Boolean(payload.keepGeneratedAudio),
           generatedAudioPolicy: payload.generatedAudioPolicy,
           generatedAudioGainDb: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
-          soundPromptPreview: String(payload.soundPrompt || "").slice(0, 180),
-          negativeAudioPromptPreview: String(payload.negativeAudioPrompt || payload.negative_audio_prompt || "").slice(0, 180),
+          jobId,
+          requestSignature: String(out?.requestSignature || ""),
+          deduplicated: Boolean(out?.deduplicated),
+          queueStatus: String(out?.queueStatus || out?.status || ""),
+          soundPromptPreview: String(out?.payloadSoundPromptPreview || payload.soundPrompt || "").slice(0, 180),
+          negativeAudioPromptPreview: String(out?.payloadNegativeAudioPromptPreview || payload.negativeAudioPrompt || payload.negative_audio_prompt || "").slice(0, 180),
           sceneTextPreview: String(sceneTextPreview || "").slice(0, 180),
           narratorTextPreview: String(payload.narratorText || "").slice(0, 180),
           speakerTextPreview: String(payload.speakerText || "").slice(0, 180),
