@@ -243,8 +243,6 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onOpenEditor = () => {
-    const activeProject = readActiveManualClipBoardProject();
-    if (hasMeaningfulManualProject(activeProject)) setStoredActiveBoardProject(activeProject);
     persistProject();
     navigate("/studio/manual-timing");
   };
@@ -254,6 +252,10 @@ export default function ManualTimingNode({ id, data }) {
     const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject]) || storedProject || model.director_board;
     if (hasMeaningfulManualProject(activeProject)) {
       setStoredActiveBoardProject(activeProject);
+      if (typeof data?.onOpenDirectorBoard === "function") {
+        data.onOpenDirectorBoard(id);
+        return;
+      }
       navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`);
       return;
     }

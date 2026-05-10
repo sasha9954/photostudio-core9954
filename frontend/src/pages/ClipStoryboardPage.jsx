@@ -32,10 +32,12 @@ import {
 import VideoRefNode from "./clip_nodes/VideoRefNode";
 import ManualClipBoardNode from "./clip_nodes/manual/ManualClipBoardNode";
 import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
+import ManualClipDirectorBoardEditor from "./manual_clip/ManualClipDirectorBoardEditor.jsx";
 import {
   readActiveManualClipBoardProject,
   hasMeaningfulManualProject,
   pickBestManualClipBoardProject,
+  persistManualClipBoardProject,
   scoreManualClipBoardProject,
 } from "./clip_nodes/manualProjectBackup.js";
 import {
@@ -10849,6 +10851,21 @@ export default function ClipStoryboardPage() {
   const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
   const [activeManualBoardProject, setActiveManualBoardProject] = useState(() => readActiveManualClipBoardProject());
+  const [manualDirectorEditor, setManualDirectorEditor] = useState({
+    open: false,
+    sourceNodeId: "",
+  });
+
+  const openManualTimingDirectorBoard = useCallback((sourceNodeId) => {
+    setManualDirectorEditor({
+      open: true,
+      sourceNodeId: String(sourceNodeId || ""),
+    });
+  }, []);
+
+  const closeManualTimingDirectorBoard = useCallback(() => {
+    setManualDirectorEditor({ open: false, sourceNodeId: "" });
+  }, []);
 
   useEffect(() => {
     const refresh = () => setActiveManualBoardProject(readActiveManualClipBoardProject());
@@ -24841,6 +24858,7 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
                 traceReason: "manual-timing:patch",
               }));
             },
+            onOpenDirectorBoard: (nodeId) => openManualTimingDirectorBoard(nodeId),
             onPatchDirectorBoard: (nodeId, boardPatchOrProject) => {
               setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                 if (nodeItem.id !== nodeId || nodeItem.type !== "manualTiming") return nodeItem;
@@ -25060,6 +25078,7 @@ return base;
       buildComfyStoryboardPatch,
       clearClipStoryboardStorageForCurrentAccount,
       stopScenarioVideoPolling,
+      openManualTimingDirectorBoard,
       onOpenScenarioStoryboard,
       onOpenScenarioPipelineDebug,
       accountKey,
@@ -25099,6 +25118,66 @@ return base;
     window.addEventListener("manual-director-board:update", onManualDirectorBoardUpdate);
     return () => window.removeEventListener("manual-director-board:update", onManualDirectorBoardUpdate);
   }, [bindHandlers, setNodes]);
+
+  const manualDirectorSourceNode = useMemo(() => (
+    nodes.find((node) => node.id === manualDirectorEditor.sourceNodeId && node.type === "manualTiming") || null
+  ), [nodes, manualDirectorEditor.sourceNodeId]);
+
+  const manualDirectorBoardProject = useMemo(() => {
+    const nodeBoard = manualDirectorSourceNode?.data?.director_board;
+    const activeBoard = readActiveManualClipBoardProject();
+    const best = pickBestManualClipBoardProject([nodeBoard, activeBoard]);
+
+    if (hasMeaningfulManualProject(best)) return best;
+
+    const sourceData = manualDirectorSourceNode?.data || {};
+    return {
+      source: "manual_timing_node",
+      ownerNodeType: "manualTiming",
+      nodeId: manualDirectorEditor.sourceNodeId,
+      sourceNodeId: manualDirectorEditor.sourceNodeId,
+      format: sourceData.format || "9:16",
+      audio: sourceData.audio || sourceData.connectedAudio || {},
+      audio_phrases: sourceData.audio_phrases || [],
+      story_blocks: sourceData.story_blocks || [],
+      scenes: sourceData.scenes || [],
+      selectedSceneId: sourceData.selectedSceneId || sourceData.scenes?.[0]?.scene_id || "",
+      updatedAt: Date.now(),
+    };
+  }, [manualDirectorSourceNode, manualDirectorEditor.sourceNodeId]);
+
+  const patchManualTimingDirectorBoard = useCallback((sourceNodeId, nextProject, reason = "manual_director_update") => {
+    const safeSourceNodeId = String(sourceNodeId || "").trim();
+    if (!safeSourceNodeId || !nextProject) return;
+
+    const safeProject = {
+      ...nextProject,
+      source: "manual_timing_node",
+      ownerNodeType: "manualTiming",
+      nodeId: safeSourceNodeId,
+      sourceNodeId: safeSourceNodeId,
+      updatedAt: Date.now(),
+      lastPersistReason: reason,
+    };
+
+    setActiveManualBoardProject(safeProject);
+    persistManualClipBoardProject(safeProject, { reason });
+
+    setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+      if (nodeItem.id !== safeSourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
+      return {
+        ...nodeItem,
+        data: {
+          ...nodeItem.data,
+          director_board: safeProject,
+        },
+      };
+    }), {
+      nodesNow: prev,
+      edgesNow: edgesRef.current || [],
+      traceReason: "manual-timing:embedded-director-board-update",
+    }));
+  }, [setNodes, bindHandlers]);
 
   const bindHandlersRef = useRef(bindHandlers);
   const narrativeSourceRefreshSignatureRef = useRef("");
@@ -26580,6 +26659,17 @@ const hydrate = useCallback((source = "unknown") => {
 
   return (
     <div className="clipSB_root">
+      {manualDirectorEditor.open && manualDirectorSourceNode ? (
+        <div className="clipSB_manualDirectorOverlay">
+          <ManualClipDirectorBoardEditor
+            embedded
+            sourceNodeId={manualDirectorEditor.sourceNodeId}
+            project={manualDirectorBoardProject}
+            onProjectChange={(nextProject, reason) => patchManualTimingDirectorBoard(manualDirectorEditor.sourceNodeId, nextProject, reason)}
+            onClose={closeManualTimingDirectorBoard}
+          />
+        </div>
+      ) : null}
       <div className="clipSB_hud">
         <button className="clipSB_hudBtn" onClick={() => setDrawerOpen(true)}>Ноды</button>
         <button className="clipSB_hudBtn clipSB_hudBtnSecondary" onClick={() => navigate("/studio")}>К студиям</button>
