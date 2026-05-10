@@ -11,11 +11,28 @@
 }
 
 .manualDirectorTopbar {
-  margin-bottom: 10px;
   display: flex;
-  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
   flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.manualDirectorTopbar .clipSB_btn,
+.manualDirectorTopbar .manualUploadBtn {
+  width: auto;
+  min-width: 0;
   flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 13px;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+
+.manualDirectorTopbar .manualDirectorBackupStatus {
+  margin-top: 0;
+  margin-left: 8px;
 }
 
 .manualDirectorGrid {
@@ -701,8 +718,8 @@
 .manualBlockWorkflowActions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  width: min(520px, 100%);
+  gap: 5px;
+  width: min(360px, 100%);
   margin-left: auto;
 }
 
@@ -710,26 +727,28 @@
 .manualBlockWorkflowActions .manualUploadBtn {
   width: 100%;
   min-width: 0;
-  min-height: 34px;
-  padding: 7px 10px;
-  font-size: 13px;
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.15;
   white-space: nowrap;
   justify-content: center;
   box-sizing: border-box;
+  border-radius: 9px;
 }
 
 .manualBlockWorkflowActions .manualBlockPhotoBtn {
   border-color: rgba(96, 165, 250, 0.55);
-  background: rgba(37, 99, 235, 0.16);
+  background: rgba(37, 99, 235, 0.14);
 }
 
 .manualBlockWorkflowActions .manualBlockVideoBtn {
   border-color: rgba(251, 191, 36, 0.58);
-  background: rgba(217, 119, 6, 0.16);
+  background: rgba(217, 119, 6, 0.14);
 }
 
 .manualBlockWorkflowActions .manualBlockImportBtn {
-  opacity: 0.9;
+  opacity: 0.88;
 }
 
 .manualBlockCopyStatus {
@@ -777,19 +796,30 @@
   .manualBlockWorkflowActions {
     width: 100%;
     margin-left: 0;
+    max-width: 360px;
   }
 }
 
 @media (max-width: 720px) {
-  .manualBlockWorkflowActions {
-    width: 100%;
-    margin-left: 0;
+  .manualDirectorTopbar {
+    display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .manualDirectorTopbar .clipSB_btn,
+  .manualDirectorTopbar .manualUploadBtn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .manualBlockWorkflowActions {
+    grid-template-columns: 1fr 1fr;
+    max-width: none;
   }
 
   .manualBlockWorkflowActions .clipSB_btn,
   .manualBlockWorkflowActions .manualUploadBtn {
-    font-size: 12px;
-    padding: 7px 8px;
+    font-size: 11px;
+    padding: 5px 6px;
   }
 }
