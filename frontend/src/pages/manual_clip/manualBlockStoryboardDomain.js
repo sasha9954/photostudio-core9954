@@ -210,6 +210,8 @@ export function buildManualBlockStoryboardContextJson(project = {}, selectedScen
   return {
     split_type: MANUAL_BLOCK_STORYBOARD_SPLIT_TYPE,
     chatgpt_task: CHATGPT_TASK,
+    format: project?.format || "9:16",
+    aspect_ratio: project?.format || "9:16",
     photo_storyboard_canon_ru: PHOTO_STORYBOARD_CANON_RU,
     photo_storyboard_canon_en: PHOTO_STORYBOARD_CANON_EN,
     project_story_bible: pickFields(project, STORY_BIBLE_FIELDS),
@@ -258,6 +260,8 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
   return {
     split_type: MANUAL_BLOCK_VIDEO_PROMPT_SPLIT_TYPE,
     chatgpt_task: VIDEO_CHATGPT_TASK,
+    format: project?.format || "9:16",
+    aspect_ratio: project?.format || "9:16",
     route_rules: {
       i2v: { audio_mode: "none или ambience" },
       i2v_sound: { audio_mode: "ambience" },
