@@ -3651,12 +3651,15 @@ function collectClipWorkspaceRuntimeAssetStats(payload = {}) {
   return stats;
 }
 
-function shouldSkipEmptyWorkspacePersistOverGeneratedAssets(nextPayload = {}, existingPayload = {}) {
+function shouldSkipEmptyWorkspacePersistOverGeneratedAssets(nextPayload = {}, existingPayload = {}, options = {}) {
+  if (options?.allowStoryboardRuntimeClear || options?.explicitReset || options?.allowGeneratedAssetLoss) return false;
   const nextStats = collectClipWorkspaceRuntimeAssetStats(nextPayload);
   const existingStats = collectClipWorkspaceRuntimeAssetStats(existingPayload);
-  return existingStats.generatedAssetCount > 0
-    && nextStats.generatedAssetCount === 0
-    && nextStats.totalScenes === 0;
+  if (existingStats.generatedAssetCount <= 0) return false;
+
+  const lostGeneratedAssets = nextStats.generatedAssetCount < existingStats.generatedAssetCount;
+  const nextHasNoScenes = nextStats.totalScenes === 0;
+  return lostGeneratedAssets || nextHasNoScenes;
 }
 
 function normalizeScenarioRuntimeSnapshot(rawSnapshot, sourceKey = "") {
@@ -11712,7 +11715,7 @@ useEffect(() => {
   const existingSnapshot = readScenarioRuntimeSnapshot();
   const existingAssetCount = Number(existingSnapshot?.diagnostics?.generatedAssetCount || 0);
   const nextAssetCount = Number(snapshot?.diagnostics?.generatedAssetCount || 0);
-  if (existingAssetCount > 0 && nextAssetCount === 0) {
+  if (existingAssetCount > 0 && nextAssetCount < existingAssetCount) {
     console.warn("[SCENARIO RUNTIME] persist skipped to protect generated assets", {
       storyboard_runtime_existing_generated_asset_count: existingAssetCount,
       storyboard_runtime_next_generated_asset_count: nextAssetCount,
