@@ -83,3 +83,35 @@
   font-size: 11px;
   line-height: 1.35;
 }
+
+.manualTimingNode_activeBoard {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(250, 204, 21, 0.36);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(250, 204, 21, 0.14), rgba(15, 23, 42, 0.18));
+  color: #fef3c7;
+}
+
+.manualTimingNode_activeBoardTitle {
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.manualTimingNode_activeBoardMeta {
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.manualTimingNode_activeBoardActions {
+  display: grid;
+  gap: 6px;
+}
+
+.manualTimingNode_activeBoardActions .clipSB_btn {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+}

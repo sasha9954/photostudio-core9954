@@ -120,6 +120,7 @@ export function hasMeaningfulManualProject(project = {}) {
     || String(project.audio?.url || project.audio_metadata?.url || "").trim()
     || compactArray(project.audio_phrases).length
     || compactArray(project.markers).length
+    || compactArray(project.story_blocks).length
     || compactArray(project.scenes).length
   );
 }
@@ -200,6 +201,35 @@ function readActiveProjectPair(activeKey, activeIdKey, projectKeyFactory) {
     } catch {}
   }
   return null;
+}
+
+
+export function readActiveManualClipBoardProject() {
+  return readActiveProjectPair(
+    MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY,
+    MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY,
+    getManualClipBoardProjectStorageKey
+  );
+}
+
+export function persistManualClipBoardProject(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  try {
+    const serialized = JSON.stringify(safeProject);
+    localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
+    const nodeId = String(safeProject?.nodeId || "").trim();
+    if (nodeId) {
+      localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
+      localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
+    }
+    if (canUseLegacyManualProjectStorage()) {
+      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
+      if (nodeId) {
+        localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
+        localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
+      }
+    }
+  } catch {}
 }
 
 export function readAnyActiveManualProject() {
