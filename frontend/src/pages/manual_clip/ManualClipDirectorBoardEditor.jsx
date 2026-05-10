@@ -203,6 +203,8 @@ function resolveManualVideoRoutePayload(scene = {}) {
       generatedAudioGainDb: Number(scene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
       soundPrompt: String(scene.sound_prompt || ""),
       sound_prompt: String(scene.sound_prompt || ""),
+      negativeAudioPrompt: String(scene.negative_audio_prompt || ""),
+      negative_audio_prompt: String(scene.negative_audio_prompt || ""),
     };
   }
 
@@ -222,6 +224,8 @@ function resolveManualVideoRoutePayload(scene = {}) {
       generated_speech_required: true,
       soundPrompt,
       sound_prompt: soundPrompt,
+      negativeAudioPrompt: String(scene.negative_audio_prompt || ""),
+      negative_audio_prompt: String(scene.negative_audio_prompt || ""),
     };
   }
 
@@ -246,6 +250,8 @@ function resolveManualVideoRoutePayload(scene = {}) {
       generatedAudioGainDb: Number(scene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
       soundPrompt: String(scene.sound_prompt || ""),
       sound_prompt: String(scene.sound_prompt || ""),
+      negativeAudioPrompt: String(scene.negative_audio_prompt || ""),
+      negative_audio_prompt: String(scene.negative_audio_prompt || ""),
     };
   }
 
@@ -424,6 +430,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     video_prompt: String(scene.video_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
+    negative_audio_prompt: String(scene.negative_audio_prompt || ""),
     audio_mode: String(scene.audio_mode || ""),
     voice_mode: String(scene.voice_mode || ""),
     voice_preset_id: String(scene.voice_preset_id || ""),
@@ -1415,6 +1422,8 @@ export default function ManualClipDirectorBoardEditor({
         video_negative_prompt: scene.negative_prompt || "",
         soundPrompt: String(routePayload.soundPrompt || scene.sound_prompt || ""),
         sound_prompt: String(routePayload.sound_prompt || scene.sound_prompt || ""),
+        negativeAudioPrompt: String(routePayload.negativeAudioPrompt || scene.negative_audio_prompt || ""),
+        negative_audio_prompt: String(routePayload.negative_audio_prompt || scene.negative_audio_prompt || ""),
         requestedDurationSec,
         targetDurationSec: requestedDurationSec,
         sceneStartSec: Number(scene.start_sec || 0),
@@ -1455,6 +1464,7 @@ export default function ManualClipDirectorBoardEditor({
           generatedAudioPolicy: payload.generatedAudioPolicy,
           generatedAudioGainDb: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
           soundPromptPreview: String(payload.soundPrompt || "").slice(0, 180),
+          negativeAudioPromptPreview: String(payload.negativeAudioPrompt || payload.negative_audio_prompt || "").slice(0, 180),
           sceneTextPreview: String(sceneTextPreview || "").slice(0, 180),
           narratorTextPreview: String(payload.narratorText || "").slice(0, 180),
           speakerTextPreview: String(payload.speakerText || "").slice(0, 180),
@@ -1754,8 +1764,11 @@ export default function ManualClipDirectorBoardEditor({
         {(selectedScene.route === "i2v_sound" || selectedScene.route === "first_last_sound") ? <section className="manualSoundBox">
           <strong>Сценический звук</strong>
           <div className="manualRouteHint">Опишите звук отдельно: скрипка, выстрел, сирена/мигалки, волны, ветер, короткая фраза, шум толпы. Backend добавит это к prompt как sound design, нормализует сценический звук и применит громкость для монтажа.</div>
-          <label className="manualPromptBlock">Sound prompt<textarea value={selectedScene.sound_prompt} placeholder="Например: distant police sirens and flashing emergency lights, low background level under the music" onChange={(e) => {
+          <label className="manualPromptBlock">Sound prompt<textarea value={selectedScene.sound_prompt} placeholder="Например для природы: raw field recording of wind through grass, insects, distant birds and dry leaves" onChange={(e) => {
             updateScene(selectedScene.scene_id, { sound_prompt: e.target.value });
+          }} /></label>
+          <label className="manualPromptBlock">Negative audio prompt<textarea value={selectedScene.negative_audio_prompt} placeholder="music, background music, cinematic score, melody, chords, pads, synth, strings, drums, rhythm, beat, trailer music, emotional soundtrack, orchestral ambience, choir, vocals, speech, narrator, human voice" onChange={(e) => {
+            updateScene(selectedScene.scene_id, { negative_audio_prompt: e.target.value });
           }} /></label>
           <label className="manualGainControl">Громкость в монтаже после нормализации: {Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB).toFixed(0)} dB
             <input type="range" min={I2V_SOUND_GAIN_MIN_DB} max={I2V_SOUND_GAIN_MAX_DB} step="1" value={Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB)} onChange={(e) => {

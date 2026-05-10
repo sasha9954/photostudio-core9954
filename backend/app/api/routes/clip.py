@@ -570,6 +570,8 @@ class ClipVideoIn(BaseModel):
     sendAudioToGenerator: bool | None = None
     soundPrompt: str | None = None
     sound_prompt: str | None = None
+    negativeAudioPrompt: str | None = None
+    negative_audio_prompt: str | None = None
     keepGeneratedAudio: bool | None = None
     keep_generated_audio: bool | None = None
     generatedAudioPolicy: str | None = None
@@ -599,6 +601,8 @@ class AssembleSceneIn(BaseModel):
     generated_audio_gain_db: int | float | None = None
     soundPrompt: str | None = None
     sound_prompt: str | None = None
+    negativeAudioPrompt: str | None = None
+    negative_audio_prompt: str | None = None
     mode: str | None = None
     model: str | None = None
 
@@ -3226,6 +3230,7 @@ def _compose_manual_clip_effective_prompt(
     base_prompt = _sanitize_manual_clip_visible_prompt(video_prompt or "")
     transition_prompt = _sanitize_manual_clip_visible_prompt(transition_action_prompt or "")
     sound_prompt = _sanitize_manual_clip_visible_prompt(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")
+    negative_audio_prompt = _sanitize_manual_clip_visible_prompt(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")
     route_kind = _resolve_manual_clip_route_kind(payload, workflow_key, scene_contract)
     seconds = _safe_positive_float(requested_duration_sec) or 5.0
     generated_audio_gain_db = _safe_float(getattr(payload, "generatedAudioGainDb", None))
@@ -3329,6 +3334,7 @@ def _compose_manual_clip_effective_prompt(
         "payloadVideoPromptPreview": _prompt_preview(base_prompt, 320),
         "payloadTransitionActionPromptPreview": _prompt_preview(transition_prompt, 320),
         "payloadSoundPromptPreview": _prompt_preview(sound_prompt, 320),
+        "payloadNegativeAudioPromptPreview": _prompt_preview(negative_audio_prompt, 320),
         "generatedAudioGainDb": float(generated_audio_gain_db),
         "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", None) or getattr(payload, "keep_generated_audio", None)),
         "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
@@ -3353,6 +3359,13 @@ def _resolve_manual_clip_negative_prompt(
         or contract.get("negative_prompt")
         or ""
     ).strip()
+    negative_audio_prompt = _sanitize_manual_clip_visible_prompt(
+        getattr(payload, "negativeAudioPrompt", None)
+        or getattr(payload, "negative_audio_prompt", None)
+        or contract.get("negativeAudioPrompt")
+        or contract.get("negative_audio_prompt")
+        or ""
+    )
     route_kind = _resolve_manual_clip_route_kind(payload, workflow_key, scene_contract)
     if route_kind == "lip_sync":
         preset = MANUAL_CLIP_LIPSYNC_NEGATIVE_PROMPT
@@ -3362,6 +3375,8 @@ def _resolve_manual_clip_negative_prompt(
         preset = MANUAL_CLIP_FIRST_LAST_NEGATIVE_PROMPT
     else:
         preset = MANUAL_CLIP_I2V_NEGATIVE_PROMPT
+    if route_kind in {"i2v_sound", "i2v_text", "first_last_sound"} and negative_audio_prompt:
+        raw_negative = _combine_negative_prompts(raw_negative, negative_audio_prompt)
     return _combine_negative_prompts(raw_negative, preset)
 
 
@@ -17185,6 +17200,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or out.get("generatedAudioPolicy") or ""),
                 "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
                 "soundPromptPreview": str(((out.get("debug") or {}).get("payloadSoundPromptPreview") if isinstance(out.get("debug"), dict) else "") or str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300]),
+                "negativeAudioPromptPreview": str(((out.get("debug") or {}).get("payloadNegativeAudioPromptPreview") if isinstance(out.get("debug"), dict) else "") or str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300]),
                 "updatedAt": time.time(),
                 "completedAt": time.time() if status == "done" else None,
             })
@@ -17457,6 +17473,7 @@ def clip_video_start(payload: ClipVideoIn):
             "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
             "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
             "soundPromptPreview": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300],
+            "negativeAudioPromptPreview": str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300],
             "updatedAt": time.time(),
             "completedAt": None,
         }
@@ -18642,6 +18659,7 @@ def clip_video(payload: ClipVideoIn):
                 "payloadVideoPromptPreview": prompt_debug.get("payloadVideoPromptPreview"),
                 "payloadTransitionActionPromptPreview": prompt_debug.get("payloadTransitionActionPromptPreview"),
                 "payloadSoundPromptPreview": prompt_debug.get("payloadSoundPromptPreview"),
+                "payloadNegativeAudioPromptPreview": prompt_debug.get("payloadNegativeAudioPromptPreview"),
                 "generatedAudioGainDb": prompt_debug.get("generatedAudioGainDb"),
                 "keepGeneratedAudio": prompt_debug.get("keepGeneratedAudio"),
                 "generatedAudioPolicy": prompt_debug.get("generatedAudioPolicy"),
