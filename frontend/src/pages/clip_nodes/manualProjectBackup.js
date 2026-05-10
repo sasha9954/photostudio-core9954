@@ -128,6 +128,48 @@ export function getManualClipBoardMaterialStats(project = {}) {
   };
 }
 
+export function scoreManualClipBoardProject(project = {}) {
+  const stats = getManualClipBoardMaterialStats(project);
+  const updatedAt = Number(project?.updatedAt || project?.updated_at || 0);
+  return {
+    stats,
+    updatedAt,
+    score:
+      stats.videos * 100000
+      + stats.images * 10000
+      + stats.prompts * 1000
+      + stats.materialTotal * 100
+      + stats.scenes
+      + Math.min(updatedAt / 1000000000000, 10),
+  };
+}
+
+function pickBestManualClipBoardProject(candidates = []) {
+  const valid = candidates.filter(hasMeaningfulManualProject);
+  if (!valid.length) return null;
+
+  return valid
+    .map((project) => ({
+      project,
+      scoreData: scoreManualClipBoardProject(project),
+    }))
+    .sort((a, b) => {
+      if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) {
+        return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
+      }
+      if (b.scoreData.stats.videos !== a.scoreData.stats.videos) {
+        return b.scoreData.stats.videos - a.scoreData.stats.videos;
+      }
+      if (b.scoreData.stats.images !== a.scoreData.stats.images) {
+        return b.scoreData.stats.images - a.scoreData.stats.images;
+      }
+      if (b.scoreData.stats.prompts !== a.scoreData.stats.prompts) {
+        return b.scoreData.stats.prompts - a.scoreData.stats.prompts;
+      }
+      return b.scoreData.updatedAt - a.scoreData.updatedAt;
+    })[0].project;
+}
+
 export function hasMeaningfulManualProject(project = {}) {
   if (!project || typeof project !== "object") return false;
   return Boolean(
@@ -220,12 +262,87 @@ function readActiveProjectPair(activeKey, activeIdKey, projectKeyFactory) {
 }
 
 
+function writeManualClipBoardProjectStorage(project = {}) {
+  const serialized = JSON.stringify(project);
+  localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
+
+  const nodeId = String(project?.nodeId || "").trim();
+  if (nodeId) {
+    localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
+    localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
+  }
+}
+
+function readScopedManualClipBoardProjectCandidates() {
+  const candidates = [];
+  const accountSuffix = `:account:${getManualProjectAccountScopeId()}`;
+
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.includes("manual_clip_board_project:") || !key.includes(accountSuffix)) continue;
+      candidates.push(readManualProjectJsonStorage(key));
+    }
+  } catch {}
+
+  return candidates;
+}
+
 export function readActiveManualClipBoardProject() {
-  return readActiveProjectPair(
-    MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY,
-    MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY,
-    getManualClipBoardProjectStorageKey
-  );
+  const candidates = [];
+  const scopedActiveKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY);
+  const scopedActiveIdKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY);
+  const scopedActive = readManualProjectJsonStorage(scopedActiveKey);
+  candidates.push(scopedActive);
+
+  try {
+    const scopedNodeId = String(localStorage.getItem(scopedActiveIdKey) || "").trim();
+    if (scopedNodeId) {
+      candidates.push(readManualProjectJsonStorage(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(scopedNodeId))));
+    }
+  } catch {}
+
+  if (canUseLegacyManualProjectStorage()) {
+    candidates.push(readManualProjectJsonStorage(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY));
+    try {
+      const legacyNodeId = String(localStorage.getItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY) || "").trim();
+      if (legacyNodeId) {
+        candidates.push(readManualProjectJsonStorage(getManualClipBoardProjectStorageKey(legacyNodeId)));
+      }
+    } catch {}
+  }
+
+  candidates.push(...readScopedManualClipBoardProjectCandidates());
+
+  const best = pickBestManualClipBoardProject(candidates);
+  if (!best) return null;
+
+  console.debug("[manual board read best]", {
+    candidates: candidates.map((project) => ({
+      nodeId: project?.nodeId,
+      updatedAt: project?.updatedAt,
+      stats: getManualClipBoardMaterialStats(project),
+    })),
+    picked: {
+      nodeId: best?.nodeId,
+      updatedAt: best?.updatedAt,
+      stats: getManualClipBoardMaterialStats(best),
+    },
+  });
+
+  const bestStats = getManualClipBoardMaterialStats(best);
+  const scopedActiveStats = getManualClipBoardMaterialStats(scopedActive);
+  if (best !== scopedActive && bestStats.materialTotal > scopedActiveStats.materialTotal) {
+    try {
+      writeManualClipBoardProjectStorage({
+        ...best,
+        updatedAt: Date.now(),
+        lastPersistReason: "repair_active_manual_clip_board_pointer",
+      });
+    } catch {}
+  }
+
+  return best;
 }
 
 export function persistManualClipBoardProject(project = {}, options = {}) {
