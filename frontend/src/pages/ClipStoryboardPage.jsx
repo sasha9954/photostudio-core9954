@@ -3542,6 +3542,256 @@ const SCENARIO_VIDEO_SOURCE_FIELDS = [
   "audioSliceUrl",
 ];
 
+const SCENARIO_RUNTIME_VIDEO_ASSET_FIELDS = [
+  "videoUrl",
+  "selectedGeneratedVideoUrl",
+  "finalVideoUrl",
+  "resultVideoUrl",
+  "assetVideoUrl",
+];
+
+const SCENARIO_RUNTIME_AUDIO_ASSET_FIELDS = [
+  "audioSliceUrl",
+  "generatedAudioUrl",
+  "voiceAudioUrl",
+];
+
+function hasRuntimeAssetValue(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isMeaningfulRuntimeValue(value) {
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "boolean") return value === true;
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (value && typeof value === "object") return Object.keys(value).length > 0;
+  return false;
+}
+
+function getScenarioRuntimeSceneAliases(scene = {}, idx = 0, prefix = "scene") {
+  const base = scene && typeof scene === "object" ? scene : {};
+  return Array.from(new Set([
+    base.uiKey,
+    base.sceneKey,
+    base.sceneId,
+    base.scene_id,
+    base.segment_id,
+    base.segmentId,
+    base.canonicalSegmentId,
+    base.display_id,
+    base.displayId,
+    base.id,
+    `S${idx + 1}`,
+    `${prefix}_${String(idx + 1).padStart(3, "0")}`,
+  ].map((value) => String(value || "").trim()).filter(Boolean)));
+}
+
+function collectScenarioRuntimeAssetStats(scenes, prefix = "scene") {
+  const normalizedScenes = normalizeSceneCollectionWithSceneId(scenes, prefix);
+  return normalizedScenes.reduce((acc, scene) => {
+    const hasImage = SCENARIO_IMAGE_SOURCE_FIELDS.some((field) => hasRuntimeAssetValue(scene?.[field]));
+    const hasVideo = SCENARIO_RUNTIME_VIDEO_ASSET_FIELDS.some((field) => hasRuntimeAssetValue(scene?.[field]));
+    const hasAudio = SCENARIO_RUNTIME_AUDIO_ASSET_FIELDS.some((field) => hasRuntimeAssetValue(scene?.[field]));
+    if (hasImage) acc.imageUrlCount += 1;
+    if (hasVideo) acc.videoUrlCount += 1;
+    if (hasAudio) acc.audioSliceUrlCount += 1;
+    if (String(scene?.videoStatus || "").trim().toLowerCase() === "done" && hasVideo) acc.doneVideoCount += 1;
+    if (hasImage || hasVideo || hasAudio) acc.generatedAssetCount += 1;
+    return acc;
+  }, {
+    totalScenes: Array.isArray(scenes) ? scenes.length : 0,
+    imageUrlCount: 0,
+    videoUrlCount: 0,
+    audioSliceUrlCount: 0,
+    doneVideoCount: 0,
+    generatedAssetCount: 0,
+  });
+}
+
+function mergeRuntimeAssetStats(target, source = {}) {
+  target.totalScenes += Number(source.totalScenes || 0);
+  target.imageUrlCount += Number(source.imageUrlCount || 0);
+  target.videoUrlCount += Number(source.videoUrlCount || 0);
+  target.audioSliceUrlCount += Number(source.audioSliceUrlCount || 0);
+  target.doneVideoCount += Number(source.doneVideoCount || 0);
+  target.generatedAssetCount += Number(source.generatedAssetCount || 0);
+  return target;
+}
+
+function collectClipWorkspaceRuntimeAssetStats(payload = {}) {
+  const workspace = payload?.workspace && typeof payload.workspace === "object" ? payload.workspace : payload;
+  const nodes = Array.isArray(workspace?.nodes) ? workspace.nodes : [];
+  const stats = {
+    totalScenes: 0,
+    imageUrlCount: 0,
+    videoUrlCount: 0,
+    audioSliceUrlCount: 0,
+    doneVideoCount: 0,
+    generatedAssetCount: 0,
+    storyboardNodeCount: 0,
+    assemblyVideoCount: hasRuntimeAssetValue(workspace?.assemblyResult?.finalVideoUrl) ? 1 : 0,
+  };
+  nodes.forEach((node) => {
+    const nodeType = String(node?.type || "").trim();
+    const data = node?.data && typeof node.data === "object" ? node.data : {};
+    if (nodeType === "scenarioStoryboard") {
+      stats.storyboardNodeCount += 1;
+      mergeRuntimeAssetStats(stats, collectScenarioRuntimeAssetStats(data.scenes, "scene"));
+    } else if (nodeType === "storyboardNode") {
+      stats.storyboardNodeCount += 1;
+      mergeRuntimeAssetStats(stats, collectScenarioRuntimeAssetStats(data.scenes, "scene"));
+    } else if (nodeType === "comfyStoryboard") {
+      stats.storyboardNodeCount += 1;
+      mergeRuntimeAssetStats(stats, collectScenarioRuntimeAssetStats(data.mockScenes, "comfy_scene"));
+    }
+  });
+  stats.generatedAssetCount += stats.assemblyVideoCount;
+  stats.videoUrlCount += stats.assemblyVideoCount;
+  return stats;
+}
+
+function shouldSkipEmptyWorkspacePersistOverGeneratedAssets(nextPayload = {}, existingPayload = {}) {
+  const nextStats = collectClipWorkspaceRuntimeAssetStats(nextPayload);
+  const existingStats = collectClipWorkspaceRuntimeAssetStats(existingPayload);
+  return existingStats.generatedAssetCount > 0
+    && nextStats.generatedAssetCount === 0
+    && nextStats.totalScenes === 0;
+}
+
+function normalizeScenarioRuntimeSnapshot(rawSnapshot, sourceKey = "") {
+  const parsed = typeof rawSnapshot === "string" ? JSON.parse(rawSnapshot) : rawSnapshot;
+  if (!parsed || typeof parsed !== "object") return null;
+  const scenes = Array.isArray(parsed?.scenes) ? normalizeSceneCollectionWithSceneId(parsed.scenes, "scene") : [];
+  const assetStats = collectScenarioRuntimeAssetStats(scenes, "scene");
+  const diagnostics = parsed?.diagnostics && typeof parsed.diagnostics === "object" ? parsed.diagnostics : {};
+  return {
+    ...parsed,
+    sourceKey,
+    scenes,
+    sceneGeneration: parsed?.sceneGeneration && typeof parsed.sceneGeneration === "object" ? parsed.sceneGeneration : {},
+    selectedSceneId: String(parsed?.selectedSceneId || "").trim(),
+    nodeId: String(parsed?.nodeId || "").trim(),
+    persistedAt: String(parsed?.persistedAt || ""),
+    diagnostics: {
+      ...diagnostics,
+      ...assetStats,
+      montageCount: Number(diagnostics?.montageCount || 0),
+    },
+  };
+}
+
+function pickBestScenarioRuntimeSnapshot(candidates = []) {
+  const snapshots = (Array.isArray(candidates) ? candidates : [])
+    .map(({ raw, key }) => {
+      try {
+        return raw ? normalizeScenarioRuntimeSnapshot(raw, key) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((snapshot) => snapshot && Array.isArray(snapshot.scenes) && snapshot.scenes.length > 0);
+  if (!snapshots.length) return null;
+  return snapshots.sort((a, b) => {
+    const aStats = a.diagnostics || {};
+    const bStats = b.diagnostics || {};
+    const scoreA = (Number(aStats.generatedAssetCount || 0) * 1000)
+      + (Number(aStats.videoUrlCount || 0) * 100)
+      + (Number(aStats.imageUrlCount || 0) * 10)
+      + Number(aStats.totalScenes || 0);
+    const scoreB = (Number(bStats.generatedAssetCount || 0) * 1000)
+      + (Number(bStats.videoUrlCount || 0) * 100)
+      + (Number(bStats.imageUrlCount || 0) * 10)
+      + Number(bStats.totalScenes || 0);
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return (Date.parse(b.persistedAt || "") || 0) - (Date.parse(a.persistedAt || "") || 0);
+  })[0];
+}
+
+function buildScenarioRuntimeSceneLookup(scenes = [], prefix = "scene") {
+  const lookup = new Map();
+  normalizeSceneCollectionWithSceneId(scenes, prefix).forEach((scene, idx) => {
+    getScenarioRuntimeSceneAliases(scene, idx, prefix).forEach((alias) => {
+      lookup.set(alias, scene);
+      lookup.set(alias.toLowerCase(), scene);
+      const baseAlias = extractBaseSegmentId(alias);
+      if (baseAlias) lookup.set(baseAlias, scene);
+    });
+  });
+  return lookup;
+}
+
+function findScenarioRuntimeSceneMatch(scene = {}, idx = 0, lookup = new Map(), prefix = "scene") {
+  const aliases = getScenarioRuntimeSceneAliases(scene, idx, prefix);
+  for (const alias of aliases) {
+    const direct = lookup.get(alias) || lookup.get(alias.toLowerCase()) || lookup.get(extractBaseSegmentId(alias));
+    if (direct) return direct;
+  }
+  return null;
+}
+
+function shouldMergeScenarioRuntimeAssets(currentScene = {}, persistedScene = {}) {
+  const currentSignature = String(buildScenarioSceneStableSignature(currentScene || {}) || "").trim();
+  const persistedSignature = String(buildScenarioSceneStableSignature(persistedScene || {}) || "").trim();
+  return !currentSignature || !persistedSignature || currentSignature === persistedSignature;
+}
+
+function buildScenarioRuntimeAssetPatch(currentScene = {}, persistedScene = {}) {
+  const patch = {};
+  const runtimeFields = new Set([
+    ...SCENARIO_GENERATED_ASSET_FIELDS,
+    ...SCENARIO_VIDEO_SOURCE_FIELDS,
+    ...SCENARIO_RUNTIME_VIDEO_ASSET_FIELDS,
+    ...SCENARIO_RUNTIME_AUDIO_ASSET_FIELDS,
+    "audioSliceStatus",
+    "audioSliceError",
+    "audioSliceLoadError",
+    "audioSliceDurationSec",
+    "audioSliceStartSec",
+    "audioSliceEndSec",
+    "audioSliceT0",
+    "audioSliceT1",
+    "audioSliceExpectedDurationSec",
+    "audioSliceBackendDurationSec",
+    "audioSliceActualDurationSec",
+    "audioSliceKind",
+    "musicVocalLipSyncAllowed",
+    "requiresAudioSensitiveVideo",
+    "send_audio_to_generator",
+    "external_audio_used",
+    "speechSafeAdjusted",
+    "speechSafeShiftMs",
+    "sliceMayCutSpeech",
+    "videoReady",
+    "imageReady",
+    "montageReady",
+    "montageState",
+  ]);
+  runtimeFields.forEach((field) => {
+    const persistedValue = persistedScene?.[field];
+    if (!isMeaningfulRuntimeValue(persistedValue)) return;
+    const currentValue = currentScene?.[field];
+    if (isMeaningfulRuntimeValue(currentValue) && !SCENARIO_GENERATED_ASSET_FIELDS.includes(field)) return;
+    patch[field] = persistedValue;
+  });
+  return patch;
+}
+
+function mergeScenarioRuntimeScenes(currentScenes = [], persistedScenes = []) {
+  const normalizedCurrentScenes = normalizeSceneCollectionWithSceneId(currentScenes, "scene");
+  const normalizedPersistedScenes = normalizeSceneCollectionWithSceneId(persistedScenes, "scene");
+  if (!normalizedCurrentScenes.length) return normalizedPersistedScenes;
+  const persistedLookup = buildScenarioRuntimeSceneLookup(normalizedPersistedScenes, "scene");
+  return normalizedCurrentScenes.map((scene, idx) => {
+    const persistedScene = findScenarioRuntimeSceneMatch(scene, idx, persistedLookup, "scene");
+    if (!persistedScene) return scene;
+    if (!shouldMergeScenarioRuntimeAssets(scene, persistedScene)) return scene;
+    const runtimePatch = buildScenarioRuntimeAssetPatch(scene, persistedScene);
+    if (!Object.keys(runtimePatch).length) return scene;
+    return preserveScenarioCanonicalResult(persistedScene, { ...scene, ...runtimePatch });
+  });
+}
+
 const SCENARIO_VIDEO_DELETE_FIELDS = [
   "videoUrl",
   "videoStatus",
@@ -10860,6 +11110,7 @@ export default function ClipStoryboardPage() {
   const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
   const COMFY_VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:comfyVideoJob:v1:${accountKey}`, [accountKey]);
   const STORYBOARD_RUNTIME_STORE_KEY = useMemo(() => `ps:clipStoryboard:scenarioRuntime:v1:${accountKey}:${window.location.pathname}`, [accountKey]);
+  const STORYBOARD_RUNTIME_FALLBACK_STORE_KEY = useMemo(() => `ps:clipStoryboard:scenarioRuntime:last:v1:${accountKey}`, [accountKey]);
 
   const storageVersionRef = useRef(0);
   const plannerSignatureRef = useRef("");
@@ -11332,75 +11583,113 @@ const storyboardRuntimeRestoredRef = useRef(false);
 const buildScenarioRuntimeSnapshot = useCallback((nodeData = {}, selectedSceneId = "") => {
   const scenes = Array.isArray(nodeData?.scenes) ? nodeData.scenes : [];
   const montageCount = scenes.filter((scene) => Boolean(scene?.montageReady || scene?.montageState)).length;
-  const generatedAssetCount = scenes.reduce((acc, scene) => acc
-    + (String(scene?.imageUrl || scene?.startImageUrl || scene?.endImageUrl || "").trim() ? 1 : 0)
-    + (String(scene?.videoUrl || "").trim() ? 1 : 0)
-    + (String(scene?.audioSliceUrl || "").trim() ? 1 : 0), 0);
+  const assetStats = collectScenarioRuntimeAssetStats(scenes, "scene");
   return {
+    version: 2,
     nodeId: String(activeScenarioStoryboardNode?.id || "").trim(),
+    path: String(window.location.pathname || ""),
     scenes,
+    sceneGeneration: nodeData?.sceneGeneration && typeof nodeData.sceneGeneration === "object" ? nodeData.sceneGeneration : {},
     selectedSceneId: String(selectedSceneId || "").trim(),
-    diagnostics: { montageCount, generatedAssetCount },
+    persistedAt: new Date().toISOString(),
+    diagnostics: { ...assetStats, montageCount },
   };
 }, [activeScenarioStoryboardNode?.id]);
+const readScenarioRuntimeSnapshot = useCallback(() => pickBestScenarioRuntimeSnapshot([
+  { key: STORYBOARD_RUNTIME_STORE_KEY, raw: safeGet(STORYBOARD_RUNTIME_STORE_KEY) },
+  { key: STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, raw: safeGet(STORYBOARD_RUNTIME_FALLBACK_STORE_KEY) },
+]), [STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY]);
 useEffect(() => {
   if (runtimeHydratedRef.current) return;
-  runtimeHydratedRef.current = true;
   console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_attempted: true, storyboard_runtime_restore_attempted: true, storyboard_runtime_hydrate_source: "runtime_persist" });
-  const raw = safeGet(STORYBOARD_RUNTIME_STORE_KEY);
+  const parsed = readScenarioRuntimeSnapshot();
+  const persistedScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
+  const persistedSceneGeneration = parsed?.sceneGeneration && typeof parsed.sceneGeneration === "object" ? parsed.sceneGeneration : {};
   const targetNodeId = String(activeScenarioStoryboardNode?.id || activeScenarioStoryboardId || "").trim();
-  if (!targetNodeId) {
+  const firstStoryboardNodeId = String(
+    (Array.isArray(nodes) ? nodes : []).find((node) => node?.type === "scenarioStoryboard")?.id || ""
+  ).trim();
+  const restoreNodeId = targetNodeId || firstStoryboardNodeId;
+  if (!parsed || !persistedScenes.length) {
+    runtimeHydratedRef.current = true;
     storyboardRuntimeRestoredRef.current = true;
     console.info("[SCENARIO RUNTIME]", {
       storyboard_runtime_restore_completed: true,
-      storyboard_runtime_restore_skipped: true,
-      reason: "empty_target_node_id",
-      storyboard_runtime_restore_target_node_id: targetNodeId,
-    });
-    return;
-  }
-  if (!raw) {
-    storyboardRuntimeRestoredRef.current = true;
-    console.info("[SCENARIO RUNTIME]", {
-      storyboard_runtime_restore_completed: true,
-      storyboard_runtime_restore_target_node_id: targetNodeId,
+      storyboard_runtime_restore_target_node_id: restoreNodeId,
       storyboard_runtime_restore_source: "runtime_persist",
       storyboard_runtime_restore_snapshot_present: false,
     });
     return;
   }
+  if (!restoreNodeId && !initialRestoreComplete) {
+    console.info("[SCENARIO RUNTIME]", {
+      storyboard_runtime_restore_skipped: true,
+      reason: "waiting_for_hydrated_storyboard_node",
+      storyboard_runtime_restore_snapshot_scene_count: persistedScenes.length,
+      storyboard_runtime_restore_snapshot_key: parsed.sourceKey,
+    });
+    return;
+  }
+
+  const persistedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
+  const rescueNodeId = restoreNodeId || String(parsed?.nodeId || `scenario_storyboard_restored_${Date.now()}`).trim();
+  runtimeHydratedRef.current = true;
   try {
-    const parsed = JSON.parse(raw);
-    const persistedScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
-    const persistedNodeId = String(parsed?.nodeId || "").trim();
-    const persistedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
-    if (persistedNodeId && persistedNodeId !== targetNodeId) {
-      storyboardRuntimeRestoredRef.current = true;
-      console.info("[SCENARIO RUNTIME]", {
-        storyboard_runtime_restore_completed: true,
-        storyboard_runtime_restore_skipped: true,
-        reason: "node_id_mismatch",
-        storyboard_runtime_restore_target_node_id: targetNodeId,
-        storyboard_runtime_restore_snapshot_node_id: persistedNodeId,
+    setNodes((prev) => {
+      const safePrev = Array.isArray(prev) ? prev : [];
+      const hasStoryboardNode = safePrev.some((node) => node?.type === "scenarioStoryboard");
+      if (!hasStoryboardNode) {
+        return [
+          ...safePrev,
+          {
+            id: rescueNodeId,
+            type: "scenarioStoryboard",
+            position: { x: 860, y: 420 },
+            data: {
+              scenes: persistedScenes,
+              sceneGeneration: buildStoryboardSceneGenerationMap(persistedScenes, persistedSceneGeneration),
+              status: "ready",
+              restoredFromRuntime: true,
+              restoredAt: new Date().toISOString(),
+            },
+          },
+        ];
+      }
+      return safePrev.map((node) => {
+        if (node?.type !== "scenarioStoryboard") return node;
+        if (rescueNodeId && String(node.id) !== rescueNodeId) return node;
+        const currentScenes = Array.isArray(node?.data?.scenes) ? node.data.scenes : [];
+        const mergedScenes = mergeScenarioRuntimeScenes(currentScenes, persistedScenes);
+        return {
+          ...node,
+          data: {
+            ...(node?.data || {}),
+            scenes: mergedScenes,
+            sceneGeneration: buildStoryboardSceneGenerationMap(mergedScenes, {
+              ...persistedSceneGeneration,
+              ...(node?.data?.sceneGeneration && typeof node.data.sceneGeneration === "object" ? node.data.sceneGeneration : {}),
+            }),
+            restoredFromRuntime: true,
+            restoredAt: new Date().toISOString(),
+          },
+        };
       });
-      return;
-    }
-    setNodes((prev) => prev.map((node) => {
-      if (node?.type !== "scenarioStoryboard") return node;
-      if (targetNodeId && String(node.id) !== targetNodeId) return node;
-      return { ...node, data: { ...(node?.data || {}), scenes: persistedScenes } };
-    }));
+    });
+    setActiveScenarioStoryboardId(rescueNodeId || null);
+    setIsScenarioStoryboardOpen(true);
     setScenarioEditor((prev) => ({
       ...prev,
+      open: true,
+      nodeId: rescueNodeId || prev?.nodeId || null,
       selectedSceneId: persistedSelectedSceneId || persistedScenes[0]?.sceneId || persistedScenes[0]?.segment_id || "",
     }));
     storyboardRuntimeRestoredRef.current = true;
-    console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_scene_count: persistedScenes.length, storyboard_runtime_hydrate_selected_scene: persistedSelectedSceneId, storyboard_runtime_restore_success: true, storyboard_runtime_restore_scene_count: persistedScenes.length, storyboard_runtime_restore_generated_asset_count: Number(parsed?.diagnostics?.generatedAssetCount || 0), storyboard_runtime_restore_montage_restored: Number(parsed?.diagnostics?.montageCount || 0) > 0, storyboard_runtime_restore_source: "runtime_persist", storyboard_runtime_restore_target_node_id: targetNodeId, storyboard_runtime_restore_completed: true });
+    console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_scene_count: persistedScenes.length, storyboard_runtime_hydrate_selected_scene: persistedSelectedSceneId, storyboard_runtime_restore_success: true, storyboard_runtime_restore_scene_count: persistedScenes.length, storyboard_runtime_restore_generated_asset_count: Number(parsed?.diagnostics?.generatedAssetCount || 0), storyboard_runtime_restore_video_url_count: Number(parsed?.diagnostics?.videoUrlCount || 0), storyboard_runtime_restore_montage_restored: Number(parsed?.diagnostics?.montageCount || 0) > 0, storyboard_runtime_restore_source: parsed.sourceKey || "runtime_persist", storyboard_runtime_restore_target_node_id: rescueNodeId, storyboard_runtime_restore_completed: true });
   } catch (error) {
     storyboardRuntimeRestoredRef.current = true;
     console.warn("[SCENARIO RUNTIME] restore failed", error);
   }
-}, [STORYBOARD_RUNTIME_STORE_KEY, setNodes, activeScenarioStoryboardId, activeScenarioStoryboardNode?.id]);
+}, [activeScenarioStoryboardId, activeScenarioStoryboardNode?.id, initialRestoreComplete, nodes, readScenarioRuntimeSnapshot, setNodes]);
 useEffect(() => {
   if (!storyboardRuntimeRestoredRef.current) {
     console.info("[SCENARIO RUNTIME]", {
@@ -11420,9 +11709,22 @@ useEffect(() => {
     });
     return;
   }
-  safeSet(STORYBOARD_RUNTIME_STORE_KEY, JSON.stringify(snapshot));
-  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_persist_enabled: true, storyboard_runtime_persist_scene_count: snapshot.scenes.length, storyboard_runtime_persist_generated_asset_count: snapshot.diagnostics.generatedAssetCount, storyboard_runtime_persist_montage_saved: snapshot.diagnostics.montageCount > 0, storyboard_runtime_persist_node_id: snapshot.nodeId });
-}, [STORYBOARD_RUNTIME_STORE_KEY, activeScenarioStoryboardNode, buildScenarioRuntimeSnapshot, scenarioEditor?.selectedSceneId]);
+  const existingSnapshot = readScenarioRuntimeSnapshot();
+  const existingAssetCount = Number(existingSnapshot?.diagnostics?.generatedAssetCount || 0);
+  const nextAssetCount = Number(snapshot?.diagnostics?.generatedAssetCount || 0);
+  if (existingAssetCount > 0 && nextAssetCount === 0) {
+    console.warn("[SCENARIO RUNTIME] persist skipped to protect generated assets", {
+      storyboard_runtime_existing_generated_asset_count: existingAssetCount,
+      storyboard_runtime_next_generated_asset_count: nextAssetCount,
+      storyboard_runtime_persist_node_id: snapshot.nodeId,
+    });
+    return;
+  }
+  const rawSnapshot = JSON.stringify(snapshot);
+  safeSet(STORYBOARD_RUNTIME_STORE_KEY, rawSnapshot);
+  safeSet(STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, rawSnapshot);
+  console.info("[SCENARIO RUNTIME]", { storyboard_runtime_persist_enabled: true, storyboard_runtime_persist_scene_count: snapshot.scenes.length, storyboard_runtime_persist_generated_asset_count: snapshot.diagnostics.generatedAssetCount, storyboard_runtime_persist_video_url_count: snapshot.diagnostics.videoUrlCount, storyboard_runtime_persist_montage_saved: snapshot.diagnostics.montageCount > 0, storyboard_runtime_persist_node_id: snapshot.nodeId });
+}, [STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY, activeScenarioStoryboardNode, buildScenarioRuntimeSnapshot, readScenarioRuntimeSnapshot, scenarioEditor?.selectedSceneId]);
 
 const scenarioBrainRefs = useMemo(() => {
   if (!scenarioFlowSourceNode?.id) return { character: [], location: [], style: [], props: [], refsByRole: {} };
@@ -11753,10 +12055,23 @@ const shouldInvalidateClipStoryboardStorage = useCallback((payload) => {
   const runtimePlannerSignature = String(plannerSignatureRef.current || "");
   const runtimeScenarioSignature = String(storyboardSignatureRef.current || "");
   const runtimeComfySignature = String(comfyStoryboardSignatureRef.current || "");
+  const plannerMismatch = !!(runtimePlannerSignature && savedPlannerSignature && runtimePlannerSignature !== savedPlannerSignature);
+  const scenarioMismatch = !!(runtimeScenarioSignature && savedScenarioSignature && runtimeScenarioSignature !== savedScenarioSignature);
+  const comfyMismatch = !!(runtimeComfySignature && savedComfySignature && runtimeComfySignature !== savedComfySignature);
 
-  if (runtimePlannerSignature && savedPlannerSignature && runtimePlannerSignature !== savedPlannerSignature) return true;
-  if (runtimeScenarioSignature && savedScenarioSignature && runtimeScenarioSignature !== savedScenarioSignature) return true;
-  if (runtimeComfySignature && savedComfySignature && runtimeComfySignature !== savedComfySignature) return true;
+  if (plannerMismatch || scenarioMismatch || comfyMismatch) {
+    const assetStats = collectClipWorkspaceRuntimeAssetStats(payload);
+    if (assetStats.generatedAssetCount > 0) {
+      console.warn("[CLIP STORAGE] stale signature kept because generated assets exist", {
+        plannerMismatch,
+        scenarioMismatch,
+        comfyMismatch,
+        assetStats,
+      });
+      return false;
+    }
+    return true;
+  }
   return false;
 }, []);
 
@@ -11794,9 +12109,12 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
   safeDel(STORE_KEY);
   safeDel(VIDEO_JOB_STORE_KEY);
   safeDel(COMFY_VIDEO_JOB_STORE_KEY);
-  if (allowStoryboardRuntimeClear) safeDel(STORYBOARD_RUNTIME_STORE_KEY);
+  if (allowStoryboardRuntimeClear) {
+    safeDel(STORYBOARD_RUNTIME_STORE_KEY);
+    safeDel(STORYBOARD_RUNTIME_FALLBACK_STORE_KEY);
+  }
   storageVersionRef.current += 1;
-}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
+}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
 
 const stopScenarioVideoPolling = useCallback((sceneId = "") => {
   const key = String(sceneId || "").trim();
@@ -26318,6 +26636,22 @@ const hydrate = useCallback((source = "unknown") => {
         persistedAt: new Date().toISOString(),
       },
     };
+    const existingWorkspaceRaw = safeGet(WORKSPACE_STORE_KEY) || safeGet(STORE_KEY);
+    if (existingWorkspaceRaw) {
+      try {
+        const existingWorkspaceParsed = JSON.parse(existingWorkspaceRaw);
+        if (shouldSkipEmptyWorkspacePersistOverGeneratedAssets(payloadToStore.workspace, existingWorkspaceParsed)) {
+          console.warn("[CLIP STORAGE] persist skipped to protect generated storyboard assets", {
+            accountKey,
+            nextStats: collectClipWorkspaceRuntimeAssetStats(payloadToStore.workspace),
+            existingStats: collectClipWorkspaceRuntimeAssetStats(existingWorkspaceParsed),
+          });
+          return;
+        }
+      } catch {
+        // ignore malformed existing storage; hydrate will handle it on reload
+      }
+    }
     const workspaceOk = safeSet(WORKSPACE_STORE_KEY, JSON.stringify(payloadToStore));
     // legacy mirror for backward compatibility
     const legacyOk = safeSet(STORE_KEY, JSON.stringify(payloadToStore.workspace));
@@ -26386,6 +26720,22 @@ const hydrate = useCallback((source = "unknown") => {
         assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
         assemblyPayloadSignature,
       };
+      const existingWorkspaceRaw = safeGet(WORKSPACE_STORE_KEY) || safeGet(STORE_KEY);
+      if (existingWorkspaceRaw) {
+        try {
+          const existingWorkspaceParsed = JSON.parse(existingWorkspaceRaw);
+          if (shouldSkipEmptyWorkspacePersistOverGeneratedAssets(payload, existingWorkspaceParsed)) {
+            console.warn("[CLIP STORAGE] beforeunload persist skipped to protect generated storyboard assets", {
+              accountKey,
+              nextStats: collectClipWorkspaceRuntimeAssetStats(payload),
+              existingStats: collectClipWorkspaceRuntimeAssetStats(existingWorkspaceParsed),
+            });
+            return;
+          }
+        } catch {
+          // ignore malformed existing storage; hydrate will handle it on reload
+        }
+      }
       const ok = safeSet(WORKSPACE_STORE_KEY, JSON.stringify({ workspace: payload })) || safeSet(STORE_KEY, JSON.stringify(payload));
       if (ok) setLastSavedAt(Date.now());
     };
