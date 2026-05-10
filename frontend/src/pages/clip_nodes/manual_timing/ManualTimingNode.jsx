@@ -168,6 +168,12 @@ export default function ManualTimingNode({ id, data }) {
   }, []);
 
   useEffect(() => {
+    const refreshActiveBoard = () => setActiveBoardProject(readActiveManualClipBoardProject());
+    window.addEventListener("focus", refreshActiveBoard);
+    return () => window.removeEventListener("focus", refreshActiveBoard);
+  }, []);
+
+  useEffect(() => {
     const stored = readManualTimingProjectForNode(id);
     if (!stored || typeof stored !== "object") return;
     const storedUpdatedAt = Number(stored?.updatedAt || 0);
