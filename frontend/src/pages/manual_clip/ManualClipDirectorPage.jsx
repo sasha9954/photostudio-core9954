@@ -1222,21 +1222,21 @@ export default function ManualClipDirectorPage() {
                 className="clipSB_btn manualBlockPhotoBtn"
                 title="Скопировать JSON блока для генерации фото / раскадровки"
                 onClick={onCopyBlockStoryboardJson}
-              >🖼 JSON фото</button>
+              >🖼 Фото JSON</button>
               <button
                 type="button"
                 className="clipSB_btn manualBlockVideoBtn"
                 title="Скопировать JSON блока для video prompts"
                 onClick={onCopyBlockVideoPromptJson}
-              >🎬 JSON видео</button>
+              >🎬 Видео JSON</button>
               <label
                 className="clipSB_btn manualUploadBtn manualBlockPhotoBtn manualBlockImportBtn"
                 title="Импортировать JSON раскадровки блока"
-              >📥 Загрузить фото<input type="file" accept=".json,application/json" hidden onChange={onImportBlockStoryboardFile} /></label>
+              >📥 Фото<input type="file" accept=".json,application/json" hidden onChange={onImportBlockStoryboardFile} /></label>
               <label
                 className="clipSB_btn manualUploadBtn manualBlockVideoBtn manualBlockImportBtn"
                 title="Импортировать JSON видео-промтов блока"
-              >📥 Загрузить видео<input type="file" accept=".json,application/json" hidden onChange={onImportBlockVideoPromptFile} /></label>
+              >📥 Видео<input type="file" accept=".json,application/json" hidden onChange={onImportBlockVideoPromptFile} /></label>
             </div>
           </div>
           {selectedScene.story_block_title_ru ? <div className="storyboardSceneBlockBadge" style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>
