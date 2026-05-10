@@ -167,7 +167,7 @@ export function scoreManualClipBoardProject(project = {}) {
   };
 }
 
-function pickBestManualClipBoardProject(candidates = []) {
+export function pickBestManualClipBoardProject(candidates = []) {
   const valid = candidates.filter(hasMeaningfulManualProject);
   if (!valid.length) return null;
 
