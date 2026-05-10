@@ -9,6 +9,8 @@ import {
   readActiveManualClipBoardProject,
   readManualClipBoardProjectForNode,
   pickBestManualClipBoardProject,
+  persistManualClipBoardProject,
+  getManualClipBoardMaterialStats,
 } from "../manualProjectBackup.js";
 import "./ManualTimingNode.css";
 import {
@@ -261,11 +263,26 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onReturnToActiveBoard = () => {
-    const storedProject = readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject();
-    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject]) || storedProject || model.director_board;
+    const nodeScopedProject = readManualClipBoardProjectForNode(id);
+    const activeStoredProject = readActiveManualClipBoardProject();
+    const activeProject = pickBestManualClipBoardProject([
+      model.director_board,
+      nodeScopedProject,
+      activeStoredProject,
+    ]) || nodeScopedProject || activeStoredProject || model.director_board;
 
     if (hasMeaningfulManualProject(activeProject)) {
       setStoredActiveBoardProject(activeProject);
+      const stats = getManualClipBoardMaterialStats(activeProject);
+      if (stats.materialTotal > 0) {
+        persistManualClipBoardProject({
+          ...activeProject,
+          nodeId: id,
+          sourceNodeId: id,
+          updatedAt: Date.now(),
+          lastPersistReason: "return_to_active_manual_board",
+        }, { reason: "return_to_active_manual_board" });
+      }
     }
 
     if (typeof data?.onOpenDirectorBoard === "function") {
@@ -274,13 +291,15 @@ export default function ManualTimingNode({ id, data }) {
     }
 
     if (hasMeaningfulManualProject(activeProject)) {
-      navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`);
+      navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`, {
+        state: { director_board: activeProject },
+      });
     }
   };
 
   const onDownloadActiveBoardBackup = () => {
     const storedProject = readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject();
-    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject]) || storedProject || model.director_board;
+    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject, readActiveManualClipBoardProject()]) || storedProject || model.director_board;
     if (!hasMeaningfulManualProject(activeProject)) return;
     setStoredActiveBoardProject(activeProject);
     downloadManualBoardBackup(activeProject);
