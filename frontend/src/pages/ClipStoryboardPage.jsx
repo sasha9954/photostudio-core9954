@@ -6010,20 +6010,27 @@ function buildIntroFramePayload(introFrame) {
   };
 }
 
-function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16", intro = null }) {
+function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16", intro = null, assemblyAudioMode = "master_audio", sceneAudioGainDb = -14, masterAudioGainDb = 0 }) {
   const normalizedFormat = normalizeSceneImageFormat(format);
   const safeAudioUrl = String(audioUrl || "").trim();
+  const safeAssemblyAudioMode = ["video_only", "scene_audio", "master_audio", "mix_master_scene"].includes(String(assemblyAudioMode || ""))
+    ? String(assemblyAudioMode)
+    : "master_audio";
   const preparedScenes = (Array.isArray(scenes) ? scenes : [])
     .map((scene, idx) => {
       const videoUrl = String(scene?.videoUrl || "").trim();
       if (!videoUrl) return null;
       return {
         sceneId: buildCanonicalSceneId(scene, idx, "scene"),
+        scene_id: buildCanonicalSceneId(scene, idx, "scene"),
         videoUrl,
+        video_url: videoUrl,
         requestedDurationSec: getSceneRequestedDurationSec(scene),
+        duration: Number(scene?.duration ?? scene?.durationSec ?? scene?.duration_sec ?? getSceneRequestedDurationSec(scene)),
         transitionType: resolveSceneTransitionType(scene),
         order: Number.isFinite(Number(scene?.order)) ? Number(scene.order) : idx + 1,
         route: String(scene?.route || scene?.mode || scene?.workflowKey || "").trim(),
+        renderMode: String(scene?.renderMode || scene?.render_mode || scene?.mode || scene?.route || scene?.workflowKey || "").trim(),
         mode: String(scene?.mode || scene?.route || scene?.workflowKey || "").trim(),
         startSec: Number(scene?.startSec ?? scene?.start_sec ?? scene?.t0 ?? 0),
         endSec: Number(scene?.endSec ?? scene?.end_sec ?? scene?.t1 ?? 0),
@@ -6033,13 +6040,20 @@ function buildAssemblyPayload({ scenes = [], audioUrl = "", format = "9:16", int
         generatedAudioPolicy: String(scene?.generatedAudioPolicy || scene?.generated_audio_policy || ""),
         generatedAudioGainDb: Number(scene?.generatedAudioGainDb ?? scene?.generated_audio_gain_db ?? -16),
         soundPrompt: String(scene?.soundPrompt || scene?.sound_prompt || ""),
-        videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? false),
+        videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? scene?.hasAudio ?? false),
+        video_has_audio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? scene?.hasAudio ?? false),
+        hasAudio: Boolean(scene?.hasAudio ?? scene?.videoHasAudio ?? scene?.video_has_audio ?? false),
       };
     })
     .filter(Boolean);
 
   return {
     audioUrl: safeAudioUrl,
+    masterAudioUrl: safeAudioUrl,
+    assemblyAudioMode: safeAssemblyAudioMode,
+    audioAssemblyMode: safeAssemblyAudioMode,
+    sceneAudioGainDb: Number.isFinite(Number(sceneAudioGainDb)) ? Number(sceneAudioGainDb) : -14,
+    masterAudioGainDb: Number.isFinite(Number(masterAudioGainDb)) ? Number(masterAudioGainDb) : 0,
     format: normalizedFormat,
     scenes: preparedScenes,
     intro: buildIntroFramePayload(intro),
@@ -6085,14 +6099,18 @@ function normalizeManualClipScenesForAssembly(scenes = [], fallbackFormat = DEFA
       return {
         ...scene,
         sceneId: String(scene?.sceneId || scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
+        scene_id: String(scene?.sceneId || scene?.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
         videoUrl,
+        video_url: videoUrl,
         startSec,
         endSec,
         t0: startSec,
         t1: endSec,
         requestedDurationSec: Number.isFinite(durationSec) && durationSec > 0 ? durationSec : getSceneRequestedDurationSec(scene),
+        duration: Number.isFinite(durationSec) && durationSec > 0 ? durationSec : getSceneRequestedDurationSec(scene),
         order: Number.isFinite(Number(scene?.order ?? scene?.index)) ? Number(scene?.order ?? scene?.index) : idx + 1,
         route: String(scene?.route || scene?.mode || "").trim(),
+        renderMode: String(scene?.renderMode || scene?.render_mode || scene?.mode || scene?.route || "").trim(),
         mode: String(scene?.mode || scene?.route || "").trim(),
         imageFormat: resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, fallbackFormat),
         format: resolvePreferredSceneFormat(scene?.imageFormat, scene?.format, fallbackFormat),
@@ -6100,7 +6118,9 @@ function normalizeManualClipScenesForAssembly(scenes = [], fallbackFormat = DEFA
         generatedAudioPolicy: String(scene?.generatedAudioPolicy || scene?.generated_audio_policy || ""),
         generatedAudioGainDb: Number(scene?.generatedAudioGainDb ?? scene?.generated_audio_gain_db ?? -16),
         soundPrompt: String(scene?.soundPrompt || scene?.sound_prompt || ""),
-        videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? false),
+        videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? scene?.hasAudio ?? false),
+        video_has_audio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? scene?.hasAudio ?? false),
+        hasAudio: Boolean(scene?.hasAudio ?? scene?.videoHasAudio ?? scene?.video_has_audio ?? false),
       };
     })
     .filter((scene) => String(scene?.videoUrl || "").trim());
@@ -6379,7 +6399,9 @@ function buildAssemblyPayloadSignature(payload, options = {}) {
   const introComparable = buildIntroFrameComparablePayload(payload?.intro);
   return JSON.stringify({
     scenesSource: String(options?.scenesSource || "none"),
-    audioMode: String(options?.assemblyAudioMode || "master_plus_scene_audio"),
+    audioMode: String(options?.assemblyAudioMode || "master_audio"),
+    sceneAudioGainDb: Number(options?.sceneAudioGainDb ?? -14),
+    masterAudioGainDb: Number(options?.masterAudioGainDb ?? 0),
     sourceNodeId: String(options?.sourceNodeId || ""),
     assemblyNodeId: String(options?.assemblyNodeId || ""),
     introSourceNodeId: String(options?.introSourceNodeId || ""),
@@ -10679,7 +10701,17 @@ function AssemblyNode({ id, data }) {
   const finalVideoUrl = resolveAssetUrl(data?.result?.finalVideoUrl);
   const resultSceneCount = Number(result?.sceneCount || 0);
   const resultTotalSegments = Number(result?.totalSegments || 0);
-  const audioApplied = !!result?.audioApplied;
+  const audioApplied = !!(result?.outputHasAudio ?? result?.audioApplied);
+  const resultAudioMode = String(result?.effectiveAssemblyAudioMode || result?.assemblyAudioMode || data?.assemblyAudioMode || "");
+  const resultAudioModeLabel = resultAudioMode === "video_only"
+    ? "без звука"
+    : resultAudioMode === "scene_audio"
+      ? "звук сцен"
+      : resultAudioMode === "mix_master_scene"
+        ? "основное + звук сцен"
+        : resultAudioMode === "master_audio"
+          ? "основное аудио"
+          : (data?.audioModeLabel || (audioApplied ? "аудио" : "без звука"));
   const isStale = !!data?.isStale;
   const statusLabel = status === "done"
     ? "готово"
@@ -10710,12 +10742,25 @@ function AssemblyNode({ id, data }) {
           <div className="clipSB_assemblyRow"><span>Audio</span><strong className="clipSB_assemblyValue">{data?.audioModeLabel || (data?.hasAudio ? "подключено" : "не подключено")}</strong></div>
           <label className="clipSB_assemblyAudioMode">
             <span>Сборка аудио</span>
-            <select className="nodrag" value={data?.assemblyAudioMode || "master_plus_scene_audio"} onChange={(e) => data?.onAssemblyAudioModeChange?.(e.target.value)}>
-              <option value="master_plus_scene_audio">🎼 С основным аудио</option>
-              <option value="scene_audio_only">🔉 Только звук сцен</option>
-              <option value="silent_video_only">🔇 Только видео</option>
+            <select className="nodrag" value={data?.assemblyAudioMode || "master_audio"} onChange={(e) => data?.onAssemblyAudioModeChange?.(e.target.value)}>
+              <option value="video_only">🔇 Только видео</option>
+              <option value="scene_audio">🔉 Звук сцен</option>
+              <option value="master_audio">🎼 Основное аудио</option>
+              <option value="mix_master_scene">🎚 Основное + звук сцен</option>
             </select>
           </label>
+          {["scene_audio", "mix_master_scene"].includes(data?.assemblyAudioMode || "master_audio") ? (
+            <label className="clipSB_assemblyAudioMode">
+              <span>Звук сцен: {Number(data?.sceneAudioGainDb ?? -14)} dB</span>
+              <input className="nodrag" type="range" min="-30" max="0" step="1" value={Number(data?.sceneAudioGainDb ?? -14)} onChange={(e) => data?.onSceneAudioGainDbChange?.(Number(e.target.value))} />
+            </label>
+          ) : null}
+          {["master_audio", "mix_master_scene"].includes(data?.assemblyAudioMode || "master_audio") ? (
+            <label className="clipSB_assemblyAudioMode">
+              <span>Основное аудио: {Number(data?.masterAudioGainDb ?? 0)} dB</span>
+              <input className="nodrag" type="range" min="-30" max="6" step="1" value={Number(data?.masterAudioGainDb ?? 0)} onChange={(e) => data?.onMasterAudioGainDbChange?.(Number(e.target.value))} />
+            </label>
+          ) : null}
           <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
           <div className="clipSB_assemblyRow"><span>Статус</span><strong className="clipSB_assemblyValue">{statusLabel}</strong></div>
@@ -10772,7 +10817,7 @@ function AssemblyNode({ id, data }) {
           <div className="clipSB_assemblyResult">
             <div className="clipSB_assemblyDoneTitle">✅ Клип готов</div>
             <div className="clipSB_assemblyDoneMeta">
-              Сцен: {resultSceneCount > 0 ? resultSceneCount : Number(data?.readyScenes || 0)} • Intro: {result?.introIncluded ? "добавлен" : "нет"} • Аудио: {audioApplied ? "добавлено" : "нет"}
+              Сцен: {resultSceneCount > 0 ? resultSceneCount : Number(data?.readyScenes || 0)} · Intro: {result?.introIncluded ? "есть" : "нет"} · Audio: {resultAudioModeLabel}
             </div>
             <video className="clipSB_videoPlayer" controls playsInline preload="metadata" src={finalVideoUrl} style={{ marginTop: 8 }} />
             <div className="clipSB_assemblyActions">
@@ -10791,7 +10836,7 @@ function AssemblyNode({ id, data }) {
               ) : null}
               {result ? (
                 <div className="clipSB_small clipSB_assemblyDetailsText">
-                  scenes={resultSceneCount}; intro={result?.introIncluded ? "yes" : "no"}; totalSegments={resultTotalSegments || resultSceneCount}; totalSteps={Number(data?.assemblyStageTotal || 0) || Number(result?.totalSteps || 0) || 0}; introDuration={Number(result?.introDurationSec || 0) || 0}
+                  scenes={resultSceneCount}; intro={result?.introIncluded ? "yes" : "no"}; audioMode={resultAudioMode || data?.assemblyAudioMode}; outputHasAudio={String(Boolean(result?.outputHasAudio ?? audioApplied))}; sceneAudioDetected={Number(result?.sceneAudioDetectedCount || 0)}; sceneAudioMissing={Number(result?.sceneAudioMissingCount || 0)}; totalSegments={resultTotalSegments || resultSceneCount}; totalSteps={Number(data?.assemblyStageTotal || 0) || Number(result?.totalSteps || 0) || 0}; introDuration={Number(result?.introDurationSec || 0) || 0}
                 </div>
               ) : null}
             </div>
@@ -11179,9 +11224,15 @@ useEffect(() => {
 const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
 const [edges, setEdges] = useEdgesState(defaultEdges);
 const updateAssemblyAudioMode = useCallback((mode) => {
-  const safeMode = ["master_plus_scene_audio", "scene_audio_only", "silent_video_only"].includes(mode)
-    ? mode
-    : "master_plus_scene_audio";
+  const aliasMap = {
+    master_plus_scene_audio: "master_audio",
+    scene_audio_only: "scene_audio",
+    silent_video_only: "video_only",
+  };
+  const requestedMode = aliasMap[mode] || mode;
+  const safeMode = ["video_only", "scene_audio", "master_audio", "mix_master_scene"].includes(requestedMode)
+    ? requestedMode
+    : "master_audio";
 
   setNodes((prev) => prev.map((node) => (
     node.type === "assemblyNode"
@@ -11190,11 +11241,30 @@ const updateAssemblyAudioMode = useCallback((mode) => {
         data: {
           ...(node.data || {}),
           assemblyAudioMode: safeMode,
+          sceneAudioGainDb: Number(node.data?.sceneAudioGainDb ?? -14),
+          masterAudioGainDb: Number(node.data?.masterAudioGainDb ?? 0),
         },
       }
       : node
   )));
 }, [setNodes]);
+const updateAssemblyGain = useCallback((field, value) => {
+  const numericValue = Number(value);
+  const fallback = field === "sceneAudioGainDb" ? -14 : 0;
+  setNodes((prev) => prev.map((node) => (
+    node.type === "assemblyNode"
+      ? {
+        ...node,
+        data: {
+          ...(node.data || {}),
+          [field]: Number.isFinite(numericValue) ? numericValue : fallback,
+        },
+      }
+      : node
+  )));
+}, [setNodes]);
+const updateAssemblySceneAudioGainDb = useCallback((value) => updateAssemblyGain("sceneAudioGainDb", value), [updateAssemblyGain]);
+const updateAssemblyMasterAudioGainDb = useCallback((value) => updateAssemblyGain("masterAudioGainDb", value), [updateAssemblyGain]);
 const onOpenScenarioStoryboard = useCallback((nodeId) => {
   setActiveScenarioStoryboardId(nodeId || null);
   setIsScenarioStoryboardOpen(true);
@@ -19478,7 +19548,11 @@ Aspect ratio: ${imageFormat}`,
     () => nodes.find((node) => node?.type === "assemblyNode") || null,
     [nodes]
   );
-  const assemblyAudioMode = String(assemblyGraphNode?.data?.assemblyAudioMode || "master_plus_scene_audio");
+  const rawAssemblyAudioMode = String(assemblyGraphNode?.data?.assemblyAudioMode || "master_audio");
+  const assemblyAudioModeAliasMap = { master_plus_scene_audio: "master_audio", scene_audio_only: "scene_audio", silent_video_only: "video_only" };
+  const assemblyAudioMode = assemblyAudioModeAliasMap[rawAssemblyAudioMode] || rawAssemblyAudioMode;
+  const sceneAudioGainDb = Number.isFinite(Number(assemblyGraphNode?.data?.sceneAudioGainDb)) ? Number(assemblyGraphNode?.data?.sceneAudioGainDb) : -14;
+  const masterAudioGainDb = Number.isFinite(Number(assemblyGraphNode?.data?.masterAudioGainDb)) ? Number(assemblyGraphNode?.data?.masterAudioGainDb) : 0;
   const assemblyIntroFrame = assemblySource.introFrame;
   const assemblyHasIntro = hasIntroFramePreview(assemblyIntroFrame);
   const assemblyIntroAddsDuration = assemblyHasIntro && normalizeIntroMontageMode(assemblyIntroFrame?.montageMode) !== INTRO_MONTAGE_MODES.OVER_FIRST_SCENE;
@@ -19493,7 +19567,7 @@ Aspect ratio: ${imageFormat}`,
 
   const assemblyMasterAudioUrl = globalAudioUrlRaw || assemblySource.audioUrl || "";
   const scenesForAssemblyAudioMode = useMemo(
-    () => assemblyAudioMode === "silent_video_only"
+    () => assemblyAudioMode === "video_only"
       ? assemblyScenesForPayload.map((scene) => ({
         ...scene,
         keepGeneratedAudio: false,
@@ -19502,7 +19576,7 @@ Aspect ratio: ${imageFormat}`,
       : assemblyScenesForPayload,
     [assemblyAudioMode, assemblyScenesForPayload]
   );
-  const assemblyAudioUrlForPayload = assemblyAudioMode === "master_plus_scene_audio"
+  const assemblyAudioUrlForPayload = ["master_audio", "mix_master_scene"].includes(assemblyAudioMode)
     ? assemblyMasterAudioUrl
     : "";
 
@@ -19517,8 +19591,11 @@ Aspect ratio: ${imageFormat}`,
       audioUrl: assemblyAudioUrlForPayload,
       format: sceneFormat,
       intro: assemblyIntroFrame,
+      assemblyAudioMode,
+      sceneAudioGainDb,
+      masterAudioGainDb,
     });
-  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.scenarioFormat, assemblyAudioUrlForPayload, scenesForAssemblyAudioMode]);
+  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.scenarioFormat, assemblyAudioUrlForPayload, scenesForAssemblyAudioMode, assemblyAudioMode, sceneAudioGainDb, masterAudioGainDb]);
 
   const assemblySourceNodeId = String(assemblySource.sourceNodeId || "");
   const assemblySourceNodeType = String(assemblySource.sourceNodeType || "");
@@ -19527,20 +19604,24 @@ Aspect ratio: ${imageFormat}`,
   const assemblyIntroSourceNodeType = String(assemblySource.introSourceNodeType || "");
   const assemblyIntroDurationSec = Number(assemblyIntroFrame?.durationSec || 0);
   const assemblyIntroTitle = String(assemblyIntroFrame?.title || "");
-  const assemblyHasAudio = assemblyAudioMode === "master_plus_scene_audio"
+  const assemblyHasAudio = assemblyAudioMode === "master_audio"
     ? Boolean(assemblyMasterAudioUrl)
-    : assemblyAudioMode === "scene_audio_only"
-      ? assemblyScenesForPayload.some((scene) => Boolean(scene.keepGeneratedAudio || scene.keep_generated_audio || scene.videoHasAudio || scene.video_has_audio))
-      : false;
-  const assemblyAudioModeLabel = assemblyAudioMode === "master_plus_scene_audio"
-    ? "основное аудио"
-    : assemblyAudioMode === "scene_audio_only"
+    : assemblyAudioMode === "scene_audio"
+      ? assemblyScenesForPayload.some((scene) => Boolean(scene.keepGeneratedAudio || scene.keep_generated_audio || scene.videoHasAudio || scene.video_has_audio || scene.hasAudio))
+      : assemblyAudioMode === "mix_master_scene"
+        ? Boolean(assemblyMasterAudioUrl) || assemblyScenesForPayload.some((scene) => Boolean(scene.keepGeneratedAudio || scene.keep_generated_audio || scene.videoHasAudio || scene.video_has_audio || scene.hasAudio))
+        : false;
+  const assemblyAudioModeLabel = assemblyAudioMode === "video_only"
+    ? "без звука"
+    : assemblyAudioMode === "scene_audio"
       ? "звук сцен"
-      : "без звука";
+      : assemblyAudioMode === "mix_master_scene"
+        ? "основное + звук сцен"
+        : "основное аудио";
   const assemblyFormat = String(assemblyPayload.format || "9:16");
   const assemblyCanAssemble = assemblyPayload.scenes.length > 0 && !isAssembling;
   const assemblyDebugSummary = useMemo(
-    () => `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySourceNodeId || "none"}; introNode=${assemblyIntroSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${assemblyIntroDurationSec || 0}; audio=${assemblyHasAudio ? "yes" : "no"}`,
+    () => `main=${assemblySourceLabel}; intro=${assemblyIntroLabel}; sourceNode=${assemblySourceNodeId || "none"}; introNode=${assemblyIntroSourceNodeId || "none"}; scenes=${assemblyScenesForPayload.length}; introImage=${assemblyHasIntro ? "yes" : "no"}; introDur=${assemblyIntroDurationSec || 0}; audio=${assemblyAudioModeLabel}`,
     [
       assemblyHasAudio,
       assemblyHasIntro,
@@ -19562,6 +19643,8 @@ Aspect ratio: ${imageFormat}`,
       introSourceNodeId: assemblyIntroSourceNodeId,
       introSourceNodeType: assemblyIntroSourceNodeType,
       assemblyAudioMode,
+      sceneAudioGainDb,
+      masterAudioGainDb,
     }),
     [
       assemblyPayload,
@@ -19572,6 +19655,8 @@ Aspect ratio: ${imageFormat}`,
       assemblyIntroSourceNodeId,
       assemblyIntroSourceNodeType,
       assemblyAudioMode,
+      sceneAudioGainDb,
+      masterAudioGainDb,
     ]
   );
 
@@ -19600,6 +19685,8 @@ Aspect ratio: ${imageFormat}`,
     assemblyHasAudio,
     assemblyAudioMode,
     assemblyAudioModeLabel,
+    sceneAudioGainDb,
+    masterAudioGainDb,
     assemblyHasIntro,
     assemblyIntroAddsDuration,
     assemblyIntroDurationSec,
@@ -19906,6 +19993,8 @@ Aspect ratio: ${imageFormat}`,
     hasAudio: assemblyHasAudio,
     audioModeLabel: assemblyAudioModeLabel,
     assemblyAudioMode,
+    sceneAudioGainDb,
+    masterAudioGainDb,
     format: assemblyFormat,
     durationSec: assemblyDurationEstimateSec,
     scenesSource: assemblyScenesSource,
@@ -19933,6 +20022,8 @@ Aspect ratio: ${imageFormat}`,
     assemblyStageTotal,
     isStale: isAssemblyStale,
     onAssemblyAudioModeChange: updateAssemblyAudioMode,
+    onSceneAudioGainDbChange: updateAssemblySceneAudioGainDb,
+    onMasterAudioGainDbChange: updateAssemblyMasterAudioGainDb,
     onAssemble: stableHandleAssemblyBuild,
     onStopAssemble: stableHandleAssemblyStop,
   }), [
@@ -19944,6 +20035,8 @@ Aspect ratio: ${imageFormat}`,
     assemblyHasAudio,
     assemblyAudioMode,
     assemblyAudioModeLabel,
+    sceneAudioGainDb,
+    masterAudioGainDb,
     assemblyHasIntro,
     assemblyIntroAddsDuration,
     assemblyInfo,
@@ -19970,6 +20063,8 @@ Aspect ratio: ${imageFormat}`,
     stableHandleAssemblyBuild,
     stableHandleAssemblyStop,
     updateAssemblyAudioMode,
+    updateAssemblySceneAudioGainDb,
+    updateAssemblyMasterAudioGainDb,
   ]);
 
   const assemblyNodePatchDepsSnapshotRef = useRef(null);
@@ -25736,9 +25831,12 @@ const hydrate = useCallback((source = "unknown") => {
       const hydratedComfyScenes = extractComfyScenesFromNodes(hydratedNodes);
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
       const hydratedAssemblyNode = hydratedNodes.find((node) => node?.type === "assemblyNode") || null;
-      const hydratedAssemblyAudioMode = String(hydratedAssemblyNode?.data?.assemblyAudioMode || "master_plus_scene_audio");
+      const hydratedRawAssemblyAudioMode = String(hydratedAssemblyNode?.data?.assemblyAudioMode || "master_audio");
+      const hydratedAssemblyAudioMode = ({ master_plus_scene_audio: "master_audio", scene_audio_only: "scene_audio", silent_video_only: "video_only" }[hydratedRawAssemblyAudioMode]) || hydratedRawAssemblyAudioMode;
+      const hydratedSceneAudioGainDb = Number.isFinite(Number(hydratedAssemblyNode?.data?.sceneAudioGainDb)) ? Number(hydratedAssemblyNode?.data?.sceneAudioGainDb) : -14;
+      const hydratedMasterAudioGainDb = Number.isFinite(Number(hydratedAssemblyNode?.data?.masterAudioGainDb)) ? Number(hydratedAssemblyNode?.data?.masterAudioGainDb) : 0;
       const hydratedMasterAudioUrl = hydratedAudioUrl || hydratedAssemblySource.audioUrl || "";
-      const hydratedScenesForAudioMode = hydratedAssemblyAudioMode === "silent_video_only"
+      const hydratedScenesForAudioMode = hydratedAssemblyAudioMode === "video_only"
         ? hydratedScenes.map((scene) => ({
           ...scene,
           keepGeneratedAudio: false,
@@ -25750,9 +25848,12 @@ const hydrate = useCallback((source = "unknown") => {
         || "9:16";
       const hydratedPayload = buildAssemblyPayload({
         scenes: hydratedScenesForAudioMode,
-        audioUrl: hydratedAssemblyAudioMode === "master_plus_scene_audio" ? hydratedMasterAudioUrl : "",
+        audioUrl: ["master_audio", "mix_master_scene"].includes(hydratedAssemblyAudioMode) ? hydratedMasterAudioUrl : "",
         format: hydratedFormat,
         intro: hydratedAssemblySource.introFrame,
+        assemblyAudioMode: hydratedAssemblyAudioMode,
+        sceneAudioGainDb: hydratedSceneAudioGainDb,
+        masterAudioGainDb: hydratedMasterAudioGainDb,
       });
       const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload, {
         ...hydratedAssemblySource,

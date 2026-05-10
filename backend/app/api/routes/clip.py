@@ -612,7 +612,9 @@ def _clip_video_payload_signature(payload: ClipVideoIn, *, resolved_workflow_key
 
 class AssembleSceneIn(BaseModel):
     sceneId: str | None = None
-    videoUrl: str
+    scene_id: str | None = None
+    videoUrl: str | None = None
+    video_url: str | None = None
     requestedDurationSec: int | float | None = None
     expectedDurationSec: int | float | None = None
     providerDurationSec: int | float | None = None
@@ -635,6 +637,12 @@ class AssembleSceneIn(BaseModel):
     negative_audio_prompt: str | None = None
     mode: str | None = None
     model: str | None = None
+    duration: int | float | None = None
+    durationSec: int | float | None = None
+    videoHasAudio: bool | None = None
+    video_has_audio: bool | None = None
+    hasAudio: bool | None = None
+    renderMode: str | None = None
 
 
 class AssembleIntroIn(BaseModel):
@@ -702,6 +710,10 @@ class AssembleClipIn(BaseModel):
     scenes: list[AssembleSceneIn]
     audioMap: dict | None = None
     intro: AssembleIntroIn | None = None
+    assemblyAudioMode: str | None = "master_audio"
+    audioAssemblyMode: str | None = None
+    sceneAudioGainDb: int | float | None = -14
+    masterAudioGainDb: int | float | None = 0
 
 
 CLIP_ASSEMBLE_JOBS: dict[str, dict] = {}
@@ -6169,7 +6181,7 @@ def _extract_audio_map_segment_duration(audio_map: dict[str, Any] | None, scene:
     if not isinstance(segments, list):
         return None
 
-    target_scene_id = str(scene.sceneId or "").strip()
+    target_scene_id = str(scene.sceneId or scene.scene_id or "").strip()
     target_segment_id = str(scene.segmentId or "").strip()
     if not target_segment_id and index < len(segments):
         seg = segments[index]
@@ -16262,6 +16274,141 @@ def _build_master_audio_filter(intro: AssembleIntroIn | None) -> str:
     return ",".join(parts)
 
 
+ASSEMBLY_AUDIO_MODES = {"video_only", "scene_audio", "master_audio", "mix_master_scene"}
+ASSEMBLY_AUDIO_MODE_ALIASES = {
+    "silent_video_only": "video_only",
+    "scene_audio_only": "scene_audio",
+    "master_plus_scene_audio": "master_audio",
+    "with_master_audio": "master_audio",
+    "master": "master_audio",
+    "mix": "mix_master_scene",
+}
+
+
+def _normalize_assembly_audio_mode(payload: AssembleClipIn) -> str:
+    raw = str(payload.audioAssemblyMode or payload.assemblyAudioMode or "master_audio").strip().lower()
+    raw = ASSEMBLY_AUDIO_MODE_ALIASES.get(raw, raw)
+    return raw if raw in ASSEMBLY_AUDIO_MODES else "master_audio"
+
+
+def _ffprobe_stream_info(path: str) -> dict[str, Any]:
+    info: dict[str, Any] = {"hasAudio": False, "hasVideo": False, "durationSec": None, "audioStreams": [], "videoStreams": [], "warning": None}
+    try:
+        proc = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration:stream=index,codec_type,codec_name,duration,channels,sample_rate", "-of", "json", path],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        info["warning"] = "ffprobe_missing_install_and_add_to_PATH"
+        return info
+    if proc.returncode != 0:
+        info["warning"] = (proc.stderr or proc.stdout or "ffprobe_failed").strip()[:300]
+        return info
+    try:
+        parsed = json.loads(proc.stdout or "{}")
+    except Exception:
+        info["warning"] = "ffprobe_json_parse_failed"
+        return info
+    try:
+        duration = float(((parsed.get("format") or {}).get("duration") or ""))
+        if duration > 0:
+            info["durationSec"] = duration
+    except Exception:
+        pass
+    for stream in (parsed.get("streams") or []):
+        if not isinstance(stream, dict):
+            continue
+        codec_type = str(stream.get("codec_type") or "").lower()
+        compact = {k: stream.get(k) for k in ("index", "codec_type", "codec_name", "duration", "channels", "sample_rate") if stream.get(k) is not None}
+        if codec_type == "audio":
+            info["hasAudio"] = True
+            info["audioStreams"].append(compact)
+        elif codec_type == "video":
+            info["hasVideo"] = True
+            info["videoStreams"].append(compact)
+    return info
+
+
+def _db_filter(gain_db: float) -> str:
+    return f"volume={float(gain_db):.3f}dB" if abs(float(gain_db or 0.0)) > 0.001 else "anull"
+
+
+def _write_ffmpeg_concat_list(paths: list[str], temp_files: list[str], *, prefix: str) -> str:
+    fd, concat_path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
+    os.close(fd)
+    temp_files.append(concat_path)
+    with open(concat_path, "w", encoding="utf-8") as f:
+        for pth in paths:
+            escaped = str(pth).replace("\\", "/").replace("'", "'\\''")
+            f.write(f"file '{escaped}'\n")
+    return concat_path
+
+
+def _prepare_scene_audio_segment(
+    *,
+    idx: int,
+    scene_path: str,
+    scene_id: str,
+    expected_duration: float,
+    has_audio: bool,
+    generated_temp_assets: list[str],
+) -> tuple[str | None, str]:
+    out_path = os.path.join(str(ASSETS_DIR), f"clip_scene_audio_{idx}_{uuid4().hex}.m4a")
+    generated_temp_assets.append(out_path)
+    if has_audio:
+        audio_filter = f"atrim=duration={float(expected_duration):.3f},apad,atrim=duration={float(expected_duration):.3f},asetpts=PTS-STARTPTS"
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", scene_path,
+            "-vn",
+            "-filter:a", audio_filter,
+            "-ac", "2",
+            "-ar", "48000",
+            "-c:a", "aac",
+            out_path,
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-t", f"{float(expected_duration):.3f}",
+            "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-c:a", "aac",
+            out_path,
+        ]
+    ok, err = _run_ffmpeg(cmd)
+    if ok and os.path.isfile(out_path):
+        return out_path, ""
+    return None, f"scene_audio_prepare_failed:{scene_id}:{err}"
+
+
+def _concat_scene_audio_timeline(scene_audio_paths: list[str], temp_files: list[str], generated_temp_assets: list[str]) -> tuple[str | None, str]:
+    if not scene_audio_paths:
+        return None, "no_scene_audio_paths"
+    concat_path = _write_ffmpeg_concat_list(scene_audio_paths, temp_files, prefix="clip_audio_concat_")
+    out_path = os.path.join(str(ASSETS_DIR), f"clip_scene_audio_timeline_{uuid4().hex}.m4a")
+    generated_temp_assets.append(out_path)
+    ok, err = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", concat_path,
+        "-c:a", "aac",
+        "-ac", "2",
+        "-ar", "48000",
+        out_path,
+    ])
+    if ok and os.path.isfile(out_path):
+        return out_path, ""
+    return None, err or "scene_audio_concat_failed"
+
+
+def _probe_output_audio_info(path: str) -> tuple[bool, list[dict[str, Any]]]:
+    info = _ffprobe_stream_info(path)
+    return bool(info.get("hasAudio")), list(info.get("audioStreams") or [])
+
+
 def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     scenes = payload.scenes or []
     intro = payload.intro
@@ -16271,8 +16418,16 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
     generated_temp_assets: list[str] = []
     prepared_scenes: list[tuple[str, float]] = []
     scene_audio_mix_items: list[dict[str, Any]] = []
+    scene_audio_segment_paths: list[str] = []
+    scenes_audio_summary: list[dict[str, Any]] = []
     assembly_timing_debug: list[dict[str, Any]] = []
     final_path: str | None = None
+
+    assembly_audio_mode = _normalize_assembly_audio_mode(payload)
+    scene_audio_gain_db = _clamp_float(getattr(payload, "sceneAudioGainDb", -14), -14.0, -30.0, 0.0)
+    master_audio_gain_db = _clamp_float(getattr(payload, "masterAudioGainDb", 0), 0.0, -30.0, 6.0)
+    fallback_applied = False
+    fallback_reason = ""
 
     scene_count = len(scenes)
     has_intro = _has_valid_intro_image(intro)
@@ -16293,7 +16448,10 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 "introNodeId": str(getattr(intro, "nodeId", "") or ""),
                 "introDurationSec": intro_duration if has_intro else 0,
                 "total": total_steps,
-                "audioPresent": bool(str(payload.audioUrl or "").strip()),
+                "audioPresent": bool(str(payload.masterAudioUrl or payload.audioUrl or "").strip()),
+                "assemblyAudioMode": assembly_audio_mode,
+                "masterAudioGainDb": master_audio_gain_db,
+                "sceneAudioGainDb": scene_audio_gain_db,
                 "format": str(payload.format or "9:16"),
             },
             ensure_ascii=False,
@@ -16313,6 +16471,10 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         introIncluded=has_intro,
         introDurationSec=intro_duration if has_intro else 0,
         totalSegments=total_steps,
+        assemblyAudioMode=assembly_audio_mode,
+        audioAssemblyMode=assembly_audio_mode,
+        masterAudioGainDb=master_audio_gain_db,
+        sceneAudioGainDb=scene_audio_gain_db,
     )
 
     try:
@@ -16414,7 +16576,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 progressPercent=max(10, min(70, progress)),
             )
 
-            scene_url = str(scene.videoUrl or "").strip()
+            scene_url = str(scene.videoUrl or scene.video_url or "").strip()
             if not scene_url:
                 raise RuntimeError(f"scene_{idx}_videoUrl_required")
 
@@ -16427,6 +16589,14 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 raise RuntimeError("FFPROBE_MISSING")
             if source_duration is None:
                 continue
+
+            scene_stream_info = _ffprobe_stream_info(scene_path)
+            if scene_stream_info.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
+                raise RuntimeError("FFPROBE_MISSING")
+            source_has_audio = bool(scene_stream_info.get("hasAudio"))
+            source_has_video = bool(scene_stream_info.get("hasVideo"))
+            if not source_has_video:
+                print("[ASSEMBLY WARNING] scene_video_stream_missing", json.dumps({"jobId": job_id, "sceneId": str(scene.sceneId or scene.scene_id or f"scene_{idx+1}"), "videoUrl": scene_url}, ensure_ascii=False))
 
             expected_duration, expected_source = _resolve_expected_scene_duration_sec(scene, audio_map, idx)
             pad_duration = max(0.0, expected_duration - source_duration)
@@ -16467,6 +16637,31 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                     raise RuntimeError("FFMPEG_MISSING")
                 continue
 
+            scene_audio_summary_item = {
+                "sceneId": str(scene.sceneId or scene.scene_id or f"scene_{idx+1}"),
+                "videoUrl": scene_url,
+                "hasAudio": bool(source_has_audio),
+                "hasVideo": bool(source_has_video),
+                "durationSec": round(float(source_duration), 3),
+                "expectedDurationSec": round(float(expected_duration), 3),
+                "route": str(scene.route or getattr(scene, "renderMode", "") or "").strip(),
+                "renderMode": str(getattr(scene, "renderMode", "") or scene.mode or "").strip(),
+            }
+            scenes_audio_summary.append(scene_audio_summary_item)
+            if assembly_audio_mode in {"scene_audio", "mix_master_scene"}:
+                segment_path, segment_err = _prepare_scene_audio_segment(
+                    idx=idx,
+                    scene_path=scene_path,
+                    scene_id=scene_audio_summary_item["sceneId"],
+                    expected_duration=expected_duration,
+                    has_audio=source_has_audio,
+                    generated_temp_assets=generated_temp_assets,
+                )
+                if segment_path:
+                    scene_audio_segment_paths.append(segment_path)
+                elif segment_err:
+                    print("[ASSEMBLY WARNING]", segment_err)
+
             normalized_duration, normalized_diag = probe_media_duration_sec(normalized_path, temp_files=temp_files)
             if normalized_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
                 raise RuntimeError("FFPROBE_MISSING")
@@ -16497,7 +16692,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                                 json.dumps(
                                     {
                                         "jobId": job_id,
-                                        "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
+                                        "sceneId": str(scene.sceneId or scene.scene_id or f"scene_{idx+1}"),
                                         "route": str(scene.route or "").strip().lower(),
                                         "requestedT0": _safe_float(scene.t0),
                                         "requestedT1": _safe_float(scene.t1),
@@ -16537,7 +16732,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                 if sfx_ok and os.path.isfile(generated_audio_path):
                     generated_audio_mix_prepared = True
                     scene_audio_mix_items.append({
-                        "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
+                        "sceneId": str(scene.sceneId or scene.scene_id or f"scene_{idx+1}"),
                         "path": generated_audio_path,
                         "timelineStartSec": round(timeline_start, 3),
                         "durationSec": round(expected_duration, 3),
@@ -16554,7 +16749,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
                         pass
 
             debug_entry = {
-                "sceneId": str(scene.sceneId or f"scene_{idx+1}"),
+                "sceneId": str(scene.sceneId or scene.scene_id or f"scene_{idx+1}"),
                 "route": str(scene.route or "").strip().lower() or None,
                 "expectedStartSec": round(timeline_start, 3),
                 "expectedEndSec": round(timeline_end, 3),
@@ -16654,208 +16849,172 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         audio_url = str(payload.masterAudioUrl or payload.audioUrl or "").strip()
         master_audio_duration_sec: float | None = None
         scene_audio_mix_applied = False
-        scene_audio_mix_count = len(scene_audio_mix_items)
-        if scene_audio_mix_items:
-            print("[CLIP ASSEMBLE SCENE AUDIO MIX PLAN]", json.dumps({"jobId": job_id, "count": scene_audio_mix_count, "items": scene_audio_mix_items}, ensure_ascii=False))
-        if audio_url:
-            print(f"[CLIP ASSEMBLE] stage=audio_mux delaySec={audio_delay_sec:.3f}")
-            _update_clip_assemble_job(
-                job_id,
-                status="running",
-                stage="audio_mux",
-                label="adding audio",
-                progressPercent=92,
-            )
-            audio_path, audio_err = _resolve_media_input(audio_url, temp_files)
-            if not audio_err and audio_path:
+        scene_audio_detected_count = sum(1 for item in scenes_audio_summary if bool(item.get("hasAudio")))
+        scene_audio_missing_count = max(0, len(scenes_audio_summary) - scene_audio_detected_count)
+        scene_audio_mix_count = scene_audio_detected_count
+        scene_timeline_path: str | None = None
+        audio_path: str | None = None
+        effective_audio_mode = assembly_audio_mode
+        target_duration_sec = float(concat_video_duration_sec or (expected_timeline_duration_sec + audio_delay_sec) or 0.0)
+
+        if assembly_audio_mode in {"scene_audio", "mix_master_scene"} and scene_audio_segment_paths:
+            scene_timeline_path, scene_timeline_err = _concat_scene_audio_timeline(scene_audio_segment_paths, temp_files, generated_temp_assets)
+            if not scene_timeline_path:
+                print("[ASSEMBLY WARNING] scene_audio_timeline_failed", str(scene_timeline_err or "")[:300])
+
+        if audio_url and assembly_audio_mode in {"master_audio", "mix_master_scene"}:
+            resolved_audio_path, audio_err = _resolve_media_input(audio_url, temp_files)
+            if not audio_err and resolved_audio_path:
+                audio_path = resolved_audio_path
                 audio_probe, audio_probe_diag = probe_media_duration_sec(audio_path, temp_files=temp_files)
                 if audio_probe_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
                     raise RuntimeError("FFPROBE_MISSING")
                 if audio_probe is not None:
                     master_audio_duration_sec = float(audio_probe)
-                    if concat_video_duration_sec is not None and master_audio_duration_sec - concat_video_duration_sec > 0.08:
-                        print(
-                            "[ASSEMBLY WARNING] concat_video_shorter_than_master_audio",
-                            json.dumps(
-                                {
-                                    "jobId": job_id,
-                                    "concatVideoDurationSec": round(float(concat_video_duration_sec), 3),
-                                    "masterAudioDurationSec": round(float(master_audio_duration_sec), 3),
-                                    "deltaSec": round(float(master_audio_duration_sec - concat_video_duration_sec), 3),
-                                },
-                                ensure_ascii=False,
-                            ),
-                        )
-                    audio_mux_cmd = [
-                        "ffmpeg", "-y",
-                        "-i", assembled_no_audio,
-                        "-i", audio_path,
-                    ]
-                    for item in scene_audio_mix_items:
-                        audio_mux_cmd.extend(["-i", str(item.get("path") or "")])
 
-                    if scene_audio_mix_items:
-                        filter_parts: list[str] = []
-                        mix_labels: list[str] = []
+        if assembly_audio_mode == "mix_master_scene":
+            if not audio_path and scene_audio_detected_count > 0 and scene_timeline_path:
+                effective_audio_mode = "scene_audio"
+                fallback_applied = True
+                fallback_reason = "master_audio_missing_fallback_to_scene_audio"
+            elif audio_path and scene_audio_detected_count <= 0:
+                effective_audio_mode = "master_audio"
+                fallback_applied = True
+                fallback_reason = "scene_audio_missing_fallback_to_master_audio"
+            elif not audio_path and scene_audio_detected_count <= 0:
+                effective_audio_mode = "video_only"
+                fallback_applied = True
+                fallback_reason = "master_and_scene_audio_missing_fallback_to_video_only"
+        elif assembly_audio_mode == "scene_audio" and scene_audio_detected_count <= 0:
+            effective_audio_mode = "video_only"
+            fallback_applied = True
+            fallback_reason = "scene_audio_missing_fallback_to_video_only"
+        elif assembly_audio_mode == "master_audio" and not audio_path:
+            effective_audio_mode = "video_only"
+            fallback_applied = True
+            fallback_reason = "master_audio_missing_fallback_to_video_only"
 
-                        master_delay_ms = max(0, int(round(float(audio_delay_sec or 0.0) * 1000.0)))
-                        master_audio_filter = _build_master_audio_filter(intro)
-                        if master_delay_ms > 0:
-                            filter_parts.append(f"[1:a]adelay={master_delay_ms}|{master_delay_ms},{master_audio_filter}[a_master]")
-                        else:
-                            filter_parts.append(f"[1:a]{master_audio_filter}[a_master]")
-                        mix_labels.append("[a_master]")
+        print("[CLIP ASSEMBLE AUDIO MODE]", json.dumps({
+            "jobId": job_id,
+            "requested": assembly_audio_mode,
+            "effective": effective_audio_mode,
+            "masterAudio": bool(audio_path),
+            "sceneAudioDetectedCount": scene_audio_detected_count,
+            "sceneAudioMissingCount": scene_audio_missing_count,
+            "fallbackApplied": fallback_applied,
+            "fallbackReason": fallback_reason,
+        }, ensure_ascii=False))
 
-                        for mix_idx, item in enumerate(scene_audio_mix_items, start=2):
-                            timeline_start_sec = float(item.get("timelineStartSec") or 0.0)
-                            scene_delay_sec = max(0.0, float(audio_delay_sec or 0.0) + timeline_start_sec)
-                            scene_delay_ms = max(0, int(round(scene_delay_sec * 1000.0)))
-                            label = f"a_scene_{mix_idx}"
-                            filter_parts.append(f"[{mix_idx}:a]adelay={scene_delay_ms}|{scene_delay_ms},asetpts=PTS-STARTPTS[{label}]")
-                            mix_labels.append(f"[{label}]")
+        _update_clip_assemble_job(
+            job_id,
+            status="running",
+            stage="audio_mux" if effective_audio_mode != "video_only" else "finalizing",
+            label="adding audio" if effective_audio_mode != "video_only" else "finalizing silent video",
+            progressPercent=92,
+            assemblyAudioMode=assembly_audio_mode,
+            audioAssemblyMode=assembly_audio_mode,
+            effectiveAssemblyAudioMode=effective_audio_mode,
+            masterAudioGainDb=master_audio_gain_db,
+            sceneAudioGainDb=scene_audio_gain_db,
+            sceneAudioDetectedCount=scene_audio_detected_count,
+            sceneAudioMissingCount=scene_audio_missing_count,
+            scenesAudioSummary=scenes_audio_summary,
+            fallbackApplied=fallback_applied,
+            fallbackReason=fallback_reason,
+        )
 
-                        filter_parts.append(
-                            "".join(mix_labels)
-                            + f"amix=inputs={len(mix_labels)}:duration=longest:dropout_transition=0:normalize=0[aout]"
-                        )
-                        filter_complex = ";".join(filter_parts)
-                        print(
-                            "[CLIP ASSEMBLE AUDIO MIX FILTER]",
-                            json.dumps(
-                                {
-                                    "jobId": job_id,
-                                    "masterDelayMs": master_delay_ms,
-                                    "sceneAudioCount": len(scene_audio_mix_items),
-                                    "normalize": 0,
-                                    "mode": "master_plus_scene_audio_adelay",
-                                },
-                                ensure_ascii=False,
-                            ),
-                        )
-                        audio_mux_cmd.extend([
-                            "-filter_complex", filter_complex,
-                            "-map", "0:v:0",
-                            "-map", "[aout]",
-                            "-c:v", "copy",
-                            "-c:a", "aac",
-                            "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
-                            final_path,
-                        ])
-                    else:
-                        master_audio_filter = _build_master_audio_filter(intro)
-                        if audio_delay_sec > 0:
-                            audio_mux_cmd = [
-                                "ffmpeg", "-y",
-                                "-i", assembled_no_audio,
-                                "-itsoffset", f"{audio_delay_sec:.3f}",
-                                "-i", audio_path,
-                            ]
-                        if master_audio_filter and master_audio_filter != "asetpts=PTS-STARTPTS" and audio_delay_sec <= 0:
-                            audio_mux_cmd.extend([
-                                "-map", "0:v:0",
-                                "-map", "1:a:0",
-                                "-c:v", "copy",
-                                "-af", master_audio_filter.replace("asetpts=PTS-STARTPTS,", "").replace("asetpts=PTS-STARTPTS", "anull"),
-                                "-c:a", "aac",
-                                "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
-                                final_path,
-                            ])
-                        else:
-                            audio_mux_cmd.extend([
-                                "-map", "0:v:0",
-                                "-map", "1:a:0",
-                                "-c:v", "copy",
-                                "-c:a", "aac",
-                                "-t", f"{master_audio_duration_sec + audio_delay_sec:.3f}",
-                                final_path,
-                            ])
-                    audio_ok, audio_ffmpeg_err = _run_ffmpeg(audio_mux_cmd)
-                    if audio_ok and scene_audio_mix_items:
-                        scene_audio_mix_applied = True
-                    if audio_ok:
-                        audio_applied = True
-                    else:
-                        if audio_ffmpeg_err == "ffmpeg_missing_install_and_add_to_PATH":
-                            raise RuntimeError("FFMPEG_MISSING")
-                        copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
-                        if not copy_ok:
-                            if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                                raise RuntimeError("FFMPEG_MISSING")
-                            raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
-                else:
-                    copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
-                    if not copy_ok:
-                        if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                            raise RuntimeError("FFMPEG_MISSING")
-                        raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
+        if effective_audio_mode == "video_only":
+            copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-map", "0:v:0", "-c:v", "copy", "-an", final_path])
+            if not copy_ok:
+                if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
+        elif effective_audio_mode == "scene_audio" and scene_timeline_path:
+            delay_ms = max(0, int(round(float(audio_delay_sec or 0.0) * 1000.0)))
+            scene_chain = f"[1:a]adelay={delay_ms}|{delay_ms}," if delay_ms > 0 else "[1:a]"
+            filter_complex = f"{scene_chain}{_db_filter(scene_audio_gain_db)},apad,atrim=duration={target_duration_sec:.3f},asetpts=PTS-STARTPTS[aout]"
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", assembled_no_audio,
+                "-i", scene_timeline_path,
+                "-filter_complex", filter_complex,
+                "-map", "0:v:0",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-t", f"{target_duration_sec:.3f}",
+                final_path,
+            ]
+            ok, err = _run_ffmpeg(cmd)
+            if ok:
+                audio_applied = True
+                scene_audio_mix_applied = True
             else:
-                copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
-                if not copy_ok:
-                    if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                        raise RuntimeError("FFMPEG_MISSING")
-                    raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
+                if err == "ffmpeg_missing_install_and_add_to_PATH":
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"ASSEMBLE_FAILED:{err}")
+        elif effective_audio_mode == "master_audio" and audio_path:
+            master_filter_parts = [_build_master_audio_filter(intro), _db_filter(master_audio_gain_db), "apad", f"atrim=duration={target_duration_sec:.3f}", "asetpts=PTS-STARTPTS"]
+            master_filter = ",".join([part for part in master_filter_parts if part and part != "anull"])
+            if audio_delay_sec > 0:
+                master_filter = f"adelay={int(round(audio_delay_sec * 1000))}|{int(round(audio_delay_sec * 1000))}," + master_filter
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", assembled_no_audio,
+                "-i", audio_path,
+                "-filter_complex", f"[1:a]{master_filter}[aout]",
+                "-map", "0:v:0",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-t", f"{target_duration_sec:.3f}",
+                final_path,
+            ]
+            ok, err = _run_ffmpeg(cmd)
+            if ok:
+                audio_applied = True
+            else:
+                if err == "ffmpeg_missing_install_and_add_to_PATH":
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"ASSEMBLE_FAILED:{err}")
+        elif effective_audio_mode == "mix_master_scene" and audio_path and scene_timeline_path:
+            scene_delay_ms = max(0, int(round(float(audio_delay_sec or 0.0) * 1000.0)))
+            master_delay_ms = max(0, int(round(float(audio_delay_sec or 0.0) * 1000.0)))
+            master_chain = f"adelay={master_delay_ms}|{master_delay_ms}," if master_delay_ms > 0 else ""
+            scene_chain = f"adelay={scene_delay_ms}|{scene_delay_ms}," if scene_delay_ms > 0 else ""
+            filter_complex = ";".join([
+                f"[1:a]{master_chain}{_build_master_audio_filter(intro)},{_db_filter(master_audio_gain_db)},apad,atrim=duration={target_duration_sec:.3f},asetpts=PTS-STARTPTS[a_master]",
+                f"[2:a]{scene_chain}{_db_filter(scene_audio_gain_db)},apad,atrim=duration={target_duration_sec:.3f},asetpts=PTS-STARTPTS[a_scene]",
+                "[a_master][a_scene]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,"
+                f"atrim=duration={target_duration_sec:.3f},asetpts=PTS-STARTPTS[aout]",
+            ])
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", assembled_no_audio,
+                "-i", audio_path,
+                "-i", scene_timeline_path,
+                "-filter_complex", filter_complex,
+                "-map", "0:v:0",
+                "-map", "[aout]",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-t", f"{target_duration_sec:.3f}",
+                final_path,
+            ]
+            ok, err = _run_ffmpeg(cmd)
+            if ok:
+                audio_applied = True
+                scene_audio_mix_applied = True
+            else:
+                if err == "ffmpeg_missing_install_and_add_to_PATH":
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"ASSEMBLE_FAILED:{err}")
         else:
-            if scene_audio_mix_items:
-                audio_mux_cmd = ["ffmpeg", "-y", "-i", assembled_no_audio]
-                for item in scene_audio_mix_items:
-                    audio_mux_cmd.extend(["-i", str(item.get("path") or "")])
-
-                filter_parts: list[str] = []
-                mix_labels: list[str] = []
-                base_delay_sec = float(audio_delay_sec or 0.0)
-                for input_idx, item in enumerate(scene_audio_mix_items, start=1):
-                    timeline_start_sec = float(item.get("timelineStartSec") or 0.0)
-                    scene_delay_sec = max(0.0, base_delay_sec + timeline_start_sec)
-                    scene_delay_ms = max(0, int(round(scene_delay_sec * 1000.0)))
-                    label = f"a_scene_{input_idx}"
-                    filter_parts.append(f"[{input_idx}:a]adelay={scene_delay_ms}|{scene_delay_ms},asetpts=PTS-STARTPTS[{label}]")
-                    mix_labels.append(f"[{label}]")
-
-                filter_parts.append(
-                    "".join(mix_labels)
-                    + f"amix=inputs={len(mix_labels)}:duration=longest:dropout_transition=0:normalize=0[aout]"
-                )
-                filter_complex = ";".join(filter_parts)
-                print(
-                    "[CLIP ASSEMBLE AUDIO MIX FILTER]",
-                    json.dumps(
-                        {
-                            "jobId": job_id,
-                            "baseDelaySec": round(base_delay_sec, 3),
-                            "sceneAudioCount": len(scene_audio_mix_items),
-                            "normalize": 0,
-                            "mode": "scene_audio_only_adelay",
-                        },
-                        ensure_ascii=False,
-                    ),
-                )
-                audio_mux_cmd.extend([
-                    "-filter_complex", filter_complex,
-                    "-map", "0:v:0",
-                    "-map", "[aout]",
-                    "-c:v", "copy",
-                    "-c:a", "aac",
-                    "-t", f"{float(expected_timeline_duration_sec + audio_delay_sec):.3f}",
-                    final_path,
-                ])
-                copy_ok, copy_err = _run_ffmpeg(audio_mux_cmd)
-                if copy_ok:
-                    scene_audio_mix_applied = True
-                    audio_applied = True
-                else:
-                    if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                        raise RuntimeError("FFMPEG_MISSING")
-                    fallback_ok, fallback_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
-                    if not fallback_ok:
-                        if fallback_err == "ffmpeg_missing_install_and_add_to_PATH":
-                            raise RuntimeError("FFMPEG_MISSING")
-                        raise RuntimeError(f"ASSEMBLE_FAILED:{fallback_err}")
-            else:
-                copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-c", "copy", final_path])
-                if not copy_ok:
-                    if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
-                        raise RuntimeError("FFMPEG_MISSING")
-                    raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
+            copy_ok, copy_err = _run_ffmpeg(["ffmpeg", "-y", "-i", assembled_no_audio, "-map", "0:v:0", "-c:v", "copy", "-an", final_path])
+            if not copy_ok:
+                if copy_err == "ffmpeg_missing_install_and_add_to_PATH":
+                    raise RuntimeError("FFMPEG_MISSING")
+                raise RuntimeError(f"ASSEMBLE_FAILED:{copy_err}")
 
         if not os.path.isfile(final_path):
             raise RuntimeError("final_file_not_created")
@@ -16863,6 +17022,7 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
         final_video_duration_sec, final_video_diag = probe_media_duration_sec(final_path, temp_files=temp_files)
         if final_video_diag.get("warning") == "ffprobe_missing_install_and_add_to_PATH":
             raise RuntimeError("FFPROBE_MISSING")
+        output_has_audio, output_audio_stream_info = _probe_output_audio_info(final_path)
         max_scene_delta = max(
             [abs(float(item.get("sceneDurationDeltaSec") or 0.0)) for item in assembly_timing_debug] or [0.0]
         )
@@ -16882,6 +17042,18 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             "sceneAudioMixCount": int(scene_audio_mix_count),
             "sceneAudioMixApplied": bool(scene_audio_mix_applied),
             "sceneAudioMixItems": scene_audio_mix_items,
+            "assemblyAudioMode": assembly_audio_mode,
+            "audioAssemblyMode": assembly_audio_mode,
+            "effectiveAssemblyAudioMode": effective_audio_mode,
+            "masterAudioGainDb": round(float(master_audio_gain_db), 3),
+            "sceneAudioGainDb": round(float(scene_audio_gain_db), 3),
+            "sceneAudioDetectedCount": int(scene_audio_detected_count),
+            "sceneAudioMissingCount": int(scene_audio_missing_count),
+            "outputHasAudio": bool(output_has_audio),
+            "outputAudioStreamInfo": output_audio_stream_info,
+            "scenesAudioSummary": scenes_audio_summary,
+            "fallbackApplied": bool(fallback_applied),
+            "fallbackReason": fallback_reason or None,
         }
         print("[ASSEMBLY TIMING SUMMARY]", json.dumps(assembly_timing_summary, ensure_ascii=False))
 
@@ -16895,6 +17067,18 @@ def _run_clip_assemble_job(job_id: str, payload: AssembleClipIn):
             progressPercent=100,
             finalVideoUrl=final_video_url,
             audioApplied=audio_applied,
+            assemblyAudioMode=assembly_audio_mode,
+            audioAssemblyMode=assembly_audio_mode,
+            effectiveAssemblyAudioMode=effective_audio_mode,
+            masterAudioGainDb=master_audio_gain_db,
+            sceneAudioGainDb=scene_audio_gain_db,
+            sceneAudioDetectedCount=scene_audio_detected_count,
+            sceneAudioMissingCount=scene_audio_missing_count,
+            outputHasAudio=output_has_audio,
+            outputAudioStreamInfo=output_audio_stream_info,
+            scenesAudioSummary=scenes_audio_summary,
+            fallbackApplied=fallback_applied,
+            fallbackReason=fallback_reason or None,
             sceneAudioMixApplied=scene_audio_mix_applied,
             sceneAudioMixCount=scene_audio_mix_count,
             sceneAudioMixItems=scene_audio_mix_items,
