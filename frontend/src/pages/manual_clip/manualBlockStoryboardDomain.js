@@ -220,6 +220,97 @@ const PHOTO_OVERLAY_POLICY_EN = "For i2v/source images, default to a clean image
 
 const CHATGPT_TASK = "BLOCK STORYBOARD PASS / РАСКАДРОВКА ОДНОГО БЛОКА. Используй общий Story Bible проекта и данные выбранного блока. Сделай visual bible блока и prompts для всех сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. video_prompt, negative_prompt, sound_prompt оставить пустыми. Не переписывай Story Pass поля: translated_text_ru, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru, block_progress_ru. Используй их только как контекст. Заполняй только block storyboard fields и scene image/i2v prompt fields. Важно для фото-раскадровки: не повторяй одну и ту же композицию между сценами блока. Сохраняй общий мир и стиль, но меняй точку наблюдения, микролокацию, передний план, высоту камеры и драматическую функцию кадра. Делай кадры так, будто камера подсматривает за живым миром, а не снимает стандартные открытки. Если нужен стиль скрытого наблюдения, делай его через композицию и оптику, а не через текстовый HUD. Не добавляй UI/text overlays в source images unless explicitly requested.";
 
+
+const LTX_VIDEO_PROMPT_CANON_RU = `
+LTX VIDEO PROMPT CANON:
+Каждый video_prompt должен начинаться с привязки к исходной картинке:
+"Use the uploaded image as the exact first frame and visual anchor."
+
+Всегда сохранять:
+- ту же локацию
+- тот же свет
+- ту же геометрию фона
+- тот же стиль
+- тот же мир
+- те же ключевые объекты/животных, если они есть
+
+Каждая сцена должна иметь:
+1) одну понятную функцию сцены: entrance / reveal / observation / tension / transition / setup / aftermath
+2) одно главное движение камеры: slow push-in / gentle pull-back / side tracking / low creeping forward move / subtle lateral reveal / controlled parallax
+3) 2–4 слоя живой среды: grass sways, mist drifts, dust moves, clouds move slowly, light changes gradually, water ripples, foreground branches move slightly, distant birds/animals move subtly
+4) ограниченную и реалистичную динамику: documentary, grounded, controlled, natural, no music-video chaos
+
+Запрещать:
+dead static camera, orbit/spin, hard zoom, fast drone move, chaotic shake, impossible camera move, sudden scene change, identity/world/location drift, warped animals, melting trees/grass, flickering sky, text/HUD/UI overlays.
+`;
+
+const LTX_CAMERA_MOVE_BANK = {
+  verified_safe: [
+    "slow push-in",
+    "very slow push-in",
+    "gentle pull-back",
+    "side tracking with controlled parallax",
+    "low creeping forward move",
+    "subtle lateral reveal",
+    "small handheld documentary drift",
+    "controlled camera settle"
+  ],
+  experimental_use_carefully: [
+    "subtle arc with clear parallax",
+    "small reframing pan",
+    "attention shift reveal"
+  ],
+  avoid_by_default: [
+    "orbit",
+    "spin",
+    "fast drone",
+    "hard zoom",
+    "whip pan",
+    "chaotic handheld",
+    "large camera arc",
+    "matrix-like slow motion"
+  ]
+};
+
+const LTX_ENVIRONMENTAL_MOTION_BANK = [
+  "grass_sways",
+  "mist_or_dust_drifts",
+  "clouds_move_slowly",
+  "light_changes_gradually",
+  "water_or_puddles_ripple",
+  "foreground_occluders_move_slightly",
+  "distant_birds_move_subtly",
+  "distant_animals_move_subtly",
+  "camera_parallax_reveals_depth"
+];
+
+const LTX_NEGATIVE_PROMPT_GUIDANCE = {
+  common: [
+    "dead static image",
+    "sudden scene change",
+    "identity drift",
+    "location drift",
+    "world change",
+    "warped animals",
+    "melting trees",
+    "melting grass",
+    "flickering sky",
+    "text overlay",
+    "HUD",
+    "REC overlay",
+    "UI elements",
+    "orbit camera",
+    "spin camera",
+    "hard zoom",
+    "chaotic shake",
+    "fast drone movement",
+    "CGI look",
+    "cartoon look",
+    "surreal motion"
+  ],
+  note: "Не перегружать negative prompt. Выбирать только релевантные риски сцены, чтобы не заморозить движение."
+};
+
 const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры. Для i2v_text обязательно используй voice_preset_bank и default_voice_config: speech_text должен звучать тем же выбранным голосом по проекту, если сцена явно не переопределяет voice_preset_id. sound_prompt должен включать точную фразу, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits. Для i2v_sound не добавляй speech_text, narrator, human voice или spoken words — только натуральную атмосферу.";
 
 function toStringId(value = "") {
@@ -353,7 +444,7 @@ function buildCompactSceneForVideoPrompt(scene = {}, project = {}) {
     ...pickFields(scene, VIDEO_CONTEXT_FIELDS),
   };
 
-  const route = String(compact.route || "").trim();
+  const route = String(compact.route || "i2v").trim().toLowerCase();
   const projectVoicePresetId = project?.voice_preset_id || "narrator_male_documentary_en";
   const voicePresetId = compact.voice_preset_id || projectVoicePresetId;
   const voicePreset = VOICE_PRESET_BANK[voicePresetId] || VOICE_PRESET_BANK.narrator_male_documentary_en;
@@ -374,8 +465,18 @@ function buildCompactSceneForVideoPrompt(scene = {}, project = {}) {
     compact.negative_voice_traits = compact.negative_voice_traits || voicePreset?.negative_voice_traits || "";
     compact.speech_text = compact.speech_text || resolveSpeechTextForVideo(scene, compact.voice_language);
     compact.ambient_sound_prompt = compact.ambient_sound_prompt || "quiet natural ambience under the voice, low volume, no music overpowering narration";
+  } else if (route === "i2v_sound") {
+    compact.audio_mode = compact.audio_mode || "ambience";
+    compact.voice_mode = "none";
+    compact.speech_text = "";
+    compact.voice_preset_id = "";
+    compact.voice_role = "none";
+    compact.voice_gender = "";
+    compact.voice_profile = "";
+    compact.delivery_style = "";
+    compact.negative_voice_traits = "";
   } else {
-    compact.speech_text = compact.speech_text || resolveSpeechTextForVideo(scene, compact.voice_language);
+    compact.speech_text = compact.speech_text || "";
   }
 
   return compact;
@@ -392,8 +493,16 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
     chatgpt_task: VIDEO_CHATGPT_TASK,
     format: project?.format || "9:16",
     aspect_ratio: project?.format || "9:16",
+    ltx_video_prompt_canon_ru: LTX_VIDEO_PROMPT_CANON_RU,
+    ltx_camera_move_bank: LTX_CAMERA_MOVE_BANK,
+    ltx_environmental_motion_bank: LTX_ENVIRONMENTAL_MOTION_BANK,
+    ltx_negative_prompt_guidance: LTX_NEGATIVE_PROMPT_GUIDANCE,
     route_rules: {
-      i2v: { audio_mode: "none или ambience" },
+      i2v: {
+        audio_mode: "none или ambience",
+        video_prompt: "Use uploaded image as exact first frame. Write one clear camera move + 2–4 living environment layers + scene function. Do not write speech. Keep motion restrained and documentary.",
+        sound_prompt: "Optional. Empty if no generated ambience is needed.",
+      },
       i2v_sound: {
         audio_mode: "ambience",
         voice_mode: "none",
