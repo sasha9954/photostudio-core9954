@@ -30,10 +30,20 @@ const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
-function readManualActiveProject(sourceNodeId = "") {
+function readManualActiveProject(sourceNodeId = "", navigationProject = null) {
   const nodeProject = readManualClipBoardProjectForNode(sourceNodeId);
   const activeProject = readActiveManualClipBoardProject();
-  return pickBestManualClipBoardProject([nodeProject, activeProject]) || activeProject || nodeProject;
+  const bestProject = pickBestManualClipBoardProject([nodeProject, activeProject, navigationProject]) || activeProject || nodeProject || navigationProject;
+  const source = bestProject === nodeProject
+    ? "node-scoped"
+    : (bestProject === activeProject ? "active" : (bestProject === navigationProject ? "node" : "unknown"));
+  if (bestProject) {
+    console.info("[MANUAL BOARD HYDRATE] picked project", {
+      source,
+      stats: getManualClipBoardMaterialStats(bestProject),
+    });
+  }
+  return bestProject;
 }
 
 function persistManualProject(nextProject = {}, options = {}) {
@@ -492,6 +502,45 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
   };
 }
 
+const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
+  "image_url",
+  "image_preview_url",
+  "start_image_url",
+  "end_image_url",
+  "video_url",
+  "videoUrl",
+  "video_job_id",
+  "video_has_audio",
+  "status",
+  "video_request_payload_preview",
+  "generated_audio_policy",
+  "generated_audio_gain_db",
+  "keep_generated_audio",
+];
+
+function isEmptyImportedMaterialValue(value) {
+  if (value === false || value === null || value === undefined) return true;
+  return String(value).trim() === "";
+}
+
+function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScenes = []) {
+  const currentById = new Map((Array.isArray(currentScenes) ? currentScenes : []).map((scene) => [String(scene?.scene_id || scene?.id || "").trim(), scene]));
+  return (Array.isArray(importedScenes) ? importedScenes : []).map((incomingScene) => {
+    const sceneId = String(incomingScene?.scene_id || incomingScene?.id || "").trim();
+    const currentScene = currentById.get(sceneId);
+    if (!currentScene) return incomingScene;
+    const nextScene = { ...(currentScene || {}), ...(incomingScene || {}) };
+    IMPORT_EMPTY_PROTECTED_SCENE_FIELDS.forEach((field) => {
+      const incomingHasField = Object.prototype.hasOwnProperty.call(incomingScene || {}, field);
+      if (!incomingHasField) return;
+      const incomingIsEmpty = isEmptyImportedMaterialValue(incomingScene?.[field]);
+      const currentHasValue = String(currentScene?.[field] ?? "").trim() !== "";
+      if (incomingIsEmpty && currentHasValue) nextScene[field] = currentScene[field];
+    });
+    return nextScene;
+  });
+}
+
 function buildStoryPositionFallback(scene = {}, idx = 0, total = 0) {
   if (idx === 0) return "начало";
   if (idx === total - 1) return "финал";
@@ -574,7 +623,8 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   useEffect(() => {
-    const parsedProject = embedded ? embeddedProject : readManualActiveProject(sourceNodeIdFromRoute);
+    const navigationProject = location.state?.director_board || location.state?.project || null;
+    const parsedProject = embedded ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject) : readManualActiveProject(sourceNodeIdFromRoute, navigationProject);
     if (!hasMeaningfulManualProject(parsedProject)) {
       setProject(null);
       setSelectedSceneId("");
@@ -594,7 +644,7 @@ export default function ManualClipDirectorBoardEditor({
     } finally {
       didHydrateRef.current = true;
     }
-  }, [embedded, embeddedProject, sourceNodeIdFromRoute]);
+  }, [embedded, embeddedProject, sourceNodeIdFromRoute, location.state]);
 
   useEffect(() => {
     projectRef.current = project;
@@ -762,8 +812,11 @@ export default function ManualClipDirectorBoardEditor({
     const parsed = unwrapManualProjectBackupJson(rawProject);
     const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
     const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
-    const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
+    const importedScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
+    const mergedScenes = mergeImportedScenesPreservingMaterials(projectRef.current?.scenes || project?.scenes || [], importedScenes);
+    const scenes = mergedScenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup));
     const nextProject = {
+      ...(projectRef.current || project || {}),
       ...parsed,
       story_blocks: storyBlocks,
       scenes,

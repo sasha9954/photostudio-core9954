@@ -25606,8 +25606,16 @@ return base;
       lastPersistReason: reason,
     };
 
-    setActiveManualBoardProject(safeProject);
-    persistManualClipBoardProject(safeProject, { reason });
+    const persisted = persistManualClipBoardProject(safeProject, { reason });
+    const protectedProject = persisted
+      ? safeProject
+      : (pickBestManualClipBoardProject([
+        readManualClipBoardProjectForNode(safeSourceNodeId),
+        readActiveManualClipBoardProject(),
+        safeProject,
+      ]) || safeProject);
+
+    setActiveManualBoardProject(protectedProject);
 
     setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
       if (nodeItem.id !== safeSourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
@@ -25615,7 +25623,7 @@ return base;
         ...nodeItem,
         data: {
           ...nodeItem.data,
-          director_board: safeProject,
+          director_board: protectedProject,
         },
       };
     }), {

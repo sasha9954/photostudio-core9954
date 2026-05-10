@@ -131,23 +131,87 @@ export function unwrapManualProjectBackupJson(raw = {}) {
 
 export function getManualClipBoardMaterialStats(project = {}) {
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const readyStatuses = new Set(["video_ready", "video_running", "video_queued"]);
+  const hasText = (value) => String(value || "").trim().length > 0;
+  const hasTruthyMaterial = (value) => value === true || hasText(value);
+  const sceneHasImage = (scene = {}) => Boolean(
+    hasText(scene?.image_url)
+    || hasText(scene?.image_preview_url)
+    || hasText(scene?.start_image_url)
+    || hasText(scene?.end_image_url)
+  );
+  const sceneHasVideo = (scene = {}) => Boolean(hasText(scene?.video_url) || hasText(scene?.videoUrl));
+  const sceneHasPrompt = (scene = {}) => Boolean(
+    hasText(scene?.video_prompt)
+    || hasText(scene?.negative_prompt)
+    || hasText(scene?.sound_prompt)
+    || hasText(scene?.negative_audio_prompt)
+  );
+  const sceneHasJob = (scene = {}) => hasText(scene?.video_job_id);
+  const sceneHasReadyStatus = (scene = {}) => readyStatuses.has(String(scene?.status || "").trim());
+  const sceneHasGeneratedAudio = (scene = {}) => {
+    const hasCustomGain = Object.prototype.hasOwnProperty.call(scene || {}, "generated_audio_gain_db")
+      && hasText(scene?.generated_audio_gain_db)
+      && Number(scene?.generated_audio_gain_db) !== -6;
+    return Boolean(
+      hasText(scene?.generated_audio_policy)
+      || hasTruthyMaterial(scene?.keep_generated_audio)
+      || hasCustomGain
+    );
+  };
+  const sceneHasPayloadPreview = (scene = {}) => hasText(scene?.video_request_payload_preview);
+  const sceneHasVideoAudioFlag = (scene = {}) => scene?.video_has_audio === true;
   const customRouteCount = scenes.filter((scene) => {
     const route = String(scene?.route || "").trim().toLowerCase();
     return route && route !== "i2v";
   }).length;
+  const imageCount = scenes.filter(sceneHasImage).length;
+  const videoCount = scenes.filter(sceneHasVideo).length;
+  const promptCount = scenes.filter(sceneHasPrompt).length;
+  const jobCount = scenes.filter(sceneHasJob).length;
+  const readyStatusCount = scenes.filter(sceneHasReadyStatus).length;
+  const generatedAudioCount = scenes.filter(sceneHasGeneratedAudio).length;
+  const payloadPreviewCount = scenes.filter(sceneHasPayloadPreview).length;
+  const videoAudioFlagCount = scenes.filter(sceneHasVideoAudioFlag).length;
+  const materialTotal = scenes.filter((scene) => (
+    sceneHasImage(scene)
+    || sceneHasVideo(scene)
+    || sceneHasPrompt(scene)
+    || sceneHasJob(scene)
+    || sceneHasReadyStatus(scene)
+    || sceneHasGeneratedAudio(scene)
+    || sceneHasPayloadPreview(scene)
+    || sceneHasVideoAudioFlag(scene)
+    || (String(scene?.route || "").trim().toLowerCase() && String(scene?.route || "").trim().toLowerCase() !== "i2v")
+  )).length;
+
   return {
     scenes: scenes.length,
-    images: scenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length,
-    prompts: scenes.filter((scene) => String(scene?.video_prompt || scene?.negative_prompt || scene?.sound_prompt || "").trim()).length,
-    videos: scenes.filter((scene) => String(scene?.video_url || scene?.videoUrl || "").trim()).length,
+    images: imageCount,
+    imageCount,
+    prompts: promptCount,
+    promptCount,
+    videos: videoCount,
+    videoCount,
+    videoJobs: jobCount,
+    readyStatuses: readyStatusCount,
+    generatedAudio: generatedAudioCount,
+    payloadPreviews: payloadPreviewCount,
+    videoHasAudio: videoAudioFlagCount,
     customRoutes: customRouteCount,
-    materialTotal: scenes.filter((scene) => (
-      String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()
-      || String(scene?.video_prompt || scene?.negative_prompt || scene?.sound_prompt || "").trim()
-      || String(scene?.video_url || scene?.videoUrl || "").trim()
-      || (String(scene?.route || "").trim().toLowerCase() && String(scene?.route || "").trim().toLowerCase() !== "i2v")
-    )).length,
+    materialTotal,
   };
+}
+
+export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, existingProject, options = {}) {
+  if (options?.forceReplace || options?.explicitReset || options?.allowMaterialLoss) return false;
+  const nextStats = getManualClipBoardMaterialStats(nextProject);
+  const existingStats = getManualClipBoardMaterialStats(existingProject);
+  if (existingStats.materialTotal <= 0) return false;
+  return nextStats.materialTotal < existingStats.materialTotal
+    || nextStats.videoCount < existingStats.videoCount
+    || nextStats.imageCount < existingStats.imageCount
+    || nextStats.promptCount < existingStats.promptCount;
 }
 
 export function scoreManualClipBoardProject(project = {}) {
@@ -157,9 +221,14 @@ export function scoreManualClipBoardProject(project = {}) {
     stats,
     updatedAt,
     score:
-      stats.videos * 100000
-      + stats.images * 10000
-      + stats.prompts * 1000
+      stats.videoCount * 100000
+      + stats.imageCount * 10000
+      + stats.videoJobs * 6000
+      + stats.readyStatuses * 4000
+      + stats.promptCount * 1000
+      + stats.generatedAudio * 700
+      + stats.payloadPreviews * 600
+      + stats.videoHasAudio * 550
       + stats.customRoutes * 500
       + stats.materialTotal * 100
       + stats.scenes
@@ -180,14 +249,20 @@ export function pickBestManualClipBoardProject(candidates = []) {
       if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) {
         return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
       }
-      if (b.scoreData.stats.videos !== a.scoreData.stats.videos) {
-        return b.scoreData.stats.videos - a.scoreData.stats.videos;
+      if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
+        return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
       }
-      if (b.scoreData.stats.images !== a.scoreData.stats.images) {
-        return b.scoreData.stats.images - a.scoreData.stats.images;
+      if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) {
+        return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
       }
-      if (b.scoreData.stats.prompts !== a.scoreData.stats.prompts) {
-        return b.scoreData.stats.prompts - a.scoreData.stats.prompts;
+      if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
+        return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
+      }
+      if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
+        return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
+      }
+      if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) {
+        return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
       }
       if (b.scoreData.stats.customRoutes !== a.scoreData.stats.customRoutes) {
         return b.scoreData.stats.customRoutes - a.scoreData.stats.customRoutes;
@@ -399,19 +474,39 @@ export function readActiveManualClipBoardProject() {
 export function persistManualClipBoardProject(project = {}, options = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const forceReplace = Boolean(options?.forceReplace);
+  const explicitReset = Boolean(options?.explicitReset);
   const reason = String(options?.reason || safeProject?.lastPersistReason || "");
-  const existing = readActiveManualClipBoardProject();
+  const nodeId = String(safeProject?.nodeId || safeProject?.sourceNodeId || "").trim();
+  const nodeScopedExisting = nodeId ? readManualClipBoardProjectForNode(nodeId) : null;
+  const activeExisting = readActiveManualClipBoardProject();
+  const existing = pickBestManualClipBoardProject([nodeScopedExisting, activeExisting]);
   const existingStats = getManualClipBoardMaterialStats(existing);
-  const incomingStats = getManualClipBoardMaterialStats(safeProject);
+  const nextStats = getManualClipBoardMaterialStats(safeProject);
+
+  if (shouldSkipManualBoardPersistToProtectMaterials(safeProject, existing, options)) {
+    console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
+      nodeId,
+      existingStats,
+      nextStats,
+      reason: reason || "incoming_project_has_fewer_materials",
+    });
+    return false;
+  }
 
   if (
     !forceReplace
+    && !explicitReset
     && hasMeaningfulManualProject(existing)
     && existingStats.materialTotal > 0
-    && incomingStats.materialTotal === 0
-    && incomingStats.scenes >= existingStats.scenes * 0.8
+    && nextStats.materialTotal === 0
+    && nextStats.scenes >= existingStats.scenes * 0.8
   ) {
-    console.warn("[manual board persist blocked] refusing to overwrite rich board with empty snapshot", { reason, existingStats, incomingStats });
+    console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
+      nodeId,
+      existingStats,
+      nextStats,
+      reason: reason || "incoming_project_empty_material_snapshot",
+    });
     return false;
   }
 
@@ -419,7 +514,6 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     writeCanonicalManualClipBoardProject(safeProject);
     const serialized = JSON.stringify(safeProject);
     localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
-    const nodeId = String(safeProject?.nodeId || "").trim();
     if (nodeId) {
       localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
       localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
@@ -436,6 +530,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       canonicalKey: getManualClipBoardCanonicalStorageKey(),
       reason,
       forceReplace,
+      explicitReset,
       stats: getManualClipBoardMaterialStats(safeProject),
       selectedSceneId: safeProject.selectedSceneId,
       updatedAt: safeProject.updatedAt,

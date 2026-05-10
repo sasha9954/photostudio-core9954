@@ -493,6 +493,18 @@ function pickPresentFields(source = {}, fields = []) {
   }, {});
 }
 
+
+function removeEmptyProtectedMaterialClears(patch = {}, currentScene = {}, protectedFields = []) {
+  const nextPatch = { ...(patch || {}) };
+  protectedFields.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(nextPatch, field)) return;
+    const incomingIsEmpty = String(nextPatch[field] ?? "").trim() === "";
+    const currentHasValue = String(currentScene?.[field] ?? "").trim() !== "";
+    if (incomingIsEmpty && currentHasValue) delete nextPatch[field];
+  });
+  return nextPatch;
+}
+
 function normalizeSourcePhraseIdsForCompare(value = []) {
   return (Array.isArray(value) ? value : [])
     .map((id) => String(id || "").trim())
@@ -829,7 +841,11 @@ export function applyManualBlockStoryboardImport(project = {}, rawPayload = {}) 
   const nextScenes = (Array.isArray(project?.scenes) ? project.scenes : []).map((scene) => {
     if (toStringId(scene?.story_block_id) !== targetBlockId) return scene;
     const incoming = incomingById.get(toStringId(scene?.scene_id)) || {};
-    const scenePatch = pickPresentFields(incoming, [...SCENE_OUTPUT_FIELDS, ...SCENE_IMAGE_URL_FIELDS]);
+    const scenePatch = removeEmptyProtectedMaterialClears(
+      pickPresentFields(incoming, [...SCENE_OUTPUT_FIELDS, ...SCENE_IMAGE_URL_FIELDS]),
+      scene,
+      SCENE_IMAGE_URL_FIELDS,
+    );
     return {
       ...scene,
       ...scenePatch,
