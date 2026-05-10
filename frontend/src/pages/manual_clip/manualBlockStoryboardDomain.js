@@ -333,6 +333,96 @@ const LTX_CAMERA_MOVE_BANK = {
 const I2V_SOUND_PROMPT_POLICY_RU = "Для i2v_sound финальный sound_prompt должен быть только позитивным описанием raw natural field recording. Не писать в sound_prompt слова music, score, melody, soundtrack, rhythm, drums, synth, strings, narrator, voice, speech, spoken words, dialogue, human voice даже с отрицанием. Запреты музыки и голоса должны быть в отдельном negative_audio_prompt, но не в positive sound_prompt.";
 const I2V_SOUND_PROMPT_POLICY_EN = "For i2v_sound, the final sound_prompt must be a positive raw natural field recording description only. Do not include music, score, melody, soundtrack, rhythm, drums, synth, strings, narrator, voice, speech, spoken words, dialogue, or human voice inside the sound_prompt, even as negatives. Put music and voice bans in the separate negative_audio_prompt, not the positive sound_prompt.";
 
+const LTX_I2V_SOUND_WORKING_CANON_V2 = {
+  purpose: "Working canon for i2v_sound video pass: preserve the uploaded photo and generate restrained visible motion with short physical ambience.",
+  video_prompt_must_not_import_story_bible_beauty_words: true,
+  forbidden_video_prompt_phrases: [
+    "sun appears",
+    "first light touches",
+    "savanna glows",
+    "golden glow",
+    "magical sunrise",
+    "cinematic atmosphere",
+    "emotional documentary ambience"
+  ],
+  video_prompt_required_language: [
+    "Use the uploaded image as the exact first frame and visual anchor.",
+    "same location",
+    "same horizon",
+    "same visible objects",
+    "lighting stays natural and stable",
+    "animate only visible grass, water, mist, clouds, or leaves"
+  ],
+  video_prompt_rules: [
+    "Do not write poetic sunrise, cinematic atmosphere, or emotional documentary descriptions in i2v_sound video_prompt.",
+    "Do not transfer beautiful Story Bible words into i2v_sound video_prompt; convert them into factual continuity locks and visible physical motion only.",
+    "Pick exactly one camera_motion from ltx_camera_motion_strength_bank and name it in the video_prompt.",
+    "Do not mix multiple camera moves in one scene.",
+    "For wildlife hidden observation or ground-level frames, prefer handheld_observer_creep.",
+    "For strict source photo preservation, use balanced_visible_push_in or safe_static_plus."
+  ],
+  sound_prompt_rules: [
+    "sound_prompt must be short and physical, describing only natural location sound.",
+    "Use wind, grass, insects, birds, water ripples, vegetation rustle, mud, dust, or distant animal movement when visible or plausible for the location.",
+    "Do not put audio bans or negative words into sound_prompt; keep negative_audio_prompt separate."
+  ],
+  negative_audio_prompt_required_terms: [
+    "music",
+    "background music",
+    "soundtrack",
+    "score",
+    "melody",
+    "instruments",
+    "rhythm",
+    "vocals",
+    "narrator",
+    "speech",
+    "human voice"
+  ],
+  negative_prompt_required_terms: [
+    "color shift",
+    "dramatic lighting change",
+    "rebuilt environment"
+  ]
+};
+
+const LTX_CAMERA_MOTION_STRENGTH_BANK = {
+  safe_static_plus: {
+    camera_motion: "safe_static_plus",
+    strength: "safest / strict photo preservation",
+    prompt_phrase: "camera_motion: safe_static_plus — almost locked-off documentary shot with only a tiny natural camera settle; no pan, no orbit, no zoom",
+    use_for: "Use when the source photo identity, horizon, composition, and object placement must stay nearly unchanged.",
+    environment_motion: "Rely on subtle visible grass, water, mist, clouds, or leaves for life in the frame."
+  },
+  balanced_visible_push_in: {
+    camera_motion: "balanced_visible_push_in",
+    strength: "controlled / visible but conservative",
+    prompt_phrase: "camera_motion: balanced_visible_push_in — one very slow push-in that preserves the same horizon, same location, same visible objects, and stable natural lighting",
+    use_for: "Default for strict source-photo preservation when a little visible motion is needed.",
+    environment_motion: "Add 2–4 visible environment layers only from existing grass, water, mist, clouds, or leaves."
+  },
+  handheld_observer_creep: {
+    camera_motion: "handheld_observer_creep",
+    strength: "hidden observer / ground-level wildlife observation",
+    prompt_phrase: "camera_motion: handheld_observer_creep — one low, slow, handheld observer creep with tiny natural sway, as if watching from grass or cover",
+    use_for: "Prefer for wildlife hidden observation, ground-level animal-path frames, grass-level viewpoints, or concealed documentary positions.",
+    environment_motion: "Keep the move restrained; foreground grass/leaves may shift slightly while the location and horizon remain the same."
+  },
+  selection_rules: [
+    "Choose exactly one camera_motion per video_prompt.",
+    "Do not combine push-in, lateral reveal, pan, parallax, or handheld drift in the same prompt.",
+    "For wildlife hidden observation / ground-level кадра prefer handheld_observer_creep.",
+    "For strict source-photo preservation prefer balanced_visible_push_in or safe_static_plus."
+  ]
+};
+
+const I2V_SOUND_PROMPT_TEMPLATE_V2 = {
+  video_prompt: "Use the uploaded image as the exact first frame and visual anchor. camera_motion: {camera_motion_from_ltx_camera_motion_strength_bank}. Preserve same location, same horizon, same visible objects; lighting stays natural and stable. Animate only visible {visible_environment_layers}: grass/water/mist/clouds/leaves move subtly. No poetic sunrise or cinematic atmosphere language.",
+  sound_prompt: "Short raw natural field recording: {wind/grass/insects/birds/water ripples/vegetation rustle}. Physical location sound only.",
+  negative_prompt: "color shift, dramatic lighting change, rebuilt environment, changed horizon, changed location, new objects, new animals, sudden scene change, identity drift, warped animals, melting grass, flickering sky, text, HUD, UI, orbit camera, spin camera, hard zoom, chaotic shake, multiple camera moves",
+  negative_audio_prompt: "music, background music, soundtrack, score, melody, instruments, rhythm, vocals, narrator, speech, human voice"
+};
+
 const LTX_ENVIRONMENTAL_MOTION_BANK = [
   "grass_sways",
   "mist_or_dust_drifts",
@@ -352,6 +442,9 @@ const LTX_NEGATIVE_PROMPT_GUIDANCE = {
     "identity drift",
     "location drift",
     "world change",
+    "color shift",
+    "dramatic lighting change",
+    "rebuilt environment",
     "warped animals",
     "melting trees",
     "melting grass",
@@ -372,7 +465,7 @@ const LTX_NEGATIVE_PROMPT_GUIDANCE = {
   note: "Не перегружать negative prompt. Выбирать только релевантные риски сцены, чтобы не заморозить движение."
 };
 
-const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt, negative_audio_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры. Для i2v_text обязательно используй voice_preset_bank и default_voice_config: speech_text должен звучать тем же выбранным голосом по проекту, если сцена явно не переопределяет voice_preset_id. Для i2v_text: sound_prompt должен включать точную фразу, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits. Для i2v_sound: sound_prompt должен быть только позитивным описанием raw natural field recording. negative_audio_prompt должен отдельно запрещать music/background music/cinematic score/melody/rhythm/drums/synth/strings/vocals/speech/narrator/human voice. Не добавлять voice_profile, delivery_style, speech_text, narrator или negative_voice_traits в i2v_sound. Если сцена wildlife/nature, писать звук как raw field recording, а не cinematic documentary ambience. Важно: для i2v_sound не копируй слова narrator, voice, speech, spoken words, dialogue, human voice в финальный sound_prompt даже с отрицанием. Финальный sound_prompt должен быть только позитивным описанием натуральной атмосферы.";
+const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt, negative_audio_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры. Для i2v_text обязательно используй voice_preset_bank и default_voice_config: speech_text должен звучать тем же выбранным голосом по проекту, если сцена явно не переопределяет voice_preset_id. Для i2v_text: sound_prompt должен включать точную фразу, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits. Для i2v_sound: не переносить красивые слова Story Bible в video_prompt и не писать poetic/cinematic sunrise descriptions; запрещены формулировки sun appears, first light touches, savanna glows, golden glow, magical sunrise, cinematic atmosphere, emotional documentary ambience. Вместо этого писать same location, same horizon, same visible objects, lighting stays natural and stable, animate only visible grass/water/mist/clouds/leaves. В video_prompt выбрать ровно один camera_motion из ltx_camera_motion_strength_bank и не смешивать несколько camera moves. negative_prompt должен включать запреты color shift / dramatic lighting change / rebuilt environment. sound_prompt должен быть только коротким позитивным физическим описанием raw natural field recording: wind, grass, insects, birds, water ripples, vegetation rustle. negative_audio_prompt должен отдельно запрещать music/background music/soundtrack/score/melody/instruments/rhythm/vocals/narrator/speech/human voice. Не добавлять voice_profile, delivery_style, speech_text, narrator или negative_voice_traits в i2v_sound. Если сцена wildlife/nature, писать звук как raw field recording, а не cinematic documentary ambience. Важно: для i2v_sound не копируй слова narrator, voice, speech, spoken words, dialogue, human voice в финальный sound_prompt даже с отрицанием. Финальный sound_prompt должен быть только позитивным описанием натуральной атмосферы.";
 
 function toStringId(value = "") {
   return String(value || "").trim();
@@ -557,6 +650,9 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
     ltx_video_prompt_canon_ru: LTX_VIDEO_PROMPT_CANON_RU,
     i2v_sound_prompt_policy_ru: I2V_SOUND_PROMPT_POLICY_RU,
     i2v_sound_prompt_policy_en: I2V_SOUND_PROMPT_POLICY_EN,
+    ltx_i2v_sound_working_canon_v2: LTX_I2V_SOUND_WORKING_CANON_V2,
+    ltx_camera_motion_strength_bank: LTX_CAMERA_MOTION_STRENGTH_BANK,
+    i2v_sound_prompt_template_v2: I2V_SOUND_PROMPT_TEMPLATE_V2,
     ltx_camera_move_bank: LTX_CAMERA_MOVE_BANK,
     ltx_environmental_motion_bank: LTX_ENVIRONMENTAL_MOTION_BANK,
     ltx_negative_prompt_guidance: LTX_NEGATIVE_PROMPT_GUIDANCE,
@@ -571,10 +667,11 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
         voice_mode: "none",
         speech_text: "",
         sound_prompt_required: true,
-        sound_prompt_rule: "Only positive raw natural field recording description. Do not mention music, score, melody, narrator, voice, spoken words, dialogue or speech inside the final sound_prompt. Use field tone, wind, grass, birds, insects, water/mud/puddles, dust, distant animal movement and subtle environmental sound.",
+        sound_prompt_rule: "Only short positive physical raw natural field recording description. Use wind, grass, insects, birds, water ripples, vegetation rustle, mud, dust, or distant animal movement. Do not mention music, score, melody, narrator, voice, spoken words, dialogue or speech inside the final sound_prompt.",
         negative_audio_prompt_required: true,
-        negative_audio_prompt_rule: "Use a separate negative_audio_prompt to block music and voices. Do not put these negative words inside positive sound_prompt. negative_audio_prompt should include: music, background music, cinematic score, melody, chords, pads, synth, strings, drums, rhythm, beat, trailer music, emotional soundtrack, orchestral ambience, choir, vocals, speech, narrator, human voice.",
-        video_prompt_rule: "Use uploaded image as exact first frame. Use exactly one restrained camera move; for image identity preservation prefer almost static documentary shot with very small push-in plus 2–4 environment motion layers. Do not combine lateral reveal, push-in and parallax in one scene. Do not request new animals, herds or story events unless required by the source image/story.",
+        negative_audio_prompt_rule: "Use a separate negative_audio_prompt to block music and voices. Do not put these negative words inside positive sound_prompt. negative_audio_prompt should include: music, background music, soundtrack, score, melody, instruments, rhythm, vocals, narrator, speech, human voice.",
+        video_prompt_rule: "Do not import poetic/cinematic Story Bible wording into i2v_sound video_prompt. Use uploaded image as exact first frame; write same location, same horizon, same visible objects, lighting stays natural and stable. Pick exactly one camera_motion from ltx_camera_motion_strength_bank; prefer handheld_observer_creep for wildlife hidden observation / ground-level кадра, and balanced_visible_push_in or safe_static_plus for strict source photo preservation. Animate only visible grass/water/mist/clouds/leaves. Do not combine multiple camera moves or request new animals, herds or story events unless required by the source image/story.",
+        negative_prompt_rule: "negative_prompt must include color shift, dramatic lighting change, rebuilt environment plus relevant identity/location drift and camera-move bans.",
       },
       i2v_text: {
         audio_mode: "narration_or_speech",
@@ -613,7 +710,7 @@ Background ambience: {ambient_sound_prompt}.
 Mix: speech clear, natural and close, ambience low under the voice.
 Avoid voice traits: {negative_voice_traits}.`,
     },
-    i2v_sound_sound_prompt_template: "Raw natural location field recording only: {ambient_sound_prompt}. Keep it realistic, irregular, environmental, low-volume and non-musical. Use only real outdoor field tone, wind, grass movement, insects, distant birds, water, dust, distant animal movement or other natural location sounds. Avoid cinematic scoring language in the positive prompt.",
+    i2v_sound_sound_prompt_template: I2V_SOUND_PROMPT_TEMPLATE_V2.sound_prompt,
     project_story_bible: pickFields(project, STORY_BIBLE_FIELDS),
     target_block_id: targetBlockId,
     target_block: { ...(selectedBlock || {}), block_id: targetBlockId },
