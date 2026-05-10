@@ -161,6 +161,9 @@ export default function ManualTimingNode({ id, data }) {
   const [activeBoardProject, setActiveBoardProject] = useState(() => readActiveManualClipBoardProject());
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
   const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
+  const activeBoardImageCount = activeBoardScenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length;
+  const activeBoardPromptCount = activeBoardScenes.filter((scene) => String(scene?.video_prompt || "").trim()).length;
+  const activeBoardVideoCount = activeBoardScenes.filter((scene) => String(scene?.video_url || "").trim()).length;
 
 
   useEffect(() => {
@@ -230,24 +233,19 @@ export default function ManualTimingNode({ id, data }) {
 
   const onOpenEditor = () => {
     const activeProject = readActiveManualClipBoardProject();
-    if (hasMeaningfulManualProject(activeProject)) {
-      setActiveBoardProject(activeProject);
-      const createNew = window.confirm("Уже есть активная режиссёрская доска. OK — начать новый разбор из текущей ноды, Отмена — продолжить существующую доску.");
-      if (!createNew) {
-        navigate("/studio/manual-clip-board");
-        return;
-      }
-      const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
-      if (!confirmed) return;
-    }
+    if (hasMeaningfulManualProject(activeProject)) setActiveBoardProject(activeProject);
     persistProject();
     navigate("/studio/manual-timing");
   };
 
   const onReturnToActiveBoard = () => {
     const activeProject = readActiveManualClipBoardProject();
-    if (hasMeaningfulManualProject(activeProject)) setActiveBoardProject(activeProject);
-    navigate("/studio/manual-clip-board");
+    if (hasMeaningfulManualProject(activeProject)) {
+      setActiveBoardProject(activeProject);
+      navigate("/studio/manual-clip-board?mode=open_existing");
+      return;
+    }
+    setActiveBoardProject(activeProject);
   };
 
   const onDownloadActiveBoardBackup = () => {
@@ -381,7 +379,7 @@ export default function ManualTimingNode({ id, data }) {
 
         {hasMeaningfulManualProject(activeBoardProject) ? <div className="manualTimingNode_activeBoard">
           <div className="manualTimingNode_activeBoardTitle">🎬 Активная режиссёрская доска</div>
-          <div className="manualTimingNode_activeBoardMeta">Сцен: {activeBoardScenes.length} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject.updatedAt || activeBoardProject.updated_at)}</div>
+          <div className="manualTimingNode_activeBoardMeta">Сцен: {activeBoardScenes.length} · Фото: {activeBoardImageCount} · Промты: {activeBoardPromptCount} · Видео: {activeBoardVideoCount} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject.updatedAt || activeBoardProject.updated_at)}</div>
           <div className="manualTimingNode_activeBoardActions">
             <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onReturnToActiveBoard}>Вернуться в доску</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadActiveBoardBackup}>Скачать backup</button>

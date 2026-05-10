@@ -481,6 +481,8 @@ export default function ManualClipDirectorPage() {
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
   const didHydrateRef = useRef(false);
+  const projectRef = useRef(null);
+  const selectedSceneIdRef = useRef("");
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
@@ -513,11 +515,66 @@ export default function ManualClipDirectorPage() {
     }
   }, []);
 
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
+    selectedSceneIdRef.current = selectedSceneId;
+  }, [selectedSceneId]);
+
   const persistProject = (nextProject) => {
-    setProject(nextProject);
-    if (!didHydrateRef.current || !hasMeaningfulManualProject(nextProject)) return;
-    persistManualProject(nextProject);
+    const safeProject = {
+      ...(nextProject || {}),
+      selectedSceneId: String(nextProject?.selectedSceneId || selectedSceneIdRef.current || ""),
+      updatedAt: Date.now(),
+    };
+    projectRef.current = safeProject;
+    selectedSceneIdRef.current = safeProject.selectedSceneId;
+    setProject(safeProject);
+    if (!didHydrateRef.current || !hasMeaningfulManualProject(safeProject)) return;
+    persistManualProject(safeProject);
   };
+
+  const safePersistCurrentProject = (reason = "manual_director_safe_persist") => {
+    const currentProject = projectRef.current || project;
+    if (!hasMeaningfulManualProject(currentProject)) return false;
+
+    const safeProject = {
+      ...currentProject,
+      selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "",
+      updatedAt: Date.now(),
+      lastPersistReason: reason,
+    };
+
+    projectRef.current = safeProject;
+    selectedSceneIdRef.current = safeProject.selectedSceneId;
+    persistManualProject(safeProject);
+    setProject(safeProject);
+    return true;
+  };
+
+  useEffect(() => {
+    const persistBeforeLeave = () => {
+      const currentProject = projectRef.current;
+      if (!hasMeaningfulManualProject(currentProject)) return;
+      persistManualProject({
+        ...currentProject,
+        selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || "",
+        updatedAt: Date.now(),
+        lastPersistReason: "pagehide_or_unmount",
+      });
+    };
+
+    window.addEventListener("pagehide", persistBeforeLeave);
+    window.addEventListener("beforeunload", persistBeforeLeave);
+
+    return () => {
+      persistBeforeLeave();
+      window.removeEventListener("pagehide", persistBeforeLeave);
+      window.removeEventListener("beforeunload", persistBeforeLeave);
+    };
+  }, []);
 
   const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
@@ -1268,7 +1325,15 @@ export default function ManualClipDirectorPage() {
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">
-      <button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Назад к AI-разбивке</button>
+      <button
+        className="clipSB_btn"
+        onClick={() => {
+          safePersistCurrentProject("back_to_ai_split");
+          navigate("/studio/storyboard");
+        }}
+      >
+        Назад к AI-разбивке
+      </button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
