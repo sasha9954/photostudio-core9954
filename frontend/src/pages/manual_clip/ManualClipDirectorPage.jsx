@@ -890,11 +890,7 @@ export default function ManualClipDirectorPage() {
   };
 
   const playFullAudio = () => {
-    const audioEl = quickListenAudioRef.current;
-    const duration = getQuickListenDurationSec();
-    const current = Number(audioEl?.currentTime || 0);
-    const start = duration > 0 && current >= duration - 0.05 ? 0 : current || 0;
-    playQuickListenRange("full", start, null);
+    playQuickListenRange("full", 0, null);
   };
 
   const onQuickListenTimeUpdate = () => {
@@ -914,6 +910,11 @@ export default function ManualClipDirectorPage() {
     stopOrPauseCurrentPlayback();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioUrl]);
+
+  useEffect(() => {
+    stopOrPauseCurrentPlayback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSceneId]);
 
   const onCopyBlockStoryboardJson = async () => {
     try {
