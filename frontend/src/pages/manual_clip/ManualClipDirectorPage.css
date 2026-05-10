@@ -698,16 +698,38 @@
   min-width: 0;
 }
 
-.manualBlockCopyActions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
+.manualBlockWorkflowActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  flex-wrap: wrap;
+  width: min(520px, 100%);
+  margin-left: auto;
 }
 
-.manualBlockCopyActions .clipSB_btn {
+.manualBlockWorkflowActions .clipSB_btn,
+.manualBlockWorkflowActions .manualUploadBtn {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 13px;
   white-space: nowrap;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.manualBlockWorkflowActions .manualBlockPhotoBtn {
+  border-color: rgba(96, 165, 250, 0.55);
+  background: rgba(37, 99, 235, 0.16);
+}
+
+.manualBlockWorkflowActions .manualBlockVideoBtn {
+  border-color: rgba(251, 191, 36, 0.58);
+  background: rgba(217, 119, 6, 0.16);
+}
+
+.manualBlockWorkflowActions .manualBlockImportBtn {
+  opacity: 0.9;
 }
 
 .manualBlockCopyStatus {
@@ -752,7 +774,22 @@
     flex-direction: column;
   }
 
-  .manualBlockCopyActions {
-    justify-content: flex-start;
+  .manualBlockWorkflowActions {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .manualBlockWorkflowActions {
+    width: 100%;
+    margin-left: 0;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .manualBlockWorkflowActions .clipSB_btn,
+  .manualBlockWorkflowActions .manualUploadBtn {
+    font-size: 12px;
+    padding: 7px 8px;
   }
 }

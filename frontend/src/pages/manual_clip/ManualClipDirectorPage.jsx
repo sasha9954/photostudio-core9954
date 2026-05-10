@@ -4,8 +4,9 @@ import { fetchJson } from "../../services/api.js";
 import { buildStoryPrepTemplateText, STORY_PREP_TEMPLATE_META } from "../clip_nodes/manual/manualClipBoardDomain";
 import {
   applyManualBlockStoryboardImport,
-  buildManualBlockStoryboardBriefText,
+  applyManualBlockVideoPromptImport,
   buildManualBlockStoryboardContextJson,
+  buildManualBlockVideoPromptContextJson,
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildManualProjectBackupJson,
@@ -436,10 +437,34 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     adapted_text_en: String(scene.adapted_text_en || ""),
     scene_role_in_block_ru: String(scene.scene_role_in_block_ru || ""),
     block_progress_ru: String(scene.block_progress_ru || ""),
+    scene_global_context_ru: String(scene.scene_global_context_ru || ""),
+    continuity_anchor_ru: String(scene.continuity_anchor_ru || ""),
+    must_match_project_identity_ru: String(scene.must_match_project_identity_ru || ""),
+    must_match_block_style_ru: String(scene.must_match_block_style_ru || ""),
+    storyboard_frame_role_ru: String(scene.storyboard_frame_role_ru || ""),
+    source_image_prompt_en: String(scene.source_image_prompt_en || ""),
+    source_image_prompt_ru: String(scene.source_image_prompt_ru || ""),
+    source_image_negative_prompt_en: String(scene.source_image_negative_prompt_en || ""),
+    i2v_prompt_en: String(scene.i2v_prompt_en || ""),
+    i2v_negative_prompt_en: String(scene.i2v_negative_prompt_en || ""),
+    composition_ru: String(scene.composition_ru || ""),
+    camera_angle_ru: String(scene.camera_angle_ru || ""),
+    subject_lock_ru: String(scene.subject_lock_ru || ""),
+    background_lock_ru: String(scene.background_lock_ru || ""),
+    continuity_from_previous_scene_ru: String(scene.continuity_from_previous_scene_ru || ""),
+    must_keep_same_ru: String(scene.must_keep_same_ru || ""),
+    allowed_variation_ru: String(scene.allowed_variation_ru || ""),
     source_phrase_ids: normalizeSourcePhraseIds(scene.source_phrase_ids || scene.sourcePhraseIds),
     video_prompt: String(scene.video_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
+    audio_mode: String(scene.audio_mode || ""),
+    voice_mode: String(scene.voice_mode || ""),
+    voice_language: String(scene.voice_language || ""),
+    speech_text: String(scene.speech_text || ""),
+    voice_profile: String(scene.voice_profile || ""),
+    ambient_sound_prompt: String(scene.ambient_sound_prompt || ""),
+    sound_mix_note_ru: String(scene.sound_mix_note_ru || ""),
     song_block_id: String(scene.song_block_id || ""),
     song_block_type: String(scene.song_block_type || ""),
     song_block_title_ru: String(scene.song_block_title_ru || ""),
@@ -458,7 +483,6 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     speaker_text_ru: String(scene.speaker_text_ru || ""),
     generated_speech_required: Boolean(scene.generated_speech_required),
     voice_profile_id: String(scene.voice_profile_id || ""),
-    voice_profile: String(scene.voice_profile || ""),
     narrator_voice_profile_en: String(scene.narrator_voice_profile_en || ""),
     negative_voice_traits: String(scene.negative_voice_traits || ""),
     broll_hint_ru: String(scene.broll_hint_ru || ""),
@@ -628,6 +652,13 @@ export default function ManualClipDirectorPage() {
         window.setTimeout(() => setBackupStatus(""), 2200);
         return;
       }
+      const blockVideoPromptProject = applyManualBlockVideoPromptImport(project || {}, parsed);
+      if (blockVideoPromptProject) {
+        persistProject(blockVideoPromptProject);
+        setBackupStatus("Видео-промты блока импортированы");
+        window.setTimeout(() => setBackupStatus(""), 2200);
+        return;
+      }
       restoreManualProjectObject(parsed, "Backup восстановлен");
     } catch (error) {
       setBackupStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
@@ -716,29 +747,78 @@ export default function ManualClipDirectorPage() {
     window.setTimeout(() => setBlockCopyStatus(""), 1800);
   };
 
+  const buildCurrentManualBlockProject = () => ({ ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId });
+
   const onCopyBlockStoryboardJson = async () => {
     try {
       const payload = buildManualBlockStoryboardContextJson(
-        { ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId },
+        buildCurrentManualBlockProject(),
         selectedBlockContextId,
       );
       await navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
-      flashBlockCopyStatus(`JSON блока скопирован: ${payload.scenes.length} сцен`);
+      flashBlockCopyStatus(`JSON фото блока скопирован: ${payload.scenes.length} сцен`);
     } catch (error) {
-      flashBlockCopyStatus(`Не удалось скопировать JSON блока: ${error?.message || "ошибка"}`);
+      flashBlockCopyStatus(`Не удалось скопировать JSON фото: ${error?.message || "ошибка"}`);
     }
   };
 
-  const onCopyBlockStoryboardBrief = async () => {
+  const onCopyBlockVideoPromptJson = async () => {
     try {
-      const text = buildManualBlockStoryboardBriefText(
-        { ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId },
+      const payload = buildManualBlockVideoPromptContextJson(
+        buildCurrentManualBlockProject(),
         selectedBlockContextId,
       );
-      await navigator.clipboard?.writeText(text);
-      flashBlockCopyStatus("Текст блока скопирован");
+      await navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
+      flashBlockCopyStatus(`JSON видео блока скопирован: ${payload.scenes.length} сцен`);
     } catch (error) {
-      flashBlockCopyStatus(`Не удалось скопировать текст блока: ${error?.message || "ошибка"}`);
+      flashBlockCopyStatus(`Не удалось скопировать JSON видео: ${error?.message || "ошибка"}`);
+    }
+  };
+
+
+  const assertImportedBlockMatchesSelection = (payload = {}) => {
+    const importedBlockId = String(
+      payload?.target_block_id
+      || payload?.target_block?.block_id
+      || payload?.story_block?.block_id
+      || payload?.block_id
+      || "",
+    ).trim();
+    const selectedBlockId = String(selectedBlockContextId || "").trim();
+    if (importedBlockId && selectedBlockId && importedBlockId !== selectedBlockId) {
+      throw new Error(`import_block_mismatch:${importedBlockId}/${selectedBlockId}`);
+    }
+  };
+
+  const onImportBlockStoryboardFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      assertImportedBlockMatchesSelection(parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : parsed);
+      const nextProject = applyManualBlockStoryboardImport(buildCurrentManualBlockProject(), parsed);
+      if (!nextProject) throw new Error("manual_block_storyboard_split_type_expected");
+      persistProject(nextProject);
+      flashBlockCopyStatus("Раскадровка/фото блока импортированы");
+    } catch (error) {
+      flashBlockCopyStatus(`Не удалось импортировать фото JSON: ${error?.message || "ошибка"}`);
+    }
+  };
+
+  const onImportBlockVideoPromptFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      assertImportedBlockMatchesSelection(parsed?.payload && typeof parsed.payload === "object" ? parsed.payload : parsed);
+      const nextProject = applyManualBlockVideoPromptImport(buildCurrentManualBlockProject(), parsed);
+      if (!nextProject) throw new Error("manual_block_video_prompt_split_type_expected");
+      persistProject(nextProject);
+      flashBlockCopyStatus("Видео-промты блока импортированы");
+    } catch (error) {
+      flashBlockCopyStatus(`Не удалось импортировать видео JSON: ${error?.message || "ошибка"}`);
     }
   };
 
@@ -1136,9 +1216,27 @@ export default function ManualClipDirectorPage() {
         <div className="storyboardSceneBlockHeader">
           <div className="storyboardSceneBlockTitleRow">
             <h2>Сцена {selectedScene.index}</h2>
-            <div className="manualBlockCopyActions">
-              <button type="button" className="clipSB_btn" onClick={onCopyBlockStoryboardJson}>Скопировать JSON блока</button>
-              <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={onCopyBlockStoryboardBrief}>Скопировать текст блока</button>
+            <div className="manualBlockWorkflowActions" aria-label="Workflow JSON блока">
+              <button
+                type="button"
+                className="clipSB_btn manualBlockPhotoBtn"
+                title="Скопировать JSON блока для генерации фото / раскадровки"
+                onClick={onCopyBlockStoryboardJson}
+              >🖼 JSON фото</button>
+              <button
+                type="button"
+                className="clipSB_btn manualBlockVideoBtn"
+                title="Скопировать JSON блока для video prompts"
+                onClick={onCopyBlockVideoPromptJson}
+              >🎬 JSON видео</button>
+              <label
+                className="clipSB_btn manualUploadBtn manualBlockPhotoBtn manualBlockImportBtn"
+                title="Импортировать JSON раскадровки блока"
+              >📥 Загрузить фото<input type="file" accept=".json,application/json" hidden onChange={onImportBlockStoryboardFile} /></label>
+              <label
+                className="clipSB_btn manualUploadBtn manualBlockVideoBtn manualBlockImportBtn"
+                title="Импортировать JSON видео-промтов блока"
+              >📥 Загрузить видео<input type="file" accept=".json,application/json" hidden onChange={onImportBlockVideoPromptFile} /></label>
             </div>
           </div>
           {selectedScene.story_block_title_ru ? <div className="storyboardSceneBlockBadge" style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>
