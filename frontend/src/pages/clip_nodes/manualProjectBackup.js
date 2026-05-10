@@ -211,7 +211,12 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
   return nextStats.materialTotal < existingStats.materialTotal
     || nextStats.videoCount < existingStats.videoCount
     || nextStats.imageCount < existingStats.imageCount
-    || nextStats.promptCount < existingStats.promptCount;
+    || nextStats.promptCount < existingStats.promptCount
+    || nextStats.videoJobs < existingStats.videoJobs
+    || nextStats.readyStatuses < existingStats.readyStatuses
+    || nextStats.generatedAudio < existingStats.generatedAudio
+    || nextStats.payloadPreviews < existingStats.payloadPreviews
+    || nextStats.videoHasAudio < existingStats.videoHasAudio;
 }
 
 export function scoreManualClipBoardProject(project = {}) {
