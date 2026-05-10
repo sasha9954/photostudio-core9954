@@ -236,12 +236,17 @@ LTX VIDEO PROMPT CANON:
 
 Каждая сцена должна иметь:
 1) одну понятную функцию сцены: entrance / reveal / observation / tension / transition / setup / aftermath
-2) одно главное движение камеры: slow push-in / gentle pull-back / side tracking / low creeping forward move / subtle lateral reveal / controlled parallax
+2) только одно главное движение камеры: slow push-in / gentle pull-back / side tracking / low creeping forward move / subtle lateral reveal / controlled parallax
 3) 2–4 слоя живой среды: grass sways, mist drifts, dust moves, clouds move slowly, light changes gradually, water ripples, foreground branches move slightly, distant birds/animals move subtly
 4) ограниченную и реалистичную динамику: documentary, grounded, controlled, natural, no music-video chaos
 
+Для i2v/i2v_sound не комбинировать больше одного camera move в одной сцене.
+Не использовать одновременно lateral reveal + push-in + parallax, если сцена должна сохранять исходную картинку.
+Если важно сохранить image identity/source photo identity, использовать: "almost static documentary shot with very small push-in" + motion only from environment layers.
+Не просить new animals / herd / story event, если они не должны появиться из уже заданного кадра и Story Bible.
+
 Запрещать:
-dead static camera, orbit/spin, hard zoom, fast drone move, chaotic shake, impossible camera move, sudden scene change, identity/world/location drift, warped animals, melting trees/grass, flickering sky, text/HUD/UI overlays.
+dead static camera, orbit/spin, hard zoom, fast drone move, chaotic shake, impossible camera move, sudden scene change, identity/world/location drift, warped animals, melting trees/grass, flickering sky, text/HUD/UI overlays, combined multi-move camera instructions, unnecessary new animals/herd/story events.
 `;
 
 const LTX_CAMERA_MOVE_BANK = {
@@ -271,6 +276,9 @@ const LTX_CAMERA_MOVE_BANK = {
     "matrix-like slow motion"
   ]
 };
+
+const I2V_SOUND_PROMPT_POLICY_RU = "Для i2v_sound финальный sound_prompt должен быть только позитивным описанием натуральной атмосферы. Не писать в sound_prompt слова narrator, voice, speech, spoken words, dialogue, human voice даже с отрицанием. Если нужно запретить голос — это должно быть отдельной технической настройкой/negative audio field, но не частью positive sound_prompt.";
+const I2V_SOUND_PROMPT_POLICY_EN = "For i2v_sound, the final sound_prompt must be a positive natural ambience description only. Do not include the words narrator, voice, speech, spoken words, dialogue, or human voice inside the sound_prompt, even as negatives. If voice must be disabled, use a separate technical flag/negative audio field, not the positive sound_prompt.";
 
 const LTX_ENVIRONMENTAL_MOTION_BANK = [
   "grass_sways",
@@ -494,13 +502,15 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
     format: project?.format || "9:16",
     aspect_ratio: project?.format || "9:16",
     ltx_video_prompt_canon_ru: LTX_VIDEO_PROMPT_CANON_RU,
+    i2v_sound_prompt_policy_ru: I2V_SOUND_PROMPT_POLICY_RU,
+    i2v_sound_prompt_policy_en: I2V_SOUND_PROMPT_POLICY_EN,
     ltx_camera_move_bank: LTX_CAMERA_MOVE_BANK,
     ltx_environmental_motion_bank: LTX_ENVIRONMENTAL_MOTION_BANK,
     ltx_negative_prompt_guidance: LTX_NEGATIVE_PROMPT_GUIDANCE,
     route_rules: {
       i2v: {
         audio_mode: "none или ambience",
-        video_prompt: "Use uploaded image as exact first frame. Write one clear camera move + 2–4 living environment layers + scene function. Do not write speech. Keep motion restrained and documentary.",
+        video_prompt: "Use uploaded image as exact first frame. Write exactly one clear camera move + 2–4 living environment layers + scene function. Do not combine multiple camera moves. For image identity preservation prefer almost static documentary shot with very small push-in. Do not write speech. Keep motion restrained and documentary.",
         sound_prompt: "Optional. Empty if no generated ambience is needed.",
       },
       i2v_sound: {
@@ -508,8 +518,8 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
         voice_mode: "none",
         speech_text: "",
         sound_prompt_required: true,
-        sound_prompt_rule: "Only natural ambience. No narrator, no human voice, no spoken words. Use wind, grass, birds, insects, water/mud/puddles, dust, distant animals, field tone.",
-        video_prompt_rule: "Use uploaded image as exact first frame. One camera move + 2–4 living environment layers + scene function.",
+        sound_prompt_rule: "Only positive natural ambience description. Do not mention narrator, voice, spoken words, dialogue or speech inside the final sound_prompt. Use field tone, wind, grass, birds, insects, water/mud/puddles, dust, distant animal movement and subtle environmental sound.",
+        video_prompt_rule: "Use uploaded image as exact first frame. Use exactly one restrained camera move; for image identity preservation prefer almost static documentary shot with very small push-in plus 2–4 environment motion layers. Do not combine lateral reveal, push-in and parallax in one scene. Do not request new animals, herds or story events unless required by the source image/story.",
       },
       i2v_text: {
         audio_mode: "narration_or_speech",
@@ -548,7 +558,7 @@ Background ambience: {ambient_sound_prompt}.
 Mix: speech clear, natural and close, ambience low under the voice.
 Avoid voice traits: {negative_voice_traits}.`,
     },
-    i2v_sound_sound_prompt_template: "Natural scene ambience only. No narrator, no spoken words, no human voice. Include: {ambient_sound_prompt}. Keep the sound realistic, subtle and documentary. No loud music, no synthetic sound, no overpowering effects.",
+    i2v_sound_sound_prompt_template: "Natural scene ambience only: {ambient_sound_prompt}. Keep the sound realistic, subtle, documentary, low-volume and environmental. Use only field tone, wind, grass, birds, insects, water, dust, distant animal movement or other natural location sounds.",
     project_story_bible: pickFields(project, STORY_BIBLE_FIELDS),
     target_block_id: targetBlockId,
     target_block: { ...(selectedBlock || {}), block_id: targetBlockId },
