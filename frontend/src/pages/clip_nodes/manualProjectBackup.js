@@ -115,15 +115,21 @@ export function unwrapManualProjectBackupJson(raw = {}) {
 
 export function getManualClipBoardMaterialStats(project = {}) {
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const customRouteCount = scenes.filter((scene) => {
+    const route = String(scene?.route || "").trim().toLowerCase();
+    return route && route !== "i2v";
+  }).length;
   return {
     scenes: scenes.length,
     images: scenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length,
     prompts: scenes.filter((scene) => String(scene?.video_prompt || scene?.negative_prompt || scene?.sound_prompt || "").trim()).length,
     videos: scenes.filter((scene) => String(scene?.video_url || scene?.videoUrl || "").trim()).length,
+    customRoutes: customRouteCount,
     materialTotal: scenes.filter((scene) => (
       String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()
       || String(scene?.video_prompt || scene?.negative_prompt || scene?.sound_prompt || "").trim()
       || String(scene?.video_url || scene?.videoUrl || "").trim()
+      || (String(scene?.route || "").trim().toLowerCase() && String(scene?.route || "").trim().toLowerCase() !== "i2v")
     )).length,
   };
 }
@@ -138,6 +144,7 @@ export function scoreManualClipBoardProject(project = {}) {
       stats.videos * 100000
       + stats.images * 10000
       + stats.prompts * 1000
+      + stats.customRoutes * 500
       + stats.materialTotal * 100
       + stats.scenes
       + Math.min(updatedAt / 1000000000000, 10),
@@ -165,6 +172,9 @@ function pickBestManualClipBoardProject(candidates = []) {
       }
       if (b.scoreData.stats.prompts !== a.scoreData.stats.prompts) {
         return b.scoreData.stats.prompts - a.scoreData.stats.prompts;
+      }
+      if (b.scoreData.stats.customRoutes !== a.scoreData.stats.customRoutes) {
+        return b.scoreData.stats.customRoutes - a.scoreData.stats.customRoutes;
       }
       return b.scoreData.updatedAt - a.scoreData.updatedAt;
     })[0].project;
