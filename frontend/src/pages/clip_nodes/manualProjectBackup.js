@@ -2,6 +2,7 @@ export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
 export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
 export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY = "manual_clip_board_active_project";
 export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY = "manual_clip_board_active_project_id";
+export const MANUAL_CLIP_BOARD_CANONICAL_PROJECT_KEY = "manual_clip_board_canonical_project";
 
 export function getManualProjectAccountScopeId() {
   try {
@@ -15,6 +16,10 @@ export function getManualProjectAccountScopeId() {
 
 export function getAccountScopedStorageKey(baseKey = "") {
   return `${String(baseKey || "manual_project")}:account:${getManualProjectAccountScopeId()}`;
+}
+
+export function getManualClipBoardCanonicalStorageKey() {
+  return getAccountScopedStorageKey(MANUAL_CLIP_BOARD_CANONICAL_PROJECT_KEY);
 }
 
 export function canUseLegacyManualProjectStorage() {
@@ -38,6 +43,17 @@ export function readManualProjectJsonStorage(key) {
   } catch {
     return null;
   }
+}
+
+export function readCanonicalManualClipBoardProject() {
+  return readManualProjectJsonStorage(getManualClipBoardCanonicalStorageKey());
+}
+
+export function writeCanonicalManualClipBoardProject(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const serialized = JSON.stringify(safeProject);
+  localStorage.setItem(getManualClipBoardCanonicalStorageKey(), serialized);
+  return true;
 }
 
 function compactArray(value) {
@@ -300,6 +316,8 @@ function readScopedManualClipBoardProjectCandidates() {
 
 export function readActiveManualClipBoardProject() {
   const candidates = [];
+  const canonicalProject = readCanonicalManualClipBoardProject();
+  candidates.push(canonicalProject);
   const scopedActiveKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY);
   const scopedActiveIdKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY);
   const scopedActive = readManualProjectJsonStorage(scopedActiveKey);
@@ -341,6 +359,17 @@ export function readActiveManualClipBoardProject() {
   });
 
   const bestStats = getManualClipBoardMaterialStats(best);
+  const canonicalStats = getManualClipBoardMaterialStats(canonicalProject);
+  if (bestStats.materialTotal > canonicalStats.materialTotal || bestStats.customRoutes > canonicalStats.customRoutes) {
+    try {
+      writeCanonicalManualClipBoardProject({
+        ...best,
+        updatedAt: Date.now(),
+        lastPersistReason: "repair_canonical_manual_clip_board",
+      });
+    } catch {}
+  }
+
   const scopedActiveStats = getManualClipBoardMaterialStats(scopedActive);
   if (best !== scopedActive && bestStats.materialTotal > scopedActiveStats.materialTotal) {
     try {
@@ -375,6 +404,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   }
 
   try {
+    writeCanonicalManualClipBoardProject(safeProject);
     const serialized = JSON.stringify(safeProject);
     localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
     const nodeId = String(safeProject?.nodeId || "").trim();
@@ -390,15 +420,49 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       }
     }
     console.debug("[manual board persist]", {
+      target: "canonical+active+node",
+      canonicalKey: getManualClipBoardCanonicalStorageKey(),
       reason,
       forceReplace,
       stats: getManualClipBoardMaterialStats(safeProject),
+      selectedSceneId: safeProject.selectedSceneId,
       updatedAt: safeProject.updatedAt,
     });
     return true;
   } catch {
     return false;
   }
+}
+
+export function debugManualClipBoardStorageSnapshot() {
+  const rows = [];
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.includes("manual_clip_board")) continue;
+      const project = readManualProjectJsonStorage(key);
+      rows.push({
+        key,
+        nodeId: project?.nodeId,
+        selectedSceneId: project?.selectedSceneId,
+        updatedAt: project?.updatedAt,
+        reason: project?.lastPersistReason,
+        stats: getManualClipBoardMaterialStats(project),
+      });
+    }
+  } catch {}
+  console.table(rows.map((row) => ({
+    key: row.key,
+    scenes: row.stats.scenes,
+    images: row.stats.images,
+    prompts: row.stats.prompts,
+    videos: row.stats.videos,
+    customRoutes: row.stats.customRoutes,
+    materialTotal: row.stats.materialTotal,
+    updatedAt: row.updatedAt,
+    reason: row.reason,
+  })));
+  return rows;
 }
 
 export function readAnyActiveManualProject() {

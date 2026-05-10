@@ -10,6 +10,8 @@ import {
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildManualProjectBackupJson,
+  debugManualClipBoardStorageSnapshot,
+  getManualClipBoardMaterialStats,
   hasMeaningfulManualProject,
   persistManualClipBoardProject,
   readActiveManualClipBoardProject,
@@ -536,6 +538,25 @@ export default function ManualClipDirectorPage() {
     persistManualProject(safeProject, { reason: safeProject.lastPersistReason || "manual_director_persist_project" });
   };
 
+  const onForceSaveDirectorBoard = () => {
+    const currentProject = projectRef.current || project;
+    if (!hasMeaningfulManualProject(currentProject)) {
+      setBackupStatus("Нет проекта для сохранения");
+      return;
+    }
+    const safeProject = {
+      ...currentProject,
+      selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || "",
+      updatedAt: Date.now(),
+      lastPersistReason: "manual_force_save_button",
+    };
+    projectRef.current = safeProject;
+    setProject(safeProject);
+    persistManualProject(safeProject, { reason: "manual_force_save_button", forceReplace: false });
+    setBackupStatus("Доска сохранена");
+    window.setTimeout(() => setBackupStatus(""), 1800);
+  };
+
   const safePersistCurrentProject = (reason = "manual_director_safe_persist") => {
     const currentProject = projectRef.current || project;
     if (!hasMeaningfulManualProject(currentProject)) return false;
@@ -651,6 +672,10 @@ export default function ManualClipDirectorPage() {
       updatedAt: Date.now(),
     };
     persistProject(nextProject);
+    console.debug("[manual director import video/photo]", {
+      stats: getManualClipBoardMaterialStats(nextProject),
+      selectedSceneId: nextProject.selectedSceneId,
+    });
     setSelectedSceneId(nextProject.selectedSceneId);
     setBackupStatus(`${successPrefix}: сцен ${scenes.length}`);
     window.setTimeout(() => setBackupStatus(""), 2200);
@@ -678,6 +703,10 @@ export default function ManualClipDirectorPage() {
       const blockStoryboardProject = applyManualBlockStoryboardImport(project || {}, parsed);
       if (blockStoryboardProject) {
         persistProject(blockStoryboardProject);
+        console.debug("[manual director import video/photo]", {
+          stats: getManualClipBoardMaterialStats(blockStoryboardProject),
+          selectedSceneId: blockStoryboardProject.selectedSceneId,
+        });
         setBackupStatus("Раскадровка блока импортирована");
         window.setTimeout(() => setBackupStatus(""), 2200);
         return;
@@ -685,6 +714,10 @@ export default function ManualClipDirectorPage() {
       const blockVideoPromptProject = applyManualBlockVideoPromptImport(project || {}, parsed);
       if (blockVideoPromptProject) {
         persistProject(blockVideoPromptProject);
+        console.debug("[manual director import video/photo]", {
+          stats: getManualClipBoardMaterialStats(blockVideoPromptProject),
+          selectedSceneId: blockVideoPromptProject.selectedSceneId,
+        });
         setBackupStatus("Видео-промты блока импортированы");
         window.setTimeout(() => setBackupStatus(""), 2200);
         return;
@@ -989,6 +1022,10 @@ export default function ManualClipDirectorPage() {
       const nextProject = applyManualBlockStoryboardImport(buildCurrentManualBlockProject(), parsed);
       if (!nextProject) throw new Error("manual_block_storyboard_split_type_expected");
       persistProject(nextProject);
+      console.debug("[manual director import video/photo]", {
+        stats: getManualClipBoardMaterialStats(nextProject),
+        selectedSceneId: nextProject.selectedSceneId,
+      });
       flashBlockCopyStatus("Раскадровка/фото блока импортированы");
     } catch (error) {
       flashBlockCopyStatus(`Не удалось импортировать фото JSON: ${error?.message || "ошибка"}`);
@@ -1005,6 +1042,10 @@ export default function ManualClipDirectorPage() {
       const nextProject = applyManualBlockVideoPromptImport(buildCurrentManualBlockProject(), parsed);
       if (!nextProject) throw new Error("manual_block_video_prompt_split_type_expected");
       persistProject(nextProject);
+      console.debug("[manual director import video/photo]", {
+        stats: getManualClipBoardMaterialStats(nextProject),
+        selectedSceneId: nextProject.selectedSceneId,
+      });
       flashBlockCopyStatus("Видео-промты блока импортированы");
     } catch (error) {
       flashBlockCopyStatus(`Не удалось импортировать видео JSON: ${error?.message || "ошибка"}`);
@@ -1045,6 +1086,15 @@ export default function ManualClipDirectorPage() {
 
       if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
         persistManualProject(nextProject, { reason: "update_scene" });
+        const savedScene = nextScenes.find((s) => s.scene_id === sceneId);
+        console.debug("[manual director updateScene saved]", {
+          sceneId,
+          stats: getManualClipBoardMaterialStats(nextProject),
+          route: savedScene?.route,
+          image: savedScene?.image_url,
+          prompt: Boolean(savedScene?.video_prompt),
+          video: savedScene?.video_url,
+        });
       }
       return nextProject;
     });
@@ -1346,7 +1396,9 @@ export default function ManualClipDirectorPage() {
         Назад к AI-разбивке
       </button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
+      <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>💾 Сохранить доску</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
+      <button className="clipSB_btn clipSB_btnSecondary" onClick={() => debugManualClipBoardStorageSnapshot()}>Debug storage</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
     </div>
