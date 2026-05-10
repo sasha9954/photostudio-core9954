@@ -359,6 +359,7 @@ const LTX_I2V_SOUND_WORKING_CANON_V2 = {
     "Pick exactly one camera_motion from ltx_camera_motion_strength_bank and name it in the video_prompt.",
     "Do not mix multiple camera moves in one scene.",
     "For wildlife hidden observation or ground-level frames, prefer handheld_observer_creep.",
+    "For i2v_sound, do not use light_changes_gradually as an active event. Prefer stable existing light: lighting stays natural and stable, no color shift, no sudden brightening.",
     "For strict source photo preservation, use balanced_visible_push_in or safe_static_plus."
   ],
   sound_prompt_rules: [
@@ -405,6 +406,7 @@ const LTX_CAMERA_MOTION_STRENGTH_BANK = {
     camera_motion: "handheld_observer_creep",
     strength: "hidden observer / ground-level wildlife observation",
     prompt_phrase: "camera_motion: handheld_observer_creep — one low, slow, handheld observer creep with tiny natural sway, as if watching from grass or cover",
+    movement_rule: "The movement must be controlled and subtle, not shaky, not jittery.",
     use_for: "Prefer for wildlife hidden observation, ground-level animal-path frames, grass-level viewpoints, or concealed documentary positions.",
     environment_motion: "Keep the move restrained; foreground grass/leaves may shift slightly while the location and horizon remain the same."
   },
@@ -457,6 +459,10 @@ const LTX_NEGATIVE_PROMPT_GUIDANCE = {
     "spin camera",
     "hard zoom",
     "chaotic shake",
+    "excessive handheld shake",
+    "jittery camera",
+    "camera wobble",
+    "sudden brightening",
     "fast drone movement",
     "CGI look",
     "cartoon look",
@@ -670,7 +676,7 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
         sound_prompt_rule: "Only short positive physical raw natural field recording description. Use wind, grass, insects, birds, water ripples, vegetation rustle, mud, dust, or distant animal movement. Do not mention music, score, melody, narrator, voice, spoken words, dialogue or speech inside the final sound_prompt.",
         negative_audio_prompt_required: true,
         negative_audio_prompt_rule: "Use a separate negative_audio_prompt to block music and voices. Do not put these negative words inside positive sound_prompt. negative_audio_prompt should include: music, background music, soundtrack, score, melody, instruments, rhythm, vocals, narrator, speech, human voice.",
-        video_prompt_rule: "Do not import poetic/cinematic Story Bible wording into i2v_sound video_prompt. Use uploaded image as exact first frame; write same location, same horizon, same visible objects, lighting stays natural and stable. Pick exactly one camera_motion from ltx_camera_motion_strength_bank; prefer handheld_observer_creep for wildlife hidden observation / ground-level кадра, and balanced_visible_push_in or safe_static_plus for strict source photo preservation. Animate only visible grass/water/mist/clouds/leaves. Do not combine multiple camera moves or request new animals, herds or story events unless required by the source image/story.",
+        video_prompt_rule: "Do not import poetic/cinematic Story Bible wording into i2v_sound video_prompt. Use uploaded image as exact first frame; write same location, same horizon, same visible objects, lighting stays natural and stable. Do not ask the light to change gradually; keep existing lighting stable unless the scene explicitly requires a light change. Pick exactly one camera_motion from ltx_camera_motion_strength_bank; prefer handheld_observer_creep for wildlife hidden observation / ground-level кадра, and balanced_visible_push_in or safe_static_plus for strict source photo preservation. Animate only visible grass/water/mist/clouds/leaves. Do not combine multiple camera moves or request new animals, herds or story events unless required by the source image/story.",
         negative_prompt_rule: "negative_prompt must include color shift, dramatic lighting change, rebuilt environment plus relevant identity/location drift and camera-move bans.",
       },
       i2v_text: {
