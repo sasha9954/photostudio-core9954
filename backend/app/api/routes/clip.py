@@ -3236,16 +3236,29 @@ def _sanitize_manual_first_last_user_prompt(raw: str) -> str:
     return text
 
 
-def _build_manual_first_last_effective_prompt(*, base_prompt: str, transition_prompt: str, seconds: float) -> str:
+def _build_manual_first_last_effective_prompt(
+    *,
+    base_prompt: str,
+    transition_prompt: str,
+    seconds: float,
+    sound_prompt: str = "",
+) -> str:
     user_motion = _sanitize_manual_first_last_user_prompt(transition_prompt or base_prompt or "")
     if not user_motion:
         user_motion = "Create one smooth physically realistic transition from the first frame to the last frame."
+    sound_prompt = _sanitize_manual_clip_visible_prompt(sound_prompt or "")
+    sound_line = (
+        f"Generated scene sound design: {sound_prompt}. The sound must match only the visible action and environment from the two uploaded frames."
+        if sound_prompt
+        else ""
+    )
     duration_line = f"Target duration is about {float(seconds):.2f} seconds. Motion should stay smooth and readable for the whole shot."
     return _join_prompt_parts(
         user_motion,
-        "The first uploaded image is the opening frame. The second uploaded image is the final frame. The video should begin from the opening image and naturally arrive at the final image as one continuous physically believable camera shot.",
-        "Preserve the same subject identity, outfit, train, compartment, lighting family, rainy night atmosphere, and world continuity. Keep the transition grounded, stable, readable, and realistic.",
-        "Use coherent perspective, stable anatomy, stable train geometry, and controlled camera motion. The shot should finish on the final uploaded image composition.",
+        "The first uploaded image is the exact opening frame. The second uploaded image is the exact final frame. The video must begin from the first image and naturally arrive at the second image as one continuous physically believable shot.",
+        "Preserve only the subjects, environment, lighting, scale, perspective, and world shown in the uploaded frames. Do not introduce any unrelated place, room, vehicle, tunnel, train, compartment, street, character, object, weather, or story element unless it is explicitly present in the user prompt or the two frames.",
+        "Use coherent perspective, stable anatomy, stable object scale, stable environment geometry, and controlled camera motion. The shot should finish on the final uploaded image composition.",
+        sound_line,
         duration_line,
     )
 
@@ -3318,6 +3331,7 @@ def _compose_manual_clip_effective_prompt(
             base_prompt=base_prompt,
             transition_prompt=transition_prompt,
             seconds=seconds,
+            sound_prompt=sound_prompt if route_kind == "first_last_sound" else "",
         )
     else:
         boost = (

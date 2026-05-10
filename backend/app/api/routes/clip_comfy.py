@@ -1170,12 +1170,22 @@ async def clip_comfy_scenario_director_generate(request: Request) -> dict[str, A
         req["metadata"]["directGeminiStoryboardMode"] = direct_mode_enabled
         req["metadata"]["direct_gemini_storyboard_mode"] = direct_mode_enabled
     if not isinstance(req.get("source"), dict):
-        source_mode = "audio" if str(req.get("audioUrl") or "").strip() else "audio"
+        audio_source_value = str(req.get("audioUrl") or "").strip()
+        text_source_value = str(
+            req.get("text")
+            or req.get("storyText")
+            or req.get("story_text")
+            or req.get("note")
+            or req.get("directorNote")
+            or req.get("director_note")
+            or ""
+        ).strip()
+        source_mode = "audio" if audio_source_value else ("text" if text_source_value else "audio")
         req["source"] = {
             "source_mode": source_mode,
             "source_origin": "connected",
-            "source_value": str(req.get("audioUrl") or "").strip() or str(req.get("text") or "").strip(),
-            "source_preview": str(req.get("text") or "").strip(),
+            "source_value": audio_source_value or text_source_value,
+            "source_preview": text_source_value,
             "source_label": "frontend_oneshot",
             "audioDurationSec": req.get("audioDurationSec"),
             "metadata": {},
