@@ -30,31 +30,40 @@ const IMMUTABLE_SCENE_FIELDS = [
 ];
 
 const BLOCK_OUTPUT_FIELDS = [
-  "visual_bible_ru",
   "block_visual_bible_ru",
-  "block_camera_language_ru",
+  "block_style_lock_ru",
+  "block_location_lock_ru",
+  "block_time_of_day_ru",
   "block_color_palette_ru",
-  "block_atmosphere_ru",
-  "block_continuity_notes_ru",
-  "block_storyboard_notes_ru",
-  "block_goal_ru",
-  "block_reveal_ru",
-  "block_emotion_ru",
+  "block_camera_language_ru",
+  "block_continuity_rules_ru",
+  "block_storyboard_summary_ru",
+  "block_reference_frame_prompt_en",
 ];
 
 const SCENE_OUTPUT_FIELDS = [
-  "scene_goal_ru",
-  "photo_prompt_hint_ru",
-  "prompt_hint_ru",
-  "scene_role_in_block_ru",
-  "block_progress_ru",
-  "visual_role_ru",
-  "performance_role_ru",
+  "scene_global_context_ru",
+  "continuity_anchor_ru",
+  "must_match_project_identity_ru",
+  "must_match_block_style_ru",
+  "storyboard_frame_role_ru",
+  "source_image_prompt_en",
+  "source_image_prompt_ru",
+  "source_image_negative_prompt_en",
+  "i2v_prompt_en",
+  "i2v_negative_prompt_en",
+  "composition_ru",
+  "camera_angle_ru",
+  "subject_lock_ru",
+  "background_lock_ru",
+  "continuity_from_previous_scene_ru",
+  "must_keep_same_ru",
+  "allowed_variation_ru",
 ];
 
 const EMPTY_PROMPT_FIELDS = ["video_prompt", "negative_prompt", "sound_prompt"];
 
-const CHATGPT_TASK = "BLOCK STORYBOARD PASS / РАСКАДРОВКА ОДНОГО БЛОКА. Используй общий Story Bible проекта и данные выбранного блока. Сделай visual bible блока и prompts для всех сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. video_prompt, negative_prompt, sound_prompt оставить пустыми. Заполни только block storyboard fields и scene prompt fields.";
+const CHATGPT_TASK = "BLOCK STORYBOARD PASS / РАСКАДРОВКА ОДНОГО БЛОКА. Используй общий Story Bible проекта и данные выбранного блока. Сделай visual bible блока и prompts для всех сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. video_prompt, negative_prompt, sound_prompt оставить пустыми. Не переписывай Story Pass поля: translated_text_ru, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru, block_progress_ru. Используй их только как контекст. Заполняй только block storyboard fields и scene image/i2v prompt fields.";
 
 function toStringId(value = "") {
   return String(value || "").trim();

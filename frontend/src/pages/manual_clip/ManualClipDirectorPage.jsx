@@ -722,7 +722,7 @@ export default function ManualClipDirectorPage() {
         { ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId },
         selectedBlockContextId,
       );
-      await navigator.clipboard?.writeText(JSON.stringify(payload));
+      await navigator.clipboard?.writeText(JSON.stringify(payload, null, 2));
       flashBlockCopyStatus(`JSON блока скопирован: ${payload.scenes.length} сцен`);
     } catch (error) {
       flashBlockCopyStatus(`Не удалось скопировать JSON блока: ${error?.message || "ошибка"}`);
