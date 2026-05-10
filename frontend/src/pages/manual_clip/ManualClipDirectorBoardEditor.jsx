@@ -274,7 +274,7 @@ function resolveManualVideoRoutePayload(scene = {}) {
 }
 
 async function startManualSceneVideo(payload) {
-  return fetchJson("/api/clip/video/start", { method: "POST", timeoutMs: 180000, body: payload });
+  return fetchJson("/api/clip/video/start", { method: "POST", timeoutMs: 60000, body: payload });
 }
 
 async function getManualSceneVideoStatus(jobId) {
@@ -1351,6 +1351,11 @@ export default function ManualClipDirectorBoardEditor({
         updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: String(statusOut?.error || statusOut?.hint || "video_job_failed"), error: String(statusOut?.error || statusOut?.hint || "video_job_failed") });
         return;
       }
+      if (status === "queued" || status === "running") {
+        updateScene(sceneId, { status: status === "queued" ? "video_queued" : "video_running", video_job_id: jobId, video_error: "", error: "" });
+        setTimeout(() => pollManualSceneVideo(sceneId, jobId, attempt + 1), delayMs);
+        return;
+      }
       if (attempt >= maxAttempts) {
         updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: "video_poll_timeout", error: "video_poll_timeout" });
         return;
@@ -1449,7 +1454,7 @@ export default function ManualClipDirectorBoardEditor({
       const jobId = resolveVideoStartJobId(out);
       if (out?.ok === false || !jobId) throw new Error(String(out?.detail || out?.error || "video_start_failed"));
       updateScene(scene.scene_id, {
-        status: "video_running",
+        status: String(out?.status || "").toLowerCase() === "queued" ? "video_queued" : "video_running",
         video_job_id: jobId,
         video_error: "",
         error: "",
@@ -1799,7 +1804,7 @@ export default function ManualClipDirectorBoardEditor({
           {selectedScene.route === "ia2v" && selectedScene.audio_slice_url ? <span className="manualAudioReady">Аудио сцены готово</span> : null}
           {selectedScene.route === "ia2v" && selectedScene.audio_extracted ? <span className="manualAudioExtracted">Аудио изъято · готово к ia2v</span> : null}
           <button className="clipSB_btn" disabled={["video_queued", "video_running"].includes(String(selectedScene.status || "").toLowerCase())} onClick={() => onCreateVideo(selectedScene)}>
-            {["video_queued", "video_running"].includes(String(selectedScene.status || "").toLowerCase()) ? "Генерация идёт" : "Создать видео"}
+            {String(selectedScene.status || "").toLowerCase() === "video_queued" ? "В очереди" : String(selectedScene.status || "").toLowerCase() === "video_running" ? "Генерация идёт" : "Создать видео"}
           </button>
           <button className="clipSB_btn" disabled={selectedSceneIndex <= 0 || !!selectedScene.video_url} onClick={() => onUsePreviousLastFrame(selectedScene)}>Взять последний кадр предыдущей</button>
           <button className="clipSB_btn" disabled={!selectedScene.video_url} onClick={() => {

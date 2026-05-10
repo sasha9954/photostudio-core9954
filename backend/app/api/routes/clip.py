@@ -16,6 +16,7 @@ import io
 import mimetypes
 import time
 import threading
+import queue
 from urllib.parse import urlparse
 from uuid import uuid4
 from typing import Any
@@ -679,6 +680,9 @@ CLIP_ASSEMBLE_JOBS_LOCK = threading.Lock()
 
 CLIP_VIDEO_JOBS: dict[str, dict] = {}
 CLIP_VIDEO_JOBS_LOCK = threading.Lock()
+CLIP_VIDEO_QUEUE = queue.Queue()
+CLIP_VIDEO_QUEUE_WORKER_STARTED = False
+CLIP_VIDEO_QUEUE_LOCK = threading.Lock()
 CLIP_VIDEO_JOBS_REGISTRY_STARTED_AT = time.time()
 CLIP_VIDEO_JOBS_REGISTRY_GENERATION_ID = uuid4().hex
 
@@ -17096,7 +17100,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         job = CLIP_VIDEO_JOBS.get(job_id)
         if not job:
             return
-        job.update({"status": "running", "updatedAt": time.time()})
+        job.update({"status": "running", "queueStatus": "running", "updatedAt": time.time(), "startedAt": job.get("startedAt") or time.time()})
 
     try:
         print(
@@ -17201,8 +17205,9 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
                 "soundPromptPreview": str(((out.get("debug") or {}).get("payloadSoundPromptPreview") if isinstance(out.get("debug"), dict) else "") or str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300]),
                 "negativeAudioPromptPreview": str(((out.get("debug") or {}).get("payloadNegativeAudioPromptPreview") if isinstance(out.get("debug"), dict) else "") or str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300]),
+                "queueStatus": status,
                 "updatedAt": time.time(),
-                "completedAt": time.time() if status == "done" else None,
+                "completedAt": time.time() if status in {"done", "error"} else None,
             })
         if status == "done":
             debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
@@ -17293,8 +17298,56 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             job = CLIP_VIDEO_JOBS.get(job_id)
             if not job:
                 return
-            job.update({"status": "error", "error": str(exc), "updatedAt": time.time(), "completedAt": None})
+            job.update({"status": "error", "queueStatus": "error", "error": str(exc), "updatedAt": time.time(), "completedAt": time.time()})
         print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=error")
+
+
+def ensure_clip_video_queue_worker_started():
+    global CLIP_VIDEO_QUEUE_WORKER_STARTED
+    with CLIP_VIDEO_QUEUE_LOCK:
+        if CLIP_VIDEO_QUEUE_WORKER_STARTED:
+            return
+        CLIP_VIDEO_QUEUE_WORKER_STARTED = True
+        threading.Thread(target=_clip_video_queue_worker_loop, daemon=True).start()
+
+
+def _clip_video_queue_worker_loop():
+    while True:
+        item = CLIP_VIDEO_QUEUE.get()
+        job_id = None
+        try:
+            job_id = str(item.get("job_id") or "").strip() if isinstance(item, dict) else ""
+            payload = item.get("payload") if isinstance(item, dict) else None
+            if not job_id or payload is None:
+                continue
+
+            now_ts = time.time()
+            with CLIP_VIDEO_JOBS_LOCK:
+                job = CLIP_VIDEO_JOBS.get(job_id) or {}
+                job.update({
+                    "status": "running",
+                    "queueStatus": "running",
+                    "startedAt": job.get("startedAt") or now_ts,
+                    "updatedAt": now_ts,
+                })
+                CLIP_VIDEO_JOBS[job_id] = job
+
+            _run_clip_video_job(job_id, payload)
+
+        except Exception as error:
+            if job_id:
+                with CLIP_VIDEO_JOBS_LOCK:
+                    job = CLIP_VIDEO_JOBS.get(job_id) or {}
+                    job.update({
+                        "status": "error",
+                        "queueStatus": "error",
+                        "error": str(error),
+                        "updatedAt": time.time(),
+                        "completedAt": time.time(),
+                    })
+                    CLIP_VIDEO_JOBS[job_id] = job
+        finally:
+            CLIP_VIDEO_QUEUE.task_done()
 
 
 @router.post("/clip/video/extract-last-frame")
@@ -17385,7 +17438,6 @@ def clip_video_start(payload: ClipVideoIn):
     provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
     resolved_duration_sec, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
-    now_ts = time.time()
     with CLIP_VIDEO_JOBS_LOCK:
         for existing_job_id, existing_job in reversed(list(CLIP_VIDEO_JOBS.items())):
             if str(existing_job.get("sceneId") or "") != scene_id:
@@ -17398,8 +17450,6 @@ def clip_video_start(payload: ClipVideoIn):
                 continue
             if str(existing_job.get("status") or "").lower() not in {"queued", "running"}:
                 continue
-            if now_ts - float(existing_job.get("updatedAt") or 0) > 1800:
-                continue
             print(
                 "[CLIP VIDEO JOB DEDUPE] "
                 f"sceneId={scene_id} existingJobId={existing_job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
@@ -17410,7 +17460,9 @@ def clip_video_start(payload: ClipVideoIn):
                 "job_id": existing_job_id,
                 "id": existing_job_id,
                 "sceneId": scene_id,
-                "status": str(existing_job.get("status") or "running"),
+                "status": str(existing_job.get("status") or "queued"),
+                "queueStatus": str(existing_job.get("queueStatus") or existing_job.get("status") or "queued"),
+                "queuePosition": existing_job.get("queuePosition"),
                 "providerJobId": existing_job.get("providerJobId"),
                 "comfyPromptId": existing_job.get("comfyPromptId") or existing_job.get("providerJobId"),
                 "resolvedWorkflowKey": resolved_workflow_hint,
@@ -17420,6 +17472,8 @@ def clip_video_start(payload: ClipVideoIn):
             }
 
     job_id = uuid4().hex
+    queued_at = time.time()
+    queue_position = int(CLIP_VIDEO_QUEUE.qsize()) + 1
     with CLIP_VIDEO_JOBS_LOCK:
         CLIP_VIDEO_JOBS[job_id] = {
             "ok": True,
@@ -17428,6 +17482,10 @@ def clip_video_start(payload: ClipVideoIn):
             "provider": provider,
             "providerJobId": None,
             "status": "queued",
+            "queueStatus": "queued",
+            "queuedAt": queued_at,
+            "startedAt": None,
+            "queuePosition": queue_position,
             "videoUrl": None,
             "mode": None,
             "model": None,
@@ -17474,7 +17532,7 @@ def clip_video_start(payload: ClipVideoIn):
             "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
             "soundPromptPreview": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "")[:300],
             "negativeAudioPromptPreview": str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300],
-            "updatedAt": time.time(),
+            "updatedAt": queued_at,
             "completedAt": None,
         }
         job_stored = bool(CLIP_VIDEO_JOBS.get(job_id))
@@ -17486,9 +17544,10 @@ def clip_video_start(payload: ClipVideoIn):
 
     print(
         "[CLIP VIDEO JOB] "
-        f"worker_start sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint}"
+        f"queued sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} queuePosition={queue_position}"
     )
-    threading.Thread(target=_run_clip_video_job, args=(job_id, payload), daemon=True).start()
+    CLIP_VIDEO_QUEUE.put({"job_id": job_id, "payload": payload})
+    ensure_clip_video_queue_worker_started()
     return {
         "ok": True,
         "jobId": job_id,
@@ -17496,6 +17555,8 @@ def clip_video_start(payload: ClipVideoIn):
         "id": job_id,
         "sceneId": scene_id,
         "status": "queued",
+        "queueStatus": "queued",
+        "queuePosition": queue_position,
         "providerJobId": None,
         "comfyPromptId": None,
         "resolvedWorkflowKey": resolved_workflow_hint,
@@ -17527,7 +17588,14 @@ def clip_video_status(job_id: str):
             "[CLIP VIDEO JOB STATUS] "
             f"read jobId={safe_job_id} status={job.get('status')} hasVideoUrl={bool(str(job.get('videoUrl') or '').strip())}"
         )
-        return {"ok": True, **job}
+        response_job = dict(job)
+        response_job["status"] = str(response_job.get("status") or "queued").lower()
+        response_job["queueStatus"] = str(response_job.get("queueStatus") or response_job.get("status") or "queued").lower()
+        if response_job.get("error") is None:
+            response_job["error"] = ""
+        if response_job.get("videoUrl") is None:
+            response_job["videoUrl"] = None
+        return {"ok": True, **response_job}
 
 
 @router.post("/clip/video")
