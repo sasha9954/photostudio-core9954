@@ -976,7 +976,7 @@ export default function ManualClipDirectorPage() {
         const patch = typeof patchOrFactory === "function" ? patchOrFactory(scene) : patchOrFactory;
         return { ...scene, ...(patch || {}) };
       });
-      const nextProject = { ...baseProject, scenes: nextScenes };
+      const nextProject = { ...baseProject, scenes: nextScenes, updatedAt: Date.now() };
       if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) persistManualProject(nextProject);
       return nextProject;
     });
