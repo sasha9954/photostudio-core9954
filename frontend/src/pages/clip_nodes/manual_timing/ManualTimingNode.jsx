@@ -180,7 +180,11 @@ export default function ManualTimingNode({ id, data }) {
       && blockId !== "__unknown__";
   });
   const activeBoardImageCount = activeBoardScenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length;
-  const activeBoardPromptCount = activeBoardScenes.filter((scene) => String(scene?.video_prompt || "").trim()).length;
+  const activeBoardPromptCount = activeBoardScenes.filter((scene) => (
+    String(scene?.video_prompt || "").trim()
+    || String(scene?.negative_prompt || "").trim()
+    || String(scene?.sound_prompt || "").trim()
+  )).length;
   const activeBoardVideoCount = activeBoardScenes.filter((scene) => String(scene?.video_url || "").trim()).length;
   const timingSceneCount = Array.isArray(model.scenes) ? model.scenes.length : 0;
   const hasTimingStoryboardContent = timingSceneCount > 0 || storyBlockCount > 0;
