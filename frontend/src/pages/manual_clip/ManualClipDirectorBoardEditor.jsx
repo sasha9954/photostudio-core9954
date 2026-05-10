@@ -500,6 +500,7 @@ export default function ManualClipDirectorBoardEditor({
     embedded ? String(sourceNodeId || "") : new URLSearchParams(location.search).get("sourceNodeId") || ""
   ), [embedded, sourceNodeId, location.search]);
   const videoStartInFlightRef = useRef(new Set());
+  const resumedVideoJobsRef = useRef(new Set());
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
@@ -674,6 +675,26 @@ export default function ManualClipDirectorBoardEditor({
     story_blocks: storyBlocks,
     scenes,
   }), [project, storyBlocks, scenes]);
+
+  useEffect(() => {
+    if (!project || !Array.isArray(scenes) || !scenes.length) return;
+
+    scenes.forEach((scene) => {
+      const jobId = String(scene?.video_job_id || "").trim();
+      const sceneId = String(scene?.scene_id || "").trim();
+      const status = String(scene?.status || "").trim();
+
+      if (!sceneId || !jobId) return;
+      if (scene?.video_url) return;
+      if (!["video_running", "video_queued"].includes(status)) return;
+
+      const key = `${sceneId}:${jobId}`;
+      if (resumedVideoJobsRef.current.has(key)) return;
+
+      resumedVideoJobsRef.current.add(key);
+      pollManualSceneVideo(sceneId, jobId, 0);
+    });
+  }, [project?.updatedAt, scenes]);
 
   useEffect(() => {
     if (!project) return;
@@ -1440,6 +1461,8 @@ export default function ManualClipDirectorBoardEditor({
         },
       });
       if (runningKey) videoStartInFlightRef.current.delete(runningKey);
+      const resumedKey = `${scene.scene_id}:${jobId}`;
+      resumedVideoJobsRef.current.add(resumedKey);
       pollManualSceneVideo(scene.scene_id, jobId, 0);
     } catch (err) {
       if (runningKey) videoStartInFlightRef.current.delete(runningKey);
