@@ -81,6 +81,11 @@ const VIDEO_OUTPUT_FIELDS = [
   "voice_profile",
   "ambient_sound_prompt",
   "sound_mix_note_ru",
+  "voice_preset_id",
+  "voice_role",
+  "voice_gender",
+  "delivery_style",
+  "negative_voice_traits",
 ];
 
 const VIDEO_CONTEXT_FIELDS = [
@@ -113,6 +118,90 @@ const VIDEO_CONTEXT_FIELDS = [
   ...VIDEO_OUTPUT_FIELDS,
 ];
 
+
+const VOICE_PRESET_BANK = {
+  narrator_male_documentary_en: {
+    label_ru: "Мужской документальный диктор EN",
+    voice_role: "narrator",
+    voice_language: "en",
+    voice_gender: "male",
+    voice_profile: "calm male documentary narrator, warm low-mid voice, clear English pronunciation, natural breath, cinematic but restrained",
+    delivery_style: "slow, clear, observant, intimate, serious but not dramatic",
+    good_for: ["wildlife_story", "documentary", "history", "crime_story", "survival_story"],
+    negative_voice_traits: "robotic voice, slurred words, distorted speech, exaggerated acting, cartoon voice, echo, harsh sibilance",
+  },
+  narrator_female_documentary_en: {
+    label_ru: "Женский документальный диктор EN",
+    voice_role: "narrator",
+    voice_language: "en",
+    voice_gender: "female",
+    voice_profile: "calm female documentary narrator, warm natural voice, clear English pronunciation, soft authority, cinematic but restrained",
+    delivery_style: "clear, warm, measured, thoughtful, emotionally controlled",
+    good_for: ["wildlife_story", "human_story", "mystery", "emotional_story"],
+    negative_voice_traits: "robotic voice, slurred words, distorted speech, overly theatrical acting, cartoon voice, echo",
+  },
+  narrator_male_documentary_ru: {
+    label_ru: "Мужской документальный диктор RU",
+    voice_role: "narrator",
+    voice_language: "ru",
+    voice_gender: "male",
+    voice_profile: "спокойный мужской документальный диктор, тёплый низко-средний тембр, чёткое русское произношение, естественное дыхание, сдержанная кинематографичная подача",
+    delivery_style: "медленно, ясно, наблюдательно, серьёзно, без театрального переигрывания",
+    good_for: ["wildlife_story", "history", "crime_story", "survival_story"],
+    negative_voice_traits: "роботизированный голос, смазанная речь, искажения, переигрывание, мультяшный голос, эхо, шипение",
+  },
+  narrator_female_documentary_ru: {
+    label_ru: "Женский документальный диктор RU",
+    voice_role: "narrator",
+    voice_language: "ru",
+    voice_gender: "female",
+    voice_profile: "спокойный женский документальный диктор, тёплый натуральный голос, чёткое русское произношение, мягкая уверенность, сдержанная эмоциональность",
+    delivery_style: "ясно, тепло, размеренно, вдумчиво, без театральности",
+    good_for: ["wildlife_story", "human_story", "mystery", "emotional_story"],
+    negative_voice_traits: "роботизированный голос, смазанная речь, искажения, переигрывание, мультяшный голос, эхо",
+  },
+  storyteller_male_cinematic_en: {
+    label_ru: "Мужской кино-рассказчик EN",
+    voice_role: "narrator",
+    voice_language: "en",
+    voice_gender: "male",
+    voice_profile: "cinematic male storyteller, deep warm voice, dramatic but controlled, clear English pronunciation",
+    delivery_style: "slow tension, meaningful pauses, emotional weight, not trailer-like",
+    good_for: ["dramatic_story", "crime_story", "survival_story", "epic_intro"],
+    negative_voice_traits: "overly epic trailer voice, shouting, robotic voice, distorted speech, slurred words",
+  },
+  whisper_male_en: {
+    label_ru: "Мужской шёпот EN",
+    voice_role: "narrator",
+    voice_language: "en",
+    voice_gender: "male",
+    voice_profile: "quiet male whisper voice, close microphone feeling, clear whispered English, tense and intimate",
+    delivery_style: "very quiet, slow, suspenseful, close, with short pauses",
+    good_for: ["secret_observation", "horror_soft", "crime_story", "tension"],
+    negative_voice_traits: "unclear whisper, noisy breath, distorted whisper, harsh sibilance, robotic voice",
+  },
+  whisper_female_en: {
+    label_ru: "Женский шёпот EN",
+    voice_role: "narrator",
+    voice_language: "en",
+    voice_gender: "female",
+    voice_profile: "quiet female whisper voice, close microphone feeling, clear whispered English, intimate and tense",
+    delivery_style: "soft, slow, secretive, suspenseful, with delicate pauses",
+    good_for: ["secret_observation", "mystery", "emotional_story", "tension"],
+    negative_voice_traits: "unclear whisper, noisy breath, distorted whisper, harsh sibilance, robotic voice",
+  },
+  character_short_phrase_en: {
+    label_ru: "Короткая реплика персонажа EN",
+    voice_role: "character",
+    voice_language: "en",
+    voice_gender: "auto",
+    voice_profile: "natural character voice, believable acting, clear English pronunciation, close realistic sound",
+    delivery_style: "short phrase, natural emotion, not theatrical, no long monologue",
+    good_for: ["dialogue", "short_reaction", "story_scene"],
+    negative_voice_traits: "robotic voice, overacting, slurred words, distorted speech, lip-sync mismatch",
+  },
+};
+
 const PHOTO_STORYBOARD_CANON_RU = "ФОТО-РАСКАДРОВКА БЛОКА: не делать одинаковые establishing shots и не повторять одну композицию с разным светом. Один блок должен сохранять единый мир, стиль, время суток и атмосферу, но каждая сцена обязана показывать новую точку наблюдения, новый участок пространства или новый визуальный ракурс. Делать кадры так, будто камера подсматривает за живым миром изнутри: из травы, из-за куста, через ветви, с края низины, с уровня земли, из скрытой наблюдательной позиции. Разрешено выдумывать правдоподобные микролокации внутри общего мира, если они усиливают интерес и не ломают Story Bible. Каждый кадр должен иметь свою функцию: вход в мир, развитие, раскрытие, тревога, переход, кульминационная подготовка или мост к следующему блоку. Запрещено делать серию однотипных открыток, туристических панорам, дроновых видов или повтор одного и того же горизонта. Сохранять continuity: общий стиль, палитру, время, погоду, природную среду и эмоциональный тон блока.";
 const PHOTO_STORYBOARD_CANON_EN = "BLOCK PHOTO STORYBOARD CANON: do not create repeated postcard-style establishing shots or the same composition with only different lighting. One block must keep the same world, style, time of day and atmosphere, but every scene must show a new observation point, a new micro-location, or a new visual angle. Make the frames feel as if the camera is secretly observing a living world from inside it: from tall grass, behind a bush, through branches, from the edge of a low basin, from ground level, or from a hidden documentary position. Plausible invented micro-locations are allowed if they strengthen the story and do not break the Story Bible. Every frame must have a clear function: entrance, development, reveal, tension, transition, setup, or bridge to the next block. Avoid generic tourist panoramas, drone-like views, repeated horizons, and wallpaper-like images. Preserve continuity: shared style, palette, time, weather, environment, and emotional tone.";
 
@@ -131,7 +220,7 @@ const PHOTO_OVERLAY_POLICY_EN = "For i2v/source images, default to a clean image
 
 const CHATGPT_TASK = "BLOCK STORYBOARD PASS / РАСКАДРОВКА ОДНОГО БЛОКА. Используй общий Story Bible проекта и данные выбранного блока. Сделай visual bible блока и prompts для всех сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. video_prompt, negative_prompt, sound_prompt оставить пустыми. Не переписывай Story Pass поля: translated_text_ru, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru, scene_role_in_block_ru, block_progress_ru. Используй их только как контекст. Заполняй только block storyboard fields и scene image/i2v prompt fields. Важно для фото-раскадровки: не повторяй одну и ту же композицию между сценами блока. Сохраняй общий мир и стиль, но меняй точку наблюдения, микролокацию, передний план, высоту камеры и драматическую функцию кадра. Делай кадры так, будто камера подсматривает за живым миром, а не снимает стандартные открытки. Если нужен стиль скрытого наблюдения, делай его через композицию и оптику, а не через текстовый HUD. Не добавляй UI/text overlays в source images unless explicitly requested.";
 
-const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры.";
+const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры. Для i2v_text обязательно используй voice_preset_bank и default_voice_config: speech_text должен звучать тем же выбранным голосом по проекту, если сцена явно не переопределяет voice_preset_id. sound_prompt должен включать точную фразу, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits. Для i2v_sound не добавляй speech_text, narrator, human voice или spoken words — только натуральную атмосферу.";
 
 function toStringId(value = "") {
   return String(value || "").trim();
@@ -243,13 +332,13 @@ export function buildManualBlockStoryboardContextJson(project = {}, selectedScen
 }
 
 
-function resolveSpeechTextForVideo(scene = {}) {
-  const voiceLanguage = String(scene?.voice_language || "").trim().toLowerCase();
+function resolveSpeechTextForVideo(scene = {}, voiceLanguageOverride = "") {
+  const voiceLanguage = String(voiceLanguageOverride || scene?.voice_language || "").trim().toLowerCase();
   if (voiceLanguage.startsWith("ru")) return String(scene?.translated_text_ru || scene?.original_text || "").trim();
   return String(scene?.original_text || scene?.source_text_en || scene?.adapted_text_en || scene?.translated_text_ru || "").trim();
 }
 
-function buildCompactSceneForVideoPrompt(scene = {}) {
+function buildCompactSceneForVideoPrompt(scene = {}, project = {}) {
   const compact = {
     scene_id: scene?.scene_id || "",
     index: scene?.index ?? "",
@@ -263,7 +352,32 @@ function buildCompactSceneForVideoPrompt(scene = {}) {
     story_block_id: scene?.story_block_id || "",
     ...pickFields(scene, VIDEO_CONTEXT_FIELDS),
   };
-  compact.speech_text = compact.speech_text || resolveSpeechTextForVideo(scene);
+
+  const route = String(compact.route || "").trim();
+  const projectVoicePresetId = project?.voice_preset_id || "narrator_male_documentary_en";
+  const voicePresetId = compact.voice_preset_id || projectVoicePresetId;
+  const voicePreset = VOICE_PRESET_BANK[voicePresetId] || VOICE_PRESET_BANK.narrator_male_documentary_en;
+
+  compact.voice_preset_id = compact.voice_preset_id || project?.voice_preset_id || "";
+  compact.voice_role = compact.voice_role || scene?.voice_role || "";
+  compact.voice_gender = compact.voice_gender || scene?.voice_gender || "";
+  compact.delivery_style = compact.delivery_style || scene?.delivery_style || "";
+  compact.negative_voice_traits = compact.negative_voice_traits || scene?.negative_voice_traits || "";
+
+  if (route === "i2v_text") {
+    compact.voice_preset_id = compact.voice_preset_id || projectVoicePresetId;
+    compact.voice_language = compact.voice_language || project?.voice_language || voicePreset?.voice_language || "en";
+    compact.voice_role = compact.voice_role || voicePreset?.voice_role || "narrator";
+    compact.voice_gender = compact.voice_gender || voicePreset?.voice_gender || "";
+    compact.voice_profile = compact.voice_profile || voicePreset?.voice_profile || "";
+    compact.delivery_style = compact.delivery_style || voicePreset?.delivery_style || "";
+    compact.negative_voice_traits = compact.negative_voice_traits || voicePreset?.negative_voice_traits || "";
+    compact.speech_text = compact.speech_text || resolveSpeechTextForVideo(scene, compact.voice_language);
+    compact.ambient_sound_prompt = compact.ambient_sound_prompt || "quiet natural ambience under the voice, low volume, no music overpowering narration";
+  } else {
+    compact.speech_text = compact.speech_text || resolveSpeechTextForVideo(scene, compact.voice_language);
+  }
+
   return compact;
 }
 
@@ -280,15 +394,56 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
     aspect_ratio: project?.format || "9:16",
     route_rules: {
       i2v: { audio_mode: "none или ambience" },
-      i2v_sound: { audio_mode: "ambience" },
-      i2v_text: { audio_mode: "narration или speech", speech_text: "original_text или translated_text_ru в зависимости от voice_language" },
+      i2v_sound: {
+        audio_mode: "ambience",
+        voice_mode: "none",
+        speech_text: "",
+        sound_prompt_required: true,
+        sound_prompt_rule: "Only natural ambience. No narrator, no human voice, no spoken words. Use wind, grass, birds, insects, water/mud/puddles, dust, distant animals, field tone.",
+        video_prompt_rule: "Use uploaded image as exact first frame. One camera move + 2–4 living environment layers + scene function.",
+      },
+      i2v_text: {
+        audio_mode: "narration_or_speech",
+        sound_prompt_required: true,
+        speech_text_required: true,
+        voice_preset_required: true,
+        speech_text_source: "If voice_language starts with ru, use translated_text_ru; otherwise use original_text/source_text_en.",
+        voice_profile_rule: "Use voice_preset_bank. Keep same voice across project unless scene overrides voice_preset_id.",
+        sound_prompt_rule: "Must include exact speech_text, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits.",
+        voice_over_rule: "If voice_role is narrator, do not force animals or people to lip-sync. This is off-screen voice-over.",
+        character_speech_rule: "If voice_role is character, phrase should be short and natural. Use only when character is meant to speak.",
+      },
       ia2v: { note: "route передать дальше, архитектуру lip-sync не ломать" },
       first_last: { note: "использовать start_image_url и end_image_url" },
     },
+    voice_preset_bank: VOICE_PRESET_BANK,
+    default_voice_config: {
+      voice_preset_id: project?.voice_preset_id || "narrator_male_documentary_en",
+      voice_language: project?.voice_language || "en",
+      voice_role: "narrator",
+      apply_to_i2v_text_by_default: true,
+      keep_same_voice_across_project: true,
+      note_ru: "Для i2v_text по умолчанию использовать один и тот же голос на весь проект, если сцена явно не переопределяет voice_preset_id.",
+    },
+    i2v_text_sound_prompt_template: {
+      narrator: `Narrator voice-over says exactly: "{speech_text}".
+Voice profile: {voice_profile}.
+Delivery: {delivery_style}.
+Background ambience: {ambient_sound_prompt}.
+Mix: voice clear and close, ambience low under the voice, no music overpowering narration.
+Avoid voice traits: {negative_voice_traits}.`,
+      character: `Character says exactly: "{speech_text}".
+Voice profile: {voice_profile}.
+Delivery: {delivery_style}.
+Background ambience: {ambient_sound_prompt}.
+Mix: speech clear, natural and close, ambience low under the voice.
+Avoid voice traits: {negative_voice_traits}.`,
+    },
+    i2v_sound_sound_prompt_template: "Natural scene ambience only. No narrator, no spoken words, no human voice. Include: {ambient_sound_prompt}. Keep the sound realistic, subtle and documentary. No loud music, no synthetic sound, no overpowering effects.",
     project_story_bible: pickFields(project, STORY_BIBLE_FIELDS),
     target_block_id: targetBlockId,
     target_block: { ...(selectedBlock || {}), block_id: targetBlockId },
-    scenes: blockScenes.map(buildCompactSceneForVideoPrompt),
+    scenes: blockScenes.map((scene) => buildCompactSceneForVideoPrompt(scene, project)),
     output_fields_to_fill: {
       scenes: VIDEO_OUTPUT_FIELDS,
     },
