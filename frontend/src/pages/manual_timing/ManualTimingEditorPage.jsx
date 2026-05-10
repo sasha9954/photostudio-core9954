@@ -1640,7 +1640,10 @@ export default function ManualTimingEditorPage() {
     }
 
     persistManualTimingProject(projectSnapshot);
-    persistManualClipBoardProject(projectSnapshot);
+    persistManualClipBoardProject(projectSnapshot, {
+      forceReplace: true,
+      reason: "create_new_director_board_from_timing",
+    });
     setActiveBoardProject(projectSnapshot);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");

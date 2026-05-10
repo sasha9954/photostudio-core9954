@@ -31,9 +31,9 @@ function readManualActiveProject() {
   return readActiveManualClipBoardProject();
 }
 
-function persistManualProject(nextProject = {}) {
-  if (!hasMeaningfulManualProject(nextProject)) return;
-  persistManualClipBoardProject(nextProject);
+function persistManualProject(nextProject = {}, options = {}) {
+  if (!hasMeaningfulManualProject(nextProject)) return false;
+  return persistManualClipBoardProject(nextProject, options);
 }
 const STATUS_VIDEO_READY = "video_ready";
 
@@ -533,7 +533,7 @@ export default function ManualClipDirectorPage() {
     selectedSceneIdRef.current = safeProject.selectedSceneId;
     setProject(safeProject);
     if (!didHydrateRef.current || !hasMeaningfulManualProject(safeProject)) return;
-    persistManualProject(safeProject);
+    persistManualProject(safeProject, { reason: safeProject.lastPersistReason || "manual_director_persist_project" });
   };
 
   const safePersistCurrentProject = (reason = "manual_director_safe_persist") => {
@@ -549,7 +549,7 @@ export default function ManualClipDirectorPage() {
 
     projectRef.current = safeProject;
     selectedSceneIdRef.current = safeProject.selectedSceneId;
-    persistManualProject(safeProject);
+    persistManualProject(safeProject, { reason });
     setProject(safeProject);
     return true;
   };
@@ -563,7 +563,7 @@ export default function ManualClipDirectorPage() {
         selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || "",
         updatedAt: Date.now(),
         lastPersistReason: "pagehide_or_unmount",
-      });
+      }, { reason: "pagehide_or_unmount" });
     };
 
     window.addEventListener("pagehide", persistBeforeLeave);
@@ -1033,8 +1033,19 @@ export default function ManualClipDirectorPage() {
         const patch = typeof patchOrFactory === "function" ? patchOrFactory(scene) : patchOrFactory;
         return { ...scene, ...(patch || {}) };
       });
-      const nextProject = { ...baseProject, scenes: nextScenes, updatedAt: Date.now() };
-      if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) persistManualProject(nextProject);
+      const nextProject = {
+        ...baseProject,
+        scenes: nextScenes,
+        selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId,
+        updatedAt: Date.now(),
+        lastPersistReason: "update_scene",
+      };
+      projectRef.current = nextProject;
+      selectedSceneIdRef.current = nextProject.selectedSceneId;
+
+      if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
+        persistManualProject(nextProject, { reason: "update_scene" });
+      }
       return nextProject;
     });
   };

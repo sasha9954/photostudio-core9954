@@ -112,6 +112,22 @@ export function unwrapManualProjectBackupJson(raw = {}) {
   };
 }
 
+
+export function getManualClipBoardMaterialStats(project = {}) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  return {
+    scenes: scenes.length,
+    images: scenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length,
+    prompts: scenes.filter((scene) => String(scene?.video_prompt || scene?.negative_prompt || scene?.sound_prompt || "").trim()).length,
+    videos: scenes.filter((scene) => String(scene?.video_url || scene?.videoUrl || "").trim()).length,
+    materialTotal: scenes.filter((scene) => (
+      String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()
+      || String(scene?.video_prompt || scene?.negative_prompt || scene?.sound_prompt || "").trim()
+      || String(scene?.video_url || scene?.videoUrl || "").trim()
+    )).length,
+  };
+}
+
 export function hasMeaningfulManualProject(project = {}) {
   if (!project || typeof project !== "object") return false;
   return Boolean(
@@ -212,8 +228,25 @@ export function readActiveManualClipBoardProject() {
   );
 }
 
-export function persistManualClipBoardProject(project = {}) {
+export function persistManualClipBoardProject(project = {}, options = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
+  const forceReplace = Boolean(options?.forceReplace);
+  const reason = String(options?.reason || safeProject?.lastPersistReason || "");
+  const existing = readActiveManualClipBoardProject();
+  const existingStats = getManualClipBoardMaterialStats(existing);
+  const incomingStats = getManualClipBoardMaterialStats(safeProject);
+
+  if (
+    !forceReplace
+    && hasMeaningfulManualProject(existing)
+    && existingStats.materialTotal > 0
+    && incomingStats.materialTotal === 0
+    && incomingStats.scenes >= existingStats.scenes * 0.8
+  ) {
+    console.warn("[manual board persist blocked] refusing to overwrite rich board with empty snapshot", { reason, existingStats, incomingStats });
+    return false;
+  }
+
   try {
     const serialized = JSON.stringify(safeProject);
     localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
@@ -229,7 +262,16 @@ export function persistManualClipBoardProject(project = {}) {
         localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
       }
     }
-  } catch {}
+    console.debug("[manual board persist]", {
+      reason,
+      forceReplace,
+      stats: getManualClipBoardMaterialStats(safeProject),
+      updatedAt: safeProject.updatedAt,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function readAnyActiveManualProject() {
