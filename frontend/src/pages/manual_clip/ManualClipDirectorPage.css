@@ -688,3 +688,71 @@
   display: block;
   margin-top: 10px;
 }
+
+.storyboardSceneBlockTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.manualBlockCopyActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.manualBlockCopyActions .clipSB_btn {
+  white-space: nowrap;
+}
+
+.manualBlockCopyStatus {
+  color: #9ee28f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manualDirectorStoryPassCompactHint {
+  border: 1px solid rgba(138, 164, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(138, 164, 255, 0.08);
+  color: #dce3ff;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  max-height: 76px;
+  overflow: auto;
+}
+
+.manualDirectorStoryPassDetails {
+  color: #cfd5ee;
+}
+
+.manualDirectorStoryPassDetails > summary {
+  cursor: pointer;
+  color: #b9c7ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.manualDirectorStoryPassDetails .manualDirectorStoryPassGrid {
+  margin-top: 8px;
+  max-height: 230px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+@media (max-width: 900px) {
+  .storyboardSceneBlockTitleRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .manualBlockCopyActions {
+    justify-content: flex-start;
+  }
+}

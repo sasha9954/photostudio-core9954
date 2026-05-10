@@ -3,6 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { fetchJson } from "../../services/api.js";
 import { buildStoryPrepTemplateText, STORY_PREP_TEMPLATE_META } from "../clip_nodes/manual/manualClipBoardDomain";
 import {
+  applyManualBlockStoryboardImport,
+  buildManualBlockStoryboardBriefText,
+  buildManualBlockStoryboardContextJson,
+} from "./manualBlockStoryboardDomain.js";
+import {
   buildManualProjectBackupJson,
   canUseLegacyManualProjectStorage,
   getAccountScopedStorageKey,
@@ -497,6 +502,7 @@ export default function ManualClipDirectorPage() {
   const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
   const [isStoryPrepExpanded, setIsStoryPrepExpanded] = useState(false);
   const [backupStatus, setBackupStatus] = useState("");
+  const [blockCopyStatus, setBlockCopyStatus] = useState("");
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
@@ -614,9 +620,17 @@ export default function ManualClipDirectorPage() {
     event.target.value = "";
     if (!file) return;
     try {
-      restoreManualProjectObject(JSON.parse(await file.text()), "Backup восстановлен");
+      const parsed = JSON.parse(await file.text());
+      const blockStoryboardProject = applyManualBlockStoryboardImport(project || {}, parsed);
+      if (blockStoryboardProject) {
+        persistProject(blockStoryboardProject);
+        setBackupStatus("Раскадровка блока импортирована");
+        window.setTimeout(() => setBackupStatus(""), 2200);
+        return;
+      }
+      restoreManualProjectObject(parsed, "Backup восстановлен");
     } catch (error) {
-      setBackupStatus(`Ошибка backup JSON: ${error?.message || "неверный формат"}`);
+      setBackupStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
     }
   };
 
@@ -694,6 +708,39 @@ export default function ManualClipDirectorPage() {
     ["Прогресс блока", selectedScene.block_progress_ru],
   ].filter(([, value]) => String(value || "").trim()) : [];
   const selectedSceneAudioPhrases = useMemo(() => getAudioPhrasesForScene(audioPhrases, selectedScene), [audioPhrases, selectedScene]);
+
+  const selectedBlockContextId = selectedScene?.story_block_id || selectedScene?.scene_id || "";
+
+  const flashBlockCopyStatus = (message) => {
+    setBlockCopyStatus(message);
+    window.setTimeout(() => setBlockCopyStatus(""), 1800);
+  };
+
+  const onCopyBlockStoryboardJson = async () => {
+    try {
+      const payload = buildManualBlockStoryboardContextJson(
+        { ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId },
+        selectedBlockContextId,
+      );
+      await navigator.clipboard?.writeText(JSON.stringify(payload));
+      flashBlockCopyStatus(`JSON блока скопирован: ${payload.scenes.length} сцен`);
+    } catch (error) {
+      flashBlockCopyStatus(`Не удалось скопировать JSON блока: ${error?.message || "ошибка"}`);
+    }
+  };
+
+  const onCopyBlockStoryboardBrief = async () => {
+    try {
+      const text = buildManualBlockStoryboardBriefText(
+        { ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId },
+        selectedBlockContextId,
+      );
+      await navigator.clipboard?.writeText(text);
+      flashBlockCopyStatus("Текст блока скопирован");
+    } catch (error) {
+      flashBlockCopyStatus(`Не удалось скопировать текст блока: ${error?.message || "ошибка"}`);
+    }
+  };
 
   const userNoteItems = useMemo(() => {
     const raw = String(selectedScene?.user_note_ru || "");
@@ -1005,14 +1052,14 @@ export default function ManualClipDirectorPage() {
     }
   };
 
-  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><div className="manualDirectorEmptyActions"><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label><button className="clipSB_btn clipSB_btnSecondary" onClick={onRestoreLegacyManualProject}>Восстановить старый проект</button></div>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
+  if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><div className="manualDirectorEmptyActions"><button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label><button className="clipSB_btn clipSB_btnSecondary" onClick={onRestoreLegacyManualProject}>Восстановить старый проект</button></div>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">
       <button className="clipSB_btn" onClick={() => navigate("/studio/storyboard")}>Назад к AI-разбивке</button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
-      <label className="clipSB_btn manualUploadBtn">Импорт backup JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
+      <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
     </div>
     {visibleStoryBlocks.length ? <div className="storyboardBlockStrip">
@@ -1087,11 +1134,18 @@ export default function ManualClipDirectorPage() {
 
       {selectedScene ? <section className="manualDirectorCenter">
         <div className="storyboardSceneBlockHeader">
-          <h2>Сцена {selectedScene.index}</h2>
+          <div className="storyboardSceneBlockTitleRow">
+            <h2>Сцена {selectedScene.index}</h2>
+            <div className="manualBlockCopyActions">
+              <button type="button" className="clipSB_btn" onClick={onCopyBlockStoryboardJson}>Скопировать JSON блока</button>
+              <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={onCopyBlockStoryboardBrief}>Скопировать текст блока</button>
+            </div>
+          </div>
           {selectedScene.story_block_title_ru ? <div className="storyboardSceneBlockBadge" style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>
             {selectedBlockNumber ? <span>Блок {selectedBlockNumber}</span> : null}
             <strong>Блок: {selectedScene.story_block_title_ru}</strong>
           </div> : null}
+          {blockCopyStatus ? <span className="manualBlockCopyStatus">{blockCopyStatus}</span> : null}
         </div>
         <label>Route
           <select value={selectedScene.route} onChange={(e) => {
@@ -1119,16 +1173,22 @@ export default function ManualClipDirectorPage() {
             <strong>Story Pass сцены</strong>
             {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
           </div>
-          <div className="manualDirectorStoryPassGrid">
-            <span>translated_text_ru</span><strong>{selectedScene.translated_text_ru || "—"}</strong>
-            <span>original_text</span><strong>{selectedSceneOriginalText || "—"}</strong>
-            <span>meaning_hint_ru</span><strong>{selectedScene.meaning_hint_ru || "—"}</strong>
-            <span>scene_goal_ru</span><strong>{selectedScene.scene_goal_ru || "—"}</strong>
-            <span>photo_prompt_hint_ru</span><strong>{selectedScene.photo_prompt_hint_ru || "—"}</strong>
-            <span>prompt_hint_ru</span><strong>{selectedScene.prompt_hint_ru || "—"}</strong>
-            <span>scene_role_in_block_ru</span><strong>{selectedScene.scene_role_in_block_ru || "—"}</strong>
-            <span>block_progress_ru</span><strong>{selectedScene.block_progress_ru || "—"}</strong>
+          <div className="manualDirectorStoryPassCompactHint">
+            {selectedSceneRuText || selectedSceneActionText || "Подробный Story Pass доступен в раскрывающемся блоке ниже и через кнопки копирования JSON/текста блока."}
           </div>
+          <details className="manualDirectorStoryPassDetails">
+            <summary>Показать подробные поля Story Pass сцены</summary>
+            <div className="manualDirectorStoryPassGrid">
+              <span>translated_text_ru</span><strong>{selectedScene.translated_text_ru || "—"}</strong>
+              <span>original_text</span><strong>{selectedSceneOriginalText || "—"}</strong>
+              <span>meaning_hint_ru</span><strong>{selectedScene.meaning_hint_ru || "—"}</strong>
+              <span>scene_goal_ru</span><strong>{selectedScene.scene_goal_ru || "—"}</strong>
+              <span>photo_prompt_hint_ru</span><strong>{selectedScene.photo_prompt_hint_ru || "—"}</strong>
+              <span>prompt_hint_ru</span><strong>{selectedScene.prompt_hint_ru || "—"}</strong>
+              <span>scene_role_in_block_ru</span><strong>{selectedScene.scene_role_in_block_ru || "—"}</strong>
+              <span>block_progress_ru</span><strong>{selectedScene.block_progress_ru || "—"}</strong>
+            </div>
+          </details>
           <details className="manualDirectorAsrDetails">
             <summary>ASR-фразы сцены ({selectedSceneAudioPhrases.length})</summary>
             {selectedSceneAudioPhrases.length ? <div className="manualDirectorAsrList">
