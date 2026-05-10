@@ -51,9 +51,14 @@ function dispatchManualDirectorBoardUpdate(sourceNodeId = "", project = {}) {
 const STATUS_VIDEO_READY = "video_ready";
 
 const FIRST_LAST_ROUTES = new Set(["first_last", "first_last_sound"]);
+const GENERATED_SOUND_ROUTES = new Set(["i2v_sound", "first_last_sound"]);
 
 function isFirstLastRoute(route = "") {
   return FIRST_LAST_ROUTES.has(String(route || "").trim());
+}
+
+function isGeneratedSoundRoute(route = "") {
+  return GENERATED_SOUND_ROUTES.has(String(route || "").trim());
 }
 
 
@@ -1761,13 +1766,13 @@ export default function ManualClipDirectorBoardEditor({
           </label>
           <div className="manualRouteHint">В этом поле одной инструкцией укажите: кто говорит, точную фразу, стиль голоса и фоновые звуки. Текст сцены выше показан только как подсказка — его можно скопировать в prompt.</div>
         </section> : null}
-        {(selectedScene.route === "i2v_sound" || selectedScene.route === "first_last_sound") ? <section className="manualSoundBox">
+        {isGeneratedSoundRoute(selectedScene.route) ? <section className="manualSoundBox">
           <strong>Сценический звук</strong>
           <div className="manualRouteHint">Опишите звук отдельно: скрипка, выстрел, сирена/мигалки, волны, ветер, короткая фраза, шум толпы. Backend добавит это к prompt как sound design, нормализует сценический звук и применит громкость для монтажа.</div>
-          <label className="manualPromptBlock">Sound prompt<textarea value={selectedScene.sound_prompt} placeholder="Например для природы: raw field recording of wind through grass, insects, distant birds and dry leaves" onChange={(e) => {
+          <label className="manualPromptBlock" htmlFor={`manual-sound-prompt-${selectedScene.scene_id}`}>Sound prompt<textarea id={`manual-sound-prompt-${selectedScene.scene_id}`} value={selectedScene.sound_prompt} placeholder="Например для природы: raw field recording of wind through grass, insects, distant birds and dry leaves" onChange={(e) => {
             updateScene(selectedScene.scene_id, { sound_prompt: e.target.value });
           }} /></label>
-          <label className="manualPromptBlock">Negative audio prompt<textarea value={selectedScene.negative_audio_prompt} placeholder="music, background music, cinematic score, melody, chords, pads, synth, strings, drums, rhythm, beat, trailer music, emotional soundtrack, orchestral ambience, choir, vocals, speech, narrator, human voice" onChange={(e) => {
+          <label className="manualPromptBlock" htmlFor={`manual-negative-audio-prompt-${selectedScene.scene_id}`}>Negative audio prompt<textarea id={`manual-negative-audio-prompt-${selectedScene.scene_id}`} value={selectedScene.negative_audio_prompt} placeholder="music, background music, cinematic score, melody, chords, pads, synth, strings, drums, rhythm, beat, trailer music, emotional soundtrack, orchestral ambience, choir, vocals, speech, narrator, human voice" onChange={(e) => {
             updateScene(selectedScene.scene_id, { negative_audio_prompt: e.target.value });
           }} /></label>
           <label className="manualGainControl">Громкость в монтаже после нормализации: {Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB).toFixed(0)} dB
@@ -1842,7 +1847,7 @@ export default function ManualClipDirectorBoardEditor({
         {selectedScene.image_upload_status === "uploading" ? <div className="manualVideoInfo">Фото сохраняется на сервер...</div> : null}
         {selectedScene.image_upload_status === "extracting_last_frame" ? <div className="manualVideoInfo">Извлекаем последний кадр предыдущей сцены...</div> : null}
         {selectedScene.image_upload_status === "error" ? <div className="manualError">{selectedScene.image_upload_error || "Ошибка загрузки фото"}</div> : null}
-        {(selectedScene.route === "i2v_sound" || selectedScene.route === "first_last_sound") && selectedScene.video_url ? <div className="manualVideoInfo">Видео содержит сценический звук. В монтаже он будет подмешан фоном под основную музыку с выбранной громкостью.</div> : null}
+        {isGeneratedSoundRoute(selectedScene.route) && selectedScene.video_url ? <div className="manualVideoInfo">Видео содержит сценический звук. В монтаже он будет подмешан фоном под основную музыку с выбранной громкостью.</div> : null}
         {selectedScene.route === "ia2v" ? <div className="manualVideoInfo">Lip-sync сцена: в финальном монтаже используем основной аудиотрек, звук видео можно игнорировать.</div> : null}
         {isFirstLastRoute(selectedScene.route) ? <div className="manualVideoInfo">First/last инструмент: загрузите первый и последний кадр. После генерации будет показано одно видео; после удаления видео снова появятся два окна кадров.</div> : <div className="manualVideoInfo">Для продолжения сцены можно взять последний кадр предыдущего готового видео как стартовое фото текущей сцены.</div>}
       </section> : null}

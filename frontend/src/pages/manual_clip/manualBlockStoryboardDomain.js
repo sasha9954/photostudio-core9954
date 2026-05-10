@@ -89,6 +89,58 @@ const VIDEO_OUTPUT_FIELDS = [
   "negative_voice_traits",
 ];
 
+
+const SOUND_PROMPT_ROUTES = new Set(["i2v_sound", "first_last_sound"]);
+
+function pickPresentFieldWithAliases(source = {}, field = "") {
+  const camelField = field.replace(/_([a-z])/g, (_, char) => char.toUpperCase());
+  if (Object.prototype.hasOwnProperty.call(source || {}, field)) return source?.[field] ?? "";
+  if (Object.prototype.hasOwnProperty.call(source || {}, camelField)) return source?.[camelField] ?? "";
+  return undefined;
+}
+
+function splitPositiveAndNegativeAudioPrompts(soundPrompt = "", negativeAudioPrompt = "") {
+  const soundText = String(soundPrompt || "");
+  const negativeText = String(negativeAudioPrompt || "");
+  const markerMatch = soundText.match(/(?:^|\n)\s*(?:negative[_\s-]*(?:audio[_\s-]*)?prompt|audio[_\s-]*negative|negative sound prompt)\s*:/i);
+  if (!markerMatch || markerMatch.index === undefined) {
+    return { sound_prompt: soundText, negative_audio_prompt: negativeText };
+  }
+
+  const positiveSoundPrompt = soundText.slice(0, markerMatch.index).trim();
+  const embeddedNegativeAudioPrompt = soundText.slice(markerMatch.index + markerMatch[0].length).trim();
+  return {
+    sound_prompt: positiveSoundPrompt,
+    negative_audio_prompt: negativeText.trim() || embeddedNegativeAudioPrompt,
+  };
+}
+
+function buildVideoPromptScenePatch(incoming = {}, route = "") {
+  const patch = {};
+  VIDEO_OUTPUT_FIELDS.forEach((field) => {
+    const value = pickPresentFieldWithAliases(incoming, field);
+    if (value !== undefined) patch[field] = value;
+  });
+
+  if (SOUND_PROMPT_ROUTES.has(toStringId(route))) {
+    const separated = splitPositiveAndNegativeAudioPrompts(
+      patch.sound_prompt ?? incoming?.sound_prompt ?? incoming?.soundPrompt ?? "",
+      patch.negative_audio_prompt ?? incoming?.negative_audio_prompt ?? incoming?.negativeAudioPrompt ?? ""
+    );
+    if (
+      Object.prototype.hasOwnProperty.call(patch, "sound_prompt")
+      || Object.prototype.hasOwnProperty.call(patch, "negative_audio_prompt")
+      || separated.sound_prompt
+      || separated.negative_audio_prompt
+    ) {
+      patch.sound_prompt = separated.sound_prompt;
+      patch.negative_audio_prompt = separated.negative_audio_prompt;
+    }
+  }
+
+  return patch;
+}
+
 const VIDEO_CONTEXT_FIELDS = [
   ...SCENE_IMAGE_URL_FIELDS,
   "source_image_prompt_en",
@@ -714,7 +766,7 @@ export function applyManualBlockVideoPromptImport(project = {}, rawPayload = {})
   const nextScenes = (Array.isArray(project?.scenes) ? project.scenes : []).map((scene) => {
     if (toStringId(scene?.story_block_id) !== targetBlockId) return scene;
     const incoming = incomingById.get(toStringId(scene?.scene_id)) || {};
-    const scenePatch = pickPresentFields(incoming, VIDEO_OUTPUT_FIELDS);
+    const scenePatch = buildVideoPromptScenePatch(incoming, scene?.route);
     const nextScene = { ...scene, ...scenePatch };
     return {
       ...nextScene,
