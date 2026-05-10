@@ -3,7 +3,13 @@ import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../../services/api";
 import { NodeShell } from "../comfy/comfyNodeShared";
-import { buildManualProjectBackupJson, hasMeaningfulManualProject, readActiveManualClipBoardProject, readManualClipBoardProjectForNode } from "../manualProjectBackup.js";
+import {
+  buildManualProjectBackupJson,
+  hasMeaningfulManualProject,
+  readActiveManualClipBoardProject,
+  readManualClipBoardProjectForNode,
+  pickBestManualClipBoardProject,
+} from "../manualProjectBackup.js";
 import "./ManualTimingNode.css";
 import {
   MANUAL_TIMING_MUSIC_CLIP_MODE,
@@ -160,7 +166,10 @@ export default function ManualTimingNode({ id, data }) {
     : "Сначала выберите режим проекта";
   const [storedActiveBoardProject, setStoredActiveBoardProject] = useState(() => readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject());
   const nodeDirectorBoard = model.director_board;
-  const activeBoardProject = hasMeaningfulManualProject(nodeDirectorBoard) ? nodeDirectorBoard : storedActiveBoardProject;
+  const activeBoardProject = pickBestManualClipBoardProject([
+    nodeDirectorBoard,
+    storedActiveBoardProject,
+  ]) || storedActiveBoardProject || nodeDirectorBoard;
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
   const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
   const activeBoardImageCount = activeBoardScenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length;
@@ -241,7 +250,8 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onReturnToActiveBoard = () => {
-    const activeProject = hasMeaningfulManualProject(model.director_board) ? model.director_board : (readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject());
+    const storedProject = readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject();
+    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject]) || storedProject || model.director_board;
     if (hasMeaningfulManualProject(activeProject)) {
       setStoredActiveBoardProject(activeProject);
       navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`);
@@ -251,7 +261,8 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onDownloadActiveBoardBackup = () => {
-    const activeProject = hasMeaningfulManualProject(model.director_board) ? model.director_board : (readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject());
+    const storedProject = readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject();
+    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject]) || storedProject || model.director_board;
     if (!hasMeaningfulManualProject(activeProject)) return;
     setStoredActiveBoardProject(activeProject);
     downloadManualBoardBackup(activeProject);

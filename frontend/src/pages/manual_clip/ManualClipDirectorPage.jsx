@@ -12,6 +12,7 @@ import {
   buildManualProjectBackupJson,
   getManualClipBoardMaterialStats,
   hasMeaningfulManualProject,
+  pickBestManualClipBoardProject,
   persistManualClipBoardProject,
   readActiveManualClipBoardProject,
   readManualClipBoardProjectForNode,
@@ -31,7 +32,8 @@ const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
 function readManualActiveProject(sourceNodeId = "") {
   const nodeProject = readManualClipBoardProjectForNode(sourceNodeId);
-  return hasMeaningfulManualProject(nodeProject) ? nodeProject : readActiveManualClipBoardProject();
+  const activeProject = readActiveManualClipBoardProject();
+  return pickBestManualClipBoardProject([nodeProject, activeProject]) || activeProject || nodeProject;
 }
 
 function persistManualProject(nextProject = {}, options = {}) {
@@ -494,6 +496,7 @@ export default function ManualClipDirectorPage() {
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
   const didHydrateRef = useRef(false);
+  const didWarnMissingSourceNodeIdRef = useRef(false);
   const projectRef = useRef(null);
   const selectedSceneIdRef = useRef("");
   const [project, setProject] = useState(null);
@@ -514,6 +517,12 @@ export default function ManualClipDirectorPage() {
     || ""
   ).trim();
 
+  const warnMissingSourceNodeId = () => {
+    if (didWarnMissingSourceNodeIdRef.current) return;
+    didWarnMissingSourceNodeIdRef.current = true;
+    console.warn("[manual director] missing sourceNodeId, node-bound board sync disabled");
+  };
+
   const normalizeDirectorProjectOwner = (candidateProject = {}) => {
     const ownerNodeId = getProjectOwnerNodeId(candidateProject);
     if (!ownerNodeId) return candidateProject || {};
@@ -527,9 +536,14 @@ export default function ManualClipDirectorPage() {
   };
 
   const persistAndBroadcastDirectorProject = (candidateProject = {}, options = {}) => {
+    const ownerNodeId = getProjectOwnerNodeId(candidateProject);
+    if (!ownerNodeId) {
+      warnMissingSourceNodeId();
+      return false;
+    }
     const safeProject = normalizeDirectorProjectOwner(candidateProject);
     const persisted = persistManualProject(safeProject, options);
-    dispatchManualDirectorBoardUpdate(getProjectOwnerNodeId(safeProject), safeProject);
+    dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
     return persisted;
   };
 

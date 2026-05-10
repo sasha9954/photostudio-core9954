@@ -35,7 +35,8 @@ import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
 import {
   readActiveManualClipBoardProject,
   hasMeaningfulManualProject,
-  getManualClipBoardMaterialStats,
+  pickBestManualClipBoardProject,
+  scoreManualClipBoardProject,
 } from "./clip_nodes/manualProjectBackup.js";
 import {
   normalizeRenderProfile,
@@ -6216,10 +6217,14 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "", ac
   }
 
   if (sourceNode?.type === "manualTiming") {
-    const board = sourceNode?.data?.director_board;
-    if (hasMeaningfulManualProject(board)) {
-      const sourceFormat = resolvePreferredSceneFormat(board?.format, DEFAULT_SCENE_IMAGE_FORMAT);
-      const scenes = normalizeManualClipScenesForAssembly(board?.scenes || [], sourceFormat);
+    const nodeBoard = sourceNode?.data?.director_board;
+    const activeBoardOwnerNodeId = String(activeManualBoardProject?.sourceNodeId || activeManualBoardProject?.nodeId || "").trim();
+    const activeBoardForThisNode = activeBoardOwnerNodeId === String(sourceNode?.id || "") ? activeManualBoardProject : null;
+    const bestBoard = pickBestManualClipBoardProject([nodeBoard, activeBoardForThisNode]);
+
+    if (hasMeaningfulManualProject(bestBoard)) {
+      const sourceFormat = resolvePreferredSceneFormat(bestBoard?.format, DEFAULT_SCENE_IMAGE_FORMAT);
+      const scenes = normalizeManualClipScenesForAssembly(bestBoard?.scenes || [], sourceFormat);
       return {
         assemblyNodeId: effectiveAssemblyNodeId,
         sourceNodeId: String(sourceNode?.id || ""),
@@ -6227,7 +6232,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "", ac
         scenesSource: "manualTimingDirectorBoard",
         scenes,
         scenarioFormat: sourceFormat,
-        audioUrl: String(board?.audio?.url || board?.audioUrl || board?.audio_url || "").trim(),
+        audioUrl: String(bestBoard?.audio?.url || bestBoard?.audioUrl || bestBoard?.audio_url || "").trim(),
         introSourceNodeId: String(introFrame?.nodeId || ""),
         introSourceNodeType: introFrame?.nodeType || "",
         introFrame,
@@ -25537,9 +25542,15 @@ const hydrate = useCallback((source = "unknown") => {
         ? hydratedNodesBase.map((nodeItem) => {
           if (nodeItem.id !== activeBoardSourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
           const currentBoard = nodeItem.data?.director_board || {};
-          const activeStats = getManualClipBoardMaterialStats(hydratedActiveManualBoardProject);
-          const currentStats = getManualClipBoardMaterialStats(currentBoard);
-          if (currentStats.materialTotal >= activeStats.materialTotal) return nodeItem;
+          const activeScore = scoreManualClipBoardProject(hydratedActiveManualBoardProject);
+          const currentScore = scoreManualClipBoardProject(currentBoard);
+          if (
+            currentScore.score > activeScore.score
+            || (
+              currentScore.score === activeScore.score
+              && Number(currentBoard?.updatedAt || 0) >= Number(hydratedActiveManualBoardProject?.updatedAt || 0)
+            )
+          ) return nodeItem;
           return {
             ...nodeItem,
             data: {
