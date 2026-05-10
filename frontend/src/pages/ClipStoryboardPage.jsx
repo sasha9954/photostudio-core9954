@@ -38,6 +38,7 @@ import {
   hasMeaningfulManualProject,
   pickBestManualClipBoardProject,
   persistManualClipBoardProject,
+  readManualClipBoardProjectForNode,
   scoreManualClipBoardProject,
 } from "./clip_nodes/manualProjectBackup.js";
 import {
@@ -25126,7 +25127,17 @@ return base;
   const manualDirectorBoardProject = useMemo(() => {
     const nodeBoard = manualDirectorSourceNode?.data?.director_board;
     const activeBoard = readActiveManualClipBoardProject();
-    const best = pickBestManualClipBoardProject([nodeBoard, activeBoard]);
+    const activeBoardOwnerNodeId = String(activeBoard?.sourceNodeId || activeBoard?.nodeId || "").trim();
+    const currentSourceNodeId = String(manualDirectorEditor.sourceNodeId || "").trim();
+    const activeBoardForThisNode = currentSourceNodeId && activeBoardOwnerNodeId === currentSourceNodeId
+      ? activeBoard
+      : null;
+    const storedBoardForNode = readManualClipBoardProjectForNode(currentSourceNodeId);
+    const best = pickBestManualClipBoardProject([
+      nodeBoard,
+      storedBoardForNode,
+      activeBoardForThisNode,
+    ]);
 
     if (hasMeaningfulManualProject(best)) return best;
 

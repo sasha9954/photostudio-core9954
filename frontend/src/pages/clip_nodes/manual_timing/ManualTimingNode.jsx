@@ -175,6 +175,8 @@ export default function ManualTimingNode({ id, data }) {
   const activeBoardImageCount = activeBoardScenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length;
   const activeBoardPromptCount = activeBoardScenes.filter((scene) => String(scene?.video_prompt || "").trim()).length;
   const activeBoardVideoCount = activeBoardScenes.filter((scene) => String(scene?.video_url || "").trim()).length;
+  const timingSceneCount = Array.isArray(model.scenes) ? model.scenes.length : 0;
+  const hasTimingStoryboardContent = timingSceneCount > 0 || storyBlockCount > 0;
 
 
   useEffect(() => {
@@ -250,16 +252,19 @@ export default function ManualTimingNode({ id, data }) {
   const onReturnToActiveBoard = () => {
     const storedProject = readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject();
     const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject]) || storedProject || model.director_board;
+
     if (hasMeaningfulManualProject(activeProject)) {
       setStoredActiveBoardProject(activeProject);
-      if (typeof data?.onOpenDirectorBoard === "function") {
-        data.onOpenDirectorBoard(id);
-        return;
-      }
-      navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`);
+    }
+
+    if (typeof data?.onOpenDirectorBoard === "function") {
+      data.onOpenDirectorBoard(id);
       return;
     }
-    setStoredActiveBoardProject(activeProject);
+
+    if (hasMeaningfulManualProject(activeProject)) {
+      navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`);
+    }
   };
 
   const onDownloadActiveBoardBackup = () => {
@@ -388,13 +393,13 @@ export default function ManualTimingNode({ id, data }) {
       <div className={`manualTimingNode_block ${getManualTimingNodeModeClass(projectMode)}`}>
         <div className="manualTimingNode_row"><b>Аудио:</b> {effectiveAudio.filename || "аудио не выбрано"}</div>
         <div className="manualTimingNode_row"><b>Длительность:</b> {formatDurationSec(effectiveAudio.duration_sec)}</div>
-        <div className="manualTimingNode_row"><b>Сцен:</b> {Array.isArray(model.scenes) ? model.scenes.length : 0}</div>
+        <div className="manualTimingNode_row"><b>Сцен:</b> {timingSceneCount}</div>
         <div className="manualTimingNode_row"><b>Смысловых блоков:</b> {storyBlockCount}</div>
         <div className="manualTimingNode_row"><b>Статус:</b> {formatTimingStatus(model.timing_status)}</div>
 
-        {hasMeaningfulManualProject(activeBoardProject) ? <div className="manualTimingNode_activeBoard">
+        {(hasMeaningfulManualProject(activeBoardProject) || hasTimingStoryboardContent) ? <div className="manualTimingNode_activeBoard">
           <div className="manualTimingNode_activeBoardTitle">🎬 Активная режиссёрская доска</div>
-          <div className="manualTimingNode_activeBoardMeta">Сцен: {activeBoardScenes.length} · Фото: {activeBoardImageCount} · Промты: {activeBoardPromptCount} · Видео: {activeBoardVideoCount} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject.updatedAt || activeBoardProject.updated_at)}</div>
+          <div className="manualTimingNode_activeBoardMeta">Сцен: {activeBoardScenes.length} · Фото: {activeBoardImageCount} · Промты: {activeBoardPromptCount} · Видео: {activeBoardVideoCount} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject?.updatedAt || activeBoardProject?.updated_at)}</div>
           <div className="manualTimingNode_activeBoardActions">
             <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onReturnToActiveBoard}>Вернуться в доску</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadActiveBoardBackup}>Скачать backup</button>

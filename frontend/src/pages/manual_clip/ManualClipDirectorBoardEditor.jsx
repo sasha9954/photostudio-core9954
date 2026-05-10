@@ -552,7 +552,6 @@ export default function ManualClipDirectorBoardEditor({
     const safeProject = normalizeDirectorProjectOwner(candidateProject);
     if (embedded && typeof onProjectChange === "function") {
       onProjectChange(safeProject, options?.reason || safeProject.lastPersistReason || "manual_director_embedded_update");
-      dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
       return true;
     }
     const persisted = persistManualProject(safeProject, options);
@@ -1455,8 +1454,8 @@ export default function ManualClipDirectorBoardEditor({
       <button
         className="clipSB_btn"
         onClick={() => {
-          safePersistCurrentProject("back_to_ai_split");
-          if (typeof onClose === "function") {
+          safePersistCurrentProject(embedded ? "close_embedded_director_board" : "back_to_ai_split");
+          if (embedded && typeof onClose === "function") {
             onClose();
             return;
           }
