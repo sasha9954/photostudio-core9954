@@ -5793,3 +5793,12 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_introMontageGrid .clipSB_hint {
   margin-bottom: 5px;
 }
+
+
+.clipSB_manualDirectorOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #050712;
+  overflow: auto;
+}
