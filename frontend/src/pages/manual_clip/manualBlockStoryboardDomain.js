@@ -62,7 +62,7 @@ const SCENE_OUTPUT_FIELDS = [
   "allowed_variation_ru",
 ];
 
-const EMPTY_PROMPT_FIELDS = ["video_prompt", "negative_prompt", "sound_prompt"];
+const EMPTY_PROMPT_FIELDS = ["video_prompt", "negative_prompt", "sound_prompt", "negative_audio_prompt"];
 
 const SCENE_IMAGE_URL_FIELDS = [
   "image_url",
@@ -74,6 +74,7 @@ const VIDEO_OUTPUT_FIELDS = [
   "video_prompt",
   "negative_prompt",
   "sound_prompt",
+  "negative_audio_prompt",
   "audio_mode",
   "voice_mode",
   "voice_language",
@@ -277,8 +278,8 @@ const LTX_CAMERA_MOVE_BANK = {
   ]
 };
 
-const I2V_SOUND_PROMPT_POLICY_RU = "Для i2v_sound финальный sound_prompt должен быть только позитивным описанием натуральной атмосферы. Не писать в sound_prompt слова narrator, voice, speech, spoken words, dialogue, human voice даже с отрицанием. Если нужно запретить голос — это должно быть отдельной технической настройкой/negative audio field, но не частью positive sound_prompt.";
-const I2V_SOUND_PROMPT_POLICY_EN = "For i2v_sound, the final sound_prompt must be a positive natural ambience description only. Do not include the words narrator, voice, speech, spoken words, dialogue, or human voice inside the sound_prompt, even as negatives. If voice must be disabled, use a separate technical flag/negative audio field, not the positive sound_prompt.";
+const I2V_SOUND_PROMPT_POLICY_RU = "Для i2v_sound финальный sound_prompt должен быть только позитивным описанием raw natural field recording. Не писать в sound_prompt слова music, score, melody, soundtrack, rhythm, drums, synth, strings, narrator, voice, speech, spoken words, dialogue, human voice даже с отрицанием. Запреты музыки и голоса должны быть в отдельном negative_audio_prompt, но не в positive sound_prompt.";
+const I2V_SOUND_PROMPT_POLICY_EN = "For i2v_sound, the final sound_prompt must be a positive raw natural field recording description only. Do not include music, score, melody, soundtrack, rhythm, drums, synth, strings, narrator, voice, speech, spoken words, dialogue, or human voice inside the sound_prompt, even as negatives. Put music and voice bans in the separate negative_audio_prompt, not the positive sound_prompt.";
 
 const LTX_ENVIRONMENTAL_MOTION_BANK = [
   "grass_sways",
@@ -319,7 +320,7 @@ const LTX_NEGATIVE_PROMPT_GUIDANCE = {
   note: "Не перегружать negative prompt. Выбирать только релевантные риски сцены, чтобы не заморозить движение."
 };
 
-const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры. Для i2v_text обязательно используй voice_preset_bank и default_voice_config: speech_text должен звучать тем же выбранным голосом по проекту, если сцена явно не переопределяет voice_preset_id. sound_prompt должен включать точную фразу, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits. Для i2v_sound не добавляй speech_text, narrator, human voice или spoken words — только натуральную атмосферу. Важно: для i2v_sound не копируй слова narrator, voice, speech, spoken words, dialogue, human voice в финальный sound_prompt даже с отрицанием. Финальный sound_prompt должен быть только позитивным описанием натуральной атмосферы.";
+const VIDEO_CHATGPT_TASK = "BLOCK VIDEO PROMPT PASS / VIDEO PROMPTS ОДНОГО БЛОКА. Используй общий Story Bible проекта, visual bible выбранного блока, раскадровочные image поля и данные только сцен этого блока. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, количество сцен. Заполняй только video_prompt, negative_prompt, sound_prompt, negative_audio_prompt и audio/voice поля. Учитывай route каждой сцены: для i2v audio_mode должен быть none или ambience; для i2v_sound audio_mode должен быть ambience; для i2v_text audio_mode должен быть narration или speech, а speech_text должен брать текст из original_text или translated_text_ru в зависимости от voice_language; ia2v/lip-sync route пропускай дальше без изменения архитектуры. Для i2v_text обязательно используй voice_preset_bank и default_voice_config: speech_text должен звучать тем же выбранным голосом по проекту, если сцена явно не переопределяет voice_preset_id. sound_prompt должен включать точную фразу, voice_profile, delivery_style, background ambience, mix note and negative_voice_traits. Для i2v_sound: sound_prompt = только позитивное описание raw natural field recording; negative_audio_prompt = отдельное поле для запрета музыки/голоса; не использовать в sound_prompt слова cinematic score, music, melody, soundtrack, rhythm, drums, synth, strings; если сцена wildlife/nature, писать звук как raw field recording, а не cinematic documentary ambience. Для i2v_sound не добавляй speech_text, narrator, human voice или spoken words — только натуральную атмосферу. Важно: для i2v_sound не копируй слова narrator, voice, speech, spoken words, dialogue, human voice в финальный sound_prompt даже с отрицанием. Финальный sound_prompt должен быть только позитивным описанием натуральной атмосферы.";
 
 function toStringId(value = "") {
   return String(value || "").trim();
@@ -518,7 +519,9 @@ export function buildManualBlockVideoPromptContextJson(project = {}, selectedSce
         voice_mode: "none",
         speech_text: "",
         sound_prompt_required: true,
-        sound_prompt_rule: "Only positive natural ambience description. Do not mention narrator, voice, spoken words, dialogue or speech inside the final sound_prompt. Use field tone, wind, grass, birds, insects, water/mud/puddles, dust, distant animal movement and subtle environmental sound.",
+        sound_prompt_rule: "Only positive raw natural field recording description. Do not mention music, score, melody, narrator, voice, spoken words, dialogue or speech inside the final sound_prompt. Use field tone, wind, grass, birds, insects, water/mud/puddles, dust, distant animal movement and subtle environmental sound.",
+        negative_audio_prompt_required: true,
+        negative_audio_prompt_rule: "Use a separate negative_audio_prompt to block music and voices. Do not put these negative words inside positive sound_prompt. negative_audio_prompt should include: music, background music, cinematic score, melody, chords, pads, synth, strings, drums, rhythm, beat, trailer music, emotional soundtrack, orchestral ambience, choir, vocals, speech, narrator, human voice.",
         video_prompt_rule: "Use uploaded image as exact first frame. Use exactly one restrained camera move; for image identity preservation prefer almost static documentary shot with very small push-in plus 2–4 environment motion layers. Do not combine lateral reveal, push-in and parallax in one scene. Do not request new animals, herds or story events unless required by the source image/story.",
       },
       i2v_text: {
@@ -558,7 +561,7 @@ Background ambience: {ambient_sound_prompt}.
 Mix: speech clear, natural and close, ambience low under the voice.
 Avoid voice traits: {negative_voice_traits}.`,
     },
-    i2v_sound_sound_prompt_template: "Natural scene ambience only: {ambient_sound_prompt}. Keep the sound realistic, subtle, documentary, low-volume and environmental. Use only field tone, wind, grass, birds, insects, water, dust, distant animal movement or other natural location sounds.",
+    i2v_sound_sound_prompt_template: "Raw natural location field recording only: {ambient_sound_prompt}. Keep it realistic, irregular, environmental, low-volume and non-musical. Use only real outdoor field tone, wind, grass movement, insects, distant birds, water, dust, distant animal movement or other natural location sounds. Avoid cinematic scoring language in the positive prompt.",
     project_story_bible: pickFields(project, STORY_BIBLE_FIELDS),
     target_block_id: targetBlockId,
     target_block: { ...(selectedBlock || {}), block_id: targetBlockId },
