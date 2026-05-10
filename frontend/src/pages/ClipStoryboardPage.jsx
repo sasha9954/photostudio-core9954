@@ -11225,7 +11225,7 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
 const [edges, setEdges] = useEdgesState(defaultEdges);
 const updateAssemblyAudioMode = useCallback((mode) => {
   const aliasMap = {
-    master_plus_scene_audio: "master_audio",
+    master_plus_scene_audio: "mix_master_scene",
     scene_audio_only: "scene_audio",
     silent_video_only: "video_only",
   };
@@ -19549,7 +19549,7 @@ Aspect ratio: ${imageFormat}`,
     [nodes]
   );
   const rawAssemblyAudioMode = String(assemblyGraphNode?.data?.assemblyAudioMode || "master_audio");
-  const assemblyAudioModeAliasMap = { master_plus_scene_audio: "master_audio", scene_audio_only: "scene_audio", silent_video_only: "video_only" };
+  const assemblyAudioModeAliasMap = { master_plus_scene_audio: "mix_master_scene", scene_audio_only: "scene_audio", silent_video_only: "video_only" };
   const assemblyAudioMode = assemblyAudioModeAliasMap[rawAssemblyAudioMode] || rawAssemblyAudioMode;
   const sceneAudioGainDb = Number.isFinite(Number(assemblyGraphNode?.data?.sceneAudioGainDb)) ? Number(assemblyGraphNode?.data?.sceneAudioGainDb) : -14;
   const masterAudioGainDb = Number.isFinite(Number(assemblyGraphNode?.data?.masterAudioGainDb)) ? Number(assemblyGraphNode?.data?.masterAudioGainDb) : 0;
@@ -25832,7 +25832,7 @@ const hydrate = useCallback((source = "unknown") => {
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
       const hydratedAssemblyNode = hydratedNodes.find((node) => node?.type === "assemblyNode") || null;
       const hydratedRawAssemblyAudioMode = String(hydratedAssemblyNode?.data?.assemblyAudioMode || "master_audio");
-      const hydratedAssemblyAudioMode = ({ master_plus_scene_audio: "master_audio", scene_audio_only: "scene_audio", silent_video_only: "video_only" }[hydratedRawAssemblyAudioMode]) || hydratedRawAssemblyAudioMode;
+      const hydratedAssemblyAudioMode = ({ master_plus_scene_audio: "mix_master_scene", scene_audio_only: "scene_audio", silent_video_only: "video_only" }[hydratedRawAssemblyAudioMode]) || hydratedRawAssemblyAudioMode;
       const hydratedSceneAudioGainDb = Number.isFinite(Number(hydratedAssemblyNode?.data?.sceneAudioGainDb)) ? Number(hydratedAssemblyNode?.data?.sceneAudioGainDb) : -14;
       const hydratedMasterAudioGainDb = Number.isFinite(Number(hydratedAssemblyNode?.data?.masterAudioGainDb)) ? Number(hydratedAssemblyNode?.data?.masterAudioGainDb) : 0;
       const hydratedMasterAudioUrl = hydratedAudioUrl || hydratedAssemblySource.audioUrl || "";

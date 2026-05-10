@@ -16278,7 +16278,7 @@ ASSEMBLY_AUDIO_MODES = {"video_only", "scene_audio", "master_audio", "mix_master
 ASSEMBLY_AUDIO_MODE_ALIASES = {
     "silent_video_only": "video_only",
     "scene_audio_only": "scene_audio",
-    "master_plus_scene_audio": "master_audio",
+    "master_plus_scene_audio": "mix_master_scene",
     "with_master_audio": "master_audio",
     "master": "master_audio",
     "mix": "mix_master_scene",
