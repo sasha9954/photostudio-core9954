@@ -28,11 +28,44 @@ export const MANUAL_TIMING_UNKNOWN_STORY_BLOCK = {
   block_goal_ru: "",
   block_reveal_ru: "",
   block_emotion_ru: "",
+  global_story_context_ru: "",
+  block_place_in_global_arc_ru: "",
+  inherits_style_lock_ru: "",
+  inherits_world_lock_ru: "",
+  inherits_atmosphere_ru: "",
+  inherits_continuity_rules_ru: "",
   color: "#64748B",
   scene_ids: [],
   start_sec: 0,
   end_sec: 0,
 };
+
+export const MANUAL_TIMING_PROJECT_STORY_BIBLE_FIELDS = [
+  "project_story_summary_ru",
+  "project_core_theme_ru",
+  "project_drama_arc_ru",
+  "project_visual_bible_ru",
+  "project_style_lock_ru",
+  "project_world_lock_ru",
+  "project_character_identity_lock_ru",
+  "project_location_lock_ru",
+  "project_time_progression_ru",
+  "project_atmosphere_lock_ru",
+  "project_camera_language_ru",
+  "project_color_progression_ru",
+  "project_continuity_rules_ru",
+  "project_must_keep_same_ru",
+  "project_allowed_variation_ru",
+  "project_reference_prompt_en",
+];
+
+export function pickManualTimingProjectStoryBibleFields(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  return MANUAL_TIMING_PROJECT_STORY_BIBLE_FIELDS.reduce((acc, key) => {
+    acc[key] = String(safeProject?.[key] || "");
+    return acc;
+  }, {});
+}
 
 const MANUAL_TIMING_SECTION_LABELS_RU = {
   intro: "вступление",
@@ -117,6 +150,7 @@ export function getDefaultManualTimingNodeData() {
     story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
     audio_phrases: [],
     scenes: [],
+    ...pickManualTimingProjectStoryBibleFields(),
     selectedSceneId: "",
     updatedAt: 0,
   };
@@ -337,6 +371,12 @@ export function normalizeManualTimingStoryBlocks(storyBlocks = []) {
         block_goal_ru: String(block?.block_goal_ru || block?.blockGoalRu || block?.goal_ru || ""),
         block_reveal_ru: String(block?.block_reveal_ru || block?.blockRevealRu || block?.reveal_ru || ""),
         block_emotion_ru: String(block?.block_emotion_ru || block?.blockEmotionRu || block?.emotion_ru || ""),
+        global_story_context_ru: String(block?.global_story_context_ru || block?.globalStoryContextRu || ""),
+        block_place_in_global_arc_ru: String(block?.block_place_in_global_arc_ru || block?.blockPlaceInGlobalArcRu || ""),
+        inherits_style_lock_ru: String(block?.inherits_style_lock_ru || block?.inheritsStyleLockRu || ""),
+        inherits_world_lock_ru: String(block?.inherits_world_lock_ru || block?.inheritsWorldLockRu || ""),
+        inherits_atmosphere_ru: String(block?.inherits_atmosphere_ru || block?.inheritsAtmosphereRu || ""),
+        inherits_continuity_rules_ru: String(block?.inherits_continuity_rules_ru || block?.inheritsContinuityRulesRu || ""),
         color: normalizeStoryBlockColor(block?.color || (block_id === MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id ? MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color : "")),
         scene_ids: Array.isArray(block?.scene_ids || block?.sceneIds)
           ? (block?.scene_ids || block?.sceneIds).map((id) => String(id || "").trim()).filter(Boolean)
@@ -782,6 +822,10 @@ export function buildGapAwareScenesFromAudioPhrases(audioPhrases = [], options =
       story_block_position_ru: "",
       scene_role_in_block_ru: "",
       block_progress_ru: "",
+      scene_global_context_ru: "",
+      continuity_anchor_ru: "",
+      must_match_project_identity_ru: "",
+      must_match_block_style_ru: "",
       scene_goal_ru: "",
       photo_prompt_hint_ru: "",
       prompt_hint_ru: "",
@@ -810,6 +854,12 @@ export function buildDraftStoryBlocksFromGapAwareScenes(scenes = []) {
       block_goal_ru: "",
       block_reveal_ru: "",
       block_emotion_ru: "",
+      global_story_context_ru: "",
+      block_place_in_global_arc_ru: "",
+      inherits_style_lock_ru: "",
+      inherits_world_lock_ru: "",
+      inherits_atmosphere_ru: "",
+      inherits_continuity_rules_ru: "",
       color: colorPalette[idx % colorPalette.length],
       start_sec: roundTimingSec(blockScenes[0]?.start_sec || 0),
       end_sec: roundTimingSec(blockScenes[blockScenes.length - 1]?.end_sec || 0),
@@ -927,6 +977,10 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
     story_block_position_ru: pickManualTimingText(scene, ["story_block_position_ru", "storyBlockPositionRu", "block_position_ru"]),
     scene_role_in_block_ru: pickManualTimingText(scene, ["scene_role_in_block_ru", "sceneRoleInBlockRu", "role_in_block_ru", "scene_block_role_ru"]),
     block_progress_ru: pickManualTimingText(scene, ["block_progress_ru", "blockProgressRu", "progress_in_block_ru", "story_block_progress_ru"]),
+    scene_global_context_ru: pickManualTimingText(scene, ["scene_global_context_ru", "sceneGlobalContextRu"]),
+    continuity_anchor_ru: pickManualTimingText(scene, ["continuity_anchor_ru", "continuityAnchorRu"]),
+    must_match_project_identity_ru: pickManualTimingText(scene, ["must_match_project_identity_ru", "mustMatchProjectIdentityRu"]),
+    must_match_block_style_ru: pickManualTimingText(scene, ["must_match_block_style_ru", "mustMatchBlockStyleRu"]),
     original_text: pickManualTimingText(scene, ["original_text", "originalText"]),
     translated_text_ru: pickManualTimingText(scene, ["translated_text_ru", "translatedTextRu", "translation_ru"]),
     meaning_hint_ru: pickManualTimingText(scene, ["meaning_hint_ru", "meaningHintRu", "meaning_ru"]),
@@ -1005,6 +1059,58 @@ export const MANUAL_TIMING_STORY_PASS_TASK_RU = `STORY PASS / РЕЖИССЁРС
 
 Ошибки ASR исправляй по смыслу в translated_text_ru / meaning_hint_ru и отмечай исправления в user_note_ru. Если кажется, что scenes нужно объединить или разделить, НЕ делай это сам: заполни user_note_ru с предложением, а тайминги и идентификаторы оставь без изменений.`;
 
+
+export const MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU = "GLOBAL STORY BIBLE / ОБЩИЙ ПАСПОРТ ИСТОРИИ. Это не перевод и не переразбивка сцен. Нужно создать общий story bible для всей истории целиком. Не менять audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, story_blocks и scenes. Не менять количество сцен и блоков. Нужно заполнить только верхнеуровневые поля общего описания проекта: project_story_summary_ru, project_core_theme_ru, project_drama_arc_ru, project_visual_bible_ru, project_style_lock_ru, project_world_lock_ru, project_character_identity_lock_ru, project_location_lock_ru, project_time_progression_ru, project_atmosphere_lock_ru, project_camera_language_ru, project_color_progression_ru, project_continuity_rules_ru, project_must_keep_same_ru, project_allowed_variation_ru, project_reference_prompt_en. Это описание потом должно использоваться как глобальная подсказка для всех блоков и сцен, чтобы вся история держала единый стиль, атмосферу, мир и continuity от первого блока до последнего.";
+
+export const MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU = `${MANUAL_TIMING_STORY_PASS_TASK_RU}
+
+BLOCK STORYBOARD PASS / РАСКАДРОВКА БЛОКОВ. Перед созданием раскадровки блоков обязательно опирайся на общий story bible проекта. Все block-level visual bible и scene-level image prompts должны наследовать project world/style continuity. Заполни story_blocks.global_story_context_ru, block_place_in_global_arc_ru, inherits_style_lock_ru, inherits_world_lock_ru, inherits_atmosphere_ru, inherits_continuity_rules_ru, а также scenes.scene_global_context_ru, continuity_anchor_ru, must_match_project_identity_ru, must_match_block_style_ru. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, story_blocks и scenes structure; не меняй количество сцен и блоков.`;
+
+export function buildManualTimingStoryBiblePassJson(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeManualTimingAudio(safeProject.audio);
+  const exportJson = buildManualTimingExportJson(safeProject);
+
+  return {
+    chatgpt_task: MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU,
+    split_type: "manual_story_bible_pass",
+    audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
+    ...pickManualTimingProjectStoryBibleFields(safeProject),
+    audio_phrases: exportJson.audio_phrases,
+    story_blocks: exportJson.story_blocks,
+    scenes: exportJson.scenes,
+  };
+}
+
+export function buildManualTimingBlockStoryboardPassJson(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeManualTimingAudio(safeProject.audio);
+  const exportJson = buildManualTimingExportJson(safeProject);
+  return {
+    chatgpt_task: MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU,
+    split_type: "manual_block_storyboard_pass",
+    audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
+    ...pickManualTimingProjectStoryBibleFields(safeProject),
+    audio_phrases: exportJson.audio_phrases,
+    story_blocks: exportJson.story_blocks.map((block) => ({
+      ...block,
+      global_story_context_ru: String(block?.global_story_context_ru || ""),
+      block_place_in_global_arc_ru: String(block?.block_place_in_global_arc_ru || ""),
+      inherits_style_lock_ru: String(block?.inherits_style_lock_ru || ""),
+      inherits_world_lock_ru: String(block?.inherits_world_lock_ru || ""),
+      inherits_atmosphere_ru: String(block?.inherits_atmosphere_ru || ""),
+      inherits_continuity_rules_ru: String(block?.inherits_continuity_rules_ru || ""),
+    })),
+    scenes: exportJson.scenes.map((scene) => ({
+      ...scene,
+      scene_global_context_ru: String(scene?.scene_global_context_ru || ""),
+      continuity_anchor_ru: String(scene?.continuity_anchor_ru || ""),
+      must_match_project_identity_ru: String(scene?.must_match_project_identity_ru || ""),
+      must_match_block_style_ru: String(scene?.must_match_block_style_ru || ""),
+    })),
+  };
+}
+
 export function buildManualTimingStoryPassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
@@ -1048,6 +1154,75 @@ function isManualTimingStoryPassPayload(raw = {}) {
   return splitType === "asr_gap_aware_story_pass"
     || task.includes("после ASR + gap-aware scene builder")
     || task.includes("РЕЖИССЁРСКАЯ СБОРКА ИСТОРИИ");
+}
+
+function isManualTimingStoryBiblePassPayload(raw = {}) {
+  const splitType = String(raw?.split_type || raw?.splitType || "");
+  const task = typeof raw?.chatgpt_task === "string"
+    ? raw.chatgpt_task
+    : JSON.stringify(raw?.chatgpt_task || "");
+  return splitType === "manual_story_bible_pass"
+    || task.includes("GLOBAL STORY BIBLE")
+    || task.includes("ОБЩИЙ ПАСПОРТ ИСТОРИИ");
+}
+
+export function validateManualTimingStoryBiblePassImport(raw = {}, baseProject = {}) {
+  if (!isManualTimingStoryBiblePassPayload(raw)) return { ok: true, errors: [] };
+
+  const basePayload = buildManualTimingStoryBiblePassJson(baseProject);
+  const importedAudioPhrases = normalizeManualTimingAudioPhrases(raw?.audio_phrases || raw?.audioPhrases || []);
+  const baseAudioPhrases = normalizeManualTimingAudioPhrases(basePayload.audio_phrases);
+  const importedScenes = (Array.isArray(raw?.scenes) ? raw.scenes : []).map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
+  const baseScenes = basePayload.scenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
+  const importedStoryBlocks = normalizeManualTimingStoryBlocks(raw?.story_blocks || []);
+  const baseStoryBlocks = normalizeManualTimingStoryBlocks(basePayload.story_blocks || []);
+  const errors = [];
+
+  if (!sameManualTimingJson(importedAudioPhrases, baseAudioPhrases)) {
+    errors.push("audio_phrases изменились — Story Bible Pass не должен менять ASR-фразы.");
+  }
+  if (importedScenes.length !== baseScenes.length) {
+    errors.push(`Количество scenes изменилось: было ${baseScenes.length}, стало ${importedScenes.length}.`);
+  }
+  if (importedStoryBlocks.length !== baseStoryBlocks.length) {
+    errors.push(`Количество story_blocks изменилось: было ${baseStoryBlocks.length}, стало ${importedStoryBlocks.length}.`);
+  }
+
+  const importedSceneById = new Map(importedScenes.map((scene) => [String(scene.scene_id || ""), scene]));
+  baseScenes.forEach((baseScene) => {
+    const sceneId = String(baseScene.scene_id || "");
+    const nextScene = importedSceneById.get(sceneId);
+    if (!nextScene) {
+      errors.push(`scene_id изменился или удалён: ${sceneId}.`);
+      return;
+    }
+    ["start_sec", "end_sec", "speech_start_sec", "speech_end_sec"].forEach((key) => {
+      if (roundTimingSec(nextScene[key]) !== roundTimingSec(baseScene[key])) errors.push(`${sceneId}: ${key} изменился (${baseScene[key]} → ${nextScene[key]}).`);
+    });
+    if (!sameManualTimingJson(normalizeManualTimingSourcePhraseIds(nextScene.source_phrase_ids), normalizeManualTimingSourcePhraseIds(baseScene.source_phrase_ids))) {
+      errors.push(`${sceneId}: source_phrase_ids изменились.`);
+    }
+    if (String(nextScene.story_block_id || "") !== String(baseScene.story_block_id || "")) errors.push(`${sceneId}: story_block_id изменился.`);
+  });
+
+  const importedBlockById = new Map(importedStoryBlocks.map((block) => [String(block.block_id || ""), block]));
+  baseStoryBlocks.forEach((baseBlock) => {
+    const blockId = String(baseBlock.block_id || "");
+    const nextBlock = importedBlockById.get(blockId);
+    if (!nextBlock) {
+      errors.push(`story_block_id изменился или удалён: ${blockId}.`);
+      return;
+    }
+    ["start_sec", "end_sec"].forEach((key) => {
+      if (roundTimingSec(nextBlock[key]) !== roundTimingSec(baseBlock[key])) errors.push(`${blockId}: ${key} изменился (${baseBlock[key]} → ${nextBlock[key]}).`);
+    });
+    if (!sameManualTimingJson(nextBlock.scene_ids || [], baseBlock.scene_ids || [])) errors.push(`${blockId}: scene_ids изменились.`);
+  });
+
+  const hasAnyBibleField = MANUAL_TIMING_PROJECT_STORY_BIBLE_FIELDS.some((key) => String(raw?.[key] || "").trim());
+  if (!hasAnyBibleField) errors.push("Story Bible Pass не заполнил верхнеуровневые project_* поля.");
+
+  return { ok: !errors.length, errors };
 }
 
 export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) {
@@ -1326,6 +1501,10 @@ export function buildManualTimingSampleJson(project = {}) {
       story_block_position_ru: "сцена 1 из 1 в блоке",
       scene_role_in_block_ru: "Какую функцию выполняет сцена внутри смыслового блока.",
       block_progress_ru: "Как эта сцена продвигает раскрытие блока шаг за шагом.",
+      scene_global_context_ru: "Как сцена связана с общей историей и глобальным story bible.",
+      continuity_anchor_ru: "Что обязательно должно совпасть с предыдущими/следующими сценами.",
+      must_match_project_identity_ru: "Какие элементы должны совпасть с project world/style identity.",
+      must_match_block_style_ru: "Какие элементы должны совпасть со стилем текущего блока.",
       original_text: "Original English phrase for this audio segment.",
       translated_text_ru: "Русский перевод фразы.",
       meaning_hint_ru: "Смысл сцены для режиссёра.",
@@ -1352,6 +1531,12 @@ export function buildManualTimingSampleJson(project = {}) {
         block_goal_ru: "Опиши драматургическую задачу блока по фактическому аудио.",
         block_reveal_ru: "Опиши, какое новое понимание должен получить зритель к концу блока.",
         block_emotion_ru: "эмоциональная дуга блока по фактическому аудио",
+        global_story_context_ru: "Как этот блок наследует общий паспорт истории.",
+        block_place_in_global_arc_ru: "Место блока в общей драматургической дуге.",
+        inherits_style_lock_ru: "Какие style lock правила проекта обязательны для блока.",
+        inherits_world_lock_ru: "Какие world lock правила проекта обязательны для блока.",
+        inherits_atmosphere_ru: "Как блок наследует общую атмосферу проекта.",
+        inherits_continuity_rules_ru: "Какие continuity rules проекта обязательны для блока.",
         color: "#F59E0B",
         scene_ids: ["seg_01"],
         start_sec: 0,
@@ -1421,6 +1606,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     project_mode: modeAndKind.project_mode,
     project_kind: modeAndKind.project_kind,
     format: String(safeRaw.format || safeBase.format || "9:16"),
+    ...pickManualTimingProjectStoryBibleFields({ ...safeBase, ...safeRaw }),
     audio: {
       ...baseAudio,
       duration_sec: finalDuration || baseAudio.duration_sec || 0,
@@ -1639,6 +1825,10 @@ export function buildManualTimingExportJson(project = {}) {
     story_block_position_ru: String(scene?.story_block_position_ru || ""),
     scene_role_in_block_ru: String(scene?.scene_role_in_block_ru || ""),
     block_progress_ru: String(scene?.block_progress_ru || ""),
+    scene_global_context_ru: String(scene?.scene_global_context_ru || ""),
+    continuity_anchor_ru: String(scene?.continuity_anchor_ru || ""),
+    must_match_project_identity_ru: String(scene?.must_match_project_identity_ru || ""),
+    must_match_block_style_ru: String(scene?.must_match_block_style_ru || ""),
     original_text: String(scene?.original_text || ""),
     translated_text_ru: String(scene?.translated_text_ru || ""),
     meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
@@ -1687,6 +1877,7 @@ export function buildManualTimingExportJson(project = {}) {
     project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
     project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
     format: String(safeProject.format || "9:16"),
+    ...pickManualTimingProjectStoryBibleFields(safeProject),
     split_type: safeProject.timing_status === "confirmed" ? "manual_timing_confirmed" : "manual_timing_draft",
     audio_duration_sec: Number(audio.duration_sec || 0),
     global_hint: safeProject.timing_status === "confirmed" ? "Manual timing confirmed by user" : "Manual timing draft",

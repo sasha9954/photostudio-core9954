@@ -27,6 +27,7 @@ import {
   buildManualTimingClipPassJson,
   buildManualTimingExportJson,
   buildManualTimingPodcastPassJson,
+  buildManualTimingStoryBiblePassJson,
   buildManualTimingStoryPassJson,
   buildManualTimingSampleJson,
   buildManualTimingScenesFromMarkers,
@@ -48,6 +49,7 @@ import {
   updateManualTimingSceneById,
   validateManualTimingClipPassImport,
   validateManualTimingPodcastPassImport,
+  validateManualTimingStoryBiblePassImport,
   validateManualTimingStoryPassImport,
   validateSceneCoverage,
 } from "../clip_nodes/manual_timing/manualTimingDomain";
@@ -229,8 +231,8 @@ function getManualTimingModeConfig(project = {}) {
       className: "mode-story_voiceover",
       title: "Тайминг · История / Voice-over",
       badge: "История",
-      subtitle: "ASR → gap-aware scenes → Story Pass",
-      hint: "Озвученная история: ASR режет речь, сцены покрывают паузы, Story Pass заполняет смысловые блоки.",
+      subtitle: "ASR → gap-aware scenes → Story Pass → Story Bible Pass → Block Storyboard Pass",
+      hint: "Озвученная история: ASR режет речь, сцены покрывают паузы, Story Pass заполняет смысловые блоки, Story Bible фиксирует единый мир и стиль.",
     };
   }
   if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
@@ -631,6 +633,8 @@ export default function ManualTimingEditorPage() {
       || (isPodcastDialogue && hasNonEmptyArray(project.speakers) && hasNonEmptyArray(project.topic_blocks) && scenes.every(sceneHasCompletePodcastPassFields))
     );
   const storyPassReadyForDirector = passReadyForDirector;
+  const storyBiblePassReady = isStoryVoiceover && scenes.some(sceneHasStoryPassFields);
+  const storyBibleButtonTitle = storyBiblePassReady ? "Скопировать JSON для Story Bible Pass" : "Сначала примените Story Pass JSON";
   const openDirectorBoardTitle = passReadyForDirector ? "Открыть режиссёрскую доску" : `Сначала примените ${workflowLabels.pass} JSON и подтвердите тайминг`;
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
@@ -949,6 +953,10 @@ export default function ManualTimingEditorPage() {
           story_block_position_ru: String(oldScene.story_block_position_ru || scene.story_block_position_ru || ""),
           scene_role_in_block_ru: String(oldScene.scene_role_in_block_ru || ""),
           block_progress_ru: String(oldScene.block_progress_ru || ""),
+          scene_global_context_ru: String(oldScene.scene_global_context_ru || ""),
+          continuity_anchor_ru: String(oldScene.continuity_anchor_ru || ""),
+          must_match_project_identity_ru: String(oldScene.must_match_project_identity_ru || ""),
+          must_match_block_style_ru: String(oldScene.must_match_block_style_ru || ""),
           original_text: String(oldScene.original_text || ""),
           translated_text_ru: String(oldScene.translated_text_ru || ""),
           meaning_hint_ru: String(oldScene.meaning_hint_ru || ""),
@@ -1689,6 +1697,18 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const onCopyStoryBiblePassJson = async () => {
+    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
+    const payload = buildManualTimingStoryBiblePassJson(project);
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCopyStatus("JSON для Story Bible Pass скопирован");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    } catch {
+      setCopyStatus("Не удалось скопировать JSON для Story Bible Pass");
+    }
+  };
+
   const applyImportedTimingJson = (rawObject) => {
     const isBackupImport = rawObject?.backup_type === "photostudio_manual_project_backup";
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
@@ -1701,9 +1721,12 @@ export default function ManualTimingEditorPage() {
       } else if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) {
         validations = [validateManualTimingPodcastPassImport(importedObject, project)];
       } else if (mode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
-        validations = [validateManualTimingStoryPassImport(importedObject, project)];
+        validations = String(importedObject.split_type || importedObject.splitType || "") === "manual_story_bible_pass"
+          ? [validateManualTimingStoryBiblePassImport(importedObject, project)]
+          : [validateManualTimingStoryPassImport(importedObject, project)];
       } else {
         validations = [
+          validateManualTimingStoryBiblePassImport(importedObject, project),
           validateManualTimingStoryPassImport(importedObject, project),
           validateManualTimingClipPassImport(importedObject, project),
           validateManualTimingPodcastPassImport(importedObject, project),
@@ -2010,6 +2033,7 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>{workflowLabels.phraseMap}</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>{workflowLabels.buildScenes}</button>
           <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+          {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Скопировать JSON для Story Bible Pass</button> : null}
           <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Открыть режиссёрскую доску"}</button>
@@ -2206,6 +2230,7 @@ export default function ManualTimingEditorPage() {
             </button>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Скопировать JSON для Story Bible Pass</button> : null}
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
