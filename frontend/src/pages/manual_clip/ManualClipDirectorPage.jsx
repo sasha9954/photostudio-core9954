@@ -10,18 +10,15 @@ import {
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildManualProjectBackupJson,
-  canUseLegacyManualProjectStorage,
-  getAccountScopedStorageKey,
-  getManualClipBoardProjectStorageKey,
   hasMeaningfulManualProject,
+  persistManualClipBoardProject,
+  readActiveManualClipBoardProject,
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
   unwrapManualProjectBackupJson,
 } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualClipDirectorPage.css";
 
-const STORAGE_KEY = "manual_clip_board_active_project";
-const ACTIVE_PROJECT_ID_STORAGE_KEY = "manual_clip_board_active_project_id";
 const ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text", "first_last", "first_last_sound"];
 const I2V_SOUND_GAIN_DEFAULT_DB = -6;
 const I2V_SOUND_GAIN_MIN_DB = -18;
@@ -30,57 +27,13 @@ const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
-
-function readJsonStorage(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
 function readManualActiveProject() {
-  const active = readJsonStorage(getAccountScopedStorageKey(STORAGE_KEY));
-  if (active) return active;
-
-  const scopedActiveNodeId = String(localStorage.getItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY)) || "").trim();
-  if (scopedActiveNodeId) {
-    const scopedNodeProject = readJsonStorage(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(scopedActiveNodeId)));
-    if (scopedNodeProject) return scopedNodeProject;
-  }
-
-  if (canUseLegacyManualProjectStorage()) {
-    const legacyActive = readJsonStorage(STORAGE_KEY);
-    if (legacyActive) return legacyActive;
-    const legacyActiveNodeId = String(localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY) || "").trim();
-    if (legacyActiveNodeId) {
-      const legacyNodeProject = readJsonStorage(getManualClipBoardProjectStorageKey(legacyActiveNodeId));
-      if (legacyNodeProject) return legacyNodeProject;
-    }
-  }
-
-  return null;
+  return readActiveManualClipBoardProject();
 }
 
 function persistManualProject(nextProject = {}) {
-  const safeProject = nextProject && typeof nextProject === "object" ? nextProject : {};
-  try {
-    const serialized = JSON.stringify(safeProject);
-    localStorage.setItem(getAccountScopedStorageKey(STORAGE_KEY), serialized);
-    const nodeId = String(safeProject?.nodeId || "").trim();
-    if (nodeId) {
-      localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY), nodeId);
-      localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
-    }
-    if (canUseLegacyManualProjectStorage()) {
-      localStorage.setItem(STORAGE_KEY, serialized);
-      if (nodeId) {
-        localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, nodeId);
-        localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
-      }
-    }
-  } catch {}
+  if (!hasMeaningfulManualProject(nextProject)) return;
+  persistManualClipBoardProject(nextProject);
 }
 const STATUS_VIDEO_READY = "video_ready";
 
@@ -527,6 +480,7 @@ export default function ManualClipDirectorPage() {
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
+  const didHydrateRef = useRef(false);
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
@@ -540,21 +494,28 @@ export default function ManualClipDirectorPage() {
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
-    if (!parsedProject) return;
+    if (!hasMeaningfulManualProject(parsedProject)) {
+      didHydrateRef.current = true;
+      return;
+    }
     try {
       const parsed = unwrapManualProjectBackupJson(parsedProject);
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
       const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
-      setProject({ ...parsed, story_blocks: storyBlocks, scenes });
+      const hydratedProject = { ...parsed, story_blocks: storyBlocks, scenes };
+      setProject(hydratedProject);
       setSelectedSceneId(String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""));
     } catch {
       setProject(null);
+    } finally {
+      didHydrateRef.current = true;
     }
   }, []);
 
   const persistProject = (nextProject) => {
     setProject(nextProject);
+    if (!didHydrateRef.current || !hasMeaningfulManualProject(nextProject)) return;
     persistManualProject(nextProject);
   };
 
@@ -1016,7 +977,7 @@ export default function ManualClipDirectorPage() {
         return { ...scene, ...(patch || {}) };
       });
       const nextProject = { ...baseProject, scenes: nextScenes };
-      persistManualProject(nextProject);
+      if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) persistManualProject(nextProject);
       return nextProject;
     });
   };

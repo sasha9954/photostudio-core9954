@@ -1,9 +1,9 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../../../services/api";
 import { NodeShell } from "../comfy/comfyNodeShared";
-import { hasMeaningfulManualProject } from "../manualProjectBackup.js";
+import { buildManualProjectBackupJson, hasMeaningfulManualProject, readActiveManualClipBoardProject } from "../manualProjectBackup.js";
 import "./ManualTimingNode.css";
 import {
   MANUAL_TIMING_MUSIC_CLIP_MODE,
@@ -120,6 +120,25 @@ function getManualTimingNodeModeClass(projectMode = "") {
   return projectMode ? `mode-${projectMode}` : "mode-unselected";
 }
 
+function formatManualBoardUpdatedAt(value) {
+  if (!value) return "неизвестно";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("ru-RU");
+}
+
+function downloadManualBoardBackup(project) {
+  const blob = new Blob([JSON.stringify(buildManualProjectBackupJson(project, { source: "manual_timing_node_active_board" }), null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "manual_clip_board_backup.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function ManualTimingNode({ id, data }) {
   const navigate = useNavigate();
   const patch = (p) => data?.onPatchNodeData?.(id, p);
@@ -139,7 +158,14 @@ export default function ManualTimingNode({ id, data }) {
   const copyJsonTitle = isProjectModeSelected
     ? (isModeReadyForJson ? "Скопировать JSON выбранного режима" : "Режим не поддерживается")
     : "Сначала выберите режим проекта";
+  const [activeBoardProject, setActiveBoardProject] = useState(() => readActiveManualClipBoardProject());
+  const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
+  const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
 
+
+  useEffect(() => {
+    setActiveBoardProject(readActiveManualClipBoardProject());
+  }, []);
 
   useEffect(() => {
     const stored = readManualTimingProjectForNode(id);
@@ -197,6 +223,37 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onOpenEditor = () => {
+    const activeProject = readActiveManualClipBoardProject();
+    if (hasMeaningfulManualProject(activeProject)) {
+      setActiveBoardProject(activeProject);
+      const createNew = window.confirm("Уже есть активная режиссёрская доска. OK — начать новый разбор из текущей ноды, Отмена — продолжить существующую доску.");
+      if (!createNew) {
+        navigate("/studio/manual-clip-board");
+        return;
+      }
+      const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+      if (!confirmed) return;
+    }
+    persistProject();
+    navigate("/studio/manual-timing");
+  };
+
+  const onReturnToActiveBoard = () => {
+    const activeProject = readActiveManualClipBoardProject();
+    if (hasMeaningfulManualProject(activeProject)) setActiveBoardProject(activeProject);
+    navigate("/studio/manual-clip-board");
+  };
+
+  const onDownloadActiveBoardBackup = () => {
+    const activeProject = readActiveManualClipBoardProject();
+    if (!hasMeaningfulManualProject(activeProject)) return;
+    setActiveBoardProject(activeProject);
+    downloadManualBoardBackup(activeProject);
+  };
+
+  const onStartFreshWithConfirm = () => {
+    const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+    if (!confirmed) return;
     persistProject();
     navigate("/studio/manual-timing");
   };
@@ -315,6 +372,16 @@ export default function ManualTimingNode({ id, data }) {
         <div className="manualTimingNode_row"><b>Сцен:</b> {Array.isArray(model.scenes) ? model.scenes.length : 0}</div>
         <div className="manualTimingNode_row"><b>Смысловых блоков:</b> {storyBlockCount}</div>
         <div className="manualTimingNode_row"><b>Статус:</b> {formatTimingStatus(model.timing_status)}</div>
+
+        {hasMeaningfulManualProject(activeBoardProject) ? <div className="manualTimingNode_activeBoard">
+          <div className="manualTimingNode_activeBoardTitle">🎬 Активная режиссёрская доска</div>
+          <div className="manualTimingNode_activeBoardMeta">Сцен: {activeBoardScenes.length} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject.updatedAt || activeBoardProject.updated_at)}</div>
+          <div className="manualTimingNode_activeBoardActions">
+            <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onReturnToActiveBoard}>Вернуться в доску</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadActiveBoardBackup}>Скачать backup</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onStartFreshWithConfirm}>Начать заново</button>
+          </div>
+        </div> : null}
 
         <label className="manualTimingNode_label">Формат</label>
         <select className="manualTimingNode_select" value={model.format || "9:16"} onChange={(e) => patch({ format: e.target.value, updatedAt: Date.now() })}>

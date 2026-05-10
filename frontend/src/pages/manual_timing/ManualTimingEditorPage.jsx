@@ -6,6 +6,8 @@ import {
   canUseLegacyManualProjectStorage,
   getAccountScopedStorageKey,
   hasMeaningfulManualProject,
+  persistManualClipBoardProject,
+  readActiveManualClipBoardProject,
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
   unwrapManualProjectBackupJson,
@@ -86,9 +88,14 @@ const STATUS_LABELS = {
 
 const NUDGE_STEPS = [-0.2, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.2];
 const SHOW_MISSING_PHRASE_TOOLS = false;
-const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY = "manual_clip_board_active_project";
-const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY = "manual_clip_board_active_project_id";
 const MANUAL_CLIP_BOARD_ROUTE = "/studio/manual-clip-board";
+
+function formatManualBoardUpdatedAt(value) {
+  if (!value) return "неизвестно";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("ru-RU");
+}
 
 const STORY_PASS_REQUIRED_SCENE_FIELDS = [
   "translated_text_ru",
@@ -381,23 +388,6 @@ function hasRealStoryBlocks(storyBlocks = []) {
   });
 }
 
-function buildManualClipBoardStorageKey(nodeId = "") {
-  const safeId = String(nodeId || "default").trim() || "default";
-  return `manual_clip_board_project:${safeId}`;
-}
-
-function persistManualClipBoardProject(projectSnapshot = {}) {
-  try {
-    const serialized = JSON.stringify(projectSnapshot);
-    localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
-    const nodeId = String(projectSnapshot?.nodeId || "").trim();
-    if (nodeId) {
-      localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
-      localStorage.setItem(getAccountScopedStorageKey(buildManualClipBoardStorageKey(nodeId)), serialized);
-    }
-  } catch {}
-}
-
 async function sliceStoryVoiceoverAudioForScenes(projectSnapshot = {}) {
   const scenes = Array.isArray(projectSnapshot?.scenes) ? projectSnapshot.scenes : [];
   const res = await fetch(`${API_BASE}/api/manual-clip/slice-audio`, {
@@ -608,6 +598,7 @@ export default function ManualTimingEditorPage() {
   const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
   const [asrStatus, setAsrStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
+  const [activeBoardProject, setActiveBoardProject] = useState(() => readActiveManualClipBoardProject());
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -619,6 +610,9 @@ export default function ManualTimingEditorPage() {
   const storyBlocks = useMemo(() => normalizeManualTimingStoryBlocks(project.story_blocks), [project.story_blocks]);
   const audioPhrases = useMemo(() => normalizeManualTimingAudioPhrases(project.audio_phrases), [project.audio_phrases]);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
+  const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
+  const hasActiveBoardProject = hasMeaningfulManualProject(activeBoardProject);
   const isStoryVoiceover = isStoryVoiceoverProject(project);
   const modeConfig = getManualTimingModeConfig(project);
   const isProjectModeSelected = Boolean(modeConfig.mode);
@@ -768,6 +762,10 @@ export default function ManualTimingEditorPage() {
   useEffect(() => {
     durationSecRef.current = Number(durationSec || 0);
   }, [durationSec]);
+
+  useEffect(() => {
+    setActiveBoardProject(readActiveManualClipBoardProject());
+  }, []);
 
   const persist = (nextProject) => {
     const safeProject = {
@@ -1592,6 +1590,18 @@ export default function ManualTimingEditorPage() {
     }
     if (handoffStatus) return;
 
+    const existingBoard = readActiveManualClipBoardProject();
+    if (hasMeaningfulManualProject(existingBoard)) {
+      setActiveBoardProject(existingBoard);
+      const createNew = window.confirm("Уже есть активная режиссёрская доска. OK — создать новую доску из текущего разбора, Отмена — продолжить существующую доску.");
+      if (!createNew) {
+        navigate(MANUAL_CLIP_BOARD_ROUTE);
+        return;
+      }
+      const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+      if (!confirmed) return;
+    }
+
     let projectSnapshot = buildDirectorProjectSnapshot();
     let handoffWarning = "";
     const needsAudioSlice = Boolean(projectSnapshot?.audio?.url)
@@ -1627,6 +1637,7 @@ export default function ManualTimingEditorPage() {
 
     persistManualTimingProject(projectSnapshot);
     persistManualClipBoardProject(projectSnapshot);
+    setActiveBoardProject(projectSnapshot);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
     navigate(MANUAL_CLIP_BOARD_ROUTE);
@@ -1670,6 +1681,29 @@ export default function ManualTimingEditorPage() {
   const onDownloadProjectBackup = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     downloadJsonPayload(buildManualProjectBackupJson(project, { source: "manual_timing_editor" }), "manual_project_backup.json");
+  };
+
+  const onReturnToActiveBoard = () => {
+    const existingBoard = readActiveManualClipBoardProject();
+    if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
+    navigate(MANUAL_CLIP_BOARD_ROUTE);
+  };
+
+  const onDownloadActiveBoardBackup = () => {
+    const existingBoard = readActiveManualClipBoardProject();
+    if (!hasMeaningfulManualProject(existingBoard)) {
+      setCopyStatus("Активная режиссёрская доска не найдена");
+      return;
+    }
+    setActiveBoardProject(existingBoard);
+    downloadJsonPayload(buildManualProjectBackupJson(existingBoard, { source: "manual_timing_editor_active_board" }), "manual_clip_board_backup.json");
+  };
+
+  const onStartNewAnalysisWithConfirm = () => {
+    const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+    if (!confirmed) return;
+    setCopyStatus("Можно продолжить новый разбор. Существующая доска будет заменена только при создании новой доски.");
+    window.setTimeout(() => setCopyStatus(""), 3200);
   };
 
   const onDownloadSampleJson = () => {
@@ -1928,6 +1962,18 @@ export default function ManualTimingEditorPage() {
       </div>
       <div className="manualTimingModeHint">{modeConfig.hint}</div>
       {!isProjectModeSelected ? <div className="manualTimingModeMissing">Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.</div> : null}
+      {hasActiveBoardProject ? <div className="manualTimingActiveBoardWarning">
+        <div>
+          <b>🎬 Активная режиссёрская доска</b>
+          <span>Уже есть активная режиссёрская доска. Можно вернуться без пересоздания.</span>
+          <span>Сцен: {activeBoardScenes.length} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject.updatedAt || activeBoardProject.updated_at)}</span>
+        </div>
+        <div className="manualTimingActiveBoardActions">
+          <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onReturnToActiveBoard}>Вернуться в доску</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadActiveBoardBackup}>Скачать backup</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onStartNewAnalysisWithConfirm}>Начать новый разбор</button>
+        </div>
+      </div> : null}
       {showLegacyRestore ? <div className="manualTimingLegacyRestore">
         <div>
           <b>Найден старый проект в браузере</b>
