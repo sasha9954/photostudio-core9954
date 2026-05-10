@@ -8,6 +8,7 @@ import {
   hasMeaningfulManualProject,
   persistManualClipBoardProject,
   readActiveManualClipBoardProject,
+  readManualClipBoardProjectForNode,
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
   unwrapManualProjectBackupJson,
@@ -154,6 +155,18 @@ function buildInitialProject() {
     selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
     timing_status: project.timing_status || (scenes.length ? "draft" : "empty"),
   };
+}
+
+function getManualTimingOwnerNodeId(project = {}) {
+  return String(project?.sourceNodeId || project?.nodeId || "").trim();
+}
+
+function dispatchManualTimingDirectorBoardUpdate(project = {}) {
+  const sourceNodeId = getManualTimingOwnerNodeId(project);
+  if (!sourceNodeId || typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("manual-director-board:update", {
+    detail: { sourceNodeId, project },
+  }));
 }
 
 function clampTime(value, duration) {
@@ -598,7 +611,7 @@ export default function ManualTimingEditorPage() {
   const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
   const [asrStatus, setAsrStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
-  const [activeBoardProject, setActiveBoardProject] = useState(() => readActiveManualClipBoardProject());
+  const [activeBoardProject, setActiveBoardProject] = useState(() => readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(buildInitialProject())) || readActiveManualClipBoardProject());
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -764,7 +777,7 @@ export default function ManualTimingEditorPage() {
   }, [durationSec]);
 
   useEffect(() => {
-    setActiveBoardProject(readActiveManualClipBoardProject());
+    setActiveBoardProject(readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject());
   }, []);
 
   const persist = (nextProject) => {
@@ -1563,31 +1576,37 @@ export default function ManualTimingEditorPage() {
   };
 
 
-  const buildDirectorProjectSnapshot = () => ({
-    ...project,
-    project_mode: modeConfig.mode || project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
-    project_kind: project.project_kind || (modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE ? "clip" : (modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" : MANUAL_TIMING_STORY_PROJECT_KIND)),
-    source: `manual_timing_${modeConfig.mode || MANUAL_TIMING_STORY_VOICEOVER_MODE}`,
-    step: `${workflowLabels.pass.toLowerCase().replace(/\s+/g, "_")}_ready`,
-    format: project.format,
-    audio,
-    audio_phrases: audioPhrases,
-    story_blocks: storyBlocks,
-    scenes: scenes.map((scene) => ({
-      ...scene,
-      video_prompt: "",
-      negative_prompt: "",
-      sound_prompt: "",
-    })),
-    selectedSceneId: selectedScene?.scene_id || project.selectedSceneId || scenes[0]?.scene_id || "",
-    timing_status: project.timing_status || "confirmed",
-  });
+  const buildDirectorProjectSnapshot = () => {
+    const sourceNodeId = getManualTimingOwnerNodeId(project);
+    return {
+      ...project,
+      project_mode: modeConfig.mode || project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
+      project_kind: project.project_kind || (modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE ? "clip" : (modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" : MANUAL_TIMING_STORY_PROJECT_KIND)),
+      source: "manual_timing_node",
+      ownerNodeType: "manualTiming",
+      nodeId: sourceNodeId,
+      sourceNodeId,
+      step: `${workflowLabels.pass.toLowerCase().replace(/\s+/g, "_")}_ready`,
+      format: project.format,
+      audio,
+      audio_phrases: audioPhrases,
+      story_blocks: storyBlocks,
+      scenes: scenes.map((scene) => ({
+        ...scene,
+        video_prompt: "",
+        negative_prompt: "",
+        sound_prompt: "",
+      })),
+      selectedSceneId: selectedScene?.scene_id || project.selectedSceneId || scenes[0]?.scene_id || "",
+      timing_status: project.timing_status || "confirmed",
+    };
+  };
 
   const onOpenDirectorBoard = () => {
-    const existingBoard = readActiveManualClipBoardProject();
+    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
     if (hasMeaningfulManualProject(existingBoard)) {
       setActiveBoardProject(existingBoard);
-      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?mode=open_existing`);
+      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(getManualTimingOwnerNodeId(existingBoard) || getManualTimingOwnerNodeId(project))}&mode=open_existing`);
       return;
     }
     setCopyStatus("Активная режиссёрская доска не найдена. Создайте новую доску отдельной кнопкой.");
@@ -1601,7 +1620,7 @@ export default function ManualTimingEditorPage() {
     }
     if (handoffStatus) return;
 
-    const existingBoard = readActiveManualClipBoardProject();
+    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
     if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
     const confirmed = window.confirm("Это заменит активную режиссёрскую доску. Сначала скачайте backup. Продолжить?");
     if (!confirmed) return;
@@ -1639,6 +1658,7 @@ export default function ManualTimingEditorPage() {
       }
     }
 
+    dispatchManualTimingDirectorBoardUpdate(projectSnapshot);
     persistManualTimingProject(projectSnapshot);
     persistManualClipBoardProject(projectSnapshot, {
       forceReplace: true,
@@ -1647,7 +1667,7 @@ export default function ManualTimingEditorPage() {
     setActiveBoardProject(projectSnapshot);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
-    navigate(MANUAL_CLIP_BOARD_ROUTE);
+    navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(getManualTimingOwnerNodeId(projectSnapshot))}&mode=open_existing`);
   };
 
   const onCopyTimingJson = async () => {
@@ -1691,17 +1711,17 @@ export default function ManualTimingEditorPage() {
   };
 
   const onReturnToActiveBoard = () => {
-    const existingBoard = readActiveManualClipBoardProject();
+    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
     if (hasMeaningfulManualProject(existingBoard)) {
       setActiveBoardProject(existingBoard);
-      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?mode=open_existing`);
+      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(getManualTimingOwnerNodeId(existingBoard) || getManualTimingOwnerNodeId(project))}&mode=open_existing`);
       return;
     }
     setCopyStatus("Активная режиссёрская доска не найдена");
   };
 
   const onDownloadActiveBoardBackup = () => {
-    const existingBoard = readActiveManualClipBoardProject();
+    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
     if (!hasMeaningfulManualProject(existingBoard)) {
       setCopyStatus("Активная режиссёрская доска не найдена");
       return;

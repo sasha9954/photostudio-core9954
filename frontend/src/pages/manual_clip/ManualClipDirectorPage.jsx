@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { fetchJson } from "../../services/api.js";
 import { buildStoryPrepTemplateText, STORY_PREP_TEMPLATE_META } from "../clip_nodes/manual/manualClipBoardDomain";
 import {
@@ -10,11 +10,11 @@ import {
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildManualProjectBackupJson,
-  debugManualClipBoardStorageSnapshot,
   getManualClipBoardMaterialStats,
   hasMeaningfulManualProject,
   persistManualClipBoardProject,
   readActiveManualClipBoardProject,
+  readManualClipBoardProjectForNode,
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
   unwrapManualProjectBackupJson,
@@ -29,13 +29,22 @@ const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
-function readManualActiveProject() {
-  return readActiveManualClipBoardProject();
+function readManualActiveProject(sourceNodeId = "") {
+  const nodeProject = readManualClipBoardProjectForNode(sourceNodeId);
+  return hasMeaningfulManualProject(nodeProject) ? nodeProject : readActiveManualClipBoardProject();
 }
 
 function persistManualProject(nextProject = {}, options = {}) {
   if (!hasMeaningfulManualProject(nextProject)) return false;
   return persistManualClipBoardProject(nextProject, options);
+}
+
+function dispatchManualDirectorBoardUpdate(sourceNodeId = "", project = {}) {
+  const safeSourceNodeId = String(sourceNodeId || project?.sourceNodeId || project?.nodeId || "").trim();
+  if (!safeSourceNodeId || typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("manual-director-board:update", {
+    detail: { sourceNodeId: safeSourceNodeId, project },
+  }));
 }
 const STATUS_VIDEO_READY = "video_ready";
 
@@ -478,6 +487,8 @@ function buildStoryPositionFallback(scene = {}, idx = 0, total = 0) {
 
 export default function ManualClipDirectorPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const sourceNodeIdFromRoute = useMemo(() => new URLSearchParams(location.search).get("sourceNodeId") || "", [location.search]);
   const videoStartInFlightRef = useRef(new Set());
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
@@ -496,8 +507,34 @@ export default function ManualClipDirectorPage() {
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [playbackRange, setPlaybackRange] = useState({ startSec: 0, endSec: null });
 
+  const getProjectOwnerNodeId = (candidateProject = {}) => String(
+    sourceNodeIdFromRoute
+    || candidateProject?.sourceNodeId
+    || candidateProject?.nodeId
+    || ""
+  ).trim();
+
+  const normalizeDirectorProjectOwner = (candidateProject = {}) => {
+    const ownerNodeId = getProjectOwnerNodeId(candidateProject);
+    if (!ownerNodeId) return candidateProject || {};
+    return {
+      ...(candidateProject || {}),
+      source: candidateProject?.source || "manual_timing_node",
+      ownerNodeType: candidateProject?.ownerNodeType || "manualTiming",
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+    };
+  };
+
+  const persistAndBroadcastDirectorProject = (candidateProject = {}, options = {}) => {
+    const safeProject = normalizeDirectorProjectOwner(candidateProject);
+    const persisted = persistManualProject(safeProject, options);
+    dispatchManualDirectorBoardUpdate(getProjectOwnerNodeId(safeProject), safeProject);
+    return persisted;
+  };
+
   useEffect(() => {
-    const parsedProject = readManualActiveProject();
+    const parsedProject = readManualActiveProject(sourceNodeIdFromRoute);
     if (!hasMeaningfulManualProject(parsedProject)) {
       didHydrateRef.current = true;
       return;
@@ -507,7 +544,7 @@ export default function ManualClipDirectorPage() {
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
       const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
-      const hydratedProject = { ...parsed, story_blocks: storyBlocks, scenes };
+      const hydratedProject = normalizeDirectorProjectOwner({ ...parsed, story_blocks: storyBlocks, scenes });
       setProject(hydratedProject);
       setSelectedSceneId(String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""));
     } catch {
@@ -526,16 +563,16 @@ export default function ManualClipDirectorPage() {
   }, [selectedSceneId]);
 
   const persistProject = (nextProject) => {
-    const safeProject = {
+    const safeProject = normalizeDirectorProjectOwner({
       ...(nextProject || {}),
       selectedSceneId: String(nextProject?.selectedSceneId || selectedSceneIdRef.current || ""),
       updatedAt: Date.now(),
-    };
+    });
     projectRef.current = safeProject;
     selectedSceneIdRef.current = safeProject.selectedSceneId;
     setProject(safeProject);
     if (!didHydrateRef.current || !hasMeaningfulManualProject(safeProject)) return;
-    persistManualProject(safeProject, { reason: safeProject.lastPersistReason || "manual_director_persist_project" });
+    persistAndBroadcastDirectorProject(safeProject, { reason: safeProject.lastPersistReason || "manual_director_persist_project" });
   };
 
   const onForceSaveDirectorBoard = () => {
@@ -552,7 +589,7 @@ export default function ManualClipDirectorPage() {
     };
     projectRef.current = safeProject;
     setProject(safeProject);
-    persistManualProject(safeProject, { reason: "manual_force_save_button", forceReplace: false });
+    persistAndBroadcastDirectorProject(safeProject, { reason: "manual_force_save_button", forceReplace: false });
     setBackupStatus("Доска сохранена");
     window.setTimeout(() => setBackupStatus(""), 1800);
   };
@@ -570,7 +607,7 @@ export default function ManualClipDirectorPage() {
 
     projectRef.current = safeProject;
     selectedSceneIdRef.current = safeProject.selectedSceneId;
-    persistManualProject(safeProject, { reason });
+    persistAndBroadcastDirectorProject(safeProject, { reason });
     setProject(safeProject);
     return true;
   };
@@ -579,7 +616,7 @@ export default function ManualClipDirectorPage() {
     const persistBeforeLeave = () => {
       const currentProject = projectRef.current;
       if (!hasMeaningfulManualProject(currentProject)) return;
-      persistManualProject({
+      persistAndBroadcastDirectorProject({
         ...currentProject,
         selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || "",
         updatedAt: Date.now(),
@@ -1074,18 +1111,18 @@ export default function ManualClipDirectorPage() {
         const patch = typeof patchOrFactory === "function" ? patchOrFactory(scene) : patchOrFactory;
         return { ...scene, ...(patch || {}) };
       });
-      const nextProject = {
+      const nextProject = normalizeDirectorProjectOwner({
         ...baseProject,
         scenes: nextScenes,
         selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId,
         updatedAt: Date.now(),
         lastPersistReason: "update_scene",
-      };
+      });
       projectRef.current = nextProject;
       selectedSceneIdRef.current = nextProject.selectedSceneId;
 
       if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
-        persistManualProject(nextProject, { reason: "update_scene" });
+        persistAndBroadcastDirectorProject(nextProject, { reason: "update_scene" });
         const savedScene = nextScenes.find((s) => s.scene_id === sceneId);
         console.debug("[manual director updateScene saved]", {
           sceneId,
@@ -1396,9 +1433,7 @@ export default function ManualClipDirectorPage() {
         Назад к AI-разбивке
       </button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
-      <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>💾 Сохранить доску</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
-      <button className="clipSB_btn clipSB_btnSecondary" onClick={() => debugManualClipBoardStorageSnapshot()}>Debug storage</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
     </div>
