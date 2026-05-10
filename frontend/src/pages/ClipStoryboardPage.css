@@ -5798,7 +5798,7 @@ body.ps_clip_fullscreen .mainCol {
 .clipSB_manualDirectorOverlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 3000;
   background: #050712;
   overflow: auto;
 }
