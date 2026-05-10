@@ -520,6 +520,9 @@ function buildStoryPositionFallback(scene = {}, idx = 0, total = 0) {
 export default function ManualClipDirectorPage() {
   const navigate = useNavigate();
   const videoStartInFlightRef = useRef(new Set());
+  const quickListenAudioRef = useRef(null);
+  const quickListenRafRef = useRef(null);
+  const playbackRangeRef = useRef({ startSec: 0, endSec: null });
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
@@ -527,6 +530,9 @@ export default function ManualClipDirectorPage() {
   const [isStoryPrepExpanded, setIsStoryPrepExpanded] = useState(false);
   const [backupStatus, setBackupStatus] = useState("");
   const [blockCopyStatus, setBlockCopyStatus] = useState("");
+  const [playbackMode, setPlaybackMode] = useState("");
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [playbackRange, setPlaybackRange] = useState({ startSec: 0, endSec: null });
 
   useEffect(() => {
     const parsedProject = readManualActiveProject();
@@ -551,6 +557,8 @@ export default function ManualClipDirectorPage() {
   const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   const audioPhrases = Array.isArray(project?.audio_phrases) ? project.audio_phrases : [];
+  const audio = project?.audio && typeof project.audio === "object" ? project.audio : {};
+  const audioUrl = String(audio?.url || project?.audio_url || project?.audioUrl || "").trim();
   const isStoryVoiceover = isStoryVoiceoverProject(project);
   const storyPrepProject = useMemo(() => ({
     ...(project || {}),
@@ -666,6 +674,11 @@ export default function ManualClipDirectorPage() {
   };
 
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
+  const currentBlock = useMemo(() => {
+    const blockId = String(selectedScene?.story_block_id || "").trim();
+    if (!blockId) return null;
+    return storyBlocks.find((block) => String(block?.block_id || "") === blockId || String(block?.id || "") === blockId) || null;
+  }, [selectedScene?.story_block_id, storyBlocks]);
   const selectedSceneIndex = useMemo(() => scenes.findIndex((s) => s.scene_id === selectedScene?.scene_id), [scenes, selectedScene]);
   const storyPositionText = selectedScene
     ? (selectedScene.story_position_ru || buildStoryPositionFallback(selectedScene, selectedSceneIndex >= 0 ? selectedSceneIndex : 0, scenes.length))
@@ -748,6 +761,159 @@ export default function ManualClipDirectorPage() {
   };
 
   const buildCurrentManualBlockProject = () => ({ ...(project || {}), story_blocks: storyBlocks, scenes, selectedSceneId });
+
+  const getQuickListenDurationSec = () => {
+    const audioEl = quickListenAudioRef.current;
+    const mediaDuration = Number(audioEl?.duration || 0);
+    const projectDuration = Number(audio?.duration_sec || project?.audio_duration_sec || 0);
+    if (Number.isFinite(mediaDuration) && mediaDuration > 0) return mediaDuration;
+    if (Number.isFinite(projectDuration) && projectDuration > 0) return projectDuration;
+    return 0;
+  };
+
+  const clampQuickListenSec = (value) => {
+    const num = Number(value || 0);
+    const safeValue = Number.isFinite(num) ? Math.max(0, num) : 0;
+    const duration = getQuickListenDurationSec();
+    return duration > 0 ? Math.min(duration, safeValue) : safeValue;
+  };
+
+  const stopQuickListenRaf = () => {
+    if (quickListenRafRef.current) {
+      window.cancelAnimationFrame(quickListenRafRef.current);
+      quickListenRafRef.current = null;
+    }
+  };
+
+  const resetQuickListenState = () => {
+    stopQuickListenRaf();
+    setIsAudioPlaying(false);
+    setPlaybackMode("");
+    playbackRangeRef.current = { startSec: 0, endSec: null };
+    setPlaybackRange({ startSec: 0, endSec: null });
+  };
+
+  const stopOrPauseCurrentPlayback = () => {
+    const audioEl = quickListenAudioRef.current;
+    if (audioEl) {
+      try {
+        audioEl.pause();
+      } catch {}
+    }
+    resetQuickListenState();
+  };
+
+  const stopAtQuickListenRangeEndIfNeeded = () => {
+    const audioEl = quickListenAudioRef.current;
+    if (!audioEl) return false;
+    const endSec = Number(playbackRangeRef.current?.endSec);
+    if (!Number.isFinite(endSec)) return false;
+    if (Number(audioEl.currentTime || 0) < endSec - 0.012) return false;
+
+    try {
+      audioEl.pause();
+      audioEl.currentTime = clampQuickListenSec(endSec);
+    } catch {}
+    resetQuickListenState();
+    return true;
+  };
+
+  const startQuickListenRaf = () => {
+    stopQuickListenRaf();
+    const tick = () => {
+      const audioEl = quickListenAudioRef.current;
+      if (!audioEl || audioEl.paused) {
+        setIsAudioPlaying(false);
+        quickListenRafRef.current = null;
+        return;
+      }
+      if (stopAtQuickListenRangeEndIfNeeded()) {
+        quickListenRafRef.current = null;
+        return;
+      }
+      quickListenRafRef.current = window.requestAnimationFrame(tick);
+    };
+    quickListenRafRef.current = window.requestAnimationFrame(tick);
+  };
+
+  const playQuickListenRange = (mode, startValue = 0, endValue = null) => {
+    const audioEl = quickListenAudioRef.current;
+    if (!audioEl || !audioUrl) return;
+
+    if (isAudioPlaying && playbackMode === mode) {
+      stopOrPauseCurrentPlayback();
+      return;
+    }
+
+    const startSec = clampQuickListenSec(startValue);
+    const rawEndSec = Number(endValue);
+    const endSec = Number.isFinite(rawEndSec) ? clampQuickListenSec(rawEndSec) : null;
+    if (endSec !== null && endSec <= startSec + 0.02) return;
+
+    stopQuickListenRaf();
+    try {
+      audioEl.pause();
+      audioEl.currentTime = startSec;
+    } catch {}
+
+    setPlaybackMode(mode);
+    playbackRangeRef.current = { startSec, endSec };
+    setPlaybackRange({ startSec, endSec });
+    setIsAudioPlaying(false);
+
+    window.setTimeout(() => {
+      const activeAudio = quickListenAudioRef.current;
+      if (!activeAudio) return;
+      try {
+        activeAudio.currentTime = startSec;
+      } catch {}
+      activeAudio.play().then(() => {
+        setPlaybackMode(mode);
+        playbackRangeRef.current = { startSec, endSec };
+        setPlaybackRange({ startSec, endSec });
+        setIsAudioPlaying(true);
+        startQuickListenRaf();
+      }).catch(() => {
+        setIsAudioPlaying(false);
+      });
+    }, 30);
+  };
+
+  const playSceneRange = () => {
+    if (!selectedScene) return;
+    playQuickListenRange("scene", Number(selectedScene.start_sec || 0), Number(selectedScene.end_sec || 0));
+  };
+
+  const playBlockRange = () => {
+    if (!currentBlock) return;
+    playQuickListenRange("block", Number(currentBlock.start_sec || 0), Number(currentBlock.end_sec || 0));
+  };
+
+  const playFullAudio = () => {
+    const audioEl = quickListenAudioRef.current;
+    const duration = getQuickListenDurationSec();
+    const current = Number(audioEl?.currentTime || 0);
+    const start = duration > 0 && current >= duration - 0.05 ? 0 : current || 0;
+    playQuickListenRange("full", start, null);
+  };
+
+  const onQuickListenTimeUpdate = () => {
+    const audioEl = quickListenAudioRef.current;
+    if (!audioEl) return;
+    if (audioEl.paused) {
+      setIsAudioPlaying(false);
+      stopQuickListenRaf();
+      return;
+    }
+    if (!stopAtQuickListenRangeEndIfNeeded()) setIsAudioPlaying(true);
+  };
+
+  useEffect(() => () => stopQuickListenRaf(), []);
+
+  useEffect(() => {
+    stopOrPauseCurrentPlayback();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioUrl]);
 
   const onCopyBlockStoryboardJson = async () => {
     try {
@@ -1245,6 +1411,37 @@ export default function ManualClipDirectorPage() {
           </div> : null}
           {blockCopyStatus ? <span className="manualBlockCopyStatus">{blockCopyStatus}</span> : null}
         </div>
+        <div className="manualDirectorQuickListenBar" aria-label="Быстрое прослушивание аудио" title={`Диапазон прослушивания: ${formatDirectorSec(playbackRange.startSec)} → ${playbackRange.endSec === null ? "конец" : formatDirectorSec(playbackRange.endSec)} c`}>
+          {audioUrl ? <audio
+            ref={quickListenAudioRef}
+            className="manualDirectorQuickListenAudio"
+            src={audioUrl}
+            preload="metadata"
+            onTimeUpdate={onQuickListenTimeUpdate}
+            onPlay={() => { setIsAudioPlaying(true); startQuickListenRaf(); }}
+            onPause={() => { setIsAudioPlaying(false); stopQuickListenRaf(); }}
+            onEnded={resetQuickListenState}
+          /> : null}
+          <button
+            type="button"
+            className="clipSB_btn manualDirectorQuickListenScene"
+            onClick={playSceneRange}
+            disabled={!audioUrl || !selectedScene}
+          >{isAudioPlaying && playbackMode === "scene" ? "⏸ Сцена" : "▶ Сцена"}</button>
+          <button
+            type="button"
+            className="clipSB_btn manualDirectorQuickListenBlock"
+            onClick={playBlockRange}
+            disabled={!audioUrl || !currentBlock}
+          >{isAudioPlaying && playbackMode === "block" ? "⏸ Блок" : "🟢 Блок"}</button>
+          <button
+            type="button"
+            className="clipSB_btn manualDirectorQuickListenFull"
+            onClick={playFullAudio}
+            disabled={!audioUrl}
+          >{isAudioPlaying && playbackMode === "full" ? "⏸ Всё аудио" : "🎵 Всё аудио"}</button>
+        </div>
+
         <label>Route
           <select value={selectedScene.route} onChange={(e) => {
             const route = e.target.value;
