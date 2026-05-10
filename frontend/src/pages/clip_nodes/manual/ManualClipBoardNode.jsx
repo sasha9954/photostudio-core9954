@@ -156,6 +156,7 @@ function mergeSceneDirectorWork(scene = {}, old = {}) {
     video_prompt: old.video_prompt || scene.video_prompt || "",
     negative_prompt: old.negative_prompt || scene.negative_prompt || "",
     sound_prompt: old.sound_prompt || scene.sound_prompt || "",
+    negative_audio_prompt: old.negative_audio_prompt || scene.negative_audio_prompt || "",
     audio_slice_url: old.audio_slice_url || scene.audio_slice_url || "",
     audio_slice_duration_sec: old.audio_slice_duration_sec || scene.audio_slice_duration_sec || 0,
     audio_extracted: old.audio_extracted ?? scene.audio_extracted ?? false,

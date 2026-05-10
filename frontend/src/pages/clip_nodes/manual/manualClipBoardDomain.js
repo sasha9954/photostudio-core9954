@@ -298,6 +298,7 @@ export function normalizeScene(scene, idx, storyBlockLookup = null) {
     video_prompt: String(scene?.video_prompt || ""),
     negative_prompt: String(scene?.negative_prompt || ""),
     sound_prompt: String(scene?.sound_prompt || ""),
+    negative_audio_prompt: String(scene?.negative_audio_prompt || ""),
     audio_slice_url: String(scene?.audio_slice_url || ""),
     audio_slice_duration_sec: Number(scene?.audio_slice_duration_sec || 0),
     video_url: String(scene?.video_url || ""),
@@ -361,6 +362,8 @@ export function buildMontageManifest(data = {}) {
       generatedAudioGainDb: Number(scene.generated_audio_gain_db ?? -16),
       sound_prompt: scene.sound_prompt || "",
       soundPrompt: scene.sound_prompt || "",
+      negative_audio_prompt: scene.negative_audio_prompt || "",
+      negativeAudioPrompt: scene.negative_audio_prompt || "",
     }));
 
   return {
