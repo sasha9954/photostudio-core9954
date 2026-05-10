@@ -33,6 +33,10 @@ import VideoRefNode from "./clip_nodes/VideoRefNode";
 import ManualClipBoardNode from "./clip_nodes/manual/ManualClipBoardNode";
 import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
 import {
+  readActiveManualClipBoardProject,
+  hasMeaningfulManualProject,
+} from "./clip_nodes/manualProjectBackup.js";
+import {
   normalizeRenderProfile,
   normalizeAudioStoryMode,
   deriveSceneRoles,
@@ -6098,6 +6102,7 @@ function normalizeManualClipScenesForAssembly(scenes = [], fallbackFormat = DEFA
 function getAssemblySourceLabel(scenesSource = "none") {
   if (scenesSource === "scenarioStoryboard") return "SCENARIO STORYBOARD";
   if (scenesSource === "manualClipBoard") return "MANUAL CLIP BOARD";
+  if (scenesSource === "activeManualClipBoard") return "ACTIVE DIRECTOR BOARD";
   return "НЕ ПОДКЛЮЧЕНО";
 }
 
@@ -6119,7 +6124,7 @@ function extractComfyScenesFromNodes(nodes = []) {
   return [];
 }
 
-function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } = {}) {
+function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "", activeManualBoardProject = null } = {}) {
   const nodesList = Array.isArray(nodes) ? nodes : [];
   const edgesList = Array.isArray(edges) ? edges : [];
   const assemblyNode = String(assemblyNodeId || "").trim()
@@ -6132,7 +6137,7 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
       if (edge?.target !== effectiveAssemblyNodeId) return false;
       if (String(edge?.targetHandle || "") !== "assembly_in") return false;
       const sourceType = String(nodesById.get(edge?.source)?.type || "");
-      return sourceType === "scenarioStoryboard" || sourceType === "manualClipBoard";
+      return sourceType === "scenarioStoryboard" || sourceType === "manualClipBoard" || sourceType === "manualTiming";
     })
     : [];
   const incomingEdge = incomingSourceEdges.length ? incomingSourceEdges[incomingSourceEdges.length - 1] : null;
@@ -6225,6 +6230,38 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "" } =
     };
   }
 
+  const buildActiveManualClipBoardSource = () => {
+    const activeFormat = resolvePreferredSceneFormat(activeManualBoardProject?.format, DEFAULT_SCENE_IMAGE_FORMAT);
+    const activeScenes = normalizeManualClipScenesForAssembly(
+      activeManualBoardProject?.scenes || [],
+      activeFormat
+    );
+    return {
+      assemblyNodeId: effectiveAssemblyNodeId,
+      sourceNodeId: String(activeManualBoardProject?.nodeId || "active_manual_clip_board"),
+      sourceNodeType: "activeManualClipBoard",
+      scenesSource: "activeManualClipBoard",
+      scenes: activeScenes,
+      scenarioFormat: activeFormat,
+      audioUrl: String(activeManualBoardProject?.audio?.url || activeManualBoardProject?.audioUrl || activeManualBoardProject?.audio_url || "").trim(),
+      introSourceNodeId: String(introFrame?.nodeId || ""),
+      introSourceNodeType: introFrame?.nodeType || "",
+      introFrame,
+    };
+  };
+
+  const hasMeaningfulActiveManualBoard = hasMeaningfulManualProject(activeManualBoardProject);
+  if (sourceNode?.type === "manualTiming" && hasMeaningfulActiveManualBoard) {
+    return buildActiveManualClipBoardSource();
+  }
+
+  if (!sourceNode && hasMeaningfulActiveManualBoard) {
+    const activeSource = buildActiveManualClipBoardSource();
+    if (activeSource.scenes.some((scene) => String(scene?.videoUrl || "").trim())) {
+      return activeSource;
+    }
+  }
+
   return {
     assemblyNodeId: effectiveAssemblyNodeId,
     sourceNodeId: "",
@@ -6309,6 +6346,7 @@ function buildAssemblyPayloadSignature(payload, options = {}) {
   const introComparable = buildIntroFrameComparablePayload(payload?.intro);
   return JSON.stringify({
     scenesSource: String(options?.scenesSource || "none"),
+    audioMode: String(options?.assemblyAudioMode || "master_plus_scene_audio"),
     sourceNodeId: String(options?.sourceNodeId || ""),
     assemblyNodeId: String(options?.assemblyNodeId || ""),
     introSourceNodeId: String(options?.introSourceNodeId || ""),
@@ -10636,7 +10674,15 @@ function AssemblyNode({ id, data }) {
           {data?.introMontageEnabled ? (
             <div className="clipSB_assemblyRow"><span>Montage</span><strong className="clipSB_assemblyValue">{data?.introMontageMode || "intro"} • title {data?.introTitleDurationSec || 0}s</strong></div>
           ) : null}
-          <div className="clipSB_assemblyRow"><span>Audio</span><strong className="clipSB_assemblyValue">{data?.hasAudio ? "подключено" : "не подключено"}</strong></div>
+          <div className="clipSB_assemblyRow"><span>Audio</span><strong className="clipSB_assemblyValue">{data?.audioModeLabel || (data?.hasAudio ? "подключено" : "не подключено")}</strong></div>
+          <label className="clipSB_assemblyAudioMode">
+            <span>Сборка аудио</span>
+            <select className="nodrag" value={data?.assemblyAudioMode || "master_plus_scene_audio"} onChange={(e) => data?.onAssemblyAudioModeChange?.(e.target.value)}>
+              <option value="master_plus_scene_audio">🎼 С основным аудио</option>
+              <option value="scene_audio_only">🔉 Только звук сцен</option>
+              <option value="silent_video_only">🔇 Только видео</option>
+            </select>
+          </label>
           <div className="clipSB_assemblyRow"><span>Формат</span><strong>{data?.format || "9:16"}</strong></div>
           <div className="clipSB_assemblyRow"><span>Длительность</span><strong>~{Math.round(Number(data?.durationSec || 0))} сек</strong></div>
           <div className="clipSB_assemblyRow"><span>Статус</span><strong className="clipSB_assemblyValue">{statusLabel}</strong></div>
@@ -10774,6 +10820,18 @@ export default function ClipStoryboardPage() {
   const renderTraceLastLogRef = useRef({ ts: 0, signature: "" });
   const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
   const [scenarioVideoFocusPulse, setScenarioVideoFocusPulse] = useState(false);
+  const [activeManualBoardProject, setActiveManualBoardProject] = useState(() => readActiveManualClipBoardProject());
+
+  useEffect(() => {
+    const refresh = () => setActiveManualBoardProject(readActiveManualClipBoardProject());
+    refresh();
+    window.addEventListener("focus", refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
 
 
   useEffect(() => {
@@ -11072,6 +11130,23 @@ useEffect(() => {
 
 const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
 const [edges, setEdges] = useEdgesState(defaultEdges);
+const updateAssemblyAudioMode = useCallback((mode) => {
+  const safeMode = ["master_plus_scene_audio", "scene_audio_only", "silent_video_only"].includes(mode)
+    ? mode
+    : "master_plus_scene_audio";
+
+  setNodes((prev) => prev.map((node) => (
+    node.type === "assemblyNode"
+      ? {
+        ...node,
+        data: {
+          ...(node.data || {}),
+          assemblyAudioMode: safeMode,
+        },
+      }
+      : node
+  )));
+}, [setNodes]);
 const onOpenScenarioStoryboard = useCallback((nodeId) => {
   setActiveScenarioStoryboardId(nodeId || null);
   setIsScenarioStoryboardOpen(true);
@@ -19343,11 +19418,19 @@ Aspect ratio: ${imageFormat}`,
     scrollToVideoBlock();
   }, [clearActiveVideoJob, scenarioEditor.selected, scenarioPreviousScene, scenarioSelected, updateScenarioScene]);
 
-  const assemblySource = useMemo(() => resolveAssemblySource({ nodes, edges }), [nodes, edges]);
+  const assemblySource = useMemo(
+    () => resolveAssemblySource({ nodes, edges, activeManualBoardProject }),
+    [nodes, edges, activeManualBoardProject]
+  );
   const assemblyScenesSource = assemblySource.scenesSource;
   const assemblySourceLabel = useMemo(() => getAssemblySourceLabel(assemblyScenesSource), [assemblyScenesSource]);
   const assemblyIntroLabel = useMemo(() => getAssemblyIntroLabel(assemblySource.introSourceNodeType), [assemblySource.introSourceNodeType]);
   const assemblyScenesForPayload = assemblySource.scenes;
+  const assemblyGraphNode = useMemo(
+    () => nodes.find((node) => node?.type === "assemblyNode") || null,
+    [nodes]
+  );
+  const assemblyAudioMode = String(assemblyGraphNode?.data?.assemblyAudioMode || "master_plus_scene_audio");
   const assemblyIntroFrame = assemblySource.introFrame;
   const assemblyHasIntro = hasIntroFramePreview(assemblyIntroFrame);
   const assemblyIntroAddsDuration = assemblyHasIntro && normalizeIntroMontageMode(assemblyIntroFrame?.montageMode) !== INTRO_MONTAGE_MODES.OVER_FIRST_SCENE;
@@ -19360,6 +19443,21 @@ Aspect ratio: ${imageFormat}`,
     [assemblyIntroAddsDuration, assemblyIntroFrame?.durationSec, assemblyScenesForPayload]
   );
 
+  const assemblyMasterAudioUrl = globalAudioUrlRaw || assemblySource.audioUrl || "";
+  const scenesForAssemblyAudioMode = useMemo(
+    () => assemblyAudioMode === "silent_video_only"
+      ? assemblyScenesForPayload.map((scene) => ({
+        ...scene,
+        keepGeneratedAudio: false,
+        keep_generated_audio: false,
+      }))
+      : assemblyScenesForPayload,
+    [assemblyAudioMode, assemblyScenesForPayload]
+  );
+  const assemblyAudioUrlForPayload = assemblyAudioMode === "master_plus_scene_audio"
+    ? assemblyMasterAudioUrl
+    : "";
+
   const assemblyPayload = useMemo(() => {
     const sceneFormat = resolvePreferredSceneFormat(
       assemblySource.scenarioFormat,
@@ -19367,12 +19465,12 @@ Aspect ratio: ${imageFormat}`,
       assemblyScenesForPayload.find((scene) => String(scene?.format || "").trim())?.format
     );
     return buildAssemblyPayload({
-      scenes: assemblyScenesForPayload,
-      audioUrl: globalAudioUrlRaw || assemblySource.audioUrl || "",
+      scenes: scenesForAssemblyAudioMode,
+      audioUrl: assemblyAudioUrlForPayload,
       format: sceneFormat,
       intro: assemblyIntroFrame,
     });
-  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.audioUrl, assemblySource.scenarioFormat, globalAudioUrlRaw]);
+  }, [assemblyIntroFrame, assemblyScenesForPayload, assemblySource.scenarioFormat, assemblyAudioUrlForPayload, scenesForAssemblyAudioMode]);
 
   const assemblySourceNodeId = String(assemblySource.sourceNodeId || "");
   const assemblySourceNodeType = String(assemblySource.sourceNodeType || "");
@@ -19381,7 +19479,16 @@ Aspect ratio: ${imageFormat}`,
   const assemblyIntroSourceNodeType = String(assemblySource.introSourceNodeType || "");
   const assemblyIntroDurationSec = Number(assemblyIntroFrame?.durationSec || 0);
   const assemblyIntroTitle = String(assemblyIntroFrame?.title || "");
-  const assemblyHasAudio = !!assemblyPayload.audioUrl;
+  const assemblyHasAudio = assemblyAudioMode === "master_plus_scene_audio"
+    ? Boolean(assemblyMasterAudioUrl)
+    : assemblyAudioMode === "scene_audio_only"
+      ? assemblyScenesForPayload.some((scene) => Boolean(scene.keepGeneratedAudio || scene.keep_generated_audio || scene.videoHasAudio || scene.video_has_audio))
+      : false;
+  const assemblyAudioModeLabel = assemblyAudioMode === "master_plus_scene_audio"
+    ? "основное аудио"
+    : assemblyAudioMode === "scene_audio_only"
+      ? "звук сцен"
+      : "без звука";
   const assemblyFormat = String(assemblyPayload.format || "9:16");
   const assemblyCanAssemble = assemblyPayload.scenes.length > 0 && !isAssembling;
   const assemblyDebugSummary = useMemo(
@@ -19406,6 +19513,7 @@ Aspect ratio: ${imageFormat}`,
       scenesSource: assemblyScenesSource,
       introSourceNodeId: assemblyIntroSourceNodeId,
       introSourceNodeType: assemblyIntroSourceNodeType,
+      assemblyAudioMode,
     }),
     [
       assemblyPayload,
@@ -19415,6 +19523,7 @@ Aspect ratio: ${imageFormat}`,
       assemblyScenesSource,
       assemblyIntroSourceNodeId,
       assemblyIntroSourceNodeType,
+      assemblyAudioMode,
     ]
   );
 
@@ -19441,8 +19550,10 @@ Aspect ratio: ${imageFormat}`,
   }, [
     assemblyFormat,
     assemblyHasAudio,
+    assemblyAudioMode,
+    assemblyAudioModeLabel,
     assemblyHasIntro,
-      assemblyIntroAddsDuration,
+    assemblyIntroAddsDuration,
     assemblyIntroDurationSec,
     assemblyIntroSourceNodeId,
     assemblyIntroSourceNodeType,
@@ -19745,6 +19856,8 @@ Aspect ratio: ${imageFormat}`,
     totalScenes: assemblyScenesForPayload.length,
     readyScenes: assemblyReadySceneCount,
     hasAudio: assemblyHasAudio,
+    audioModeLabel: assemblyAudioModeLabel,
+    assemblyAudioMode,
     format: assemblyFormat,
     durationSec: assemblyDurationEstimateSec,
     scenesSource: assemblyScenesSource,
@@ -19771,6 +19884,7 @@ Aspect ratio: ${imageFormat}`,
     assemblyStageCurrent,
     assemblyStageTotal,
     isStale: isAssemblyStale,
+    onAssemblyAudioModeChange: updateAssemblyAudioMode,
     onAssemble: stableHandleAssemblyBuild,
     onStopAssemble: stableHandleAssemblyStop,
   }), [
@@ -19780,6 +19894,8 @@ Aspect ratio: ${imageFormat}`,
     assemblyError,
     assemblyFormat,
     assemblyHasAudio,
+    assemblyAudioMode,
+    assemblyAudioModeLabel,
     assemblyHasIntro,
     assemblyIntroAddsDuration,
     assemblyInfo,
@@ -19805,6 +19921,7 @@ Aspect ratio: ${imageFormat}`,
     isAssemblyStale,
     stableHandleAssemblyBuild,
     stableHandleAssemblyStop,
+    updateAssemblyAudioMode,
   ]);
 
   const assemblyNodePatchDepsSnapshotRef = useRef(null);
@@ -25382,20 +25499,38 @@ const hydrate = useCallback((source = "unknown") => {
           console.warn("[CLIP NODE TYPE MISSING]", nodeItem?.type);
         }
       });
-      const hydratedAssemblySource = resolveAssemblySource({ nodes: hydratedNodes, edges: hydratedEdges });
+      const hydratedActiveManualBoardProject = readActiveManualClipBoardProject();
+      const hydratedAssemblySource = resolveAssemblySource({
+        nodes: hydratedNodes,
+        edges: hydratedEdges,
+        activeManualBoardProject: hydratedActiveManualBoardProject,
+      });
       const hydratedScenes = hydratedAssemblySource.scenes;
       const hydratedComfyScenes = extractComfyScenesFromNodes(hydratedNodes);
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
+      const hydratedAssemblyNode = hydratedNodes.find((node) => node?.type === "assemblyNode") || null;
+      const hydratedAssemblyAudioMode = String(hydratedAssemblyNode?.data?.assemblyAudioMode || "master_plus_scene_audio");
+      const hydratedMasterAudioUrl = hydratedAudioUrl || hydratedAssemblySource.audioUrl || "";
+      const hydratedScenesForAudioMode = hydratedAssemblyAudioMode === "silent_video_only"
+        ? hydratedScenes.map((scene) => ({
+          ...scene,
+          keepGeneratedAudio: false,
+          keep_generated_audio: false,
+        }))
+        : hydratedScenes;
       const hydratedFormat = hydratedScenes.find((scene) => String(scene?.imageFormat || scene?.format || "").trim())?.imageFormat
         || hydratedScenes.find((scene) => String(scene?.format || "").trim())?.format
         || "9:16";
       const hydratedPayload = buildAssemblyPayload({
-        scenes: hydratedScenes,
-        audioUrl: hydratedAudioUrl,
+        scenes: hydratedScenesForAudioMode,
+        audioUrl: hydratedAssemblyAudioMode === "master_plus_scene_audio" ? hydratedMasterAudioUrl : "",
         format: hydratedFormat,
         intro: hydratedAssemblySource.introFrame,
       });
-      const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload, hydratedAssemblySource);
+      const hydratedSignature = buildAssemblyPayloadSignature(hydratedPayload, {
+        ...hydratedAssemblySource,
+        assemblyAudioMode: hydratedAssemblyAudioMode,
+      });
       const assemblySourceSceneStats = collectSceneVideoStateStats(
         hydratedScenes,
         hydratedAssemblySource.scenesSource === "comfyStoryboard" ? "comfy_scene" : "scene"
