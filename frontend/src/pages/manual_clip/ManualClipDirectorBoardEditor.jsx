@@ -486,7 +486,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     end_image_preview_url: String(scene.end_image_preview_url || ""),
     image_upload_status: String(scene.image_upload_status || ""),
     image_upload_error: String(scene.image_upload_error || ""),
-    video_url: String(scene.video_url || ""),
+    video_url: String(scene.video_url || scene.videoUrl || ""),
     audio_slice_url: String(scene.audio_slice_url || ""),
     audio_slice_duration_sec: Number(scene.audio_slice_duration_sec || 0),
     status: String(scene.status || "draft"),
@@ -512,6 +512,10 @@ const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "video_job_id",
   "video_has_audio",
   "status",
+  "audio_slice_url",
+  "audio_slice_duration_sec",
+  "audio_extracted",
+  "video_error",
   "video_request_payload_preview",
   "generated_audio_policy",
   "generated_audio_gain_db",
@@ -537,6 +541,19 @@ function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScen
       const currentHasValue = String(currentScene?.[field] ?? "").trim() !== "";
       if (incomingIsEmpty && currentHasValue) nextScene[field] = currentScene[field];
     });
+
+    const currentStatus = String(currentScene?.status || "").trim();
+    const incomingStatus = String(incomingScene?.status || "").trim();
+    const protectedCurrentStatuses = new Set(["video_ready", "video_running", "video_queued"]);
+    const downgradeIncomingStatuses = new Set(["", "draft", "prompt_ready"]);
+    if (protectedCurrentStatuses.has(currentStatus) && downgradeIncomingStatuses.has(incomingStatus)) {
+      nextScene.status = currentScene.status;
+    }
+
+    if (currentScene?.video_has_audio === true && incomingScene?.video_has_audio !== true) {
+      nextScene.video_has_audio = true;
+    }
+
     return nextScene;
   });
 }
