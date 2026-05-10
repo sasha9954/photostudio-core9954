@@ -35,6 +35,7 @@ import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
 import {
   readActiveManualClipBoardProject,
   hasMeaningfulManualProject,
+  getManualClipBoardMaterialStats,
 } from "./clip_nodes/manualProjectBackup.js";
 import {
   normalizeRenderProfile,
@@ -6103,6 +6104,7 @@ function getAssemblySourceLabel(scenesSource = "none") {
   if (scenesSource === "scenarioStoryboard") return "SCENARIO STORYBOARD";
   if (scenesSource === "manualClipBoard") return "MANUAL CLIP BOARD";
   if (scenesSource === "activeManualClipBoard") return "ACTIVE DIRECTOR BOARD";
+  if (scenesSource === "manualTimingDirectorBoard") return "MANUAL TIMING DIRECTOR BOARD";
   return "НЕ ПОДКЛЮЧЕНО";
 }
 
@@ -6213,6 +6215,26 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "", ac
     };
   }
 
+  if (sourceNode?.type === "manualTiming") {
+    const board = sourceNode?.data?.director_board;
+    if (hasMeaningfulManualProject(board)) {
+      const sourceFormat = resolvePreferredSceneFormat(board?.format, DEFAULT_SCENE_IMAGE_FORMAT);
+      const scenes = normalizeManualClipScenesForAssembly(board?.scenes || [], sourceFormat);
+      return {
+        assemblyNodeId: effectiveAssemblyNodeId,
+        sourceNodeId: String(sourceNode?.id || ""),
+        sourceNodeType: "manualTimingDirectorBoard",
+        scenesSource: "manualTimingDirectorBoard",
+        scenes,
+        scenarioFormat: sourceFormat,
+        audioUrl: String(board?.audio?.url || board?.audioUrl || board?.audio_url || "").trim(),
+        introSourceNodeId: String(introFrame?.nodeId || ""),
+        introSourceNodeType: introFrame?.nodeType || "",
+        introFrame,
+      };
+    }
+  }
+
   if (sourceNode?.type === "manualClipBoard") {
     const sourceFormat = resolvePreferredSceneFormat(sourceNode?.data?.format, DEFAULT_SCENE_IMAGE_FORMAT);
     const scenes = normalizeManualClipScenesForAssembly(sourceNode?.data?.scenes || [], sourceFormat);
@@ -6251,7 +6273,8 @@ function resolveAssemblySource({ nodes = [], edges = [], assemblyNodeId = "", ac
   };
 
   const hasMeaningfulActiveManualBoard = hasMeaningfulManualProject(activeManualBoardProject);
-  if (sourceNode?.type === "manualTiming" && hasMeaningfulActiveManualBoard) {
+  const activeManualBoardOwnerNodeId = String(activeManualBoardProject?.sourceNodeId || activeManualBoardProject?.nodeId || "").trim();
+  if (sourceNode?.type === "manualTiming" && hasMeaningfulActiveManualBoard && activeManualBoardOwnerNodeId === String(sourceNode?.id || "")) {
     return buildActiveManualClipBoardSource();
   }
 
@@ -24813,6 +24836,33 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
                 traceReason: "manual-timing:patch",
               }));
             },
+            onPatchDirectorBoard: (nodeId, boardPatchOrProject) => {
+              setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+                if (nodeItem.id !== nodeId || nodeItem.type !== "manualTiming") return nodeItem;
+                const currentBoard = nodeItem.data?.director_board || {};
+                const nextBoard = typeof boardPatchOrProject === "function"
+                  ? boardPatchOrProject(currentBoard)
+                  : { ...currentBoard, ...(boardPatchOrProject || {}) };
+                return {
+                  ...nodeItem,
+                  data: {
+                    ...nodeItem.data,
+                    director_board: {
+                      ...nextBoard,
+                      source: nextBoard?.source || "manual_timing_node",
+                      ownerNodeType: "manualTiming",
+                      nodeId,
+                      sourceNodeId: nodeId,
+                      updatedAt: Date.now(),
+                    },
+                  },
+                };
+              }), {
+                nodesNow: prev,
+                edgesNow: edgesRef.current || [],
+                traceReason: "manual-timing:director-board-patch",
+              }));
+            },
           };
 
           if (connectedAudio) {
@@ -25011,6 +25061,39 @@ return base;
       STORE_KEY,
     ]
   );
+
+
+  useEffect(() => {
+    const onManualDirectorBoardUpdate = (event) => {
+      const sourceNodeId = String(event?.detail?.sourceNodeId || "").trim();
+      const project = event?.detail?.project;
+      if (!sourceNodeId || !project) return;
+      setActiveManualBoardProject(project);
+      setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
+        if (nodeItem.id !== sourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
+        return {
+          ...nodeItem,
+          data: {
+            ...nodeItem.data,
+            director_board: {
+              ...project,
+              source: project?.source || "manual_timing_node",
+              ownerNodeType: "manualTiming",
+              nodeId: sourceNodeId,
+              sourceNodeId,
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      }), {
+        nodesNow: prev,
+        edgesNow: edgesRef.current || [],
+        traceReason: "manual-director-board:event-update",
+      }));
+    };
+    window.addEventListener("manual-director-board:update", onManualDirectorBoardUpdate);
+    return () => window.removeEventListener("manual-director-board:update", onManualDirectorBoardUpdate);
+  }, [bindHandlers, setNodes]);
 
   const bindHandlersRef = useRef(bindHandlers);
   const narrativeSourceRefreshSignatureRef = useRef("");
@@ -25447,7 +25530,32 @@ const hydrate = useCallback((source = "unknown") => {
         });
       }
 
-      const hydratedNodes = cleanNodes.length ? cleanNodes : defaultNodes;
+      const hydratedActiveManualBoardProject = readActiveManualClipBoardProject();
+      const activeBoardSourceNodeId = String(hydratedActiveManualBoardProject?.sourceNodeId || hydratedActiveManualBoardProject?.nodeId || "").trim();
+      const hydratedNodesBase = cleanNodes.length ? cleanNodes : defaultNodes;
+      const hydratedNodes = activeBoardSourceNodeId && hasMeaningfulManualProject(hydratedActiveManualBoardProject)
+        ? hydratedNodesBase.map((nodeItem) => {
+          if (nodeItem.id !== activeBoardSourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
+          const currentBoard = nodeItem.data?.director_board || {};
+          const activeStats = getManualClipBoardMaterialStats(hydratedActiveManualBoardProject);
+          const currentStats = getManualClipBoardMaterialStats(currentBoard);
+          if (currentStats.materialTotal >= activeStats.materialTotal) return nodeItem;
+          return {
+            ...nodeItem,
+            data: {
+              ...nodeItem.data,
+              director_board: {
+                ...hydratedActiveManualBoardProject,
+                source: hydratedActiveManualBoardProject?.source || "manual_timing_node",
+                ownerNodeType: "manualTiming",
+                nodeId: activeBoardSourceNodeId,
+                sourceNodeId: activeBoardSourceNodeId,
+                updatedAt: hydratedActiveManualBoardProject?.updatedAt || Date.now(),
+              },
+            },
+          };
+        })
+        : hydratedNodesBase;
       const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
       const normalizedViewport = savedViewport && Number.isFinite(Number(savedViewport.x)) && Number.isFinite(Number(savedViewport.y)) && Number.isFinite(Number(savedViewport.zoom))
         ? {
@@ -25499,7 +25607,6 @@ const hydrate = useCallback((source = "unknown") => {
           console.warn("[CLIP NODE TYPE MISSING]", nodeItem?.type);
         }
       });
-      const hydratedActiveManualBoardProject = readActiveManualClipBoardProject();
       const hydratedAssemblySource = resolveAssemblySource({
         nodes: hydratedNodes,
         edges: hydratedEdges,

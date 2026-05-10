@@ -314,6 +314,18 @@ function readScopedManualClipBoardProjectCandidates() {
   return candidates;
 }
 
+export function readManualClipBoardProjectForNode(nodeId = "") {
+  const safeNodeId = String(nodeId || "").trim();
+  if (!safeNodeId) return null;
+  const candidates = [
+    readManualProjectJsonStorage(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(safeNodeId))),
+  ];
+  if (canUseLegacyManualProjectStorage()) {
+    candidates.push(readManualProjectJsonStorage(getManualClipBoardProjectStorageKey(safeNodeId)));
+  }
+  return pickBestManualClipBoardProject(candidates);
+}
+
 export function readActiveManualClipBoardProject() {
   const candidates = [];
   const canonicalProject = readCanonicalManualClipBoardProject();
