@@ -315,7 +315,7 @@ export function buildManualBlockStoryboardBriefText(project = {}, selectedSceneO
   ].join("\n");
 }
 
-function validateIncomingSceneShape(originalScene = {}, incomingScene = {}, targetBlockId = "") {
+function validateIncomingSceneShape(originalScene = {}, incomingScene = {}, targetBlockId = "", options = {}) {
   if (toStringId(incomingScene?.scene_id) !== toStringId(originalScene?.scene_id)) {
     throw new Error(`scene_id_changed:${originalScene?.scene_id || "unknown"}`);
   }
@@ -329,6 +329,13 @@ function validateIncomingSceneShape(originalScene = {}, incomingScene = {}, targ
   });
   if (!sameSourcePhraseIds(incomingScene?.source_phrase_ids, originalScene?.source_phrase_ids)) {
     throw new Error(`source_phrase_ids_changed:${originalScene?.scene_id}`);
+  }
+  if (options.requireEmptyPromptFields) {
+    EMPTY_PROMPT_FIELDS.forEach((field) => {
+      if (String(incomingScene?.[field] || "").trim()) {
+        throw new Error(`${field}_must_be_empty:${originalScene?.scene_id}`);
+      }
+    });
   }
 }
 
@@ -349,7 +356,9 @@ export function applyManualBlockStoryboardImport(project = {}, rawPayload = {}) 
   currentBlockScenes.forEach((scene) => {
     const incoming = incomingById.get(toStringId(scene?.scene_id));
     if (!incoming) throw new Error(`manual_block_storyboard_missing_scene:${scene?.scene_id}`);
-    validateIncomingSceneShape(scene, incoming, targetBlockId);
+    validateIncomingSceneShape(scene, incoming, targetBlockId, {
+      requireEmptyPromptFields: true,
+    });
   });
 
   const incomingBlock = payload?.target_block || payload?.story_block || {};
@@ -395,7 +404,9 @@ export function applyManualBlockVideoPromptImport(project = {}, rawPayload = {})
   currentBlockScenes.forEach((scene) => {
     const incoming = incomingById.get(toStringId(scene?.scene_id));
     if (!incoming) throw new Error(`manual_block_video_prompt_missing_scene:${scene?.scene_id}`);
-    validateIncomingSceneShape(scene, incoming, targetBlockId);
+    validateIncomingSceneShape(scene, incoming, targetBlockId, {
+      requireEmptyPromptFields: false,
+    });
   });
 
   const nextScenes = (Array.isArray(project?.scenes) ? project.scenes : []).map((scene) => {
