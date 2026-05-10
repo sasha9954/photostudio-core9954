@@ -171,7 +171,14 @@ export default function ManualTimingNode({ id, data }) {
     storedActiveBoardProject,
   ]) || storedActiveBoardProject || nodeDirectorBoard;
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
-  const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
+  const activeBoardBlocks = (Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : []).filter((block) => {
+    const blockId = String(block?.block_id || block?.id || "").trim();
+    return blockId
+      && blockId !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id
+      && blockId !== "unknown"
+      && blockId !== "unknown_story_block"
+      && blockId !== "__unknown__";
+  });
   const activeBoardImageCount = activeBoardScenes.filter((scene) => String(scene?.image_url || scene?.start_image_url || scene?.end_image_url || "").trim()).length;
   const activeBoardPromptCount = activeBoardScenes.filter((scene) => String(scene?.video_prompt || "").trim()).length;
   const activeBoardVideoCount = activeBoardScenes.filter((scene) => String(scene?.video_url || "").trim()).length;
