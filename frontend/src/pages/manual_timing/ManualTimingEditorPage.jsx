@@ -1583,7 +1583,18 @@ export default function ManualTimingEditorPage() {
     timing_status: project.timing_status || "confirmed",
   });
 
-  const onOpenDirectorBoard = async () => {
+  const onOpenDirectorBoard = () => {
+    const existingBoard = readActiveManualClipBoardProject();
+    if (hasMeaningfulManualProject(existingBoard)) {
+      setActiveBoardProject(existingBoard);
+      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?mode=open_existing`);
+      return;
+    }
+    setCopyStatus("Активная режиссёрская доска не найдена. Создайте новую доску отдельной кнопкой.");
+    window.setTimeout(() => setCopyStatus(""), 3200);
+  };
+
+  const onCreateNewDirectorBoardFromTiming = async () => {
     if (!storyPassReadyForDirector) {
       setCopyStatus(`Сначала примените ${workflowLabels.pass} JSON`);
       return;
@@ -1591,16 +1602,9 @@ export default function ManualTimingEditorPage() {
     if (handoffStatus) return;
 
     const existingBoard = readActiveManualClipBoardProject();
-    if (hasMeaningfulManualProject(existingBoard)) {
-      setActiveBoardProject(existingBoard);
-      const createNew = window.confirm("Уже есть активная режиссёрская доска. OK — создать новую доску из текущего разбора, Отмена — продолжить существующую доску.");
-      if (!createNew) {
-        navigate(MANUAL_CLIP_BOARD_ROUTE);
-        return;
-      }
-      const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
-      if (!confirmed) return;
-    }
+    if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
+    const confirmed = window.confirm("Это заменит активную режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+    if (!confirmed) return;
 
     let projectSnapshot = buildDirectorProjectSnapshot();
     let handoffWarning = "";
@@ -1685,8 +1689,12 @@ export default function ManualTimingEditorPage() {
 
   const onReturnToActiveBoard = () => {
     const existingBoard = readActiveManualClipBoardProject();
-    if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
-    navigate(MANUAL_CLIP_BOARD_ROUTE);
+    if (hasMeaningfulManualProject(existingBoard)) {
+      setActiveBoardProject(existingBoard);
+      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?mode=open_existing`);
+      return;
+    }
+    setCopyStatus("Активная режиссёрская доска не найдена");
   };
 
   const onDownloadActiveBoardBackup = () => {
@@ -2110,7 +2118,8 @@ export default function ManualTimingEditorPage() {
           {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Скопировать JSON для Block Storyboard Pass</button> : null}
           <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Открыть режиссёрскую доску"}</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || Boolean(handoffStatus)} title="Открыть существующую активную режиссёрскую доску без пересоздания">Открыть режиссёрскую доску</button>
+          <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Создать новую доску из тайминга"}</button>
           {!storyPassReadyForDirector ? <span className="manualTimingWorkflowStatus">Сначала примените {workflowLabels.pass} JSON и подтвердите тайминг</span> : null}
         </div>
 
