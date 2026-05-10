@@ -196,14 +196,16 @@ const CLIP_TRACE_SCENARIO_FORMAT = false;
 const CLIP_TRACE_SCENARIO_GRAPH = false;
 const CLIP_TRACE_INTRO_PREVIEW = false;
 const CLIP_TRACE_SCENARIO_GLOBAL_MUSIC = false;
-const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = true;
+const CLIP_TRACE_SCENARIO_EDITOR_GENERATE = false;
 const CLIP_TRACE_SCENARIO_IMAGE_PAYLOAD = false;
 const CLIP_TRACE_SCENARIO_SCENE_ASSETS = false;
 const CLIP_TRACE_SCENARIO_IMAGE_E2E = false;
-const CLIP_TRACE_SC2_GHOST_IMAGE = true;
+const CLIP_TRACE_SC2_GHOST_IMAGE = false;
 const CLIP_TRACE_ROLE_CONTRACT_SCENE_ID = "TRACE_SCENE_2P_001";
 const SCENARIO_IMAGE_ROLE_FIX_MARKER = "role_fix_2g_manifest_authority_2026_05_01";
-console.warn("[CLIP PIPELINE FRONTEND BUILD MARKER] v=clip_pipeline_debug_01");
+if (CLIP_TRACE_SCENARIO_GRAPH) {
+  console.warn("[CLIP PIPELINE FRONTEND BUILD MARKER] v=clip_pipeline_debug_01");
+}
 
 function shouldTraceRoleContractScene(sceneId = "") {
   const needle = String(CLIP_TRACE_ROLE_CONTRACT_SCENE_ID || "").trim();
@@ -21422,7 +21424,6 @@ onClipSec: (nodeId, value) => {
                 sceneId,
                 preservedAssets: shouldPreserveAssets,
                 semanticChanged,
-                storyboardRunChanged,
                 hardResetBeforeApply: shouldHardResetStoryboardRuntime,
               });
             }
@@ -22043,8 +22044,14 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
                 }
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
                   if (nodeItem.id !== nodeId || nodeItem.type !== "scenarioStoryboard") return nodeItem;
-                  const nextScenes = (Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : []).map((sceneItem) => {
-                    if (String(sceneItem?.sceneId || "") !== String(sceneId || "")) return sceneItem;
+                  const rawScenes = Array.isArray(nodeItem?.data?.scenes) ? nodeItem.data.scenes : [];
+                  const normalizedScenes = normalizeSceneCollectionWithSceneId(rawScenes, "scene");
+                  const requestedSceneId = String(sceneId || "").trim();
+                  const resolvedSceneIndex = resolveScenarioSceneIndex(requestedSceneId, normalizedScenes);
+                  if (resolvedSceneIndex < 0) return nodeItem;
+                  const runtimeSceneKey = requestedSceneId || String(normalizedScenes?.[resolvedSceneIndex]?.sceneId || "").trim();
+                  const nextScenes = rawScenes.map((sceneItem, sceneIdx) => {
+                    if (sceneIdx !== resolvedSceneIndex) return sceneItem;
                     const normalizedPatch = { ...(patch && typeof patch === "object" ? patch : {}) };
                     if (Object.prototype.hasOwnProperty.call(normalizedPatch, "imageUrl") && !String(normalizedPatch.imageUrl || "").trim()) {
                       Object.assign(normalizedPatch, buildScenarioSceneRuntimeCleanupPatch(sceneItem || {}, { domains: ["image"] }));
@@ -22058,7 +22065,18 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
                     return { ...sceneItem, ...normalizedPatch };
                   });
                   const currentMap = nodeItem?.data?.sceneGeneration && typeof nodeItem.data.sceneGeneration === "object" ? nodeItem.data.sceneGeneration : {};
-                  const currentRuntime = currentMap[sceneId] && typeof currentMap[sceneId] === "object" ? currentMap[sceneId] : {};
+                  const runtimeAliases = [
+                    runtimeSceneKey,
+                    normalizedScenes?.[resolvedSceneIndex]?.sceneId,
+                    normalizedScenes?.[resolvedSceneIndex]?.sceneKey,
+                    normalizedScenes?.[resolvedSceneIndex]?.uiKey,
+                    normalizedScenes?.[resolvedSceneIndex]?.segment_id,
+                    normalizedScenes?.[resolvedSceneIndex]?.segmentId,
+                    rawScenes?.[resolvedSceneIndex]?.sceneId,
+                    rawScenes?.[resolvedSceneIndex]?.scene_id,
+                  ].map((value) => String(value || "").trim()).filter(Boolean);
+                  const currentRuntimeKey = runtimeAliases.find((key) => currentMap[key] && typeof currentMap[key] === "object") || runtimeSceneKey;
+                  const currentRuntime = currentMap[currentRuntimeKey] && typeof currentMap[currentRuntimeKey] === "object" ? currentMap[currentRuntimeKey] : {};
                   const runtimePatch = {};
                   if (Object.prototype.hasOwnProperty.call(patch, "imageUrl")) runtimePatch.imageStatus = String(patch.imageUrl || "").trim() ? "done" : "";
                   if (Object.prototype.hasOwnProperty.call(patch, "startImageUrl")) {
@@ -22086,7 +22104,7 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
                       scenes: nextScenes,
                       sceneGeneration: {
                         ...currentMap,
-                        [sceneId]: {
+                        [runtimeSceneKey]: {
                           ...currentRuntime,
                           ...runtimePatch,
                           updatedAt: new Date().toISOString(),
@@ -25082,6 +25100,7 @@ return base;
       openManualTimingDirectorBoard,
       onOpenScenarioStoryboard,
       onOpenScenarioPipelineDebug,
+      resolveScenarioSceneIndex,
       accountKey,
       STORE_KEY,
     ]

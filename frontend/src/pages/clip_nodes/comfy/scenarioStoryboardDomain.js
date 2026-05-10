@@ -2223,18 +2223,20 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
       hasProviderHints: !!normalizedScene.providerHints,
     });
   }
-  console.debug("[SCENARIO SCENE CONTRACT DEBUG]", {
-    sceneId: normalizedScene.sceneId,
-    participants: resolvedRoleContract.debug?.participants || normalizedScene.actors || [],
-    primaryRole: normalizedScene.primaryRole || "",
-    secondaryRoles: normalizedScene.secondaryRoles || [],
-    sceneActiveRoles: normalizedScene.sceneActiveRoles || [],
-    refsUsed: normalizedScene.refsUsed || [],
-    mustAppear: normalizedScene.mustAppear || [],
-    refsUsedByRoleKeys: Object.keys(normalizeObjectMap(normalizedScene.refsUsedByRole)),
-    forceTwoPerson: Boolean(resolvedRoleContract.debug?.forceTwoPerson),
-    hasSemanticTwoPerson: Boolean(resolvedRoleContract.debug?.hasSemanticTwoPerson),
-  });
+  if (SCENARIO_STORYBOARD_TRACE) {
+    console.debug("[SCENARIO SCENE CONTRACT DEBUG]", {
+      sceneId: normalizedScene.sceneId,
+      participants: resolvedRoleContract.debug?.participants || normalizedScene.actors || [],
+      primaryRole: normalizedScene.primaryRole || "",
+      secondaryRoles: normalizedScene.secondaryRoles || [],
+      sceneActiveRoles: normalizedScene.sceneActiveRoles || [],
+      refsUsed: normalizedScene.refsUsed || [],
+      mustAppear: normalizedScene.mustAppear || [],
+      refsUsedByRoleKeys: Object.keys(normalizeObjectMap(normalizedScene.refsUsedByRole)),
+      forceTwoPerson: Boolean(resolvedRoleContract.debug?.forceTwoPerson),
+      hasSemanticTwoPerson: Boolean(resolvedRoleContract.debug?.hasSemanticTwoPerson),
+    });
+  }
   const transitionPromptPatch = buildTransitionPromptPatch(normalizedScene, index);
   if (transitionPromptPatch) {
     normalizedScene.startFramePromptRu = String(transitionPromptPatch.startFramePromptRu || normalizedScene.startFramePromptRu || "").trim();
@@ -2334,27 +2336,31 @@ export function normalizeScenarioScene(scene = {}, index = 0, scenarioPackage = 
   normalizedScene.imageStrategy = normalizedScene.imageStrategy || videoProfile.imageStrategy;
   const transitionTypeBefore = String(normalizedScene.transitionType || videoProfile.transitionType || "").trim().toLowerCase();
   normalizedScene.transitionType = resolveScenarioTransitionTypeByRoute(normalizedScene, videoProfile);
-  console.debug("[SCENARIO VIDEO TRANSITION RESOLVE]", {
-    sceneId: normalizedScene.sceneId,
-    resolvedWorkflowKey: normalizedScene.resolvedWorkflowKey,
-    requiresContinuation: Boolean(normalizedScene.requiresContinuation || normalizedScene.continuationFromPrevious),
-    requiresTwoFrames: Boolean(normalizedScene.requiresTwoFrames),
-    imageStrategy: normalizedScene.imageStrategy,
-    transitionTypeBefore,
-    transitionTypeAfter: normalizedScene.transitionType,
-    reason: "normalized_from_route_and_flags",
-  });
+  if (SCENARIO_STORYBOARD_TRACE) {
+    console.debug("[SCENARIO VIDEO TRANSITION RESOLVE]", {
+      sceneId: normalizedScene.sceneId,
+      resolvedWorkflowKey: normalizedScene.resolvedWorkflowKey,
+      requiresContinuation: Boolean(normalizedScene.requiresContinuation || normalizedScene.continuationFromPrevious),
+      requiresTwoFrames: Boolean(normalizedScene.requiresTwoFrames),
+      imageStrategy: normalizedScene.imageStrategy,
+      transitionTypeBefore,
+      transitionTypeAfter: normalizedScene.transitionType,
+      reason: "normalized_from_route_and_flags",
+    });
+  }
   normalizedScene.debugRouteSourceField = videoProfile.debugRouteSourceField;
-  console.debug("[SCENARIO SCENE PROFILE]", {
-    sceneId: normalizedScene.sceneId,
-    routeRaw: videoProfile.routeRaw,
-    routeResolved: videoProfile.routeResolved,
-    renderMode: normalizedScene.renderMode,
-    ltxMode: normalizedScene.ltxMode,
-    requiresTwoFrames: normalizedScene.requiresTwoFrames,
-    isAudioDriven: normalizedScene.isAudioDriven,
-    sourceFieldUsed: videoProfile.debugRouteSourceField,
-  });
+  if (SCENARIO_STORYBOARD_TRACE) {
+    console.debug("[SCENARIO SCENE PROFILE]", {
+      sceneId: normalizedScene.sceneId,
+      routeRaw: videoProfile.routeRaw,
+      routeResolved: videoProfile.routeResolved,
+      renderMode: normalizedScene.renderMode,
+      ltxMode: normalizedScene.ltxMode,
+      requiresTwoFrames: normalizedScene.requiresTwoFrames,
+      isAudioDriven: normalizedScene.isAudioDriven,
+      sourceFieldUsed: videoProfile.debugRouteSourceField,
+    });
+  }
   normalizedScene.contractWarnings = buildScenarioSceneContractWarnings(normalizedScene);
   normalizedScene.contractWarningCodes = normalizedScene.contractWarnings.map((item) => item.code);
   return normalizedScene;
@@ -3004,92 +3010,94 @@ export function normalizeScenarioStoryboardPackage({
       normalizedGlobalMusicPromptLength: globalMusicPrompt.length,
     });
   }
-  const firstInputScene = Array.isArray(inputSceneCandidates) && inputSceneCandidates.length ? inputSceneCandidates[0] : null;
-  console.log("[SCENARIO NORMALIZE AUDIO HYDRATE]", {
-    hasSourcePackage: !!safeSourcePackage,
-    storyboardOutKeys: Object.keys(safeStoryboardOut || {}).slice(0, 20),
-    sourcePackageKeys: Object.keys(safeSourcePackage || {}).slice(0, 20),
-    sourcePackageHasAudioMap: !!safeSourcePackage?.audio_map,
-    audioSegmentCount: Object.keys(audioById || {}).length,
-    packageAudioUrlPresent: !!packageAudioUrl,
-    firstSceneTiming: scenes?.[0] && {
-      id: scenes[0].segment_id || scenes[0].sceneId,
-      startSec: scenes[0].startSec,
-      endSec: scenes[0].endSec,
-      transcript: scenes[0].transcript_slice || scenes[0].transcript || "",
-    },
-    firstSceneAudioLookup: scenes?.[0] && resolveAudioSegmentForScene(scenes[0], audioById, 0),
-    audioSegmentKeysSample: Object.keys(audioById || {}).slice(0, 20),
-  });
-  console.log("[SCENARIO NORMALIZE ROUTE HYDRATE]", {
-    routeSegmentCount: Object.keys(routeById || {}).length,
-    routeCounts: scenes.reduce((acc, s) => {
-      const route = String(s.route || "unknown").toLowerCase();
-      acc[route] = (acc[route] || 0) + 1;
-      return acc;
-    }, {}),
-    routeSources: scenes.map((s) => ({
-      id: s.segment_id,
-      route: s.route,
-      source: s.routeInfoDebug?.routeHydrationSourceName,
-      sourceRaw: s.routeInfoDebug?.sourceRouteRaw,
-      workflow: s.resolvedWorkflowKey,
-    })),
-    firstRoutes: scenes.slice(0, 9).map((s) => ({
-      id: s.segment_id || s.sceneId,
-      route: s.route,
-      lipSync: s.lipSync,
-      renderMode: s.renderMode,
-      resolvedWorkflowKey: s.resolvedWorkflowKey,
-      routeHydrationSource: s.routeHydrationSource,
-    })),
-  });
-  console.debug("[SCENARIO NORMALIZE PACKAGE]", {
-    sceneContractSource: canonicalSceneSource,
-    inputHasScenes: inputSceneCount > 0,
-    inputSceneCount,
-    outputSceneCount: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,
-    inputKeys: storyboardInputKeys,
-    firstSceneKeys: firstInputScene && typeof firstInputScene === "object" ? Object.keys(firstInputScene) : [],
-    storyboard_generated_assets_restored_count: restoredGeneratedAssetsCount,
-    storyboard_generated_assets_missing_after_reload_count: missingGeneratedAssetsAfterReloadCount,
-    montage_state_restore_attempted: true,
-    montage_state_restored: scenes.some((scene) => Boolean(scene?.montageReady || scene?.montageState)),
-    montage_segment_count: scenes.filter((scene) => Boolean(scene?.montageReady || scene?.montageState)).length,
-  });
-  console.debug("[SCENARIO STORYBOARD PACKAGE]", {
-    status: "package normalized successfully",
-    packageMergeStrategy: "safe_nested_map_merge",
-    packageRefsByRoleKeys: Object.keys(normalizedPackage.refsByRole || {}),
-    packageConnectedRefsByRoleKeys: Object.keys(normalizedPackage.connectedRefsByRole || {}),
-    packageRefDirectivesKeys: Object.keys(normalizedPackage.refDirectives || {}),
-    packageHeroParticipants: normalizedPackage.heroParticipants || [],
-    packageSupportingParticipants: normalizedPackage.supportingParticipants || [],
-    packageMustAppearRoles: normalizedPackage.mustAppearRoles || [],
-    packageContextRefsType: Array.isArray(normalizedPackage.context_refs)
-      ? "array"
-      : isNonEmptyObject(normalizedPackage.context_refs)
-        ? "object"
-        : isNonEmptyString(normalizedPackage.context_refs)
-          ? "string"
-          : "empty",
-    packageConnectedContextSummaryType: Array.isArray(normalizedPackage.connected_context_summary)
-      ? "array"
-      : isNonEmptyObject(normalizedPackage.connected_context_summary)
-        ? "object"
-        : isNonEmptyString(normalizedPackage.connected_context_summary)
-          ? "string"
-          : "empty",
-    sceneRoleSnapshot: (normalizedPackage.scenes || []).map((scene, idx) => ({
-      scene: idx + 1,
-      primaryRole: normalizeText(scene?.primaryRole),
-      secondaryRoles: Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : [],
-      sceneActiveRoles: Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : [],
-      refsUsed: Array.isArray(scene?.refsUsed) ? scene.refsUsed : [],
-      mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear : [],
-      refsUsedByRoleKeys: Object.keys(normalizeObjectMap(scene?.refsUsedByRole)),
-    })),
-  });
+  if (SCENARIO_STORYBOARD_TRACE) {
+    const firstInputScene = Array.isArray(inputSceneCandidates) && inputSceneCandidates.length ? inputSceneCandidates[0] : null;
+    console.debug("[SCENARIO NORMALIZE AUDIO HYDRATE]", {
+      hasSourcePackage: !!safeSourcePackage,
+      storyboardOutKeys: Object.keys(safeStoryboardOut || {}).slice(0, 20),
+      sourcePackageKeys: Object.keys(safeSourcePackage || {}).slice(0, 20),
+      sourcePackageHasAudioMap: !!safeSourcePackage?.audio_map,
+      audioSegmentCount: Object.keys(audioById || {}).length,
+      packageAudioUrlPresent: !!packageAudioUrl,
+      firstSceneTiming: scenes?.[0] && {
+        id: scenes[0].segment_id || scenes[0].sceneId,
+        startSec: scenes[0].startSec,
+        endSec: scenes[0].endSec,
+        transcript: scenes[0].transcript_slice || scenes[0].transcript || "",
+      },
+      firstSceneAudioLookup: scenes?.[0] && resolveAudioSegmentForScene(scenes[0], audioById, 0),
+      audioSegmentKeysSample: Object.keys(audioById || {}).slice(0, 20),
+    });
+    console.debug("[SCENARIO NORMALIZE ROUTE HYDRATE]", {
+      routeSegmentCount: Object.keys(routeById || {}).length,
+      routeCounts: scenes.reduce((acc, s) => {
+        const route = String(s.route || "unknown").toLowerCase();
+        acc[route] = (acc[route] || 0) + 1;
+        return acc;
+      }, {}),
+      routeSources: scenes.map((s) => ({
+        id: s.segment_id,
+        route: s.route,
+        source: s.routeInfoDebug?.routeHydrationSourceName,
+        sourceRaw: s.routeInfoDebug?.sourceRouteRaw,
+        workflow: s.resolvedWorkflowKey,
+      })),
+      firstRoutes: scenes.slice(0, 9).map((s) => ({
+        id: s.segment_id || s.sceneId,
+        route: s.route,
+        lipSync: s.lipSync,
+        renderMode: s.renderMode,
+        resolvedWorkflowKey: s.resolvedWorkflowKey,
+        routeHydrationSource: s.routeHydrationSource,
+      })),
+    });
+    console.debug("[SCENARIO NORMALIZE PACKAGE]", {
+      sceneContractSource: canonicalSceneSource,
+      inputHasScenes: inputSceneCount > 0,
+      inputSceneCount,
+      outputSceneCount: Array.isArray(normalizedPackage?.scenes) ? normalizedPackage.scenes.length : 0,
+      inputKeys: storyboardInputKeys,
+      firstSceneKeys: firstInputScene && typeof firstInputScene === "object" ? Object.keys(firstInputScene) : [],
+      storyboard_generated_assets_restored_count: restoredGeneratedAssetsCount,
+      storyboard_generated_assets_missing_after_reload_count: missingGeneratedAssetsAfterReloadCount,
+      montage_state_restore_attempted: true,
+      montage_state_restored: scenes.some((scene) => Boolean(scene?.montageReady || scene?.montageState)),
+      montage_segment_count: scenes.filter((scene) => Boolean(scene?.montageReady || scene?.montageState)).length,
+    });
+    console.debug("[SCENARIO STORYBOARD PACKAGE]", {
+      status: "package normalized successfully",
+      packageMergeStrategy: "safe_nested_map_merge",
+      packageRefsByRoleKeys: Object.keys(normalizedPackage.refsByRole || {}),
+      packageConnectedRefsByRoleKeys: Object.keys(normalizedPackage.connectedRefsByRole || {}),
+      packageRefDirectivesKeys: Object.keys(normalizedPackage.refDirectives || {}),
+      packageHeroParticipants: normalizedPackage.heroParticipants || [],
+      packageSupportingParticipants: normalizedPackage.supportingParticipants || [],
+      packageMustAppearRoles: normalizedPackage.mustAppearRoles || [],
+      packageContextRefsType: Array.isArray(normalizedPackage.context_refs)
+        ? "array"
+        : isNonEmptyObject(normalizedPackage.context_refs)
+          ? "object"
+          : isNonEmptyString(normalizedPackage.context_refs)
+            ? "string"
+            : "empty",
+      packageConnectedContextSummaryType: Array.isArray(normalizedPackage.connected_context_summary)
+        ? "array"
+        : isNonEmptyObject(normalizedPackage.connected_context_summary)
+          ? "object"
+          : isNonEmptyString(normalizedPackage.connected_context_summary)
+            ? "string"
+            : "empty",
+      sceneRoleSnapshot: (normalizedPackage.scenes || []).map((scene, idx) => ({
+        scene: idx + 1,
+        primaryRole: normalizeText(scene?.primaryRole),
+        secondaryRoles: Array.isArray(scene?.secondaryRoles) ? scene.secondaryRoles : [],
+        sceneActiveRoles: Array.isArray(scene?.sceneActiveRoles) ? scene.sceneActiveRoles : [],
+        refsUsed: Array.isArray(scene?.refsUsed) ? scene.refsUsed : [],
+        mustAppear: Array.isArray(scene?.mustAppear) ? scene.mustAppear : [],
+        refsUsedByRoleKeys: Object.keys(normalizeObjectMap(scene?.refsUsedByRole)),
+      })),
+    });
+  }
   return normalizedPackage;
 }
 
