@@ -11,6 +11,7 @@ import {
 import {
   buildManualProjectBackupJson,
   forceWriteManualClipBoardProjectForNode,
+  getLastManualClipBoardStorageError,
   getManualClipBoardMaterialStats,
   getManualProjectOwnerId,
   hasMeaningfulManualProject,
@@ -871,6 +872,13 @@ export default function ManualClipDirectorBoardEditor({
     projectRef.current = safeProject;
     setProject(safeProject);
     const wrote = forceWriteManualClipBoardProjectForNode(safeProject, { reason: "manual_force_save_button" });
+    const storageError = wrote ? null : getLastManualClipBoardStorageError();
+    if (!wrote) {
+      console.error("[MANUAL BOARD SAVE BUTTON] force write failed", {
+        sourceNodeId: ownerNodeId,
+        storageError,
+      });
+    }
     const readback = readManualClipBoardProjectForNode(ownerNodeId);
     const readbackOk = Boolean(
       wrote
@@ -879,7 +887,11 @@ export default function ManualClipDirectorBoardEditor({
     );
     dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
     logStorageVerify(ownerNodeId);
-    setBackupStatus(readbackOk ? "Доска сохранена" : "Ошибка сохранения доски");
+    setBackupStatus(readbackOk
+      ? "Доска сохранена"
+      : (storageError?.reason === "quota_exceeded"
+        ? "Ошибка сохранения: localStorage переполнен"
+        : "Ошибка сохранения: смотри console write failed"));
     window.setTimeout(() => setBackupStatus(""), 1800);
   };
 
