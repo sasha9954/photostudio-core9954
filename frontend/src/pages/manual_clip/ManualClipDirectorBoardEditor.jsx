@@ -34,6 +34,97 @@ const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
 
+
+const LTX_CLEAN_BASE_NEGATIVE_PROMPT = "music, background music, soundtrack, score, underscore, cinematic underscore, emotional underscore, musical bed, ambient music bed, cinematic bed, drone music, synth pad, strings, orchestral pad, tonal pad, melody, instruments, rhythm, beat, drums, singing, choir, vocals, extra voices, repeated phrase, long narration, echo, heavy reverb, robotic voice, cartoon voice, distorted voice, trailer boom, horror sound design, artificial impact sound, sudden scene change, location drift, new landscape, new animals appearing, hard zoom, orbit camera, spin camera, chaotic shake, fast drone movement, text overlay, HUD, UI elements, CGI look, cartoon look, warped grass, warped trees, warped wildlife, distorted animals, extra limbs, flickering sky, distorted waterline";
+
+function combineNegativePromptTokens(...parts) {
+  const seen = new Set();
+  const out = [];
+  parts.forEach((part) => {
+    String(part || "").split(/[,\n]+/).forEach((item) => {
+      const clean = item.trim().replace(/\s+/g, " ");
+      const key = clean.toLowerCase();
+      if (!clean || seen.has(key)) return;
+      seen.add(key);
+      out.push(clean);
+    });
+  });
+  return out.join(", ");
+}
+
+function resolveLtxCleanVoiceMode(scene = {}) {
+  const raw = String(scene.voice_mode || scene.voiceMode || "").trim().toLowerCase().replace(/-/g, "_");
+  if (["narrator", "voiceover", "voice_over"].includes(raw)) return "voiceover";
+  if (["none", "no_voice", "silent"].includes(raw)) return "none";
+  if (String(scene.route || "").trim() === "i2v_text" || scene.generated_speech_required) return "voiceover";
+  return "none";
+}
+
+function detectLtxSpeechLanguage(scene = {}, speechText = "") {
+  const explicit = String(scene.voice_language || scene.voiceLanguage || "").trim().toLowerCase();
+  if (explicit.startsWith("ru") || explicit.includes("russian") || explicit.includes("рус")) return "Russian";
+  if (explicit.startsWith("en") || explicit.includes("english") || explicit.includes("анг")) return "English";
+  return /[А-Яа-яЁё]/.test(String(speechText || "")) ? "Russian" : "English";
+}
+
+function buildLtxCleanPositivePrompt(scene = {}, project = {}) {
+  const videoPrompt = String(scene.positive_prompt || scene.positivePrompt || scene.video_prompt || scene.videoPrompt || "").trim();
+  const soundPrompt = String(scene.sound_prompt || scene.soundPrompt || "").trim();
+  const ambienceHint = String(scene.ambience_hint || scene.ambienceHint || scene.ambient_sound_prompt || scene.ambientSoundPrompt || "").trim();
+  const physicalSounds = combineNegativePromptTokens(soundPrompt, ambienceHint).replace(/,/g, ";");
+  const voiceMode = resolveLtxCleanVoiceMode(scene);
+  const speechText = String(scene.speech_text || scene.speechText || "").trim();
+  const voiceProfile = String(scene.voice_profile || scene.voiceProfile || scene.narrator_voice_profile_en || "natural narrator").trim() || "natural narrator";
+  const deliveryStyle = String(scene.delivery_style || scene.deliveryStyle || "").trim();
+  const language = detectLtxSpeechLanguage(scene, speechText);
+  const visual = [
+    "Visual block:",
+    "Use the uploaded image as the exact first frame and visual anchor.",
+    "Preserve the same scene, framing, horizon, location, and visible objects.",
+    "Use one camera movement only.",
+    "Animate only visible elements.",
+    videoPrompt ? `Scene motion: ${videoPrompt}` : "",
+  ].filter(Boolean).join("\n");
+  const audio = voiceMode === "voiceover"
+    ? [
+      "Audio block:",
+      `A ${voiceProfile} voice says exactly once in ${language}: "${speechText || soundPrompt}"`,
+      `Voice description: ${[voiceProfile, deliveryStyle].filter(Boolean).join("\n\n")}`,
+      physicalSounds ? `Raw outdoor field recording under the voice: ${physicalSounds}.` : "Raw outdoor field recording under the voice must match only the visible environment.",
+      "Audio must contain only two things: voice plus raw field recording.",
+      "No composed music. No soundtrack. No score. No musical bed. Voice plus raw field recording only.",
+    ].filter(Boolean).join("\n")
+    : [
+      "Audio block:",
+      "Audio must be raw outdoor field recording only.",
+      `Physical sounds: ${physicalSounds || "wind, grass movement, insects, birds, water, dust, leaves, distant visible animal movement"}.`,
+      "No composed music. No soundtrack. No score. No musical bed. Raw field recording only.",
+    ].join("\n");
+  return [visual, audio].filter(Boolean).join("\n\n");
+}
+
+function buildLtxCleanNegativePrompt(scene = {}, project = {}) {
+  const voiceMode = resolveLtxCleanVoiceMode(scene);
+  const speechText = String(scene.speech_text || scene.speechText || "").trim();
+  const userNegative = String(scene.negative_prompt || scene.negativePrompt || "").trim();
+  const voiceNegative = voiceMode === "voiceover"
+    ? combineNegativePromptTokens("wrong language", /[А-Яа-яЁё]/.test(speechText) ? "English speech" : "", "repeated phrase", "extra voices")
+    : "narrator, speech, human voice";
+  return combineNegativePromptTokens(LTX_CLEAN_BASE_NEGATIVE_PROMPT, userNegative, voiceNegative);
+}
+
+function withLtxCleanFinalPrompts(scene = {}, project = {}) {
+  const positive = buildLtxCleanPositivePrompt(scene, project);
+  const negative = buildLtxCleanNegativePrompt(scene, project);
+  return {
+    positive_prompt: positive,
+    negative_prompt: negative,
+    finalPositivePrompt: positive,
+    final_positive_prompt: positive,
+    finalNegativePrompt: negative,
+    final_negative_prompt: negative,
+  };
+}
 function normalizeProjectAspectFormat(format) {
   const value = String(format || "").trim();
   return ["9:16", "16:9", "1:1"].includes(value) ? value : "";
@@ -343,7 +434,7 @@ function resolveManualVideoRoutePayload(scene = {}) {
 
   if (route === "i2v_sound") {
     return {
-      resolvedWorkflowKey: "i2v_sound",
+      resolvedWorkflowKey: "ltx23_i2v_sound_clean",
       video_generation_route: "i2v_sound",
       renderMode: "i2v_sound",
       lipSync: false,
@@ -357,13 +448,14 @@ function resolveManualVideoRoutePayload(scene = {}) {
       sound_prompt: String(scene.sound_prompt || ""),
       negativeAudioPrompt: String(scene.negative_audio_prompt || ""),
       negative_audio_prompt: String(scene.negative_audio_prompt || ""),
+      ...withLtxCleanFinalPrompts({ ...scene, voice_mode: scene.voice_mode || "none" }),
     };
   }
 
   if (route === "i2v_text") {
     const soundPrompt = String(scene.sound_prompt || "").trim();
     return {
-      resolvedWorkflowKey: "i2v_sound",
+      resolvedWorkflowKey: "ltx23_i2v_sound_clean",
       video_generation_route: "i2v_text",
       renderMode: "i2v_sound",
       lipSync: false,
@@ -378,13 +470,14 @@ function resolveManualVideoRoutePayload(scene = {}) {
       sound_prompt: soundPrompt,
       negativeAudioPrompt: String(scene.negative_audio_prompt || ""),
       negative_audio_prompt: String(scene.negative_audio_prompt || ""),
+      ...withLtxCleanFinalPrompts({ ...scene, sound_prompt: soundPrompt, voice_mode: scene.voice_mode || "voiceover", generated_speech_required: true }),
     };
   }
 
   if (route === "first_last" || route === "first_last_sound") {
     const withSound = route === "first_last_sound";
     return {
-      resolvedWorkflowKey: withSound ? "first_last_sound" : "first_last",
+      resolvedWorkflowKey: withSound ? "first_last_sound_clean" : "first_last",
       video_generation_route: route,
       renderMode: route,
       ltxMode: withSound ? "f_l_sound" : "f_l",
@@ -404,6 +497,7 @@ function resolveManualVideoRoutePayload(scene = {}) {
       sound_prompt: String(scene.sound_prompt || ""),
       negativeAudioPrompt: String(scene.negative_audio_prompt || ""),
       negative_audio_prompt: String(scene.negative_audio_prompt || ""),
+      ...(withSound ? withLtxCleanFinalPrompts({ ...scene, voice_mode: scene.voice_mode || "none" }) : {}),
     };
   }
 
@@ -580,6 +674,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     allowed_variation_ru: String(scene.allowed_variation_ru || ""),
     source_phrase_ids: normalizeSourcePhraseIds(scene.source_phrase_ids || scene.sourcePhraseIds),
     video_prompt: String(scene.video_prompt || ""),
+    positive_prompt: String(scene.positive_prompt || ""),
     negative_prompt: String(scene.negative_prompt || ""),
     sound_prompt: String(scene.sound_prompt || ""),
     negative_audio_prompt: String(scene.negative_audio_prompt || ""),
@@ -666,6 +761,7 @@ const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "generated_audio_gain_db",
   "keep_generated_audio",
   "video_prompt",
+  "positive_prompt",
   "negative_prompt",
   "sound_prompt",
   "negative_audio_prompt",
@@ -1955,6 +2051,28 @@ export default function ManualClipDirectorBoardEditor({
         sound_prompt: String(routePayload.sound_prompt || scene.sound_prompt || ""),
         negativeAudioPrompt: String(routePayload.negativeAudioPrompt || scene.negative_audio_prompt || ""),
         negative_audio_prompt: String(routePayload.negative_audio_prompt || scene.negative_audio_prompt || ""),
+        positivePrompt: String(routePayload.positive_prompt || scene.positive_prompt || scene.video_prompt || ""),
+        positive_prompt: String(routePayload.positive_prompt || scene.positive_prompt || scene.video_prompt || ""),
+        negativePrompt: String(routePayload.negative_prompt || scene.negative_prompt || ""),
+        negative_prompt: String(routePayload.negative_prompt || scene.negative_prompt || ""),
+        finalPositivePrompt: String(routePayload.finalPositivePrompt || routePayload.final_positive_prompt || ""),
+        final_positive_prompt: String(routePayload.final_positive_prompt || routePayload.finalPositivePrompt || ""),
+        finalNegativePrompt: String(routePayload.finalNegativePrompt || routePayload.final_negative_prompt || ""),
+        final_negative_prompt: String(routePayload.final_negative_prompt || routePayload.finalNegativePrompt || ""),
+        speechText: String(scene.speech_text || ""),
+        speech_text: String(scene.speech_text || ""),
+        voiceProfile: String(scene.voice_profile || scene.narrator_voice_profile_en || ""),
+        voice_profile: String(scene.voice_profile || scene.narrator_voice_profile_en || ""),
+        voiceMode: String(scene.voice_mode || (scene.route === "i2v_text" ? "voiceover" : "none")),
+        voice_mode: String(scene.voice_mode || (scene.route === "i2v_text" ? "voiceover" : "none")),
+        voiceLanguage: String(scene.voice_language || ""),
+        voice_language: String(scene.voice_language || ""),
+        deliveryStyle: String(scene.delivery_style || ""),
+        delivery_style: String(scene.delivery_style || ""),
+        ambienceHint: String(scene.ambience_hint || scene.ambient_sound_prompt || ""),
+        ambience_hint: String(scene.ambience_hint || scene.ambient_sound_prompt || ""),
+        ambientSoundPrompt: String(scene.ambient_sound_prompt || ""),
+        ambient_sound_prompt: String(scene.ambient_sound_prompt || ""),
         requestedDurationSec,
         targetDurationSec: requestedDurationSec,
         sceneStartSec: Number(scene.start_sec || 0),
@@ -2291,11 +2409,11 @@ export default function ManualClipDirectorBoardEditor({
           /> : null}
         </div>
 
-        <label className="manualPromptBlock">Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
+        <label className="manualPromptBlock">Positive Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
           const nextScene = { ...selectedScene, video_prompt: e.target.value };
           updateScene(selectedScene.scene_id, { video_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
         }} /></label>
-        <label className="manualNegativePromptBlock">Negative prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => {
+        <label className="manualNegativePromptBlock">Negative Prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => {
           const nextScene = { ...selectedScene, negative_prompt: e.target.value };
           updateScene(selectedScene.scene_id, { negative_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
         }} /></label>
@@ -2311,6 +2429,8 @@ export default function ManualClipDirectorBoardEditor({
             />
           </label>
           <div className="manualRouteHint">В этом поле одной инструкцией укажите: кто говорит, точную фразу, стиль голоса и фоновые звуки. Текст сцены выше показан только как подсказка — его можно скопировать в prompt.</div>
+          <label className="manualPromptBlock">Final Positive Prompt<textarea readOnly value={buildLtxCleanPositivePrompt({ ...selectedScene, voice_mode: selectedScene.voice_mode || "voiceover", generated_speech_required: true }, project)} /></label>
+          <label className="manualNegativePromptBlock">Final Negative Prompt<textarea readOnly value={buildLtxCleanNegativePrompt({ ...selectedScene, voice_mode: selectedScene.voice_mode || "voiceover", generated_speech_required: true }, project)} /></label>
         </section> : null}
         {isGeneratedSoundRoute(selectedScene.route) ? <section className="manualSoundBox">
           <strong>Сценический звук</strong>
@@ -2318,9 +2438,11 @@ export default function ManualClipDirectorBoardEditor({
           <label className="manualPromptBlock" htmlFor={`manual-sound-prompt-${selectedScene.scene_id}`}>Sound prompt<textarea id={`manual-sound-prompt-${selectedScene.scene_id}`} value={selectedScene.sound_prompt} placeholder="Например для природы: raw field recording of wind through grass, insects, distant birds and dry leaves" onChange={(e) => {
             updateScene(selectedScene.scene_id, { sound_prompt: e.target.value });
           }} /></label>
-          <label className="manualPromptBlock" htmlFor={`manual-negative-audio-prompt-${selectedScene.scene_id}`}>Negative audio prompt<textarea id={`manual-negative-audio-prompt-${selectedScene.scene_id}`} value={selectedScene.negative_audio_prompt} placeholder="music, background music, cinematic score, melody, chords, pads, synth, strings, drums, rhythm, beat, trailer music, emotional soundtrack, orchestral ambience, choir, vocals, speech, narrator, human voice" onChange={(e) => {
+          <label className="manualPromptBlock" htmlFor={`manual-negative-audio-prompt-${selectedScene.scene_id}`}>Helper negative audio prompt<textarea id={`manual-negative-audio-prompt-${selectedScene.scene_id}`} value={selectedScene.negative_audio_prompt} placeholder="Optional helper only. Final Negative Prompt is assembled below and sent to Comfy node 247." onChange={(e) => {
             updateScene(selectedScene.scene_id, { negative_audio_prompt: e.target.value });
           }} /></label>
+          <label className="manualPromptBlock">Final Positive Prompt<textarea readOnly value={buildLtxCleanPositivePrompt(selectedScene, project)} /></label>
+          <label className="manualNegativePromptBlock">Final Negative Prompt<textarea readOnly value={buildLtxCleanNegativePrompt(selectedScene, project)} /></label>
           <label className="manualGainControl">Громкость в монтаже после нормализации: {Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB).toFixed(0)} dB
             <input type="range" min={I2V_SOUND_GAIN_MIN_DB} max={I2V_SOUND_GAIN_MAX_DB} step="1" value={Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB)} onChange={(e) => {
               updateScene(selectedScene.scene_id, { generated_audio_gain_db: Number(e.target.value), keep_generated_audio: true, generated_audio_policy: "mix_generated_audio_under_master" });

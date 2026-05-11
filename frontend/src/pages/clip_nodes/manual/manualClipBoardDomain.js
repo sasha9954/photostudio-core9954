@@ -296,6 +296,7 @@ export function normalizeScene(scene, idx, storyBlockLookup = null) {
     image_upload_status: String(scene?.image_upload_status || ""),
     image_upload_error: String(scene?.image_upload_error || ""),
     video_prompt: String(scene?.video_prompt || ""),
+    positive_prompt: String(scene?.positive_prompt || ""),
     negative_prompt: String(scene?.negative_prompt || ""),
     sound_prompt: String(scene?.sound_prompt || ""),
     negative_audio_prompt: String(scene?.negative_audio_prompt || ""),

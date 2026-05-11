@@ -573,6 +573,30 @@ class ClipVideoIn(BaseModel):
     sound_prompt: str | None = None
     negativeAudioPrompt: str | None = None
     negative_audio_prompt: str | None = None
+    positivePrompt: str | None = None
+    positive_prompt: str | None = None
+    negativePrompt: str | None = None
+    negative_prompt: str | None = None
+    finalPositivePrompt: str | None = None
+    final_positive_prompt: str | None = None
+    finalNegativePrompt: str | None = None
+    final_negative_prompt: str | None = None
+    ambienceHint: str | None = None
+    ambience_hint: str | None = None
+    ambientSoundPrompt: str | None = None
+    ambient_sound_prompt: str | None = None
+    speechText: str | None = None
+    speech_text: str | None = None
+    voiceProfile: str | None = None
+    voice_profile: str | None = None
+    voiceMode: str | None = None
+    voice_mode: str | None = None
+    voiceLanguage: str | None = None
+    voice_language: str | None = None
+    deliveryStyle: str | None = None
+    delivery_style: str | None = None
+    audioMode: str | None = None
+    audio_mode: str | None = None
     keepGeneratedAudio: bool | None = None
     keep_generated_audio: bool | None = None
     generatedAudioPolicy: str | None = None
@@ -1077,18 +1101,24 @@ def _normalize_clip_video_transition_type(value: str | None) -> str:
 LTX_WORKFLOW_KEY_TO_FILE = {
     "i2v": "image-video.json",
     "i2v_sound": "image-video-golos-zvuk.json",
+    "ltx23_i2v_sound_clean": "image-video-golos-zvuk.json",
     "f_l": "last-first cadr-NO sound.json",
     "f_l_sound": "last-first cadr-sound.json",
+    "first_last_sound_clean": "last-first cadr-sound.json",
     "continuation": "image-video.json",
     "lip_sync": "image-lipsink-video-music.json",
 }
 DIRECT_STORYBOARD_ROUTE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
-    "i2v_sound": "i2v_sound",
+    "i2v_sound": "ltx23_i2v_sound_clean",
+    "i2v_text": "ltx23_i2v_sound_clean",
+    "voiceover": "ltx23_i2v_sound_clean",
+    "ltx23_i2v_sound_clean": "ltx23_i2v_sound_clean",
     "first_last": "f_l",
-    "first_last_sound": "f_l_sound",
+    "first_last_sound": "first_last_sound_clean",
+    "first_last_sound_clean": "first_last_sound_clean",
     "f_l": "f_l",
-    "f_l_sound": "f_l_sound",
+    "f_l_sound": "first_last_sound_clean",
     "lip_sync_music": "lip_sync",
     "lip_sync": "lip_sync",
 }
@@ -1102,6 +1132,8 @@ DIRECT_STORYBOARD_ROUTE_TO_RENDER_MODE = {
 DIRECT_STORYBOARD_WORKFLOW_KEY_TO_PUBLIC_ROUTE = {
     "i2v": "i2v",
     "i2v_sound": "i2v_sound",
+    "ltx23_i2v_sound_clean": "i2v_sound",
+    "first_last_sound_clean": "first_last_sound",
     "lip_sync": "lip_sync_music",
     "f_l": "first_last",
     "f_l_sound": "first_last_sound",
@@ -1137,29 +1169,28 @@ DIRECT_ROUTE_RISKY_ROTATION_MARKERS = (
 )
 LTX_WORKFLOW_FILE_TO_KEY = {
     "image-video.json": "i2v",
-    "image-video-golos-zvuk.json": "i2v_sound",
-    "image-video-golos-zvuk.json": "i2v",
+    "image-video-golos-zvuk.json": "ltx23_i2v_sound_clean",
     "last-first cadr.json": "f_l",
     "last-first cadr-no sound.json": "f_l",
-    "last-first cadr-sound.json": "f_l_sound",
+    "last-first cadr-sound.json": "first_last_sound_clean",
     "imag-imag-video-bz.json": "f_l",
     "imag-imag-video-zvuk.json": "f_l",
     "image-lipsink-video-music.json": "lip_sync",
 }
 
-LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "i2v_sound", "lip_sync"}
-LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l", "f_l_sound"}
+LTX_SINGLE_IMAGE_WORKFLOW_KEYS = {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "lip_sync"}
+LTX_FIRST_LAST_WORKFLOW_KEYS = {"f_l", "f_l_sound", "first_last_sound_clean"}
 LTX_CONTINUATION_WORKFLOW_KEYS = {"continuation"}
 LTX_LEGACY_WORKFLOW_ALIASES = {
     "i2v_as": "i2v",
-    "image_video_sound": "i2v_sound",
-    "standard_video_sound": "i2v_sound",
-    "video_with_sound": "i2v_sound",
+    "image_video_sound": "ltx23_i2v_sound_clean",
+    "standard_video_sound": "ltx23_i2v_sound_clean",
+    "video_with_sound": "ltx23_i2v_sound_clean",
     "f_l_as": "f_l",
     "first_last": "f_l",
     "first-last": "f_l",
-    "first_last_sound": "f_l_sound",
-    "first-last-sound": "f_l_sound",
+    "first_last_sound": "first_last_sound_clean",
+    "first-last-sound": "first_last_sound_clean",
     "imag_imag_video_bz": "f_l",
     "imag-imag-video-bz": "f_l",
     "ia2v": "lip_sync",
@@ -1168,15 +1199,19 @@ LTX_LEGACY_WORKFLOW_ALIASES = {
 
 LTX_MODE_TO_WORKFLOW_KEY = {
     "i2v": "i2v",
-    "i2v_sound": "i2v_sound",
+    "i2v_sound": "ltx23_i2v_sound_clean",
+    "i2v_text": "ltx23_i2v_sound_clean",
+    "voiceover": "ltx23_i2v_sound_clean",
+    "ltx23_i2v_sound_clean": "ltx23_i2v_sound_clean",
     # legacy input alias (do not treat as production key)
     "i2v_as": "i2v",
-    "image_video_sound": "i2v_sound",
-    "standard_video_sound": "i2v_sound",
-    "video_with_sound": "i2v_sound",
+    "image_video_sound": "ltx23_i2v_sound_clean",
+    "standard_video_sound": "ltx23_i2v_sound_clean",
+    "video_with_sound": "ltx23_i2v_sound_clean",
     "f_l": "f_l",
     "f_l_sound": "f_l_sound",
-    "first_last_sound": "f_l_sound",
+    "first_last_sound": "first_last_sound_clean",
+    "first_last_sound_clean": "first_last_sound_clean",
     # legacy input alias (do not treat as production key)
     "f_l_as": "f_l",
     "continuation": "continuation",
@@ -1186,36 +1221,38 @@ LTX_MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_distilled_fp8": {
         "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_dev_fp16": {
         "key": "ltx23_dev_fp16",
         "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_distilled_fp16": {
         "key": "ltx23_distilled_fp16",
         "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_13b_dev_fp8": {
         "key": "ltx23_13b_dev_fp8",
         "ckpt_name": "ltx-2.3-13b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_13b_distilled_fp8": {
         "key": "ltx23_13b_distilled_fp8",
         "ckpt_name": "ltx-2.3-13b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
 }
 LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
     "i2v": "ltx23_dev_fp8",
+    "ltx23_i2v_sound_clean": "ltx23_dev_fp8",
+    "first_last_sound_clean": "ltx23_dev_fp8",
     "i2v_sound": "ltx23_dev_fp8",
     "lip_sync": "ltx23_dev_fp8",
     "f_l": "ltx23_distilled_fp8",
@@ -2383,8 +2420,8 @@ def _resolve_ltx_workflow_selection(
         if is_lipsync or render_mode == "avatar_lipsync":
             fallback_workflow_key = "lip_sync"
             source = "legacy_render_mode"
-        elif str(render_mode or "").strip().lower() in {"i2v_sound", "image_video_sound", "standard_video_sound"}:
-            fallback_workflow_key = "i2v_sound"
+        elif str(render_mode or "").strip().lower() in {"i2v_sound", "i2v_text", "voiceover", "image_video_sound", "standard_video_sound"}:
+            fallback_workflow_key = "ltx23_i2v_sound_clean"
             source = "render_mode_i2v_sound"
         elif is_continuous:
             fallback_workflow_key = "f_l"
@@ -3208,6 +3245,140 @@ def _combine_negative_prompts(*parts: Any) -> str:
     return ", ".join(chunks)
 
 
+LTX_CLEAN_WORKFLOW_KEYS = {"ltx23_i2v_sound_clean", "first_last_sound_clean"}
+LTX_CLEAN_BASE_NEGATIVE_PROMPT = (
+    "music, background music, soundtrack, score, underscore, cinematic underscore, emotional underscore, "
+    "musical bed, ambient music bed, cinematic bed, drone music, synth pad, strings, orchestral pad, "
+    "tonal pad, melody, instruments, rhythm, beat, drums, singing, choir, vocals, extra voices, "
+    "repeated phrase, long narration, echo, heavy reverb, robotic voice, cartoon voice, distorted voice, "
+    "trailer boom, horror sound design, artificial impact sound, sudden scene change, location drift, "
+    "new landscape, new animals appearing, hard zoom, orbit camera, spin camera, chaotic shake, "
+    "fast drone movement, text overlay, HUD, UI elements, CGI look, cartoon look, warped grass, "
+    "warped trees, warped wildlife, distorted animals, extra limbs, flickering sky, distorted waterline"
+)
+
+
+def _ltx_clean_scene_value(scene: Any, *keys: str) -> str:
+    for key in keys:
+        value = ""
+        if isinstance(scene, dict):
+            value = scene.get(key)
+        else:
+            value = getattr(scene, key, None)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _ltx_clean_scene_bool(scene: Any, *keys: str) -> bool:
+    for key in keys:
+        value = scene.get(key) if isinstance(scene, dict) else getattr(scene, key, None)
+        if _as_boolish(value):
+            return True
+    return False
+
+
+def _ltx_clean_voice_mode(scene: Any) -> str:
+    raw = _ltx_clean_scene_value(scene, "voice_mode", "voiceMode").lower().replace("-", "_").strip()
+    if raw in {"narrator", "voiceover", "voice_over"}:
+        return "voiceover"
+    if raw in {"none", "no_voice", "silent"}:
+        return "none"
+    route = _ltx_clean_scene_value(scene, "route", "video_generation_route", "videoGenerationRoute", "renderMode").lower()
+    if route in {"i2v_text", "voiceover"} or _ltx_clean_scene_bool(scene, "generated_speech_required", "generatedSpeechRequired"):
+        return "voiceover"
+    return "none"
+
+
+def _detect_speech_language(scene: Any, speech_text: str) -> str:
+    explicit = _ltx_clean_scene_value(scene, "voice_language", "voiceLanguage", "language")
+    if explicit:
+        low = explicit.lower()
+        if low.startswith("ru") or "russian" in low or "рус" in low:
+            return "Russian"
+        if low.startswith("en") or "english" in low or "анг" in low:
+            return "English"
+        return explicit
+    return "Russian" if re.search(r"[А-Яа-яЁё]", speech_text or "") else "English"
+
+
+def buildLtxCleanPositivePrompt(scene: Any, project: Any | None = None) -> str:
+    """Build the two-field LTX 2.3 clean positive prompt sent to Comfy."""
+    video_prompt = _ltx_clean_scene_value(scene, "positive_prompt", "positivePrompt", "video_prompt", "videoPrompt", "i2v_prompt_en")
+    sound_prompt = _ltx_clean_scene_value(scene, "sound_prompt", "soundPrompt")
+    ambience_hint = _ltx_clean_scene_value(scene, "ambience_hint", "ambienceHint", "ambient_sound_prompt", "ambientSoundPrompt")
+    physical_sounds = _combine_negative_prompts(sound_prompt, ambience_hint).replace(",", ";")
+    voice_mode = _ltx_clean_voice_mode(scene)
+    speech_text = _ltx_clean_scene_value(scene, "speech_text", "speechText", "narrator_text_ru", "narratorTextRu", "narrator_text_en", "narratorTextEn")
+    voice_profile = _ltx_clean_scene_value(scene, "voice_profile", "voiceProfile", "narrator_voice_profile_en", "narratorVoiceProfileEn") or "natural narrator"
+    delivery_style = _ltx_clean_scene_value(scene, "delivery_style", "deliveryStyle")
+    language = _detect_speech_language(scene, speech_text)
+
+    visual_lines = [
+        "Visual block:",
+        "Use the uploaded image as the exact first frame and visual anchor.",
+        "Preserve the same scene, framing, horizon, location, and visible objects.",
+        "Use one camera movement only.",
+        "Animate only visible elements.",
+    ]
+    if video_prompt:
+        visual_lines.append(f"Scene motion: {video_prompt}")
+
+    audio_lines = ["Audio block:"]
+    if voice_mode == "voiceover":
+        spoken = speech_text or _ltx_clean_scene_value(scene, "sound_prompt", "soundPrompt")
+        audio_lines.append(f'A {voice_profile} voice says exactly once in {language}: "{spoken}"')
+        if voice_profile or delivery_style:
+            audio_lines.append(f"Voice description: {_join_prompt_parts(voice_profile, delivery_style)}")
+        if physical_sounds:
+            audio_lines.append(f"Raw outdoor field recording under the voice: {physical_sounds}.")
+        else:
+            audio_lines.append("Raw outdoor field recording under the voice must match only the visible environment.")
+        audio_lines.append("Audio must contain only two things: voice plus raw field recording.")
+        audio_lines.append("No composed music. No soundtrack. No score. No musical bed. Voice plus raw field recording only.")
+    else:
+        audio_lines.append("Audio must be raw outdoor field recording only.")
+        audio_lines.append(f"Physical sounds: {physical_sounds or 'wind, grass movement, insects, birds, water, dust, leaves, distant visible animal movement'}.")
+        audio_lines.append("No composed music. No soundtrack. No score. No musical bed. Raw field recording only.")
+
+    return _join_prompt_parts("\n".join(visual_lines), "\n".join(audio_lines))
+
+
+def buildLtxCleanNegativePrompt(scene: Any, project: Any | None = None) -> str:
+    """Build the two-field LTX 2.3 clean negative prompt sent to Comfy."""
+    voice_mode = _ltx_clean_voice_mode(scene)
+    speech_text = _ltx_clean_scene_value(scene, "speech_text", "speechText", "narrator_text_ru", "narratorTextRu", "narrator_text_en", "narratorTextEn")
+    additions = []
+    if voice_mode == "voiceover":
+        additions.extend(["wrong language"])
+        if re.search(r"[А-Яа-яЁё]", speech_text or ""):
+            additions.append("English speech")
+        additions.extend(["repeated phrase", "extra voices"])
+    else:
+        additions.extend(["narrator", "speech", "human voice"])
+    user_negative = _ltx_clean_scene_value(scene, "negative_prompt", "negativePrompt", "video_negative_prompt", "videoNegativePrompt")
+    return _combine_negative_prompts(LTX_CLEAN_BASE_NEGATIVE_PROMPT, user_negative, ", ".join(additions))
+
+
+def _build_ltx_clean_scene_context(payload: ClipVideoIn, scene_contract: dict[str, Any] | None, *, video_prompt: str, route_kind: str) -> dict[str, Any]:
+    contract = scene_contract if isinstance(scene_contract, dict) else {}
+    return {
+        **contract,
+        "route": route_kind or contract.get("route") or contract.get("video_generation_route") or getattr(payload, "renderMode", ""),
+        "video_prompt": video_prompt,
+        "positive_prompt": str(getattr(payload, "positivePrompt", None) or getattr(payload, "positive_prompt", None) or contract.get("positive_prompt") or contract.get("positivePrompt") or video_prompt or ""),
+        "negative_prompt": str(getattr(payload, "negativePrompt", None) or getattr(payload, "negative_prompt", None) or getattr(payload, "videoNegativePrompt", None) or getattr(payload, "video_negative_prompt", None) or contract.get("negative_prompt") or contract.get("negativePrompt") or ""),
+        "sound_prompt": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or contract.get("sound_prompt") or contract.get("soundPrompt") or ""),
+        "ambience_hint": str(getattr(payload, "ambienceHint", None) or getattr(payload, "ambience_hint", None) or getattr(payload, "ambientSoundPrompt", None) or getattr(payload, "ambient_sound_prompt", None) or contract.get("ambience_hint") or contract.get("ambient_sound_prompt") or ""),
+        "speech_text": str(getattr(payload, "speechText", None) or getattr(payload, "speech_text", None) or contract.get("speech_text") or contract.get("speechText") or ""),
+        "voice_profile": str(getattr(payload, "voiceProfile", None) or getattr(payload, "voice_profile", None) or contract.get("voice_profile") or contract.get("voiceProfile") or ""),
+        "delivery_style": str(getattr(payload, "deliveryStyle", None) or getattr(payload, "delivery_style", None) or contract.get("delivery_style") or contract.get("deliveryStyle") or ""),
+        "voice_mode": str(getattr(payload, "voiceMode", None) or getattr(payload, "voice_mode", None) or contract.get("voice_mode") or contract.get("voiceMode") or ("voiceover" if route_kind == "i2v_text" else "none")),
+        "voice_language": str(getattr(payload, "voiceLanguage", None) or getattr(payload, "voice_language", None) or contract.get("voice_language") or contract.get("voiceLanguage") or ""),
+        "generated_speech_required": bool(contract.get("generated_speech_required") or contract.get("generatedSpeechRequired")),
+    }
+
+
 def _resolve_manual_clip_route_kind(payload: ClipVideoIn, workflow_key: str | None, scene_contract: dict[str, Any] | None = None) -> str:
     contract = scene_contract if isinstance(scene_contract, dict) else {}
     normalized_workflow_key = _normalize_ltx_workflow_key(workflow_key)
@@ -3225,7 +3396,9 @@ def _resolve_manual_clip_route_kind(payload: ClipVideoIn, workflow_key: str | No
         return "first_last_sound" if (normalized_workflow_key == "f_l_sound" or render_mode in {"first_last_sound", "f_l_sound"} or route_hint in {"first_last_sound", "f_l_sound"}) else "first_last"
     if normalized_workflow_key in {"lip_sync", "lip_sync_music"} or render_mode in {"lip_sync", "lip_sync_music", "avatar_lipsync"} or route_hint in {"ia2v", "lip_sync", "lip_sync_music"}:
         return "lip_sync"
-    if render_mode in {"i2v_sound", "image_video_sound", "standard_video_sound"} or route_hint in {"i2v_sound", "video_with_sound"} or _as_boolish(getattr(payload, "send_audio_to_generator", False)) or _as_boolish(getattr(payload, "sendAudioToGenerator", False)):
+    if render_mode in {"i2v_text", "voiceover"} or route_hint in {"i2v_text", "voiceover"}:
+        return "i2v_text"
+    if normalized_workflow_key == "ltx23_i2v_sound_clean" or render_mode in {"i2v_sound", "image_video_sound", "standard_video_sound"} or route_hint in {"i2v_sound", "video_with_sound"} or _as_boolish(getattr(payload, "send_audio_to_generator", False)) or _as_boolish(getattr(payload, "sendAudioToGenerator", False)):
         return "i2v_sound"
     return "i2v"
 
@@ -17999,7 +18172,7 @@ def clip_video(payload: ClipVideoIn):
         continuation_requested = False
         final_workflow_key = explicit_route_from_storyboard
     elif force_two_frame_mode:
-        final_workflow_key = "f_l"
+        final_workflow_key = final_workflow_key if final_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS else "f_l"
     elif continuation_requested:
         final_workflow_key = "continuation"
 
@@ -18314,6 +18487,45 @@ def clip_video(payload: ClipVideoIn):
                 model_key=resolved_model_key,
             )
             prompt_source_label = "legacy_backend_builder"
+        clean_route_kind = _resolve_manual_clip_route_kind(payload, final_workflow_key, scene_contract_for_prompt)
+        if final_workflow_key in LTX_CLEAN_WORKFLOW_KEYS or clean_route_kind in {"i2v_sound", "i2v_text", "first_last_sound"}:
+            clean_scene = _build_ltx_clean_scene_context(
+                payload,
+                scene_contract_for_prompt,
+                video_prompt=scene_video_prompt or effective_prompt,
+                route_kind=clean_route_kind,
+            )
+            explicit_final_positive = str(getattr(payload, "finalPositivePrompt", None) or getattr(payload, "final_positive_prompt", None) or "").strip()
+            explicit_final_negative = str(getattr(payload, "finalNegativePrompt", None) or getattr(payload, "final_negative_prompt", None) or "").strip()
+            effective_prompt = explicit_final_positive or buildLtxCleanPositivePrompt(clean_scene, None)
+            scene_video_negative_prompt = explicit_final_negative or buildLtxCleanNegativePrompt(clean_scene, None)
+            prompt_source_label = "ltx_clean_two_field_prompt_contract"
+            prompt_debug.update({
+                "effectivePromptLength": len(effective_prompt),
+                "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
+                "effectivePromptSource": prompt_source_label,
+                "promptBuilderMode": "ltx_clean_positive_negative_only",
+                "finalPositivePrompt": effective_prompt,
+                "finalNegativePrompt": scene_video_negative_prompt,
+                "finalPositivePromptPreview": _prompt_preview(effective_prompt, 500),
+                "finalNegativePromptPreview": _prompt_preview(scene_video_negative_prompt, 500),
+                "ltxCleanPromptContractApplied": True,
+                "ltxCleanVoiceMode": _ltx_clean_voice_mode(clean_scene),
+            })
+            print(
+                "[LTX CLEAN PROMPT CONTRACT] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "workflowKey": final_workflow_key,
+                        "routeKind": clean_route_kind,
+                        "voiceMode": _ltx_clean_voice_mode(clean_scene),
+                        "finalPositivePromptPreview": _prompt_preview(effective_prompt, 320),
+                        "finalNegativePromptPreview": _prompt_preview(scene_video_negative_prompt, 320),
+                    },
+                    ensure_ascii=False,
+                )
+            )
         if final_workflow_key in {"lip_sync", "lip_sync_music"} and not is_manual_clip_board_request:
             scene_video_negative_prompt = IA2V_MINIMAL_NEGATIVE_PROMPT
         print(
@@ -18960,8 +19172,8 @@ def clip_video(payload: ClipVideoIn):
             "targetDurationSec": round(float(target_duration_sec), 3),
             "generationDurationSec": round(float(generation_duration_sec), 3),
             "providerDurationSec": round(float(source_video_duration_sec or comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or generation_duration_sec), 3),
-            "videoHasAudio": bool(final_workflow_key == "i2v_sound" and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
-            "hasAudio": bool(final_workflow_key == "i2v_sound" and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
+            "videoHasAudio": bool(final_workflow_key in {"i2v_sound", "ltx23_i2v_sound_clean", "first_last_sound_clean"} and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
+            "hasAudio": bool(final_workflow_key in {"i2v_sound", "ltx23_i2v_sound_clean", "first_last_sound_clean"} and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
             "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
             "generatedAudioPolicy": str(getattr(payload, "generatedAudioPolicy", None) or getattr(payload, "generated_audio_policy", None) or ""),
             "generatedAudioGainDb": float(_safe_float(getattr(payload, "generatedAudioGainDb", None)) if _safe_float(getattr(payload, "generatedAudioGainDb", None)) is not None else (_safe_float(getattr(payload, "generated_audio_gain_db", None)) if _safe_float(getattr(payload, "generated_audio_gain_db", None)) is not None else -16.0)),
