@@ -1321,6 +1321,24 @@ def _read_node_input(workflow: dict, node_id: str, input_key: str):
     return inputs.get(input_key)
 
 
+def _find_primitive_value_node_by_title(workflow: dict, title: str) -> str:
+    expected_title = str(title or "").strip().lower()
+    if not expected_title or not isinstance(workflow, dict):
+        return ""
+    for node_id, node in workflow.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "").strip().lower()
+        if class_type != "primitiveint":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or "value" not in inputs:
+            continue
+        if _node_title_lower(node) == expected_title:
+            return str(node_id)
+    return ""
+
+
 # These node ids are intentionally pinned to image-video-silent-directprompt.json.
 FIXED_IMAGE_VIDEO_NODES = {
     "image": ("269", "image"),
@@ -1697,7 +1715,7 @@ def _patch_duration_and_frames(
     requested_duration = float(requested_duration_sec)
     normalized_workflow_key = str(workflow_key or "").strip().lower()
     resolved_fps = int(max(1, int(round(float(fps_hint or _resolve_workflow_fps(workflow))))))
-    frames = max(1, int(math.ceil(requested_duration * float(resolved_fps))))
+    frames = max(1, int(round(requested_duration * float(resolved_fps))))
     duration_int = max(1, int(round(requested_duration)))
     duration_patch_ids: list[str] = []
     fps_patch_ids: list[str] = []
@@ -1705,6 +1723,12 @@ def _patch_duration_and_frames(
     length_patch_ids: list[str] = []
     linked_length_patch_ids: list[str] = []
     expression_patch_ids: list[str] = []
+    workflow_length_before: dict[str, object] = {}
+    workflow_length_after: dict[str, object] = {}
+
+    def _remember_length_value(bucket: dict[str, object], node_id: str, value) -> None:
+        if str(node_id).strip():
+            bucket[str(node_id)] = value
 
     def _is_expression_or_math_class(class_name: str) -> bool:
         normalized = str(class_name or "").strip().lower()
@@ -1740,7 +1764,13 @@ def _patch_duration_and_frames(
             if _patch_primitive_value(str(node_id), fps_value):
                 fps_patch_ids.append(str(node_id))
                 continue
-        if any(hint in title_l for hint in ("duration", "length", "seconds", "sec")):
+        if any(hint in title_l for hint in ("length", "frame")) and "value" in inputs:
+            _remember_length_value(workflow_length_before, str(node_id), inputs.get("value"))
+            if _patch_primitive_value(str(node_id), int(frames)):
+                length_patch_ids.append(str(node_id))
+                _remember_length_value(workflow_length_after, str(node_id), int(frames))
+                continue
+        if any(hint in title_l for hint in ("duration", "seconds", "sec")):
             duration_value = float(requested_duration) if class_type == "primitivefloat" else int(duration_int)
             if _patch_primitive_value(str(node_id), duration_value):
                 duration_patch_ids.append(str(node_id))
@@ -1783,7 +1813,13 @@ def _patch_duration_and_frames(
                         upstream_inputs["value"] = int(resolved_fps)
                         fps_patch_ids.append(upstream_id)
                         chain_patched = True
-                    elif any(hint in upstream_title_l for hint in ("duration", "length", "seconds", "sec")):
+                    elif any(hint in upstream_title_l for hint in ("length", "frame")):
+                        _remember_length_value(workflow_length_before, upstream_id, upstream_inputs.get("value"))
+                        upstream_inputs["value"] = int(frames)
+                        length_patch_ids.append(upstream_id)
+                        _remember_length_value(workflow_length_after, upstream_id, int(frames))
+                        chain_patched = True
+                    elif any(hint in upstream_title_l for hint in ("duration", "seconds", "sec")):
                         upstream_inputs["value"] = float(requested_duration) if upstream_class == "primitivefloat" else int(duration_int)
                         duration_patch_ids.append(upstream_id)
                         chain_patched = True
@@ -1842,9 +1878,11 @@ def _patch_duration_and_frames(
                 continue
             if not _is_video_latent_branch_node(node):
                 continue
+            _remember_length_value(workflow_length_before, str(node_id), length_value)
             inputs["length"] = int(frames)
             length_patch_ids.append(str(node_id))
             linked_length_patch_ids.append(str(node_id))
+            _remember_length_value(workflow_length_after, str(node_id), int(frames))
 
     # Priority D: keep legacy reserve behavior.
     _patch_audio_frames(workflow, frames)
@@ -1865,6 +1903,8 @@ def _patch_duration_and_frames(
         "patched_length_node_ids": list(dict.fromkeys(length_patch_ids)),
         "patched_linked_length_node_ids": list(dict.fromkeys(linked_length_patch_ids)),
         "patched_expression_node_ids": list(dict.fromkeys(expression_patch_ids)),
+        "workflow_length_before": workflow_length_before,
+        "workflow_length_after": workflow_length_after,
     }
 
 
@@ -2814,7 +2854,17 @@ def _patch_workflow_inputs(
     if normalized_workflow_key == "lip_sync" and not discovered_fps_id:
         discovered_fps_id = LIPSYNC_PRIMARY_NODE_IDS["fps"]
     fps = _resolve_workflow_fps(wf, preferred_fps_node_id=discovered_fps_id)
-    frames = max(1, int(math.ceil(float(requested_duration_sec) * float(fps))))
+    frames = max(1, int(round(float(requested_duration_sec) * float(fps))))
+    workflow_length_before_inputs: dict[str, object] = {}
+    fixed_length_node_id, fixed_length_input_key = FIXED_IMAGE_VIDEO_NODES["length"]
+    fixed_length_value = _read_node_input(wf, fixed_length_node_id, fixed_length_input_key)
+    if fixed_length_value is not None:
+        workflow_length_before_inputs[str(fixed_length_node_id)] = fixed_length_value
+    else:
+        dynamic_length_node_id = _find_primitive_value_node_by_title(wf, "Length")
+        dynamic_length_value = _read_node_input(wf, dynamic_length_node_id, "value") if dynamic_length_node_id else None
+        if dynamic_length_value is not None:
+            workflow_length_before_inputs[str(dynamic_length_node_id)] = dynamic_length_value
 
     patch_values = []
     f_l_positive_prompt_node_id = ""
@@ -2934,8 +2984,25 @@ def _patch_workflow_inputs(
             (*FIXED_IMAGE_VIDEO_NODES["height"], int(height)),
             (*FIXED_IMAGE_VIDEO_NODES["length"], int(frames)),
         ])
-    for node_id, key, value in patch_values:
+    for idx, (node_id, key, value) in enumerate(list(patch_values)):
         ok, err = _set_node_input(wf, node_id, key, value)
+        if not ok and normalized_workflow_key == "ltx23_i2v_sound_clean" and str(node_id) == FIXED_IMAGE_VIDEO_NODES["length"][0] and str(key) == "value":
+            fallback_length_node_id = _find_primitive_value_node_by_title(wf, "Length")
+            if fallback_length_node_id:
+                ok, err = _set_node_input(wf, fallback_length_node_id, "value", value)
+                if ok:
+                    patch_values[idx] = (fallback_length_node_id, "value", value)
+                    node_id, key = fallback_length_node_id, "value"
+                    logger.warning(
+                        "[COMFY LTX CLEAN LENGTH FALLBACK] %s",
+                        {
+                            "workflowKey": normalized_workflow_key,
+                            "workflowPath": workflow_path,
+                            "fixedNodeId": FIXED_IMAGE_VIDEO_NODES["length"][0],
+                            "fallbackNodeId": fallback_length_node_id,
+                            "value": int(value),
+                        },
+                    )
         if not ok:
             return None, err, None, None, {}
         if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"} and str(node_id) == FIXED_IMAGE_VIDEO_NODES["prompt"][0] and str(key) == FIXED_IMAGE_VIDEO_NODES["prompt"][1]:
@@ -2955,6 +3022,7 @@ def _patch_workflow_inputs(
     )
     workflow_static_negative_prompt = ""
     negative_prompt_node_patched = False
+    negative_prompt_patched_node_ids: list[str] = []
     negative_prompt_source = "missing"
     effective_negative_prompt = ""
     if resolved_negative_prompt_node_id:
@@ -2979,6 +3047,7 @@ def _patch_workflow_inputs(
                         if not ok:
                             return None, err, None, None, {}
                         negative_prompt_node_patched = True
+                        negative_prompt_patched_node_ids.append(str(resolved_negative_prompt_node_id))
                         negative_prompt_source = "scene"
                         if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"}:
                             logger.info(
@@ -3010,7 +3079,6 @@ def _patch_workflow_inputs(
     )
     fps = int(timing_patch_debug.get("fps") or fps)
     frames = int(timing_patch_debug.get("frames") or frames)
-    print("[COMFY LENGTH APPLY]", timing_patch_debug)
 
     if seed is not None:
         seed_targets: list[tuple[str, str]] = []
@@ -3036,6 +3104,24 @@ def _patch_workflow_inputs(
                     logger.info("[COMFY F_L OPTIONAL FIXED NODE SKIP] %s", optional_fallback_misses[-1])
                     continue
                 return None, err, None, None, {}
+
+
+    patched_length_node_ids_for_debug = [str(item) for item in (timing_patch_debug.get("patched_length_node_ids") or []) if str(item).strip()]
+    patched_fps_node_ids_for_debug = [str(item) for item in (timing_patch_debug.get("patched_fps_node_ids") or []) if str(item).strip()]
+    patched_width_node_ids_for_debug = [str(node_id) for node_id, key, _ in patch_values if str(key) == "value" and str(node_id) == FIXED_IMAGE_VIDEO_NODES["width"][0]]
+    patched_height_node_ids_for_debug = [str(node_id) for node_id, key, _ in patch_values if str(key) == "value" and str(node_id) == FIXED_IMAGE_VIDEO_NODES["height"][0]]
+    resolved_image_node_id_for_debug = str(patched_node_by_key.get("image") or (first_last_discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0])
+    resolved_prompt_node_id_for_debug = str(f_l_positive_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]))
+    resolved_negative_prompt_node_id_for_debug = str(resolved_negative_prompt_node_id or "")
+    resolved_width_node_id_for_debug = str((patched_width_node_ids_for_debug or [discovery.get("width_node_id") or first_last_discovery.get("width_node_id") or FIXED_IMAGE_VIDEO_NODES["width"][0]])[0])
+    resolved_height_node_id_for_debug = str((patched_height_node_ids_for_debug or [discovery.get("height_node_id") or first_last_discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0]])[0])
+    resolved_length_node_id_for_debug = str((patched_length_node_ids_for_debug or [discovery.get("length_node_id") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0]])[0])
+    resolved_fps_node_id_for_debug = str((patched_fps_node_ids_for_debug or [discovery.get("fps_node_id") or first_last_discovery.get("fps_node_id") or FIXED_IMAGE_VIDEO_NODES["fps"][0]])[0])
+    workflow_length_before_debug = dict(workflow_length_before_inputs)
+    if isinstance(timing_patch_debug.get("workflow_length_before"), dict):
+        workflow_length_before_debug.update({k: v for k, v in timing_patch_debug.get("workflow_length_before", {}).items() if k not in workflow_length_before_debug})
+    workflow_length_after_debug = timing_patch_debug.get("workflow_length_after") if isinstance(timing_patch_debug.get("workflow_length_after"), dict) else {}
+    length_node_value_sent = workflow_length_after_debug.get(resolved_length_node_id_for_debug, _read_node_input(wf, resolved_length_node_id_for_debug, "value"))
 
     discovery_debug = {
         "workflow_key": normalized_workflow_key,
@@ -3069,19 +3155,19 @@ def _patch_workflow_inputs(
         "optionalFallbackMisses": optional_fallback_misses,
         "saveVideoFilenamePrefix": str(discovery.get("save_video_filename_prefix") or ""),
         "usedLegacyFallbackIds": bool(used_legacy_fallback_ids),
-        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else (f_l_positive_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]))),
+        "patchedPromptNodeId": str((patched_node_by_key.get("value") or discovery.get("prompt_text_node_id") or LIPSYNC_PRIMARY_NODE_IDS["prompt"]) if normalized_workflow_key == "lip_sync" else resolved_prompt_node_id_for_debug),
         "patchedPositivePromptNodeId": str(f_l_positive_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else ""),
-        "patchedNegativePromptNodeId": str(f_l_negative_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else ""),
+        "patchedNegativePromptNodeId": str(resolved_negative_prompt_node_id_for_debug),
         "positivePromptNodePatched": bool(f_l_positive_prompt_node_id) if normalized_workflow_key in F_L_WORKFLOW_KEYS else bool(patched_node_by_key.get("value")),
         "negativePromptNodePatched": bool(negative_prompt_node_patched),
         "promptPatchInputKey": str(f_l_positive_prompt_input_key if normalized_workflow_key in F_L_WORKFLOW_KEYS else "value"),
         "negativePromptPatchInputKey": str(f_l_negative_prompt_input_key if normalized_workflow_key in F_L_WORKFLOW_KEYS else ""),
-        "patchedImageNodeId": str((patched_node_by_key.get("image") or (discovery.get("image_node_ids") or [LIPSYNC_PRIMARY_NODE_IDS["image"]])[0]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("image") or (first_last_discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0])),
-        "patchedDurationNodeId": str((discovery.get("duration_node_id") or LIPSYNC_PRIMARY_NODE_IDS["duration"]) if normalized_workflow_key == "lip_sync" else (patched_node_by_key.get("value") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
-        "patchedFpsNodeId": str((discovery.get("fps_node_id") or LIPSYNC_PRIMARY_NODE_IDS["fps"]) if normalized_workflow_key == "lip_sync" else (first_last_discovery.get("fps_node_id") or FIXED_IMAGE_VIDEO_NODES["fps"][0])),
-        "patchedWidthNodeId": str((discovery.get("width_node_id") or first_last_discovery.get("width_node_id") or FIXED_IMAGE_VIDEO_NODES["width"][0])),
-        "patchedHeightNodeId": str((discovery.get("height_node_id") or first_last_discovery.get("height_node_id") or FIXED_IMAGE_VIDEO_NODES["height"][0])),
-        "patchedLengthNodeId": str((discovery.get("length_node_id") or first_last_discovery.get("length_node_id") or FIXED_IMAGE_VIDEO_NODES["length"][0])),
+        "patchedImageNodeId": str((patched_node_by_key.get("image") or (discovery.get("image_node_ids") or [LIPSYNC_PRIMARY_NODE_IDS["image"]])[0]) if normalized_workflow_key == "lip_sync" else resolved_image_node_id_for_debug),
+        "patchedDurationNodeId": str((discovery.get("duration_node_id") or LIPSYNC_PRIMARY_NODE_IDS["duration"]) if normalized_workflow_key == "lip_sync" else resolved_length_node_id_for_debug),
+        "patchedFpsNodeId": str((discovery.get("fps_node_id") or LIPSYNC_PRIMARY_NODE_IDS["fps"]) if normalized_workflow_key == "lip_sync" else resolved_fps_node_id_for_debug),
+        "patchedWidthNodeId": str(resolved_width_node_id_for_debug),
+        "patchedHeightNodeId": str(resolved_height_node_id_for_debug),
+        "patchedLengthNodeId": str(resolved_length_node_id_for_debug),
         "resolvedNegativePromptNodeId": str(resolved_negative_prompt_node_id or ""),
         "negativePromptSource": negative_prompt_source,
         "negativePromptPreview": _preview_value(effective_negative_prompt, limit=320),
@@ -3098,12 +3184,42 @@ def _patch_workflow_inputs(
         "patchedLengthNodeIds": timing_patch_debug.get("patched_length_node_ids") or [],
         "patchedLinkedLengthNodeIds": timing_patch_debug.get("patched_linked_length_node_ids") or [],
         "patchedExpressionNodeIds": timing_patch_debug.get("patched_expression_node_ids") or [],
+        "expectedFrames": int(frames),
+        "patchedFrameRateNodeIds": patched_fps_node_ids_for_debug,
+        "patchedWidthHeightNodeIds": list(dict.fromkeys([*patched_width_node_ids_for_debug, *patched_height_node_ids_for_debug])),
+        "workflowLengthBefore": workflow_length_before_debug,
+        "workflowLengthAfter": timing_patch_debug.get("workflow_length_after") or {},
+        "lengthNodeValueSent": length_node_value_sent,
+        "patchedNegativePromptNodeIds": list(dict.fromkeys(negative_prompt_patched_node_ids)),
+        "widthNodeValue": _read_node_input(wf, resolved_width_node_id_for_debug, "value"),
+        "heightNodeValue": _read_node_input(wf, resolved_height_node_id_for_debug, "value"),
+        "fpsNodeValue": _read_node_input(wf, resolved_fps_node_id_for_debug, "value"),
         "requestedDurationSec": float(timing_patch_debug.get("requestedDurationSec") or requested_duration_sec),
         "providerDurationSec": float(timing_patch_debug.get("providerDurationSec") or requested_duration_sec),
         "fps": int(timing_patch_debug.get("fps") or fps),
         "frames": int(timing_patch_debug.get("frames") or frames),
     }
     logger.info("[COMFY WORKFLOW DISCOVERY] %s", discovery_debug)
+    logger.info(
+        "[COMFY LTX CLEAN WORKFLOW SEND DEBUG] %s",
+        {
+            "normalized_workflow_key": normalized_workflow_key,
+            "target_duration_sec": float(requested_duration_sec),
+            "fps": int(fps),
+            "calculated_frames": int(frames),
+            "width": int(width),
+            "height": int(height),
+            "image_node_id": discovery_debug.get("patchedImageNodeId"),
+            "prompt_node_id": discovery_debug.get("patchedPromptNodeId"),
+            "negative_prompt_node_id": discovery_debug.get("resolvedNegativePromptNodeId"),
+            "width_node_id": discovery_debug.get("patchedWidthNodeId"),
+            "width_node_value": discovery_debug.get("widthNodeValue"),
+            "height_node_id": discovery_debug.get("patchedHeightNodeId"),
+            "height_node_value": discovery_debug.get("heightNodeValue"),
+            "length_node_id": discovery_debug.get("patchedLengthNodeId"),
+            "length_node_value": discovery_debug.get("lengthNodeValueSent"),
+        },
+    )
     logger.info(
         "[COMFY NEGATIVE PROMPT TRACE] %s",
         {
@@ -4418,6 +4534,14 @@ def run_comfy_image_to_video(
             "patched_length_node_ids": (workflow_discovery_debug or {}).get("patchedLengthNodeIds") or [],
             "patched_linked_length_node_ids": (workflow_discovery_debug or {}).get("patchedLinkedLengthNodeIds") or [],
             "patched_expression_node_ids": (workflow_discovery_debug or {}).get("patchedExpressionNodeIds") or [],
+            "expectedFrames": (workflow_discovery_debug or {}).get("expectedFrames"),
+            "patchedLengthNodeIds": (workflow_discovery_debug or {}).get("patchedLengthNodeIds") or [],
+            "patchedFrameRateNodeIds": (workflow_discovery_debug or {}).get("patchedFrameRateNodeIds") or (workflow_discovery_debug or {}).get("patchedFpsNodeIds") or [],
+            "patchedWidthHeightNodeIds": (workflow_discovery_debug or {}).get("patchedWidthHeightNodeIds") or [],
+            "workflowLengthBefore": (workflow_discovery_debug or {}).get("workflowLengthBefore") or {},
+            "workflowLengthAfter": (workflow_discovery_debug or {}).get("workflowLengthAfter") or {},
+            "lengthNodeValueSent": (workflow_discovery_debug or {}).get("lengthNodeValueSent"),
+            "patchedNegativePromptNodeIds": (workflow_discovery_debug or {}).get("patchedNegativePromptNodeIds") or [],
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,
             "sceneDurationSec": scene_duration_sec,
