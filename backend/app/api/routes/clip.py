@@ -622,8 +622,32 @@ def _clip_video_payload_signature(payload: ClipVideoIn, *, resolved_workflow_key
         "audioSliceUrl": str(payload.audioSliceUrl or ""),
         "videoPrompt": str(payload.videoPrompt or getattr(payload, "video_prompt", "") or ""),
         "videoNegativePrompt": str(payload.videoNegativePrompt or payload.video_negative_prompt or ""),
-        "soundPrompt": str(payload.soundPrompt or payload.sound_prompt or ""),
-        "negativeAudioPrompt": str(payload.negativeAudioPrompt or payload.negative_audio_prompt or ""),
+        "finalPositivePrompt": str(getattr(payload, "finalPositivePrompt", None) or ""),
+        "final_positive_prompt": str(getattr(payload, "final_positive_prompt", None) or ""),
+        "finalNegativePrompt": str(getattr(payload, "finalNegativePrompt", None) or ""),
+        "final_negative_prompt": str(getattr(payload, "final_negative_prompt", None) or ""),
+        "positivePrompt": str(getattr(payload, "positivePrompt", None) or ""),
+        "positive_prompt": str(getattr(payload, "positive_prompt", None) or ""),
+        "negativePrompt": str(getattr(payload, "negativePrompt", None) or ""),
+        "negative_prompt": str(getattr(payload, "negative_prompt", None) or ""),
+        "soundPrompt": str(getattr(payload, "soundPrompt", None) or ""),
+        "sound_prompt": str(getattr(payload, "sound_prompt", None) or ""),
+        "negativeAudioPrompt": str(getattr(payload, "negativeAudioPrompt", None) or ""),
+        "negative_audio_prompt": str(getattr(payload, "negative_audio_prompt", None) or ""),
+        "speechText": str(getattr(payload, "speechText", None) or ""),
+        "speech_text": str(getattr(payload, "speech_text", None) or ""),
+        "voiceMode": str(getattr(payload, "voiceMode", None) or ""),
+        "voice_mode": str(getattr(payload, "voice_mode", None) or ""),
+        "voiceLanguage": str(getattr(payload, "voiceLanguage", None) or ""),
+        "voice_language": str(getattr(payload, "voice_language", None) or ""),
+        "voiceProfile": str(getattr(payload, "voiceProfile", None) or ""),
+        "voice_profile": str(getattr(payload, "voice_profile", None) or ""),
+        "deliveryStyle": str(getattr(payload, "deliveryStyle", None) or ""),
+        "delivery_style": str(getattr(payload, "delivery_style", None) or ""),
+        "ambienceHint": str(getattr(payload, "ambienceHint", None) or ""),
+        "ambience_hint": str(getattr(payload, "ambience_hint", None) or ""),
+        "ambientSoundPrompt": str(getattr(payload, "ambientSoundPrompt", None) or ""),
+        "ambient_sound_prompt": str(getattr(payload, "ambient_sound_prompt", None) or ""),
         "requestedDurationSec": float(_safe_positive_float(payload.requestedDurationSec) or 0),
         "targetDurationSec": float(_safe_positive_float(payload.targetDurationSec) or 0),
         "keepGeneratedAudio": bool(payload.keepGeneratedAudio or payload.keep_generated_audio),
@@ -3304,7 +3328,7 @@ def _detect_speech_language(scene: Any, speech_text: str) -> str:
 
 def buildLtxCleanPositivePrompt(scene: Any, project: Any | None = None) -> str:
     """Build the two-field LTX 2.3 clean positive prompt sent to Comfy."""
-    video_prompt = _ltx_clean_scene_value(scene, "positive_prompt", "positivePrompt", "video_prompt", "videoPrompt", "i2v_prompt_en")
+    video_prompt = _ltx_clean_scene_value(scene, "video_prompt", "videoPrompt", "i2v_prompt_en")
     sound_prompt = _ltx_clean_scene_value(scene, "sound_prompt", "soundPrompt")
     ambience_hint = _ltx_clean_scene_value(scene, "ambience_hint", "ambienceHint", "ambient_sound_prompt", "ambientSoundPrompt")
     physical_sounds = _combine_negative_prompts(sound_prompt, ambience_hint).replace(",", ";")
@@ -3366,7 +3390,7 @@ def _build_ltx_clean_scene_context(payload: ClipVideoIn, scene_contract: dict[st
         **contract,
         "route": route_kind or contract.get("route") or contract.get("video_generation_route") or getattr(payload, "renderMode", ""),
         "video_prompt": video_prompt,
-        "positive_prompt": str(getattr(payload, "positivePrompt", None) or getattr(payload, "positive_prompt", None) or contract.get("positive_prompt") or contract.get("positivePrompt") or video_prompt or ""),
+        "positive_prompt": str(getattr(payload, "positivePrompt", None) or getattr(payload, "positive_prompt", None) or contract.get("positive_prompt") or contract.get("positivePrompt") or ""),
         "negative_prompt": str(getattr(payload, "negativePrompt", None) or getattr(payload, "negative_prompt", None) or getattr(payload, "videoNegativePrompt", None) or getattr(payload, "video_negative_prompt", None) or contract.get("negative_prompt") or contract.get("negativePrompt") or ""),
         "sound_prompt": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or contract.get("sound_prompt") or contract.get("soundPrompt") or ""),
         "ambience_hint": str(getattr(payload, "ambienceHint", None) or getattr(payload, "ambience_hint", None) or getattr(payload, "ambientSoundPrompt", None) or getattr(payload, "ambient_sound_prompt", None) or contract.get("ambience_hint") or contract.get("ambient_sound_prompt") or ""),

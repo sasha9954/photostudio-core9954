@@ -21,7 +21,7 @@
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Загрузить изображение"
+      "title": "Last image / end frame"
     }
   },
   "138": {
@@ -30,7 +30,7 @@
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Загрузить изображение"
+      "title": "First image / start frame"
     }
   },
   "139:99": {
@@ -73,7 +73,7 @@
     },
     "class_type": "LTXVEmptyLatentAudio",
     "_meta": {
-      "title": "LTXV Пустое латентное аудио"
+      "title": "Clean audio latent settings"
     }
   },
   "139:104": {
@@ -409,7 +409,7 @@
     },
     "class_type": "CreateVideo",
     "_meta": {
-      "title": "Создать видео"
+      "title": "Create video with clean generated audio"
     }
   },
   "139:105": {
@@ -445,7 +445,7 @@
     },
     "class_type": "LTXVAudioVAEDecode",
     "_meta": {
-      "title": "LTXV Декодирование аудио VAE"
+      "title": "Clean audio VAE decode"
     }
   },
   "139:121": {
@@ -462,7 +462,7 @@
   },
   "139:128": {
     "inputs": {
-      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Create one continuous realistic transition from the start frame to the end frame. Follow only the runtime user prompt for subject, action, environment, camera movement, visual style, and sound. If this workflow generates audio from text, create only sound that directly matches the visible action and the runtime prompt. No background music, no unrelated ambience, no voice, no singing unless explicitly requested. Do not introduce anything unrelated to the runtime prompt or the provided frames. Keep the same visual world between both frames. Stable cinematic motion, physically natural transition, no sudden jumps, no surreal deformation.",
+      "text": "Visual block:\nUse the uploaded first image as the exact first frame and visual anchor.\nUse the uploaded last image as the exact final frame target.\nPreserve the same scene, framing, horizon, location, and visible objects between the two images.\nUse one continuous physically plausible transition and one camera movement only.\nAnimate only visible elements.\nScene motion: __RUNTIME_POSITIVE_PROMPT__\n\nAudio block:\nAudio must be raw outdoor field recording only unless the runtime prompt explicitly requests one voice.\nPhysical sounds must match only the visible environment and the runtime sound prompt.\nNo composed music. No soundtrack. No score. No musical bed. Raw field recording only.",
       "clip": [
         "139:103",
         0
@@ -470,7 +470,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Кодирование текста CLIP (Запрос)"
+      "title": "Positive Prompt"
     }
   },
   "139:127": {
@@ -544,7 +544,7 @@
   },
   "139:112": {
     "inputs": {
-      "text": "unrelated scene, unrelated environment, unrelated subject, unrelated object, random background, background morphing, subject replacement, object replacement, identity drift, mismatched start frame, mismatched end frame, jump cut, teleportation, sudden scene change, flicker, ghosting, double exposure, unstable geometry, surreal deformation, broken anatomy, extra limbs, duplicated subject, bad hands, distorted face, low quality, blurry, cartoon, CGI, text on screen, subtitles, captions, logo, watermark, letters, random signage",
+      "text": "music, background music, soundtrack, score, underscore, cinematic underscore, emotional underscore, musical bed, ambient music bed, cinematic bed, drone music, synth pad, strings, orchestral pad, tonal pad, melody, instruments, rhythm, beat, drums, singing, choir, vocals, extra voices, repeated phrase, long narration, echo, heavy reverb, robotic voice, cartoon voice, distorted voice, trailer boom, horror sound design, artificial impact sound, sudden scene change, location drift, new landscape, new animals appearing, hard zoom, orbit camera, spin camera, chaotic shake, fast drone movement, text overlay, HUD, UI elements, CGI look, cartoon look, warped grass, warped trees, warped wildlife, distorted animals, extra limbs, flickering sky, distorted waterline, unrelated scene, unrelated environment, unrelated subject, unrelated object, random background, background morphing, subject replacement, object replacement, identity drift, mismatched start frame, mismatched end frame, jump cut, teleportation, flicker, ghosting, double exposure, unstable geometry, surreal deformation, broken anatomy, extra limbs, duplicated subject, bad hands, distorted face, low quality, blurry, captions, logo, watermark, letters, random signage",
       "clip": [
         "139:103",
         0
@@ -552,7 +552,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Кодирование текста CLIP (Запрос)"
+      "title": "Negative Prompt"
     }
   }
 }
