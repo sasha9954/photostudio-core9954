@@ -33,6 +33,91 @@ const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
+
+function normalizeProjectAspectFormat(format) {
+  const value = String(format || "").trim();
+  return ["9:16", "16:9", "1:1"].includes(value) ? value : "";
+}
+
+function resolveProjectAspectFormat(project = {}, scene = {}) {
+  return normalizeProjectAspectFormat(project?.format)
+    || normalizeProjectAspectFormat(project?.aspect_ratio)
+    || normalizeProjectAspectFormat(scene?.format)
+    || normalizeProjectAspectFormat(scene?.aspect_ratio)
+    || "9:16";
+}
+
+function getAspectRatioNumber(format) {
+  const safeFormat = normalizeProjectAspectFormat(format);
+  if (safeFormat === "9:16") return 9 / 16;
+  if (safeFormat === "16:9") return 16 / 9;
+  if (safeFormat === "1:1") return 1;
+  return null;
+}
+
+function getImageAspectRatioLabel(width, height) {
+  const safeWidth = Number(width || 0);
+  const safeHeight = Number(height || 0);
+  if (!safeWidth || !safeHeight) return "unknown";
+  const ratio = safeWidth / safeHeight;
+  if (Math.abs(ratio - 9 / 16) < 0.12) return "9:16";
+  if (Math.abs(ratio - 16 / 9) < 0.18) return "16:9";
+  if (Math.abs(ratio - 1) < 0.12) return "1:1";
+  return `${safeWidth}:${safeHeight}`;
+}
+
+function isImageAspectMismatch(width, height, expectedFormat) {
+  const expected = getAspectRatioNumber(expectedFormat);
+  if (!expected || !width || !height) return false;
+  const actual = Number(width) / Number(height);
+  const tolerance = 0.12;
+  return Math.abs(actual - expected) / expected > tolerance;
+}
+
+function getStoredImageAspectLabel(scene = {}) {
+  const storedLabel = String(scene?.image_aspect_label || "").trim();
+  if (storedLabel) return storedLabel;
+  if (scene?.image_width && scene?.image_height) return getImageAspectRatioLabel(scene.image_width, scene.image_height);
+  return "unknown";
+}
+
+function getSceneImageAspectMeta(scene = {}) {
+  const width = Number(scene?.image_width || 0);
+  const height = Number(scene?.image_height || 0);
+  const label = getStoredImageAspectLabel(scene);
+  const ratio = Number(scene?.image_aspect_ratio || (width && height ? width / height : 0));
+  return { width, height, label, ratio: Number.isFinite(ratio) ? ratio : 0 };
+}
+
+function isSceneImageAspectMismatch(scene = {}, expectedFormat) {
+  const meta = getSceneImageAspectMeta(scene);
+  if (meta.width && meta.height) return isImageAspectMismatch(meta.width, meta.height, expectedFormat);
+  const expected = getAspectRatioNumber(expectedFormat);
+  if (!expected || !meta.ratio) return false;
+  const tolerance = 0.12;
+  return Math.abs(meta.ratio - expected) / expected > tolerance;
+}
+
+function readImageFileDimensions(file) {
+  return new Promise((resolve) => {
+    if (!file || typeof Image === "undefined" || typeof URL === "undefined") {
+      resolve({ width: 0, height: 0, objectUrl: "" });
+      return;
+    }
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      resolve({
+        width: Number(image.naturalWidth || image.width || 0),
+        height: Number(image.naturalHeight || image.height || 0),
+        objectUrl,
+      });
+    };
+    image.onerror = () => resolve({ width: 0, height: 0, objectUrl });
+    image.src = objectUrl;
+  });
+}
+
 function projectBelongsToSource(project = {}, sourceNodeId = "") {
   const source = String(sourceNodeId || "").trim();
   if (!source) return true;
@@ -525,6 +610,12 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
     narrator_voice_profile_en: String(scene.narrator_voice_profile_en || ""),
     negative_voice_traits: String(scene.negative_voice_traits || ""),
     broll_hint_ru: String(scene.broll_hint_ru || ""),
+    format: normalizeProjectAspectFormat(scene.format || scene.aspect_ratio),
+    aspect_ratio: normalizeProjectAspectFormat(scene.aspect_ratio || scene.format),
+    image_width: Number(scene.image_width || 0),
+    image_height: Number(scene.image_height || 0),
+    image_aspect_ratio: Number(scene.image_aspect_ratio || 0),
+    image_aspect_label: String(scene.image_aspect_label || ""),
     image_url: String(scene.image_url || scene.start_image_url || ""),
     start_image_url: String(scene.start_image_url || scene.image_url || ""),
     end_image_url: String(scene.end_image_url || ""),
@@ -656,6 +747,7 @@ export default function ManualClipDirectorBoardEditor({
   const didWarnMissingSourceNodeIdRef = useRef(false);
   const projectRef = useRef(null);
   const selectedSceneIdRef = useRef("");
+  const aspectWarningResolverRef = useRef(null);
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
@@ -666,6 +758,7 @@ export default function ManualClipDirectorBoardEditor({
   const [playbackMode, setPlaybackMode] = useState("");
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [playbackRange, setPlaybackRange] = useState({ startSec: 0, endSec: null });
+  const [uploadAspectWarning, setUploadAspectWarning] = useState(null);
 
   const getProjectOwnerNodeId = (candidateProject = {}) => String(
     sourceNodeIdFromRoute
@@ -768,12 +861,22 @@ export default function ManualClipDirectorBoardEditor({
     }
     try {
       const parsed = unwrapManualProjectBackupJson(parsedProject);
+      const projectFormat = resolveProjectAspectFormat(parsed);
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
-      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
+      const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => {
+        const normalizedScene = normalizeScene(scene, idx, storyBlockLookup);
+        return {
+          ...normalizedScene,
+          format: normalizeProjectAspectFormat(normalizedScene.format) || projectFormat,
+          aspect_ratio: normalizeProjectAspectFormat(normalizedScene.aspect_ratio) || normalizeProjectAspectFormat(normalizedScene.format) || projectFormat,
+        };
+      }) : [];
       const selectedSceneIdForHydrate = String(parsed?.selectedSceneId || scenes[0]?.scene_id || "");
       const hydratedProject = normalizeDirectorProjectOwner({
         ...parsed,
+        format: projectFormat,
+        aspect_ratio: normalizeProjectAspectFormat(parsed?.aspect_ratio) || projectFormat,
         story_blocks: storyBlocks,
         scenes,
         selectedSceneId: selectedSceneIdForHydrate,
@@ -839,8 +942,11 @@ export default function ManualClipDirectorBoardEditor({
   }, [selectedSceneId]);
 
   const persistProject = (nextProject) => {
+    const nextFormat = resolveProjectAspectFormat(nextProject || {}, (nextProject || {})?.scenes?.[0] || {});
     const safeProject = normalizeDirectorProjectOwner({
       ...(nextProject || {}),
+      format: nextFormat,
+      aspect_ratio: nextFormat,
       selectedSceneId: String(nextProject?.selectedSceneId || selectedSceneIdRef.current || ""),
       updatedAt: Date.now(),
     });
@@ -1461,10 +1567,70 @@ export default function ManualClipDirectorBoardEditor({
     });
   };
 
+  const requestUploadAspectDecision = (warning) => new Promise((resolve) => {
+    aspectWarningResolverRef.current = resolve;
+    setUploadAspectWarning(warning);
+  });
+
+  const resolveUploadAspectDecision = (decision) => {
+    const resolver = aspectWarningResolverRef.current;
+    aspectWarningResolverRef.current = null;
+    setUploadAspectWarning(null);
+    if (typeof resolver === "function") resolver(decision);
+  };
+
+  const applyProjectAspectFormat = (nextFormat, sceneId = "") => {
+    const safeFormat = normalizeProjectAspectFormat(nextFormat);
+    if (!safeFormat) return;
+    setProject((currentProject) => {
+      const baseProject = currentProject || projectRef.current || project || {};
+      const nextProject = {
+        ...baseProject,
+        format: safeFormat,
+        aspect_ratio: safeFormat,
+        scenes: Array.isArray(baseProject.scenes)
+          ? baseProject.scenes.map((scene) => (String(scene?.scene_id || "") === String(sceneId || "")
+            ? { ...scene, format: safeFormat, aspect_ratio: safeFormat }
+            : scene))
+          : [],
+        selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId || "",
+        updatedAt: Date.now(),
+        lastPersistReason: "change_project_format_from_image_warning",
+      };
+      projectRef.current = nextProject;
+      if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
+        persistAndBroadcastDirectorProject(nextProject, { reason: "change_project_format_from_image_warning" });
+      }
+      return nextProject;
+    });
+  };
+
   const onUploadImage = async (sceneId, file, slot = "main") => {
     if (!file) return;
-    const previewUrl = URL.createObjectURL(file);
-    const isStartSlot = slot === "start";
+    const selectedUploadScene = scenes.find((scene) => scene.scene_id === sceneId) || {};
+    const imageMeta = await readImageFileDimensions(file);
+    const previewUrl = imageMeta.objectUrl || URL.createObjectURL(file);
+    const imageAspectLabel = getImageAspectRatioLabel(imageMeta.width, imageMeta.height);
+    const expectedFormat = resolveProjectAspectFormat(projectRef.current || project, selectedUploadScene);
+    const mismatch = isImageAspectMismatch(imageMeta.width, imageMeta.height, expectedFormat);
+
+    if (mismatch) {
+      const decision = await requestUploadAspectDecision({
+        sceneId,
+        expectedFormat,
+        actualFormatLabel: imageAspectLabel,
+        width: imageMeta.width,
+        height: imageMeta.height,
+      });
+      if (decision === "cancel") {
+        try { URL.revokeObjectURL(previewUrl); } catch {}
+        return;
+      }
+      if (decision === "switch_project") {
+        applyProjectAspectFormat(imageAspectLabel, sceneId);
+      }
+    }
+
     const isEndSlot = slot === "end";
 
     updateScene(sceneId, {
@@ -1477,8 +1643,15 @@ export default function ManualClipDirectorBoardEditor({
       const imageUrl = await uploadManualSceneImage(file);
 
       updateScene(sceneId, (currentScene = {}) => {
+        const aspectFields = {
+          image_width: Number(imageMeta.width || 0),
+          image_height: Number(imageMeta.height || 0),
+          image_aspect_ratio: imageMeta.width && imageMeta.height ? Number((imageMeta.width / imageMeta.height).toFixed(6)) : 0,
+          image_aspect_label: imageAspectLabel,
+        };
         const nextScene = {
           ...currentScene,
+          ...aspectFields,
           ...(isEndSlot
             ? { end_image_url: imageUrl, end_image_preview_url: previewUrl }
             : { image_url: imageUrl, start_image_url: imageUrl, image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
@@ -1487,6 +1660,7 @@ export default function ManualClipDirectorBoardEditor({
           ...(isEndSlot
             ? { end_image_url: imageUrl, end_image_preview_url: previewUrl }
             : { image_url: imageUrl, start_image_url: imageUrl, image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
+          ...aspectFields,
           image_upload_status: "done",
           image_upload_error: "",
           status: resolveManualSceneStatus(nextScene),
@@ -1705,6 +1879,12 @@ export default function ManualClipDirectorBoardEditor({
       return;
     }
 
+    const expectedFormat = resolveProjectAspectFormat(projectRef.current || project, scene);
+    if (isSceneImageAspectMismatch(scene, expectedFormat)) {
+      const confirmed = window.confirm("Фото сцены не совпадает с форматом проекта. Продолжить?");
+      if (!confirmed) return;
+    }
+
     if (runningKey) videoStartInFlightRef.current.add(runningKey);
     const routePayload = resolveManualVideoRoutePayload(scene);
     const sceneTextPreview = scene.route === "i2v_text" ? resolveI2vTextSceneText(scene) : "";
@@ -1736,7 +1916,7 @@ export default function ManualClipDirectorBoardEditor({
         sceneStartSec: Number(scene.start_sec || 0),
         sceneEndSec: Number(scene.end_sec || 0),
         sceneDurationSec: Number(scene.duration_sec || requestedDurationSec),
-        format: project?.format || "9:16",
+        format: resolveProjectAspectFormat(projectRef.current || project, scene),
         provider: "comfy_remote",
         ...routePayload,
         manualClip: true,
@@ -1791,6 +1971,10 @@ export default function ManualClipDirectorBoardEditor({
     }
   };
 
+  const selectedProjectFormat = selectedScene ? resolveProjectAspectFormat(projectRef.current || project, selectedScene) : resolveProjectAspectFormat(projectRef.current || project);
+  const selectedImageAspectMeta = selectedScene ? getSceneImageAspectMeta(selectedScene) : { width: 0, height: 0, label: "unknown", ratio: 0 };
+  const selectedImageAspectMismatch = Boolean(selectedScene && isSceneImageAspectMismatch(selectedScene, selectedProjectFormat));
+
   if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><div className="manualDirectorEmptyActions"><button className="clipSB_btn" onClick={() => (typeof onClose === "function" ? onClose() : navigate("/studio/storyboard"))}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label><button className="clipSB_btn clipSB_btnSecondary" onClick={onRestoreLegacyManualProject}>Восстановить старый проект</button></div>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
 
   return <div className="manualDirectorPage">
@@ -1814,6 +1998,18 @@ export default function ManualClipDirectorBoardEditor({
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
     </div>
+    {uploadAspectWarning ? <div className="manualAspectModalBackdrop" role="presentation">
+      <div className="manualAspectModal" role="dialog" aria-modal="true" aria-labelledby="manual-aspect-warning-title">
+        <h3 id="manual-aspect-warning-title">Проверка формата фото</h3>
+        <p>Выбран формат проекта {uploadAspectWarning.expectedFormat}, а фото имеет формат {uploadAspectWarning.actualFormatLabel}. Такое изображение может быть обрезано, растянуто или дать видео не того формата.</p>
+        <div className="manualAspectModalMeta">Image: {uploadAspectWarning.actualFormatLabel} / {uploadAspectWarning.width || "?"}x{uploadAspectWarning.height || "?"}</div>
+        <div className="manualAspectModalActions">
+          <button type="button" className="clipSB_btn" onClick={() => resolveUploadAspectDecision("cancel")}>Отменить</button>
+          <button type="button" className="clipSB_btn clipSB_btnPrimary" onClick={() => resolveUploadAspectDecision("as_is")}>Загрузить как есть</button>
+          {normalizeProjectAspectFormat(uploadAspectWarning.actualFormatLabel) ? <button type="button" className="clipSB_btn clipSB_btnPrimary" onClick={() => resolveUploadAspectDecision("switch_project")}>Сменить проект на {uploadAspectWarning.actualFormatLabel}</button> : null}
+        </div>
+      </div>
+    </div> : null}
     {visibleStoryBlocks.length ? <div className="storyboardBlockStrip">
       {visibleStoryBlocks.map((block, idx) => {
         const blockId = String(block.block_id || block.id || `block_${idx + 1}`);
@@ -2133,6 +2329,11 @@ export default function ManualClipDirectorBoardEditor({
       </section> : null}
 
       {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3>
+        <div className="manualAspectPreviewPanel">
+          <span>Project format: <strong>{selectedProjectFormat || "unknown"}</strong></span>
+          <span>Image: <strong>{selectedImageAspectMeta.label || "unknown"}</strong>{selectedImageAspectMeta.width && selectedImageAspectMeta.height ? ` / ${selectedImageAspectMeta.width}x${selectedImageAspectMeta.height}` : " / unknown"}</span>
+          {selectedImageAspectMismatch ? <span className="manualAspectMismatchBadge">Формат фото не совпадает с проектом</span> : null}
+        </div>
         {isFirstLastRoute(selectedScene.route) && !selectedScene.video_url ? (
           <div className="manualFirstLastPanel">
             <div className="manualFirstLastSlot">

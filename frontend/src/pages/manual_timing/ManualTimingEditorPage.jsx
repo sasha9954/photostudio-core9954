@@ -1695,6 +1695,7 @@ export default function ManualTimingEditorPage() {
 
   const buildDirectorProjectSnapshot = () => {
     const sourceNodeId = getManualTimingOwnerNodeId(project);
+    const projectFormat = String(project.format || project.aspect_ratio || "9:16");
     return {
       ...project,
       project_mode: modeConfig.mode || project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
@@ -1704,12 +1705,15 @@ export default function ManualTimingEditorPage() {
       nodeId: sourceNodeId,
       sourceNodeId,
       step: `${workflowLabels.pass.toLowerCase().replace(/\s+/g, "_")}_ready`,
-      format: project.format,
+      format: projectFormat,
+      aspect_ratio: projectFormat,
       audio,
       audio_phrases: audioPhrases,
       story_blocks: storyBlocks,
       scenes: scenes.map((scene) => ({
         ...scene,
+        format: scene.format || scene.aspect_ratio || projectFormat,
+        aspect_ratio: scene.aspect_ratio || scene.format || projectFormat,
         video_prompt: "",
         negative_prompt: "",
         sound_prompt: "",
@@ -1794,6 +1798,13 @@ export default function ManualTimingEditorPage() {
 
     projectSnapshot = {
       ...projectSnapshot,
+      format: String(projectSnapshot.format || projectSnapshot.aspect_ratio || "9:16"),
+      aspect_ratio: String(projectSnapshot.aspect_ratio || projectSnapshot.format || "9:16"),
+      scenes: Array.isArray(projectSnapshot.scenes) ? projectSnapshot.scenes.map((scene) => ({
+        ...scene,
+        format: scene.format || scene.aspect_ratio || projectSnapshot.format || "9:16",
+        aspect_ratio: scene.aspect_ratio || scene.format || projectSnapshot.aspect_ratio || projectSnapshot.format || "9:16",
+      })) : [],
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       ownerNodeType: "manualTiming",
