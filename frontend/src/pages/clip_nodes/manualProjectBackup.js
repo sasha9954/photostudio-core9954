@@ -444,6 +444,17 @@ function readScopedManualClipBoardProjectCandidates() {
   return candidates;
 }
 
+
+export function getManualProjectOwnerId(project = {}) {
+  return String(project?.sourceNodeId || project?.nodeId || "").trim();
+}
+
+export function manualProjectBelongsToNode(project = {}, nodeId = "") {
+  const safeNodeId = String(nodeId || "").trim();
+  if (!safeNodeId) return true;
+  return getManualProjectOwnerId(project) === safeNodeId;
+}
+
 export function readManualClipBoardProjectForNode(nodeId = "") {
   const safeNodeId = String(nodeId || "").trim();
   if (!safeNodeId) return null;
@@ -527,6 +538,14 @@ export function readActiveManualClipBoardProject() {
 }
 
 
+export function readActiveManualClipBoardProjectForNode(nodeId = "") {
+  const safeNodeId = String(nodeId || "").trim();
+  const nodeProject = safeNodeId ? readManualClipBoardProjectForNode(safeNodeId) : null;
+  const activeProject = readActiveManualClipBoardProject();
+  const activeMatching = manualProjectBelongsToNode(activeProject, safeNodeId) ? activeProject : null;
+  return pickBestManualClipBoardProject([nodeProject, activeMatching]);
+}
+
 export function clearManualClipBoardProjectForNode(nodeId = "", options = {}) {
   const safeNodeId = String(nodeId || "").trim();
   const clearActive = options?.clearActive !== false;
@@ -583,14 +602,27 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const reason = String(options?.reason || safeProject?.lastPersistReason || "");
   const nodeId = String(safeProject?.nodeId || safeProject?.sourceNodeId || "").trim();
   const nodeScopedExisting = nodeId ? readManualClipBoardProjectForNode(nodeId) : null;
-  const activeExisting = readActiveManualClipBoardProject();
-  const existing = pickBestManualClipBoardProject([nodeScopedExisting, activeExisting]);
+  const activeExistingRaw = readActiveManualClipBoardProject();
+  const activeExistingRawOwner = getManualProjectOwnerId(activeExistingRaw);
+  const activeWasIgnoredBecauseDifferentOwner = Boolean(
+    nodeId
+    && hasMeaningfulManualProject(activeExistingRaw)
+    && !manualProjectBelongsToNode(activeExistingRaw, nodeId)
+  );
+  const activeExisting = nodeId && manualProjectBelongsToNode(activeExistingRaw, nodeId)
+    ? activeExistingRaw
+    : null;
+  const existing = nodeId
+    ? pickBestManualClipBoardProject([nodeScopedExisting, activeExisting])
+    : pickBestManualClipBoardProject([nodeScopedExisting, activeExistingRaw]);
   const existingStats = getManualClipBoardMaterialStats(existing);
   const nextStats = getManualClipBoardMaterialStats(safeProject);
 
   if (shouldSkipManualBoardPersistToProtectMaterials(safeProject, existing, options)) {
     console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
       nodeId,
+      activeExistingRawOwner,
+      activeWasIgnoredBecauseDifferentOwner,
       existingStats,
       nextStats,
       reason: reason || "incoming_project_has_fewer_materials",
@@ -608,6 +640,8 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   ) {
     console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
       nodeId,
+      activeExistingRawOwner,
+      activeWasIgnoredBecauseDifferentOwner,
       existingStats,
       nextStats,
       reason: reason || "incoming_project_empty_material_snapshot",
@@ -636,6 +670,8 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       reason,
       forceReplace,
       explicitReset,
+      nodeId,
+      sourceNodeId: safeProject.sourceNodeId,
       stats: getManualClipBoardMaterialStats(safeProject),
       selectedSceneId: safeProject.selectedSceneId,
       updatedAt: safeProject.updatedAt,

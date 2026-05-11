@@ -723,9 +723,43 @@ export default function ManualClipDirectorBoardEditor({
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
       const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup)) : [];
-      const hydratedProject = normalizeDirectorProjectOwner({ ...parsed, story_blocks: storyBlocks, scenes });
+      const selectedSceneIdForHydrate = String(parsed?.selectedSceneId || scenes[0]?.scene_id || "");
+      const hydratedProject = normalizeDirectorProjectOwner({
+        ...parsed,
+        story_blocks: storyBlocks,
+        scenes,
+        selectedSceneId: selectedSceneIdForHydrate,
+      });
+      projectRef.current = hydratedProject;
+      selectedSceneIdRef.current = selectedSceneIdForHydrate;
       setProject(hydratedProject);
-      setSelectedSceneId(String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""));
+      setSelectedSceneId(selectedSceneIdForHydrate);
+
+      if (!embedded && hasMeaningfulManualProject(hydratedProject)) {
+        const reason = navigationProject ? "hydrate_from_navigation_project" : "hydrate_source_bound_project";
+        const projectToPersist = {
+          ...hydratedProject,
+          selectedSceneId: selectedSceneIdForHydrate,
+          updatedAt: Date.now(),
+          lastPersistReason: reason,
+        };
+        projectRef.current = projectToPersist;
+        setProject(projectToPersist);
+        const persisted = persistManualProject(projectToPersist, {
+          reason,
+          forceReplace: Boolean(navigationProject),
+        });
+        dispatchManualDirectorBoardUpdate(
+          sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId,
+          projectToPersist
+        );
+        console.info("[MANUAL BOARD HYDRATE] persisted navigation project for reload", {
+          sourceNodeId: sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId,
+          persisted,
+          stats: getManualClipBoardMaterialStats(projectToPersist),
+          selectedSceneId: projectToPersist.selectedSceneId,
+        });
+      }
     } catch {
       setProject(null);
     } finally {
