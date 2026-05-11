@@ -1180,6 +1180,7 @@ export const MANUAL_TIMING_SEMANTIC_CUT_RULES = {
     pause_before_important_action: "may_belong_to_next_scene",
     pause_after_strong_phrase: "may_remain_in_previous_scene",
     long_pause_with_visual_meaning: "may_become_atmospheric_broll_scene",
+    silent_broll_scene_may_have_empty_source_phrase_ids: true,
     duration_sec_includes_assigned_silence: true,
   },
   required_scene_fields: [
@@ -1197,6 +1198,7 @@ export const MANUAL_TIMING_SEMANTIC_CUT_RULES = {
     "each_scene_has_one_main_visual_action_or_state",
     "story_blocks_explain_dramatic_stages",
     "source_phrase_ids_match_scene_timing",
+    "silent_broll_scenes_must_be_explicitly_marked",
     "manual_user_scene_boundaries_are_not_overwritten",
   ],
 };
@@ -1494,6 +1496,46 @@ function isSemanticManualTimingStoryPassPayload(raw = {}) {
     || task.includes("СМЫСЛОВАЯ НАРЕЗКА ИСТОРИИ");
 }
 
+function isManualTimingSilentBrollScene(scene = {}, rawScene = {}) {
+  const values = [
+    scene.scene_type,
+    rawScene.scene_type,
+    scene.sceneType,
+    rawScene.sceneType,
+    scene.visual_role_ru,
+    rawScene.visual_role_ru,
+    scene.visualRoleRu,
+    rawScene.visualRoleRu,
+    scene.storyboard_frame_role_ru,
+    rawScene.storyboard_frame_role_ru,
+    scene.storyboardFrameRoleRu,
+    rawScene.storyboardFrameRoleRu,
+    scene.scene_goal_ru,
+    rawScene.scene_goal_ru,
+    scene.sceneGoalRu,
+    rawScene.sceneGoalRu,
+    scene.meaning_hint_ru,
+    rawScene.meaning_hint_ru,
+    scene.meaningHintRu,
+    rawScene.meaningHintRu,
+    scene.user_note_ru,
+    rawScene.user_note_ru,
+    scene.userNoteRu,
+    rawScene.userNoteRu,
+  ].map((value) => String(value || "").toLowerCase());
+
+  return values.some((value) => (
+    value.includes("b-roll")
+    || value.includes("broll")
+    || value.includes("silent")
+    || value.includes("silence")
+    || value.includes("без речи")
+    || value.includes("пауза")
+    || value.includes("атмосферная")
+    || value.includes("атмосферный")
+  ));
+}
+
 function isManualTimingStoryBiblePassPayload(raw = {}) {
   const splitType = String(raw?.split_type || raw?.splitType || "");
   const task = typeof raw?.chatgpt_task === "string"
@@ -1689,7 +1731,20 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
       if (audioDurationSec > 0 && Number.isFinite(rawStart) && Number.isFinite(rawEnd) && (start < -0.01 || end - audioDurationSec > 0.01)) {
         errors.push(`${sceneId}: тайминг scene вне audio_duration_sec (${audioDurationSec.toFixed(3)} сек).`);
       }
-      if (!sourcePhraseIds.length) errors.push(`${sceneId}: source_phrase_ids не заполнены.`);
+      const isSilentBrollScene = isManualTimingSilentBrollScene(scene, rawScene);
+
+      if (!sourcePhraseIds.length && !isSilentBrollScene) {
+        errors.push(`${sceneId}: source_phrase_ids не заполнены.`);
+      }
+      if (!sourcePhraseIds.length && isSilentBrollScene) {
+        const sceneType = String(rawScene?.scene_type || scene?.scene_type || "").trim();
+        const goal = String(rawScene?.scene_goal_ru || scene?.scene_goal_ru || "").trim();
+        const meaning = String(rawScene?.meaning_hint_ru || scene?.meaning_hint_ru || "").trim();
+
+        if (!sceneType && !goal && !meaning) {
+          errors.push(`${sceneId}: silent/b-roll scene без source_phrase_ids должна иметь scene_type, scene_goal_ru или meaning_hint_ru.`);
+        }
+      }
       sourcePhraseIds.forEach((phraseId) => {
         if (!phraseIds.has(phraseId)) errors.push(`${sceneId}: source_phrase_ids содержит неизвестный phrase_id ${phraseId}.`);
       });
