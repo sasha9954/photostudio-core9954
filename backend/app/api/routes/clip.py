@@ -6513,7 +6513,7 @@ def _validate_video_ready_for_playback(
     *,
     max_attempts: int = 5,
     retry_delay_sec: float = 1.0,
-) -> tuple[bool, float | None, str]:
+) -> tuple[bool, float | None, str, dict[str, Any]]:
     safe_scene_id = str(scene_id or "").strip() or "scene"
     safe_video_url = str(video_url or "").strip()
     if not safe_video_url:
@@ -6532,12 +6532,13 @@ def _validate_video_ready_for_playback(
                 ensure_ascii=False,
             )
         )
-        return False, None, "video_url_empty"
+        return False, None, "video_url_empty", {"actualDuration": None, "actualFrames": None}
 
     attempts = max(1, int(max_attempts or 1))
     delay = max(0.1, float(retry_delay_sec or 1.0))
     last_reason = "video_not_ready"
     last_duration: float | None = None
+    last_frames: int | None = None
     for attempt in range(1, attempts + 1):
         temp_files: list[str] = []
         file_accessible = False
@@ -6551,6 +6552,7 @@ def _validate_video_ready_for_playback(
                     if probe_err == "ffprobe_missing_install_and_add_to_PATH":
                         raise RuntimeError("FFPROBE_MISSING")
                     last_duration = ffprobe_duration
+                    last_frames = ffprobe_frames if isinstance(ffprobe_frames, int) else None
                     if not probe_err and ffprobe_duration is not None and math.isfinite(ffprobe_duration) and ffprobe_duration > 0:
                         if ffprobe_duration < 1.0 or (isinstance(ffprobe_frames, int) and ffprobe_frames <= 1):
                             last_reason = "VIDEO_TOO_SHORT_OR_ONE_FRAME"
@@ -6571,7 +6573,7 @@ def _validate_video_ready_for_playback(
                                     ensure_ascii=False,
                                 )
                             )
-                            return True, float(ffprobe_duration), "validated"
+                            return True, float(ffprobe_duration), "validated", {"actualDuration": float(ffprobe_duration), "actualFrames": int(ffprobe_frames) if isinstance(ffprobe_frames, int) else None}
                         print(
                             "[SCENARIO VIDEO READY VALIDATION] "
                             + json.dumps(
@@ -6588,7 +6590,8 @@ def _validate_video_ready_for_playback(
                                 ensure_ascii=False,
                             )
                         )
-                    last_reason = str(probe_err or "ffprobe_duration_non_positive")
+                    if probe_err or last_reason != "VIDEO_TOO_SHORT_OR_ONE_FRAME":
+                        last_reason = str(probe_err or "ffprobe_duration_non_positive")
                 else:
                     last_reason = "resolved_file_empty"
             else:
@@ -6611,6 +6614,7 @@ def _validate_video_ready_for_playback(
                     "videoUrl": safe_video_url,
                     "attempt": attempt,
                     "ffprobeDurationSec": round(float(last_duration), 3) if isinstance(last_duration, (float, int)) and math.isfinite(last_duration) else None,
+                    "ffprobeNbFrames": int(last_frames) if isinstance(last_frames, int) else None,
                     "fileAccessible": file_accessible,
                     "ready": False,
                     "reason": last_reason,
@@ -6621,7 +6625,7 @@ def _validate_video_ready_for_playback(
         if attempt < attempts:
             time.sleep(delay)
 
-    return False, last_duration, last_reason
+    return False, last_duration, last_reason, {"actualDuration": float(last_duration) if isinstance(last_duration, (float, int)) and math.isfinite(last_duration) else None, "actualFrames": int(last_frames) if isinstance(last_frames, int) else None}
 
 
 def _build_public_static_url(filename: str) -> str:
@@ -17545,7 +17549,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "hint": "provider_marked_done_without_video_url",
             }
         if status == "done":
-            ready, validated_duration_sec, validation_reason = _validate_video_ready_for_playback(
+            ready, validated_duration_sec, validation_reason, validation_debug = _validate_video_ready_for_playback(
                 scene_id,
                 video_url,
                 max_attempts=4,
@@ -17559,12 +17563,23 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             else:
                 failure_code = "VIDEO_TOO_SHORT_OR_ONE_FRAME" if str(validation_reason or "").strip() == "VIDEO_TOO_SHORT_OR_ONE_FRAME" else "VIDEO_NOT_READY_FOR_PLAYBACK"
                 status = "error"
+                existing_debug = out.get("debug") if isinstance(out.get("debug"), dict) else {}
+                validation_error_debug = {
+                    "expectedFrames": existing_debug.get("expectedFrames"),
+                    "actualFrames": validation_debug.get("actualFrames") if isinstance(validation_debug, dict) else None,
+                    "actualDuration": validation_debug.get("actualDuration") if isinstance(validation_debug, dict) else None,
+                    "lengthNodeValueSent": existing_debug.get("lengthNodeValueSent"),
+                    "workflowKey": existing_debug.get("workflow_key") or existing_debug.get("resolved_workflow_key"),
+                    "workflowFile": existing_debug.get("workflow_file") or existing_debug.get("workflow_path"),
+                }
                 out = {
                     **(out if isinstance(out, dict) else {}),
                     "ok": False,
                     "code": failure_code,
                     "hint": str(validation_reason or "video_duration_unreadable"),
                     "details": str(validation_reason or "video_duration_unreadable"),
+                    "debug": {**existing_debug, "videoValidationError": validation_error_debug},
+                    **validation_error_debug,
                 }
         if video_url:
             print(f"[CLIP VIDEO JOB WORKER] result_received jobId={job_id} video_url={video_url}")
@@ -17600,6 +17615,15 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "effectivePromptPreview": str(((out.get("debug") or {}).get("effectivePromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
                 "effectivePromptLength": int(((out.get("debug") or {}).get("effectivePromptLength") if isinstance(out.get("debug"), dict) else 0) or 0),
                 "promptPatchedNodeIds": ((out.get("debug") or {}).get("promptPatchedNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("promptPatchedNodeIds"), list) else []),
+                "expectedFrames": ((out.get("debug") or {}).get("expectedFrames") if isinstance(out.get("debug"), dict) else None),
+                "patchedLengthNodeIds": ((out.get("debug") or {}).get("patchedLengthNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("patchedLengthNodeIds"), list) else []),
+                "patchedFrameRateNodeIds": ((out.get("debug") or {}).get("patchedFrameRateNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("patchedFrameRateNodeIds"), list) else []),
+                "patchedWidthHeightNodeIds": ((out.get("debug") or {}).get("patchedWidthHeightNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("patchedWidthHeightNodeIds"), list) else []),
+                "workflowLengthBefore": ((out.get("debug") or {}).get("workflowLengthBefore") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("workflowLengthBefore"), dict) else {}),
+                "workflowLengthAfter": ((out.get("debug") or {}).get("workflowLengthAfter") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("workflowLengthAfter"), dict) else {}),
+                "patchedNegativePromptNodeIds": ((out.get("debug") or {}).get("patchedNegativePromptNodeIds") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("patchedNegativePromptNodeIds"), list) else []),
+                "lengthNodeValueSent": ((out.get("debug") or {}).get("lengthNodeValueSent") if isinstance(out.get("debug"), dict) else None),
+                "videoValidationError": ((out.get("debug") or {}).get("videoValidationError") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("videoValidationError"), dict) else {}),
                 "audioUsed": bool(((out.get("debug") or {}).get("audio_used")) if isinstance(out.get("debug"), dict) else False),
                 "audioPatchNodeIds": ((out.get("debug") or {}).get("audio_patch_node_ids") if isinstance(out.get("debug"), dict) and isinstance((out.get("debug") or {}).get("audio_patch_node_ids"), list) else []),
                 "audioTransportMode": str(((out.get("debug") or {}).get("audio_transport_mode") if isinstance(out.get("debug"), dict) else "") or ""),
@@ -19177,6 +19201,7 @@ def clip_video(payload: ClipVideoIn):
             f"sceneId={scene_id} workflowKey={final_workflow_key} modelKey={resolved_model_key} "
             f"promptPatchedNodeIds={comfy_debug.get('prompt_patched_node_ids') or []} "
             f"negativePromptNodePatched={bool(comfy_debug.get('negative_prompt_node_patched'))} "
+            f"patchedNegativePromptNodeIds={comfy_debug.get('patchedNegativePromptNodeIds') or []} "
             f"negativePromptSource={str(comfy_debug.get('negative_prompt_source') or 'missing')} "
             f"negativePromptPreview={str(comfy_debug.get('negative_prompt_preview') or '')} "
             f"finalPromptPreview={str(comfy_debug.get('final_prompt_preview') or '')}"
