@@ -33,6 +33,8 @@ COMFY_AUDIO_WORKFLOW_FILES = {
     "lip_sync": "image-lipsink-video-music.json",
     # i2v_sound is a sound-capable image-to-video workflow, but it does not require an input audio file.
     "i2v_sound": "image-video-golos-zvuk.json",
+    "ltx23_i2v_sound_clean": "image-video-golos-zvuk.json",
+    "first_last_sound_clean": "last-first cadr-sound.json",
 }
 COMFY_AUDIO_INPUT_NODE_CLASS_NAMES = {
     "loadaudio",
@@ -111,20 +113,25 @@ COMFY_FIRST_LAST_PROMPT_CLASS_NAMES = {
 COMFY_LTX_WORKFLOW_REQUIREMENTS = {
     "i2v": {"single_image": True, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": False},
     "i2v_sound": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": False, "continuation": False},
+    "ltx23_i2v_sound_clean": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": False, "continuation": False},
     "f_l": {"single_image": False, "first_last": True, "audio_sensitive": False, "lip_sync": False, "continuation": False},
     "f_l_sound": {"single_image": False, "first_last": True, "audio_sensitive": True, "lip_sync": False, "continuation": False},
+    "first_last_sound_clean": {"single_image": False, "first_last": True, "audio_sensitive": True, "lip_sync": False, "continuation": False},
     "continuation": {"single_image": False, "first_last": False, "audio_sensitive": False, "lip_sync": False, "continuation": True},
     "lip_sync": {"single_image": True, "first_last": False, "audio_sensitive": True, "lip_sync": True, "continuation": False},
 }
 COMFY_LEGACY_WORKFLOW_ALIASES = {
     "i2v_as": "i2v",
-    "image_video_sound": "i2v_sound",
-    "standard_video_sound": "i2v_sound",
-    "video_with_sound": "i2v_sound",
+    "image_video_sound": "ltx23_i2v_sound_clean",
+    "standard_video_sound": "ltx23_i2v_sound_clean",
+    "video_with_sound": "ltx23_i2v_sound_clean",
+    "i2v_text": "ltx23_i2v_sound_clean",
+    "voiceover": "ltx23_i2v_sound_clean",
     "f_l_as": "f_l",
     "first_last": "f_l",
-    "first_last_sound": "f_l_sound",
-    "f_l_sound": "f_l_sound",
+    "first_last_sound": "first_last_sound_clean",
+    "first_last_sound_clean": "first_last_sound_clean",
+    "f_l_sound": "first_last_sound_clean",
     "imag-imag-video-bz": "f_l",
     "ia2v": "lip_sync",
     "lip_sync_music": "lip_sync",
@@ -132,54 +139,58 @@ COMFY_LEGACY_WORKFLOW_ALIASES = {
 COMFY_WORKFLOW_FAMILY = {
     "i2v": "ltx_image_video",
     "i2v_sound": "ltx_image_video_sound",
+    "ltx23_i2v_sound_clean": "ltx_image_video_sound_clean",
     "f_l": "ltx_first_last",
     "f_l_sound": "ltx_first_last_sound",
+    "first_last_sound_clean": "ltx_first_last_sound_clean",
     "continuation": "ltx_continuation",
     "lip_sync": "comfy_lip_sync_audio",
 }
 COMFY_WORKFLOW_FILENAME_FALLBACKS = {
     "i2v": ("image-video.json",),
     "i2v_sound": ("image-video-golos-zvuk.json", "image-video.json"),
+    "ltx23_i2v_sound_clean": ("image-video-golos-zvuk.json",),
     "f_l": ("last-first cadr-NO sound.json", "last-first cadr.json", "imag-imag-video-bz.json"),
     "f_l_sound": ("last-first cadr-sound.json", "imag-imag-video-zvuk.json"),
+    "first_last_sound_clean": ("last-first cadr-sound.json", "imag-imag-video-zvuk.json"),
     "continuation": ("image-video.json",),
     "lip_sync": ("image-lipsink-video-music.json",),
 }
-COMFY_MODEL_GATED_WORKFLOW_KEYS = {"i2v", "i2v_sound", "f_l", "f_l_sound", "continuation"}
+COMFY_MODEL_GATED_WORKFLOW_KEYS = {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean", "continuation"}
 MODEL_KEY_TO_MODEL_SPEC = {
     "ltx23_dev_fp8": {
         "key": "ltx23_dev_fp8",
         "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_distilled_fp8": {
         "key": "ltx23_distilled_fp8",
         "ckpt_name": "ltx-2.3-22b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_dev_fp16": {
         "key": "ltx23_dev_fp16",
         "ckpt_name": "ltx-2.3-22b-dev-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_distilled_fp16": {
         "key": "ltx23_distilled_fp16",
         "ckpt_name": "ltx-2.3-22b-distilled-fp16.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_13b_dev_fp8": {
         "key": "ltx23_13b_dev_fp8",
         "ckpt_name": "ltx-2.3-13b-dev-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
     "ltx23_13b_distilled_fp8": {
         "key": "ltx23_13b_distilled_fp8",
         "ckpt_name": "ltx-2.3-13b-distilled-fp8.safetensors",
-        "compatible_workflow_keys": {"i2v", "i2v_sound", "f_l", "f_l_sound"},
+        "compatible_workflow_keys": {"i2v", "i2v_sound", "ltx23_i2v_sound_clean", "f_l", "f_l_sound", "first_last_sound_clean"},
     },
 }
 MODEL_PATCH_NODE_TYPES = {"CheckpointLoaderSimple", "LTXAVTextEncoderLoader", "LTXVAudioVAELoader"}
-F_L_WORKFLOW_KEYS = {"f_l", "f_l_sound"}
+F_L_WORKFLOW_KEYS = {"f_l", "f_l_sound", "first_last_sound_clean"}
 
 
 def _validate_comfy_ltx_request(
@@ -2927,6 +2938,13 @@ def _patch_workflow_inputs(
         ok, err = _set_node_input(wf, node_id, key, value)
         if not ok:
             return None, err, None, None, {}
+        if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"} and str(node_id) == FIXED_IMAGE_VIDEO_NODES["prompt"][0] and str(key) == FIXED_IMAGE_VIDEO_NODES["prompt"][1]:
+            logger.info(
+                "[LTX CLEAN WORKFLOW PATCH] patched positive node 266 node_id=%s input_key=%s preview=%r",
+                str(node_id),
+                str(key),
+                _preview_value(value, limit=180),
+            )
     patched_node_by_key: dict[str, str] = {}
     for node_id, key, _ in patch_values:
         if str(key) not in patched_node_by_key:
@@ -2947,7 +2965,10 @@ def _patch_workflow_inputs(
                 workflow_static_negative_prompt = str(negative_inputs.get("text") or negative_inputs.get("value") or "").strip()
                 scene_negative_prompt = str(negative_prompt or "").strip()
                 if scene_negative_prompt:
-                    effective_negative_prompt = _dedupe_prompt_tokens_csv(workflow_static_negative_prompt, scene_negative_prompt)
+                    if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"}:
+                        effective_negative_prompt = scene_negative_prompt
+                    else:
+                        effective_negative_prompt = _dedupe_prompt_tokens_csv(workflow_static_negative_prompt, scene_negative_prompt)
                     input_key = (
                         f_l_negative_prompt_input_key
                         if (normalized_workflow_key in F_L_WORKFLOW_KEYS and f_l_negative_prompt_input_key in negative_inputs)
@@ -2959,6 +2980,13 @@ def _patch_workflow_inputs(
                             return None, err, None, None, {}
                         negative_prompt_node_patched = True
                         negative_prompt_source = "scene"
+                        if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"}:
+                            logger.info(
+                                "[LTX CLEAN WORKFLOW PATCH] patched negative node 247 node_id=%s input_key=%s preview=%r",
+                                str(resolved_negative_prompt_node_id),
+                                str(input_key),
+                                _preview_value(effective_negative_prompt, limit=180),
+                            )
                     else:
                         negative_prompt_source = "missing"
                 else:

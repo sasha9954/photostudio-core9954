@@ -62,7 +62,7 @@ const SCENE_OUTPUT_FIELDS = [
   "allowed_variation_ru",
 ];
 
-const EMPTY_PROMPT_FIELDS = ["video_prompt", "negative_prompt", "sound_prompt", "negative_audio_prompt"];
+const EMPTY_PROMPT_FIELDS = ["video_prompt", "positive_prompt", "negative_prompt", "sound_prompt", "negative_audio_prompt"];
 
 const SCENE_IMAGE_URL_FIELDS = [
   "image_url",
@@ -72,6 +72,7 @@ const SCENE_IMAGE_URL_FIELDS = [
 
 const VIDEO_OUTPUT_FIELDS = [
   "video_prompt",
+  "positive_prompt",
   "negative_prompt",
   "sound_prompt",
   "negative_audio_prompt",
