@@ -1589,9 +1589,7 @@ export default function ManualClipDirectorBoardEditor({
         format: safeFormat,
         aspect_ratio: safeFormat,
         scenes: Array.isArray(baseProject.scenes)
-          ? baseProject.scenes.map((scene) => (String(scene?.scene_id || "") === String(sceneId || "")
-            ? { ...scene, format: safeFormat, aspect_ratio: safeFormat }
-            : scene))
+          ? baseProject.scenes.map((scene) => ({ ...scene, format: safeFormat, aspect_ratio: safeFormat }))
           : [],
         selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId || "",
         updatedAt: Date.now(),
