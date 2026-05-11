@@ -176,6 +176,7 @@ export function getDefaultManualTimingNodeData() {
     project_mode: "",
     project_kind: "",
     format: "9:16",
+    aspect_ratio: "9:16",
     audio: {
       url: "",
       filename: "",
@@ -2195,7 +2196,8 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     ...safeBase,
     project_mode: modeAndKind.project_mode,
     project_kind: modeAndKind.project_kind,
-    format: String(safeRaw.format || safeBase.format || "9:16"),
+    format: String(safeRaw.format || safeRaw.aspect_ratio || safeBase.format || safeBase.aspect_ratio || "9:16"),
+    aspect_ratio: String(safeRaw.aspect_ratio || safeRaw.format || safeBase.aspect_ratio || safeBase.format || "9:16"),
     ...pickManualTimingProjectStoryBibleFields({ ...safeBase, ...safeRaw }),
     audio: {
       ...baseAudio,
