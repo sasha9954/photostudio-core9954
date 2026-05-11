@@ -68,7 +68,7 @@ function detectLtxSpeechLanguage(scene = {}, speechText = "") {
 }
 
 function buildLtxCleanPositivePrompt(scene = {}, project = {}) {
-  const videoPrompt = String(scene.positive_prompt || scene.positivePrompt || scene.video_prompt || scene.videoPrompt || "").trim();
+  const videoPrompt = String(scene.video_prompt || scene.videoPrompt || "").trim();
   const soundPrompt = String(scene.sound_prompt || scene.soundPrompt || "").trim();
   const ambienceHint = String(scene.ambience_hint || scene.ambienceHint || scene.ambient_sound_prompt || scene.ambientSoundPrompt || "").trim();
   const physicalSounds = combineNegativePromptTokens(soundPrompt, ambienceHint).replace(/,/g, ";");
@@ -2051,8 +2051,8 @@ export default function ManualClipDirectorBoardEditor({
         sound_prompt: String(routePayload.sound_prompt || scene.sound_prompt || ""),
         negativeAudioPrompt: String(routePayload.negativeAudioPrompt || scene.negative_audio_prompt || ""),
         negative_audio_prompt: String(routePayload.negative_audio_prompt || scene.negative_audio_prompt || ""),
-        positivePrompt: String(routePayload.positive_prompt || scene.positive_prompt || scene.video_prompt || ""),
-        positive_prompt: String(routePayload.positive_prompt || scene.positive_prompt || scene.video_prompt || ""),
+        positivePrompt: String(routePayload.positive_prompt || scene.positive_prompt || ""),
+        positive_prompt: String(routePayload.positive_prompt || scene.positive_prompt || ""),
         negativePrompt: String(routePayload.negative_prompt || scene.negative_prompt || ""),
         negative_prompt: String(routePayload.negative_prompt || scene.negative_prompt || ""),
         finalPositivePrompt: String(routePayload.finalPositivePrompt || routePayload.final_positive_prompt || ""),
@@ -2409,7 +2409,7 @@ export default function ManualClipDirectorBoardEditor({
           /> : null}
         </div>
 
-        <label className="manualPromptBlock">Positive Prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
+        <label className="manualPromptBlock">Video / motion prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
           const nextScene = { ...selectedScene, video_prompt: e.target.value };
           updateScene(selectedScene.scene_id, { video_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
         }} /></label>
