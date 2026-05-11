@@ -937,3 +937,19 @@
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+.manualRepairActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.manualAspectModal {
+  border-color: rgba(248, 113, 113, 0.75);
+  background: linear-gradient(135deg, rgba(127, 29, 29, 0.96), rgba(69, 26, 3, 0.96));
+}
+
+.manualAspectModalMeta {
+  color: #fde68a;
+}

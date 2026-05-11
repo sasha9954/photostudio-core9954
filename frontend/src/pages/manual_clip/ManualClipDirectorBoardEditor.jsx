@@ -39,9 +39,14 @@ function normalizeProjectAspectFormat(format) {
   return ["9:16", "16:9", "1:1"].includes(value) ? value : "";
 }
 
-function resolveProjectAspectFormat(project = {}, scene = {}) {
+function resolveLockedProjectFormat(project = {}) {
   return normalizeProjectAspectFormat(project?.format)
     || normalizeProjectAspectFormat(project?.aspect_ratio)
+    || "9:16";
+}
+
+function resolveProjectAspectFormat(project = {}, scene = {}) {
+  return resolveLockedProjectFormat(project)
     || normalizeProjectAspectFormat(scene?.format)
     || normalizeProjectAspectFormat(scene?.aspect_ratio)
     || "9:16";
@@ -792,8 +797,15 @@ export default function ManualClipDirectorBoardEditor({
   const normalizeDirectorProjectOwner = (candidateProject = {}) => {
     const ownerNodeId = getProjectOwnerNodeId(candidateProject);
     if (!ownerNodeId) return candidateProject || {};
+    const projectFormat = resolveLockedProjectFormat(candidateProject);
     return {
       ...(candidateProject || {}),
+      format: projectFormat,
+      aspect_ratio: projectFormat,
+      format_locked: true,
+      scenes: Array.isArray(candidateProject?.scenes)
+        ? candidateProject.scenes.map((scene) => ({ ...scene, format: scene.format || projectFormat, aspect_ratio: scene.aspect_ratio || projectFormat }))
+        : [],
       source: candidateProject?.source || "manual_timing_node",
       ownerNodeType: candidateProject?.ownerNodeType || "manualTiming",
       nodeId: ownerNodeId,
@@ -1579,28 +1591,58 @@ export default function ManualClipDirectorBoardEditor({
     if (typeof resolver === "function") resolver(decision);
   };
 
-  const applyProjectAspectFormat = (nextFormat, sceneId = "") => {
-    const safeFormat = normalizeProjectAspectFormat(nextFormat);
-    if (!safeFormat) return;
-    setProject((currentProject) => {
-      const baseProject = currentProject || projectRef.current || project || {};
-      const nextProject = {
-        ...baseProject,
-        format: safeFormat,
-        aspect_ratio: safeFormat,
-        scenes: Array.isArray(baseProject.scenes)
-          ? baseProject.scenes.map((scene) => ({ ...scene, format: safeFormat, aspect_ratio: safeFormat }))
-          : [],
-        selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId || "",
-        updatedAt: Date.now(),
-        lastPersistReason: "change_project_format_from_image_warning",
-      };
-      projectRef.current = nextProject;
-      if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
-        persistAndBroadcastDirectorProject(nextProject, { reason: "change_project_format_from_image_warning" });
-      }
-      return nextProject;
-    });
+  const clearVideoPatch = (scene = {}) => {
+    const sceneWithoutVideo = {
+      ...scene,
+      video_url: "",
+      videoUrl: "",
+      video_job_id: "",
+      video_error: "",
+      video_has_audio: false,
+      generated_audio_policy: "",
+      generated_audio_gain_db: I2V_SOUND_GAIN_DEFAULT_DB,
+      keep_generated_audio: false,
+      video_request_payload_preview: null,
+      error: "",
+    };
+    return {
+      video_url: "",
+      videoUrl: "",
+      video_job_id: "",
+      video_error: "",
+      video_has_audio: false,
+      generated_audio_policy: "",
+      generated_audio_gain_db: I2V_SOUND_GAIN_DEFAULT_DB,
+      keep_generated_audio: false,
+      video_request_payload_preview: null,
+      error: "",
+      status: resolveManualSceneStatus(sceneWithoutVideo),
+    };
+  };
+
+  const onDeleteSceneVideo = (scene) => {
+    if (!scene?.scene_id) return;
+    updateScene(scene.scene_id, (currentScene = {}) => clearVideoPatch(currentScene));
+  };
+
+  const onDeleteScenePhoto = (scene) => {
+    if (!scene?.scene_id) return;
+    if (scene.video_url && !window.confirm("Удаление фото также удалит видео этой сцены. Продолжить?")) return;
+    updateScene(scene.scene_id, (currentScene = {}) => ({
+      ...clearVideoPatch(currentScene),
+      image_url: "",
+      imageUrl: "",
+      start_image_url: "",
+      image_preview_url: "",
+      start_image_preview_url: "",
+      image_width: 0,
+      image_height: 0,
+      image_aspect_ratio: 0,
+      image_aspect_label: "",
+      image_upload_status: "",
+      image_upload_error: "",
+      status: "draft",
+    }));
   };
 
   const onUploadImage = async (sceneId, file, slot = "main") => {
@@ -1613,23 +1655,23 @@ export default function ManualClipDirectorBoardEditor({
     const mismatch = isImageAspectMismatch(imageMeta.width, imageMeta.height, expectedFormat);
 
     if (mismatch) {
-      const decision = await requestUploadAspectDecision({
+      await requestUploadAspectDecision({
         sceneId,
         expectedFormat,
         actualFormatLabel: imageAspectLabel,
         width: imageMeta.width,
         height: imageMeta.height,
       });
-      if (decision === "cancel") {
-        try { URL.revokeObjectURL(previewUrl); } catch {}
-        return;
-      }
-      if (decision === "switch_project") {
-        applyProjectAspectFormat(imageAspectLabel, sceneId);
-      }
+      try { URL.revokeObjectURL(previewUrl); } catch {}
+      return;
     }
 
     const isEndSlot = slot === "end";
+    const shouldClearVideoAfterUpload = Boolean(selectedUploadScene.video_url) && slot !== "end";
+    if (shouldClearVideoAfterUpload && !window.confirm("Замена фото удалит текущее видео сцены. Продолжить?")) {
+      try { URL.revokeObjectURL(previewUrl); } catch {}
+      return;
+    }
 
     updateScene(sceneId, {
       ...(isEndSlot ? { end_image_preview_url: previewUrl } : { image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
@@ -1659,9 +1701,10 @@ export default function ManualClipDirectorBoardEditor({
             ? { end_image_url: imageUrl, end_image_preview_url: previewUrl }
             : { image_url: imageUrl, start_image_url: imageUrl, image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
           ...aspectFields,
+          ...(shouldClearVideoAfterUpload ? clearVideoPatch(nextScene) : {}),
           image_upload_status: "done",
           image_upload_error: "",
-          status: resolveManualSceneStatus(nextScene),
+          status: resolveManualSceneStatus({ ...nextScene, ...(shouldClearVideoAfterUpload ? { video_url: "", videoUrl: "" } : {}) }),
           error: "",
         };
       });
@@ -1877,10 +1920,13 @@ export default function ManualClipDirectorBoardEditor({
       return;
     }
 
-    const expectedFormat = resolveProjectAspectFormat(projectRef.current || project, scene);
+    const expectedFormat = resolveLockedProjectFormat(projectRef.current || project);
     if (isSceneImageAspectMismatch(scene, expectedFormat)) {
-      const confirmed = window.confirm("Фото сцены не совпадает с форматом проекта. Продолжить?");
-      if (!confirmed) return;
+      updateScene(scene.scene_id, {
+        error: `Фото сцены не совпадает с форматом проекта ${expectedFormat}. Замените фото перед генерацией видео.`,
+        status: scene.status || "draft",
+      });
+      return;
     }
 
     if (runningKey) videoStartInFlightRef.current.add(runningKey);
@@ -1914,7 +1960,7 @@ export default function ManualClipDirectorBoardEditor({
         sceneStartSec: Number(scene.start_sec || 0),
         sceneEndSec: Number(scene.end_sec || 0),
         sceneDurationSec: Number(scene.duration_sec || requestedDurationSec),
-        format: resolveProjectAspectFormat(projectRef.current || project, scene),
+        format: resolveLockedProjectFormat(projectRef.current || project),
         provider: "comfy_remote",
         ...routePayload,
         manualClip: true,
@@ -1999,12 +2045,11 @@ export default function ManualClipDirectorBoardEditor({
     {uploadAspectWarning ? <div className="manualAspectModalBackdrop" role="presentation">
       <div className="manualAspectModal" role="dialog" aria-modal="true" aria-labelledby="manual-aspect-warning-title">
         <h3 id="manual-aspect-warning-title">Проверка формата фото</h3>
-        <p>Выбран формат проекта {uploadAspectWarning.expectedFormat}, а фото имеет формат {uploadAspectWarning.actualFormatLabel}. Такое изображение может быть обрезано, растянуто или дать видео не того формата.</p>
+        <p>Формат проекта: {uploadAspectWarning.expectedFormat}. Фото: {uploadAspectWarning.actualFormatLabel}. Загрузка заблокирована, чтобы не сломать проект. Загрузите изображение в формате {uploadAspectWarning.expectedFormat}.</p>
         <div className="manualAspectModalMeta">Image: {uploadAspectWarning.actualFormatLabel} / {uploadAspectWarning.width || "?"}x{uploadAspectWarning.height || "?"}</div>
         <div className="manualAspectModalActions">
-          <button type="button" className="clipSB_btn" onClick={() => resolveUploadAspectDecision("cancel")}>Отменить</button>
-          <button type="button" className="clipSB_btn clipSB_btnPrimary" onClick={() => resolveUploadAspectDecision("as_is")}>Загрузить как есть</button>
-          {normalizeProjectAspectFormat(uploadAspectWarning.actualFormatLabel) ? <button type="button" className="clipSB_btn clipSB_btnPrimary" onClick={() => resolveUploadAspectDecision("switch_project")}>Сменить проект на {uploadAspectWarning.actualFormatLabel}</button> : null}
+          <button type="button" className="clipSB_btn clipSB_btnPrimary" onClick={() => resolveUploadAspectDecision("cancel")}>Понятно</button>
+          <button type="button" className="clipSB_btn" onClick={() => resolveUploadAspectDecision("cancel")}>Отменить загрузку</button>
         </div>
       </div>
     </div> : null}
@@ -2299,24 +2344,11 @@ export default function ManualClipDirectorBoardEditor({
           }}>{selectedScene.audio_extracted ? "Переизъять аудио" : "Изъять аудио"}</button> : null}
           {selectedScene.route === "ia2v" && selectedScene.audio_slice_url ? <span className="manualAudioReady">Аудио сцены готово</span> : null}
           {selectedScene.route === "ia2v" && selectedScene.audio_extracted ? <span className="manualAudioExtracted">Аудио изъято · готово к ia2v</span> : null}
-          <button className="clipSB_btn" disabled={["video_queued", "video_running"].includes(String(selectedScene.status || "").toLowerCase())} onClick={() => onCreateVideo(selectedScene)}>
+          <button className="clipSB_btn" disabled={selectedImageAspectMismatch || ["video_queued", "video_running"].includes(String(selectedScene.status || "").toLowerCase())} onClick={() => onCreateVideo(selectedScene)}>
             {String(selectedScene.status || "").toLowerCase() === "video_queued" ? "В очереди" : String(selectedScene.status || "").toLowerCase() === "video_running" ? "Генерация идёт" : "Создать видео"}
           </button>
           <button className="clipSB_btn" disabled={selectedSceneIndex <= 0 || !!selectedScene.video_url} onClick={() => onUsePreviousLastFrame(selectedScene)}>Взять последний кадр предыдущей</button>
-          <button className="clipSB_btn" disabled={!selectedScene.video_url} onClick={() => {
-            const sceneWithoutVideo = { ...selectedScene, video_url: "" };
-            updateScene(selectedScene.scene_id, {
-              video_url: "",
-              video_job_id: "",
-              video_error: "",
-              video_has_audio: false,
-              generated_audio_policy: "",
-              generated_audio_gain_db: I2V_SOUND_GAIN_DEFAULT_DB,
-              keep_generated_audio: false,
-              error: "",
-              status: resolveManualSceneStatus(sceneWithoutVideo),
-            });
-          }}>{selectedScene.video_url ? "Удалить видео" : "Видео нет"}</button>
+          <button className="clipSB_btn" disabled={!selectedScene.video_url} onClick={() => onDeleteSceneVideo(selectedScene)}>{selectedScene.video_url ? "Удалить видео" : "Видео нет"}</button>
         </div>
         {selectedScene.error ? <div className="manualError">{selectedScene.error}</div> : null}
         {(["video_queued", "video_running", "video_error"].includes(selectedScene.status)) ? <div className="manualVideoDebug">job: {selectedScene.video_job_id || "—"} · route: {selectedScene.route} · workflow: {selectedScene.video_request_payload_preview?.resolvedWorkflowKey || "—"} · audioSlice: {selectedScene.video_request_payload_preview?.hasAudioSliceUrl ? "yes" : "no"} · keepAudio: {selectedScene.video_request_payload_preview?.keepGeneratedAudio ? "yes" : "no"} · gain: {selectedScene.video_request_payload_preview?.generatedAudioGainDb ?? selectedScene.generated_audio_gain_db ?? "—"} dB</div> : null}
@@ -2345,10 +2377,19 @@ export default function ManualClipDirectorBoardEditor({
           </div>
         ) : (
           <>
-            <label className="clipSB_btn manualUploadBtn">Upload image<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "main")} /></label>
+            <div className="manualRepairActions">
+              <label className="clipSB_btn manualUploadBtn">Заменить фото<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "main")} /></label>
+              <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteScenePhoto(selectedScene)} disabled={!selectedScene.image_url && !selectedScene.image_preview_url}>Удалить фото</button>
+              <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteSceneVideo(selectedScene)} disabled={!selectedScene.video_url}>Удалить видео</button>
+            </div>
             <div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video key={selectedScene.video_url} controls preload="metadata" src={selectedScene.video_url} />) : selectedScene.image_preview_url ? <img src={selectedScene.image_preview_url} alt="Scene preview" /> : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>
           </>
         )}
+        {isFirstLastRoute(selectedScene.route) ? <div className="manualRepairActions">
+          <label className="clipSB_btn manualUploadBtn">Заменить фото<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "main")} /></label>
+          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteScenePhoto(selectedScene)} disabled={!selectedScene.image_url && !selectedScene.image_preview_url && !selectedScene.start_image_url && !selectedScene.start_image_preview_url}>Удалить фото</button>
+          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteSceneVideo(selectedScene)} disabled={!selectedScene.video_url}>Удалить видео</button>
+        </div> : null}
         {selectedScene.video_url && !selectedScene.video_url.startsWith("mock://") ? <a className="manualVideoLink" href={selectedScene.video_url} target="_blank" rel="noreferrer">Открыть видео напрямую</a> : null}
         {selectedScene.image_upload_status === "uploading" ? <div className="manualVideoInfo">Фото сохраняется на сервер...</div> : null}
         {selectedScene.image_upload_status === "extracting_last_frame" ? <div className="manualVideoInfo">Извлекаем последний кадр предыдущей сцены...</div> : null}
