@@ -746,7 +746,7 @@ export default function ManualTimingEditorPage() {
   const hasActiveBoardProject = hasMeaningfulManualProject(activeBoardProject);
   const projectFormat = String(project.format || project.aspect_ratio || "9:16");
   const hasSceneMaterials = scenes.some(sceneHasCreatedMaterials);
-  const isFormatLocked = Boolean(project.format_locked || scenes.length > 0 || hasActiveBoardProject || project.timing_status === "confirmed" || hasSceneMaterials || hasRealStoryBlocks(storyBlocks));
+  const isFormatLocked = Boolean(project.format_locked || hasActiveBoardProject || project.timing_status === "confirmed" || hasSceneMaterials || hasRealStoryBlocks(storyBlocks));
   const isStoryVoiceover = isStoryVoiceoverProject(project);
   const modeConfig = getManualTimingModeConfig(project);
   const isProjectModeSelected = Boolean(modeConfig.mode);
@@ -1120,7 +1120,7 @@ export default function ManualTimingEditorPage() {
       selectedSceneId,
       format: projectFormat,
       aspect_ratio: projectFormat,
-      format_locked: Boolean(extraPatch.format_locked ?? true),
+      format_locked: Boolean(extraPatch.format_locked ?? project.format_locked),
       timing_status: extraPatch.timing_status || (nextScenes.length ? "draft" : project.timing_status || "draft"),
     });
   };
@@ -2290,7 +2290,7 @@ export default function ManualTimingEditorPage() {
           </select>
         </label>
       </div>
-      {isFormatLocked ? <div className="manualTimingFormatLockHint">Формат зафиксирован после создания сцен/доски. Чтобы изменить формат, начните новый проект.</div> : null}
+      {isFormatLocked ? <div className="manualTimingFormatLockHint">Формат зафиксирован после Story Pass, подтверждения тайминга, создания доски или материалов. Чтобы изменить формат, начните новый проект.</div> : null}
       <div className="manualTimingCompactActions manualTimingAudioReplaceActions">
         <label className={`clipSB_btn clipSB_btnSecondary ${isTimingAudioUploading ? "isDisabled" : ""}`}>
           {isTimingAudioUploading ? "Загрузка аудио…" : (audio.url ? "Заменить аудио" : "Загрузить аудио")}
