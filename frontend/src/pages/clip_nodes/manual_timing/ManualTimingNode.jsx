@@ -5,6 +5,7 @@ import { API_BASE } from "../../../services/api";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import {
   buildManualProjectBackupJson,
+  clearManualClipBoardProjectForNode,
   hasMeaningfulManualProject,
   readActiveManualClipBoardProject,
   readManualClipBoardProjectForNode,
@@ -147,13 +148,45 @@ function downloadManualBoardBackup(project) {
   URL.revokeObjectURL(url);
 }
 
+function getEmptyManualTimingAudio() {
+  return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
+}
+
+function buildManualTimingAudioResetPatch(base = {}, nextAudio = getEmptyManualTimingAudio(), audioSource = "") {
+  const safeAudio = normalizeManualTimingAudio(nextAudio);
+  const durationSec = Number(safeAudio.duration_sec || 0);
+  const hasAudio = Boolean(safeAudio.url);
+  return {
+    audio: safeAudio,
+    audio_source: audioSource,
+    timing_status: hasAudio ? "draft" : "empty",
+    markers: hasAudio && durationSec > 0 ? [0, durationSec] : [],
+    story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
+    audio_phrases: [],
+    audio_words: [],
+    asr_phrase_map: null,
+    scenes: [],
+    selectedSceneId: "",
+    updatedAt: Date.now(),
+  };
+}
+
 export default function ManualTimingNode({ id, data }) {
   const navigate = useNavigate();
   const patch = (p) => data?.onPatchNodeData?.(id, p);
   const model = { ...getDefaultManualTimingNodeData(), ...(data || {}) };
   const connectedAudio = data?.connectedInputs?.audio_in || data?.connectedAudio || data?.audioInput || null;
   const normalizedConnectedAudio = normalizeManualTimingAudio(connectedAudio);
-  const effectiveAudio = normalizedConnectedAudio?.url ? normalizedConnectedAudio : normalizeManualTimingAudio(model.audio);
+  const manualAudio = normalizeManualTimingAudio(model.audio);
+  const audioSource = String(model.audio_source || model.audioSource || "").trim();
+  const effectiveAudio = audioSource === "none"
+    ? getEmptyManualTimingAudio()
+    : (audioSource === "manual_upload" && manualAudio.url
+      ? manualAudio
+      : (normalizedConnectedAudio?.url ? normalizedConnectedAudio : manualAudio));
+  const hasConnectedAudio = Boolean(normalizedConnectedAudio?.url);
+  const isManualAudioOverride = audioSource === "manual_upload" && Boolean(manualAudio.url);
+  const isAudioBlocked = audioSource === "none";
   const storyBlockCount = (Array.isArray(model.story_blocks) ? model.story_blocks : []).filter((block) => (
     String(block?.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id
   )).length;
@@ -306,9 +339,21 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onStartFreshWithConfirm = () => {
-    const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+    const confirmed = window.confirm("Это очистит активную режиссёрскую доску и начнёт новый разбор с текущим аудио. Сначала скачайте backup. Продолжить?");
     if (!confirmed) return;
-    persistProject();
+    clearManualClipBoardProjectForNode(id, { clearActive: true, clearCanonical: true });
+    setStoredActiveBoardProject(null);
+    const currentAudio = effectiveAudio?.url ? effectiveAudio : getEmptyManualTimingAudio();
+    const resetPatch = buildManualTimingAudioResetPatch(model, currentAudio, currentAudio.url ? (audioSource || (hasConnectedAudio ? "connected" : "manual_upload")) : "");
+    const nextProject = {
+      ...model,
+      ...resetPatch,
+      nodeId: id,
+      audio_upload_status: "",
+      audio_upload_error: "",
+    };
+    patch(nextProject);
+    persistManualTimingProject(nextProject);
     navigate("/studio/manual-timing");
   };
 
@@ -391,23 +436,22 @@ export default function ManualTimingNode({ id, data }) {
       ).trim();
       if (!uploadedAssetUrl) throw new Error("asset_url_missing");
 
-      patch({
-        audio: {
-          url: uploadedAssetUrl,
-          filename: uploadedAssetFilename,
-          duration_sec: Number.isFinite(durationSec) ? durationSec : 0,
-          duration_ms: Number.isFinite(durationSec) && durationSec > 0 ? Math.round(durationSec * 1000) : Number(metadata.duration_ms || 0),
-        },
-        timing_status: "draft",
-        markers: [],
-        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
-        audio_phrases: [],
-        scenes: [],
-        selectedSceneId: "",
+      const nextAudio = {
+        url: uploadedAssetUrl,
+        filename: uploadedAssetFilename,
+        duration_sec: Number.isFinite(durationSec) ? durationSec : 0,
+        duration_ms: Number.isFinite(durationSec) && durationSec > 0 ? Math.round(durationSec * 1000) : Number(metadata.duration_ms || 0),
+      };
+      const resetPatch = buildManualTimingAudioResetPatch(model, nextAudio, "manual_upload");
+      const nextProject = {
+        ...model,
+        ...resetPatch,
+        nodeId: id,
         audio_upload_status: "ready",
         audio_upload_error: "",
-        updatedAt: Date.now(),
-      });
+      };
+      patch(nextProject);
+      persistManualTimingProject(nextProject);
     } catch (error) {
       patch({
         audio_upload_status: "error",
@@ -417,11 +461,43 @@ export default function ManualTimingNode({ id, data }) {
     }
   };
 
+  const onDeleteAudio = () => {
+    const confirmed = window.confirm("Удалить аудио и текущую разметку тайминга? Режиссёрская доска не удаляется — сначала скачайте backup, если она нужна.");
+    if (!confirmed) return;
+    const resetPatch = buildManualTimingAudioResetPatch(model, getEmptyManualTimingAudio(), "none");
+    const nextProject = {
+      ...model,
+      ...resetPatch,
+      nodeId: id,
+      audio_upload_status: "",
+      audio_upload_error: "",
+    };
+    patch(nextProject);
+    persistManualTimingProject(nextProject);
+  };
+
+  const onUseConnectedAudio = () => {
+    if (!normalizedConnectedAudio?.url) return;
+    const resetPatch = buildManualTimingAudioResetPatch(model, normalizedConnectedAudio, "connected");
+    const nextProject = {
+      ...model,
+      ...resetPatch,
+      nodeId: id,
+      audio_upload_status: "",
+      audio_upload_error: "",
+    };
+    patch(nextProject);
+    persistManualTimingProject(nextProject);
+  };
+
   return (
     <NodeShell title="Тайминг песни" subtitle="ручная разметка" accent="var(--accentB)" onClose={onCloseNode}>
       <Handle type="target" position={Position.Left} id="audio_in" />
       <div className={`manualTimingNode_block ${getManualTimingNodeModeClass(projectMode)}`}>
         <div className="manualTimingNode_row"><b>Аудио:</b> {effectiveAudio.filename || "аудио не выбрано"}</div>
+        {isManualAudioOverride ? <div className="manualTimingNode_row">Источник: загружено вручную</div> : null}
+        {hasConnectedAudio && !isManualAudioOverride && !isAudioBlocked ? <div className="manualTimingNode_row">Источник: AUDIO-вход</div> : null}
+        {isAudioBlocked ? <div className="manualTimingNode_row">Источник: аудио отключено вручную</div> : null}
         <div className="manualTimingNode_row"><b>Длительность:</b> {formatDurationSec(effectiveAudio.duration_sec)}</div>
         <div className="manualTimingNode_row"><b>Сцен:</b> {timingSceneCount}</div>
         <div className="manualTimingNode_row"><b>Смысловых блоков:</b> {storyBlockCount}</div>
@@ -464,9 +540,11 @@ export default function ManualTimingNode({ id, data }) {
           <button className="clipSB_btn" onClick={onOpenEditor} disabled={!isProjectModeSelected}>Открыть редактор</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={!isProjectModeSelected || !isModeReadyForJson} title={copyJsonTitle}>{copyJsonLabel}</button>
           <label className={`clipSB_btn clipSB_btnSecondary manualTimingNode_upload ${isAudioUploading ? "isDisabled" : ""}`}>
-            {isAudioUploading ? "Загрузка…" : "Загрузить аудио"}
+            {isAudioUploading ? "Загрузка…" : (effectiveAudio.url ? "Заменить аудио" : "Загрузить аудио")}
             <input type="file" accept="audio/*" onChange={(e) => onAudioUpload(e.target.files?.[0])} disabled={isAudioUploading} hidden />
           </label>
+          <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onDeleteAudio} disabled={isAudioUploading || !effectiveAudio.url}>Удалить аудио</button>
+          {hasConnectedAudio && (isManualAudioOverride || isAudioBlocked) ? <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onUseConnectedAudio} disabled={isAudioUploading}>Взять AUDIO-вход</button> : null}
         </div>
       </div>
       <Handle type="source" position={Position.Right} id="manual_timing_out" />

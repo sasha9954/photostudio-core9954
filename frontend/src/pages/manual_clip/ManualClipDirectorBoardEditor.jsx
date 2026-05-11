@@ -507,6 +507,8 @@ const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "image_preview_url",
   "start_image_url",
   "end_image_url",
+  "start_image_preview_url",
+  "end_image_preview_url",
   "video_url",
   "videoUrl",
   "video_job_id",
@@ -520,6 +522,26 @@ const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "generated_audio_policy",
   "generated_audio_gain_db",
   "keep_generated_audio",
+  "video_prompt",
+  "negative_prompt",
+  "sound_prompt",
+  "negative_audio_prompt",
+  "speech_text",
+  "voice_profile",
+  "delivery_style",
+  "ambient_sound_prompt",
+  "source_image_prompt_en",
+  "source_image_prompt_ru",
+  "source_image_negative_prompt_en",
+  "i2v_prompt_en",
+  "i2v_negative_prompt_en",
+  "composition_ru",
+  "camera_angle_ru",
+  "subject_lock_ru",
+  "background_lock_ru",
+  "scene_global_context_ru",
+  "continuity_anchor_ru",
+  "storyboard_frame_role_ru",
 ];
 
 function isEmptyImportedMaterialValue(value) {
@@ -538,7 +560,7 @@ function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScen
       const incomingHasField = Object.prototype.hasOwnProperty.call(incomingScene || {}, field);
       if (!incomingHasField) return;
       const incomingIsEmpty = isEmptyImportedMaterialValue(incomingScene?.[field]);
-      const currentHasValue = String(currentScene?.[field] ?? "").trim() !== "";
+      const currentHasValue = currentScene?.[field] === true || String(currentScene?.[field] ?? "").trim() !== "";
       if (incomingIsEmpty && currentHasValue) nextScene[field] = currentScene[field];
     });
 

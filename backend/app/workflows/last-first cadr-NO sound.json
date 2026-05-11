@@ -16,7 +16,7 @@
   },
   "137": {
     "inputs": {
-      "image": "ир2.png"
+      "image": "__RUNTIME_END_IMAGE__.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -25,7 +25,7 @@
   },
   "138": {
     "inputs": {
-      "image": "ир1.png"
+      "image": "__RUNTIME_START_IMAGE__.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -457,7 +457,7 @@
   },
   "139:128": {
     "inputs": {
-      "text": "Use the first image as the exact start frame and the second image as the exact end frame. A locked high-angle cinematic shot of a narrow mountain road, convoy trucks with missiles, and a tunnel carved into a rocky cliff. Preserve the exact canyon geometry, tunnel shape, road curve, vehicle positions, lighting, time of day, dust tone, and overall composition. Over 6 seconds, the scene escalates from tense stillness into sudden impact: the convoy is moving slowly out of the tunnel, heat haze and light road dust are visible, then a fast incoming missile enters from the upper right and strikes the cliff face above the tunnel entrance. The rock wall erupts into a violent explosion with fire, dust, shattered stone, and debris blasting outward and downward across the road. The blast wave rolls through the canyon, dust expands, small fragments scatter, soldiers react, nearby vehicles jolt slightly but remain grounded and believable. Keep motion physically plausible and coherent, with strong continuity from start frame to end frame. No camera cut, no teleporting objects, no layout changes, no extra vehicles, no fantasy effects, no melted geometry, no drifting identity of the trucks, no rubber motion.",
+      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Create one continuous realistic transition from the start frame to the end frame. Follow only the runtime user prompt for subject, action, environment, camera movement, visual style, and sound. If this workflow generates audio from text, create only sound that directly matches the visible action and the runtime prompt. No background music, no unrelated ambience, no voice, no singing unless explicitly requested. Do not introduce anything unrelated to the runtime prompt or the provided frames. Keep the same visual world between both frames. Stable cinematic motion, physically natural transition, no sudden jumps, no surreal deformation.",
       "clip": [
         "139:103",
         0
@@ -539,7 +539,7 @@
   },
   "139:112": {
     "inputs": {
-      "text": "low quality, blurry, soft image, overexposed, underexposed, flat lighting, flicker, frame inconsistency, temporal instability, ghosting, double objects, duplicated vehicles, duplicated soldiers, duplicated missiles, disappearing objects, popping objects, teleporting debris, floating rocks, rubber motion, jelly motion, warped trucks, bent wheels, melted geometry, deformed road, changing tunnel shape, changing cliff structure, shifting mountain background, camera shake, camera drift, zoom, cut, angle change, sudden reframing, unrealistic missile path, wrong explosion direction, fake fire, fake smoke, cartoon explosion, excessive fireball, fantasy effects, sci-fi glow, broken perspective, broken scale, bad depth, stretched vehicles, distorted missile launcher, extra vehicles, extra soldiers, collapsed convoy layout, identity drift of trucks, unstable composition, morphing rock wall, melting asphalt, impossible shockwave, oversaturated dust, noisy image, artifacts, compression artifacts",
+      "text": "unrelated scene, unrelated environment, unrelated subject, unrelated object, random background, background morphing, subject replacement, object replacement, identity drift, mismatched start frame, mismatched end frame, jump cut, teleportation, sudden scene change, flicker, ghosting, double exposure, unstable geometry, surreal deformation, broken anatomy, extra limbs, duplicated subject, bad hands, distorted face, low quality, blurry, cartoon, CGI, text on screen, subtitles, captions, logo, watermark, letters, random signage",
       "clip": [
         "139:103",
         0

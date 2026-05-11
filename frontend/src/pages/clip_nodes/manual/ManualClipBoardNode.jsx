@@ -5,7 +5,15 @@ import { useNavigate } from "react-router-dom";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import "./ManualClipBoardNode.css";
 import { buildManualAudioSlicePayload, buildManualClipSampleJson, buildMockSplitJson, buildStoryPrepTemplateText, getDefaultManualClipNodeData, buildStoryBlockLookup, normalizeManualAudio, normalizeScene, parseManualSplitJson, STORY_PREP_TEMPLATE_META, toBool } from "./manualClipBoardDomain";
-import { canUseLegacyManualProjectStorage, getAccountScopedStorageKey } from "../manualProjectBackup.js";
+import {
+  canUseLegacyManualProjectStorage,
+  getAccountScopedStorageKey,
+  getManualClipBoardMaterialStats,
+  persistManualClipBoardProject,
+  pickBestManualClipBoardProject,
+  readManualClipBoardProjectForNode,
+  readActiveManualClipBoardProject,
+} from "../manualProjectBackup.js";
 
 
 const ACTIVE_PROJECT_STORAGE_KEY = "manual_clip_board_active_project";
@@ -37,6 +45,13 @@ function readJsonStorage(key) {
 
 function readManualProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
+  const centralNodeProject = readManualClipBoardProjectForNode(safeId);
+  if (centralNodeProject) return centralNodeProject;
+
+  const centralActiveProject = readActiveManualClipBoardProject();
+  const activeOwnerId = String(centralActiveProject?.sourceNodeId || centralActiveProject?.nodeId || "").trim();
+  if (centralActiveProject && (!safeId || activeOwnerId === safeId)) return centralActiveProject;
+
   const active = readJsonStorage(getAccountScopedStorageKey(ACTIVE_PROJECT_STORAGE_KEY));
   if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
   const scoped = readJsonStorage(getAccountScopedStorageKey(getManualProjectStorageKey(safeId)));
@@ -50,17 +65,14 @@ function readManualProjectForNode(nodeId = "") {
   return null;
 }
 
-function persistManualProject(project = {}) {
+function persistManualProject(project = {}, options = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
-  try {
-    const serialized = JSON.stringify(safeProject);
-    localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_STORAGE_KEY), serialized);
-    const nodeId = String(safeProject?.nodeId || "").trim();
-    if (nodeId) {
-      localStorage.setItem(getAccountScopedStorageKey(ACTIVE_PROJECT_ID_STORAGE_KEY), nodeId);
-      localStorage.setItem(getAccountScopedStorageKey(getManualProjectStorageKey(nodeId)), serialized);
-    }
-  } catch {}
+  return persistManualClipBoardProject(safeProject, {
+    reason: options?.reason || safeProject?.lastPersistReason || "manual_clip_board_node_persist",
+    forceReplace: Boolean(options?.forceReplace),
+    explicitReset: Boolean(options?.explicitReset),
+    allowMaterialLoss: Boolean(options?.allowMaterialLoss),
+  });
 }
 
 function removeManualProjectForNode(nodeId = "") {
@@ -611,14 +623,16 @@ export default function ManualClipBoardNode({ id, data }) {
 
   const onOpenDirectorBoard = () => {
     let nextScenes = scenes;
+    let existingProject = null;
     try {
-      const existingProject = readManualProjectForNode(id);
+      existingProject = readManualProjectForNode(id);
       if (existingProject?.nodeId === id) {
         const existingScenes = Array.isArray(existingProject?.scenes) ? existingProject.scenes : [];
         nextScenes = mergeDirectorSceneWork(scenes, existingScenes);
       }
     } catch {
       nextScenes = scenes;
+      existingProject = null;
     }
 
     const payload = {
@@ -633,13 +647,21 @@ export default function ManualClipBoardNode({ id, data }) {
       story_blocks: pickStoryBlocksFromModel(model),
       scenes: nextScenes,
     };
-    persistManualProject(payload);
+    const protectedPayload = pickBestManualClipBoardProject([payload, existingProject]) || payload;
+    const persisted = persistManualProject(protectedPayload, { reason: "open_manual_clip_board_node" });
+    console.debug("[manual clip board node open]", {
+      persisted,
+      protectedByExisting: protectedPayload === existingProject,
+      stats: getManualClipBoardMaterialStats(protectedPayload),
+    });
     patch({
       scenes: nextScenes,
       selectedSceneId: nextScenes[0]?.scene_id || model.selectedSceneId || "",
       step: scenes.length ? "scene_plan_ready" : model.step,
     });
-    navigate("/studio/manual-clip-board");
+    navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`, {
+      state: { director_board: protectedPayload },
+    });
   };
 
   return <NodeShell title="AI-разбивка клипа" onClose={() => data?.onRemoveNode?.(id)} icon={<span>✂️</span>} className="clipSB_nodeStoryboard manualClipBoardNode">

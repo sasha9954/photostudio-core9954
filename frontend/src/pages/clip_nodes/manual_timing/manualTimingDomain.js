@@ -182,6 +182,7 @@ export function getDefaultManualTimingNodeData() {
       duration_sec: 0,
       duration_ms: 0,
     },
+    audio_source: "",
     timing_status: "empty",
     markers: [],
     story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],

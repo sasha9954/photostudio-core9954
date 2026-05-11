@@ -17,7 +17,7 @@
   },
   "137": {
     "inputs": {
-      "image": "о1 (1).jpg"
+      "image": "__RUNTIME_END_IMAGE__.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -26,7 +26,7 @@
   },
   "138": {
     "inputs": {
-      "image": "о2 (1).jpg"
+      "image": "__RUNTIME_START_IMAGE__.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -462,7 +462,7 @@
   },
   "139:128": {
     "inputs": {
-      "text": "Start outside the moving train at night in the rain. The camera smoothly tracks along the wet carriage with warm light glowing through the window. Then the camera gently approaches the illuminated window and makes a seamless cinematic transition into the compartment interior, ending on the same man from the end frame. Keep the same train, same rainy atmosphere, same warm lamp light, and same character identity. End with the man emotionally singing in the compartment with open mouth, realistic lip movement, expressive face, and subtle hand gestures. One continuous stable shot, natural motion, no sudden jumps or surreal distortion.",
+      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Create one continuous realistic transition from the start frame to the end frame. Follow only the runtime user prompt for subject, action, environment, camera movement, visual style, and sound. If this workflow generates audio from text, create only sound that directly matches the visible action and the runtime prompt. No background music, no unrelated ambience, no voice, no singing unless explicitly requested. Do not introduce anything unrelated to the runtime prompt or the provided frames. Keep the same visual world between both frames. Stable cinematic motion, physically natural transition, no sudden jumps, no surreal deformation.",
       "clip": [
         "139:103",
         0
@@ -544,7 +544,7 @@
   },
   "139:112": {
     "inputs": {
-      "text": "static pose, no movement, frozen frame, delayed motion,\nteleportation, instant position change, jump cut,\nfloating body, unnatural lifting, weightless motion,\nextra limbs, duplicated arms, broken legs,\ntwisted body, incorrect anatomy, deformed hands,\nunnatural speed, sudden acceleration, jerky motion,\nsliding instead of walking, glitch movement,\ncamera shake, fast zoom, chaotic motion,\nmotion blur artifacts, ghosting, double exposure,\nidentity change, face distortion, inconsistent character",
+      "text": "unrelated scene, unrelated environment, unrelated subject, unrelated object, random background, background morphing, subject replacement, object replacement, identity drift, mismatched start frame, mismatched end frame, jump cut, teleportation, sudden scene change, flicker, ghosting, double exposure, unstable geometry, surreal deformation, broken anatomy, extra limbs, duplicated subject, bad hands, distorted face, low quality, blurry, cartoon, CGI, text on screen, subtitles, captions, logo, watermark, letters, random signage",
       "clip": [
         "139:103",
         0

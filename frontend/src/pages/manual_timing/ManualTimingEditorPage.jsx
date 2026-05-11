@@ -4,6 +4,7 @@ import { API_BASE } from "../../services/api";
 import {
   buildManualProjectBackupJson,
   canUseLegacyManualProjectStorage,
+  clearManualClipBoardProjectForNode,
   getAccountScopedStorageKey,
   hasMeaningfulManualProject,
   persistManualClipBoardProject,
@@ -127,6 +128,102 @@ function readActiveProject() {
   } catch {
     return null;
   }
+}
+
+function getEmptyManualTimingAudio() {
+  return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
+}
+
+async function uploadManualTimingAudioAsset(file) {
+  const fd = new FormData();
+  fd.append("file", file);
+
+  const res = await fetch(`${API_BASE}/api/assets/upload`, {
+    method: "POST",
+    body: fd,
+    credentials: "include",
+  });
+  if (!res.ok) {
+    let message = `upload_failed:${res.status}`;
+    try {
+      const data = await res.json();
+      message = data?.detail || data?.message || message;
+    } catch {
+      try {
+        message = await res.text() || message;
+      } catch {
+        // keep default upload message
+      }
+    }
+    throw new Error(message);
+  }
+  return await res.json();
+}
+
+function readAudioFileMetadata(file) {
+  return new Promise((resolve) => {
+    if (!file) {
+      resolve({ duration_sec: 0, duration_ms: 0 });
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    const audioEl = new Audio();
+    let settled = false;
+
+    const finish = (durationSec = 0) => {
+      if (settled) return;
+      settled = true;
+      const safeDurationSec = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
+        ? Number(Number(durationSec).toFixed(3))
+        : 0;
+      try {
+        audioEl.removeAttribute("src");
+        audioEl.load();
+      } catch {
+        // ignore metadata cleanup errors
+      }
+      URL.revokeObjectURL(url);
+      resolve({
+        duration_sec: safeDurationSec,
+        duration_ms: safeDurationSec > 0 ? Math.round(safeDurationSec * 1000) : 0,
+      });
+    };
+
+    audioEl.preload = "metadata";
+    audioEl.onloadedmetadata = () => finish(audioEl.duration || 0);
+    audioEl.onerror = () => finish(0);
+    audioEl.src = url;
+  });
+}
+
+function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = getEmptyManualTimingAudio(), audioSource = "") {
+  const safeAudio = normalizeManualTimingAudio(nextAudio);
+  const durationSec = Number(safeAudio.duration_sec || 0);
+  const hasAudio = Boolean(safeAudio.url);
+  const markers = hasAudio && durationSec > 0 ? [0, durationSec] : [];
+  const storyBlocks = [MANUAL_TIMING_UNKNOWN_STORY_BLOCK];
+  const scenes = markers.length
+    ? hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(markers, [], { durationSec }), storyBlocks)
+    : [];
+  return {
+    ...getDefaultManualTimingNodeData(),
+    nodeId: String(baseProject?.nodeId || ""),
+    sourceNodeId: String(baseProject?.sourceNodeId || baseProject?.nodeId || ""),
+    project_mode: String(baseProject?.project_mode || ""),
+    project_kind: String(baseProject?.project_kind || ""),
+    format: String(baseProject?.format || "9:16"),
+    audio: safeAudio,
+    audio_source: audioSource,
+    markers,
+    story_blocks: storyBlocks,
+    audio_phrases: [],
+    audio_words: [],
+    asr_phrase_map: null,
+    scenes,
+    selectedSceneId: scenes[0]?.scene_id || "",
+    timing_status: hasAudio ? "draft" : "empty",
+  };
 }
 
 function buildInitialProject() {
@@ -610,6 +707,7 @@ export default function ManualTimingEditorPage() {
   const [missingPhraseDraft, setMissingPhraseDraft] = useState({ start_sec: null, end_sec: null });
   const [selectedMissingPhraseId, setSelectedMissingPhraseId] = useState("");
   const [asrStatus, setAsrStatus] = useState("");
+  const [audioUploadStatus, setAudioUploadStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
   const [activeBoardProject, setActiveBoardProject] = useState(() => readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(buildInitialProject())) || readActiveManualClipBoardProject());
   const currentTimeRef = useRef(0);
@@ -630,6 +728,7 @@ export default function ManualTimingEditorPage() {
   const modeConfig = getManualTimingModeConfig(project);
   const isProjectModeSelected = Boolean(modeConfig.mode);
   const mainActionsDisabled = !isProjectModeSelected;
+  const isTimingAudioUploading = audioUploadStatus === "uploading";
   const workflowLabels = getManualTimingWorkflowLabels(modeConfig.mode);
   const routeOptions = getManualTimingRouteOptions(modeConfig.mode);
   const isMusicClip = modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE;
@@ -1731,9 +1830,17 @@ export default function ManualTimingEditorPage() {
   };
 
   const onStartNewAnalysisWithConfirm = () => {
-    const confirmed = window.confirm("Это очистит текущую режиссёрскую доску. Сначала скачайте backup. Продолжить?");
+    const confirmed = window.confirm("Начать новый разбор? Это очистит активную режиссёрскую доску, текущее аудио, ASR-фразы и сцены тайминга. Сначала скачайте backup, если нужно сохранить старую доску.");
     if (!confirmed) return;
-    setCopyStatus("Можно продолжить новый разбор. Существующая доска будет заменена только при создании новой доски.");
+    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    clearManualClipBoardProjectForNode(ownerNodeId, { clearActive: true, clearCanonical: true });
+    setActiveBoardProject(null);
+    const nextProject = buildManualTimingProjectForAudioChange(project, getEmptyManualTimingAudio(), "none");
+    persist(nextProject);
+    setAsrStatus("");
+    setHandoffStatus("");
+    setAudioTime(0, { pause: true, clearBound: true });
+    setCopyStatus("Новый разбор начат. Загрузите новое аудио.");
     window.setTimeout(() => setCopyStatus(""), 3200);
   };
 
@@ -1859,6 +1966,82 @@ export default function ManualTimingEditorPage() {
     } catch (error) {
       setCopyStatus(`Ошибка файла JSON: ${error?.message || "неверный формат"}`);
     }
+  };
+
+
+  const onReplaceTimingAudio = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!isProjectModeSelected) {
+      setCopyStatus("Сначала выберите режим проекта");
+      return;
+    }
+    const confirmed = scenes.length || audio.url || audioPhrases.length
+      ? window.confirm("Заменить аудио? Текущие ASR-фразы, разметка сцен и Story Pass будут очищены. Активная доска не удаляется — её можно отдельно скачать backup.")
+      : true;
+    if (!confirmed) return;
+
+    setAudioUploadStatus("uploading");
+    setCopyStatus("Загружаю новое аудио…");
+    try {
+      const [metadata, uploadedAsset] = await Promise.all([
+        readAudioFileMetadata(file),
+        uploadManualTimingAudioAsset(file),
+      ]);
+      const uploadedDurationSec = Number(uploadedAsset?.durationSec || uploadedAsset?.duration_sec || 0);
+      const duration = uploadedDurationSec > 0
+        ? Number(uploadedDurationSec.toFixed(3))
+        : Number(metadata.duration_sec || 0);
+      const uploadedAssetUrl = String(
+        uploadedAsset?.url
+        || uploadedAsset?.assetUrl
+        || uploadedAsset?.asset_url
+        || uploadedAsset?.publicUrl
+        || uploadedAsset?.public_url
+        || uploadedAsset?.path
+        || ""
+      ).trim();
+      const uploadedAssetFilename = String(
+        uploadedAsset?.name
+        || uploadedAsset?.filename
+        || uploadedAsset?.fileName
+        || file.name
+        || ""
+      ).trim();
+      if (!uploadedAssetUrl) throw new Error("asset_url_missing");
+
+      const nextAudio = {
+        url: uploadedAssetUrl,
+        filename: uploadedAssetFilename,
+        duration_sec: Number.isFinite(duration) ? duration : 0,
+        duration_ms: Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) : Number(metadata.duration_ms || 0),
+      };
+      const nextProject = buildManualTimingProjectForAudioChange(project, nextAudio, "manual_upload");
+      persist(nextProject);
+      setAsrStatus("");
+      setHandoffStatus("");
+      setAudioTime(0, { pause: true, clearBound: true });
+      setCopyStatus(`Аудио заменено: ${uploadedAssetFilename || file.name}. Старые ASR/сцены очищены.`);
+      window.setTimeout(() => setCopyStatus(""), 3200);
+    } catch (error) {
+      setCopyStatus(`Не удалось загрузить аудио: ${error?.message || "upload_failed"}`);
+    } finally {
+      setAudioUploadStatus("");
+    }
+  };
+
+  const onDeleteTimingAudio = () => {
+    if (!audio.url && !scenes.length && !audioPhrases.length) return;
+    const confirmed = window.confirm("Удалить текущее аудио и очистить ASR-фразы/сцены тайминга? Активная режиссёрская доска не удаляется.");
+    if (!confirmed) return;
+    const nextProject = buildManualTimingProjectForAudioChange(project, getEmptyManualTimingAudio(), "none");
+    persist(nextProject);
+    setAsrStatus("");
+    setHandoffStatus("");
+    setAudioTime(0, { pause: true, clearBound: true });
+    setCopyStatus("Аудио удалено. Тайминг очищен.");
+    window.setTimeout(() => setCopyStatus(""), 2200);
   };
 
   const onRestoreLegacyManualProject = () => {
@@ -2019,6 +2202,14 @@ export default function ManualTimingEditorPage() {
         <div><b>Сцен:</b> {scenes.length}</div>
         <div><b>Статус:</b> {readableTimingStatus}</div>
       </div>
+      <div className="manualTimingCompactActions manualTimingAudioReplaceActions">
+        <label className={`clipSB_btn clipSB_btnSecondary ${isTimingAudioUploading ? "isDisabled" : ""}`}>
+          {isTimingAudioUploading ? "Загрузка аудио…" : (audio.url ? "Заменить аудио" : "Загрузить аудио")}
+          <input type="file" accept="audio/*" onChange={onReplaceTimingAudio} disabled={isTimingAudioUploading || mainActionsDisabled} hidden />
+        </label>
+        <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onDeleteTimingAudio} disabled={isTimingAudioUploading || mainActionsDisabled || (!audio.url && !scenes.length && !audioPhrases.length)}>Удалить аудио</button>
+        <span className="manualTimingWorkflowStatus">Замена аудио очищает ASR phrase map, сцены и Story Pass, чтобы старый разбор не смешивался с новым.</span>
+      </div>
 
       <section className="manualTimingTransport">
         {audio.url ? <audio
@@ -2120,6 +2311,20 @@ export default function ManualTimingEditorPage() {
             >
               {isPlaying ? "⏸ пауза" : "▶ слушать"}
             </button>
+          </div>
+
+          <div className="manualTimingNudgePanel manualTimingTrackNudgePanel">
+            <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы — рядом с аудио-дорожкой</div>
+            <div className="manualTimingNudgeGuidance">Если в конце сцены слышно начало следующей фразы — выбери сцену прямо на шкале и двигай её конечную границу назад. Это меняет границу между текущей и следующей сценой.</div>
+            <div className="manualTimingNudgeButtons">
+              {NUDGE_STEPS.map((step) => <button
+                key={step}
+                className="clipSB_btn clipSB_btnSecondary"
+                disabled={!selectedBoundaryIsInternal}
+                onClick={() => nudgeSelectedBoundary(step)}
+              >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
+            </div>
+            <div className="manualTimingNudgeHint">− сдвигает конец выбранной сцены раньше, + сдвигает конец выбранной сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
           </div>
         </div>
 
@@ -2236,20 +2441,6 @@ export default function ManualTimingEditorPage() {
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
             </div>
           </div> : null}
-
-          <div className="manualTimingNudgePanel">
-            <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы — главный инструмент подгонки фразы</div>
-            <div className="manualTimingNudgeGuidance">Если в конце сцены слышно начало следующей фразы — выбери сцену и двигай её конечную границу назад кнопками микро-доводчика. Это меняет границу между текущей и следующей сценой.</div>
-            <div className="manualTimingNudgeButtons">
-              {NUDGE_STEPS.map((step) => <button
-                key={step}
-                className="clipSB_btn clipSB_btnSecondary"
-                disabled={!selectedBoundaryIsInternal}
-                onClick={() => nudgeSelectedBoundary(step)}
-              >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
-            </div>
-            <div className="manualTimingNudgeHint">− сдвигает конец сцены раньше, + сдвигает конец сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
-          </div>
         </details> : null}
 
         {selectedScene ? <div className="manualTimingSceneTextPanel">

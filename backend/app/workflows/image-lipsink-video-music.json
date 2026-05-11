@@ -1,7 +1,7 @@
 {
   "269": {
     "inputs": {
-      "image": "рроз.jpg"
+      "image": "__INPUT_IMAGE__"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -10,8 +10,8 @@
   },
   "276": {
     "inputs": {
-      "audio": "5666.mp3",
-      "audioUI": "/api/view?filename=5666.mp3&type=input&subfolder=&rand=0.3432663467822794"
+      "audio": "__INPUT_AUDIO__",
+      "audioUI": ""
     },
     "class_type": "LoadAudio",
     "_meta": {
@@ -36,7 +36,7 @@
   },
   "340:285": {
     "inputs": {
-      "noise_seed": 42
+      "noise_seed": 0
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -45,7 +45,7 @@
   },
   "340:286": {
     "inputs": {
-      "noise_seed": 803273866902483
+      "noise_seed": 0
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -734,7 +734,7 @@
   },
   "340:319": {
     "inputs": {
-      "value": "Emotional singing performance in tight medium framing with persistent face/mouth readability. LIP-SYNC PERFORMANCE RULES (STRICT): performer-first, face/mouth readability is mandatory, eye line toward camera or near-camera is preferred, emotional lyric delivery through face/shoulders/hands/subtle torso rhythm, and only gentle head turns/subtle lean/soft sway/phrase-timed hand gestures are allowed. Camera movement must stay slow, controlled, and readable: gentle push-in, slight lateral drift, or slow eye-level arc only. CAMERA ORBIT SAFETY: if orbit is used it must stay a slow horizontal right-to-left or left-to-right arc around the performer at eye/chest/waist level; keep horizon stable and subject readable. Forbidden camera behavior: no overhead orbit, no top-down rotation, no camera roll, no spinning around head, no top orbit, no overhead spin, no head-top camera circle, no drone-like loop over subject, no aggressive zoom-out, no fast retreating camera, no whip-pan, no chaotic circular chase camera. Background extras may move softly but remain secondary and non-distracting; no chaotic background dance and no crowd stealing focus. No unreadable mouth and no extreme motion blur. Environment remains background support; no running/chasing/spinning as primary action. LTX 2.3 LIP-SYNC PERFORMANCE CANON and PHYSICS/ANATOMY/MICROPHONE constraints apply."
+      "value": "Use the uploaded image as the exact visual identity and first-frame anchor. Create a realistic audio-driven singing or speaking performance matched to the supplied audio. Keep the same subject identity, face, age impression, outfit, accessories, lighting, and background. The mouth, jaw, cheeks, throat, eyes, shoulders, and subtle hand gestures should respond naturally to the vocal phrase and emotional energy. Maintain clear face and mouth readability throughout the shot. Camera movement should be slow, stable, and readable: gentle push-in, slight lateral drift, or mostly locked medium framing. Motion must stay grounded and physically natural, with no sudden jumps, no scene change, and no unrelated environment transformation. Background elements may move softly but must remain secondary and non-distracting. One continuous coherent shot."
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
@@ -743,7 +743,7 @@
   },
   "340:314": {
     "inputs": {
-      "text": "cartoon, anime, game look, low quality, blur, flicker, jitter, face distortion, identity drift, extra fingers, extra arms, duplicate microphone, deformed hands, broken legs, crossed legs, fused legs, warped limbs, twisted hips, unnatural posture, bad body mechanics, floating feet, sliding feet, foot distortion, leg deformation, outfit change, sudden zoom, shaky camera, text, watermark",
+      "text": "text on screen, subtitles, captions, logo, watermark, letters, random words, title card, closed mouth, frozen face, weak lip movement, no singing, unreadable lips, hidden mouth, face fully turned away, mouth covered, severe identity drift, different face, different outfit, different location, scene change, background morphing, camera roll, spinning camera, rotating frame, orbit camera, top-down view, overhead spin, unstable framing, fast camera shake, chaotic movement, distorted lips, broken jaw, distorted face, bad hands, extra fingers, extra arms, duplicate subject, broken anatomy, warped limbs, foot sliding, flicker, ghosting, cartoon, CGI, low quality",
       "clip": [
         "340:318",
         0

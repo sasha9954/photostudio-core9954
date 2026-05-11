@@ -17,7 +17,7 @@
   },
   "137": {
     "inputs": {
-      "image": "aa.jpg"
+      "image": "__RUNTIME_END_IMAGE__.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -26,7 +26,7 @@
   },
   "138": {
     "inputs": {
-      "image": "bb.jpg"
+      "image": "__RUNTIME_START_IMAGE__.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -462,7 +462,7 @@
   },
   "139:128": {
     "inputs": {
-      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Locked transition for the protagonist in urban: one controlled only: brim lifts relative to start while the cap remains worn, the face opens more, and direct gaze becomes visible. Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing. Keep cap attached/worn with no drift or detachment.",
+      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Create one continuous realistic transition from the start frame to the end frame. Follow only the runtime user prompt for subject, action, environment, camera movement, and visual style. Do not introduce anything unrelated to the runtime prompt or the provided frames. Keep the same visual world between both frames. Stable cinematic motion, physically natural transition, no sudden jumps, no surreal deformation.",
       "clip": [
         "139:103",
         0
@@ -544,7 +544,7 @@
   },
   "139:112": {
     "inputs": {
-      "text": "Use the first image as the exact start frame and the second image as the exact end frame. Locked transition for the protagonist in urban: one controlled only: brim lifts relative to start while the cap remains worn, the face opens more, and direct gaze becomes visible. Preserve same exact wall geometry, framing, perspective, camera distance, clothing, body proportions, and lighting. No camera drift, no zoom, no reframing, no layout change, no extra objects, no geometry morphing. Keep cap attached/worn with no drift or detachment.. DANCE MOTION SAFETY: smooth dynamic nightclub realism, controlled musical movement, beat-shaped but readable motion, stable anatomy-safe choreography, elegant club-energy not frantic chaos. Use groove/sway/step/pivot/rebound/pose and phrase-shaped accents with moderate amplitude. Avoid jerky dance, fast flailing arms, abrupt spins, violent head whipping, high-frequency shaking, extreme rotation velocity, aggressive torso snapping, stroboscopic pose changes, ultra-fast partner turbulence.. CAMERA ORBIT SAFETY: if orbit is used, keep slow horizontal arc around performer at eye/chest/waist level, prefer right-to-left or left-to-right around subject plane, preserve stable horizon and subject readability. Forbidden: top orbit, overhead spin, top-down path, head-top camera circle, drone-like loop, roll-tilt orbit.",
+      "text": "unrelated scene, unrelated environment, unrelated subject, unrelated object, random background, background morphing, subject replacement, object replacement, identity drift, mismatched start frame, mismatched end frame, jump cut, teleportation, sudden scene change, flicker, ghosting, double exposure, unstable geometry, surreal deformation, broken anatomy, extra limbs, duplicated subject, bad hands, distorted face, low quality, blurry, cartoon, CGI, text on screen, subtitles, captions, logo, watermark, letters, random signage",
       "clip": [
         "139:103",
         0
