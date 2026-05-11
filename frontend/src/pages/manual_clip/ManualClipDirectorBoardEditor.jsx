@@ -804,7 +804,7 @@ export default function ManualClipDirectorBoardEditor({
       aspect_ratio: projectFormat,
       format_locked: true,
       scenes: Array.isArray(candidateProject?.scenes)
-        ? candidateProject.scenes.map((scene) => ({ ...scene, format: scene.format || projectFormat, aspect_ratio: scene.aspect_ratio || projectFormat }))
+        ? candidateProject.scenes.map((scene) => ({ ...scene, format: projectFormat, aspect_ratio: projectFormat }))
         : [],
       source: candidateProject?.source || "manual_timing_node",
       ownerNodeType: candidateProject?.ownerNodeType || "manualTiming",
@@ -1667,7 +1667,7 @@ export default function ManualClipDirectorBoardEditor({
     }
 
     const isEndSlot = slot === "end";
-    const shouldClearVideoAfterUpload = Boolean(selectedUploadScene.video_url) && slot !== "end";
+    const shouldClearVideoAfterUpload = Boolean(selectedUploadScene.video_url);
     if (shouldClearVideoAfterUpload && !window.confirm("Замена фото удалит текущее видео сцены. Продолжить?")) {
       try { URL.revokeObjectURL(previewUrl); } catch {}
       return;
