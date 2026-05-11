@@ -1136,14 +1136,205 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
   };
 }
 
-export const MANUAL_TIMING_STORY_PASS_TASK_RU = `STORY PASS / РЕЖИССЁРСКАЯ СБОРКА ИСТОРИИ.
-Это НЕ простой перевод. Нужно понять историю целиком, пересобрать story_blocks по смысловым событиям и драматургии, сохранить причинно-следственный порядок, развитие напряжения и финальный смысл. Блоки не должны быть механически по 3–4 сцены: каждый блок должен быть законченным этапом истории.
+export const MANUAL_TIMING_SEMANTIC_CUT_RULES = {
+  version: "semantic_story_cut_v1",
+  main_rule: "one_scene_equals_one_visual_shootable_meaning",
+  core_instruction_ru: "Ты режешь не текст. Ты режешь будущую съёмку.",
+  scene_quality_question_ru: "Можно ли снять это одним понятным кадром?",
+  scene_unit: "one photo + one i2v clip",
+  allow_short_scenes: true,
+  prefer_clear_shots_over_long_mixed_scenes: true,
+  story_block_rule: "block_is_a_finished_dramatic_stage_not_fixed_scene_count",
+  manual_user_split_priority: true,
+  audio_phrases_are_timing_source: true,
+  do_not_change_audio_phrases: true,
+  video_fields_policy: "leave_video_prompt_negative_prompt_sound_prompt_empty_until_video_pass",
+  do_not_merge: [
+    "environment_wakes_up + animals_enter",
+    "character_action + another_character_reaction",
+    "wide_action + important_detail",
+    "fear + protective_response",
+    "attack + consequence",
+    "philosophical_line + new_visual_event",
+  ],
+  split_details_as_scenes_when_meaningful: [
+    "ears_turning",
+    "eyes_waiting",
+    "hooves_and_dust",
+    "birds_flying",
+    "hand_or_trunk_or_paw_action",
+    "character_stops",
+    "character_turns_back",
+    "child_scared",
+    "mother_protects_child",
+    "trunk_raised",
+    "predator_stops",
+    "predator_retreats",
+    "sky_color_change",
+    "night_or_final_symbol",
+  ],
+  pause_rules: {
+    short_pause_between_semantic_scenes: "split_by_midpoint",
+    pause_before_important_action: "may_belong_to_next_scene",
+    pause_after_strong_phrase: "may_remain_in_previous_scene",
+    long_pause_with_visual_meaning: "may_become_atmospheric_broll_scene",
+    duration_sec_includes_assigned_silence: true,
+  },
+  required_scene_fields: [
+    "translated_text_ru",
+    "meaning_hint_ru",
+    "scene_goal_ru",
+    "scene_role_in_block_ru",
+    "block_progress_ru",
+    "photo_prompt_hint_ru",
+    "prompt_hint_ru",
+    "user_note_ru",
+  ],
+  quality_checks: [
+    "each_scene_can_be_imagined_as_one_clear_photo",
+    "each_scene_has_one_main_visual_action_or_state",
+    "story_blocks_explain_dramatic_stages",
+    "source_phrase_ids_match_scene_timing",
+    "manual_user_scene_boundaries_are_not_overwritten",
+  ],
+};
 
-Это JSON после ASR + gap-aware scene builder. Не меняй audio_phrases, timings/start_sec/end_sec, speech_start_sec, speech_end_sec, scene_id и source_phrase_ids. Тайминги, scene_id, source_phrase_ids и audio_phrases нельзя менять ни при каких условиях.
+export const MANUAL_TIMING_STORY_PASS_TASK_RU = `SEMANTIC STORY CUT PASS / СМЫСЛОВАЯ НАРЕЗКА ИСТОРИИ ДЛЯ ФОТО-РАСКАДРОВКИ.
 
-Для каждой сцены заполни translated_text_ru, meaning_hint_ru, scene_role_in_block_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru и block_progress_ru: перевод, смысл, роль в блоке, цель сцены, подсказку для фото и подсказку для будущего i2v. video_prompt, negative_prompt, sound_prompt оставить пустыми.
+Это НЕ простой перевод и НЕ механический Story Pass.
 
-Ошибки ASR исправляй по смыслу в translated_text_ru / meaning_hint_ru и отмечай исправления в user_note_ru. Если кажется, что scenes нужно объединить или разделить, НЕ делай это сам: заполни user_note_ru с предложением, а тайминги и идентификаторы оставь без изменений.`;
+Главная задача:
+разбить историю так, чтобы по каждой сцене можно было сделать одну понятную фотографию и один i2v-клип.
+
+ОСНОВНОЙ КАНОН:
+1. Одна сцена = один законченный визуальный / съёмочный смысл.
+2. Сцена должна отвечать:
+   - что мы видим на фото?
+   - что оживает в i2v?
+   - какой конкретный шаг истории происходит сейчас?
+3. Нельзя склеивать в одну сцену два разных визуальных события, даже если они находятся в одной фразе ASR.
+4. Если внутри фразы есть:
+   - общий план + деталь,
+   - событие + реакция,
+   - персонаж + реакция другого персонажа,
+   - среда + появление животного/героя,
+   - действие + последствие,
+   это чаще всего нужно разделить на отдельные сцены.
+5. Короткие сцены разрешены и желательны, если они объясняют историю.
+6. Блок = законченный драматургический этап истории, а не просто 3–4 сцены подряд.
+7. Смысловые блоки нужны для будущей фото-раскадровки, поэтому каждый блок должен иметь:
+   - свою цель,
+   - свой эмоциональный этап,
+   - свой визуальный стиль внутри общей истории,
+   - понятное место в общей драматургии.
+8. Количество блоков не фиксировано. Делать столько блоков, сколько требует история.
+9. Количество сцен не фиксировано. Лучше больше коротких понятных сцен, чем меньше длинных смешанных сцен.
+
+КАК ДЕЛИТЬ СЦЕНЫ:
+- Рассвет / появление света / пробуждение мира — отдельные сцены.
+- Появление нового животного / героя — отдельная сцена.
+- Деталь поведения животного — отдельная сцена, если она важна для смысла.
+- Реакция на опасность — отдельная сцена.
+- Подготовка к действию — отдельная сцена.
+- Само действие — отдельная сцена.
+- Последствие действия — отдельная сцена.
+- Эмоциональная реакция — отдельная сцена.
+- Философский вывод диктора — отдельная сцена или отдельный блок.
+
+ПРИМЕРЫ ПРАВИЛЬНОГО ДЕЛЕНИЯ:
+Нельзя делать одну сцену:
+"саванна начинает просыпаться + стадо зебр пошло"
+
+Нужно делить:
+scene A — саванна начинает просыпаться
+scene B — стадо зебр медленно идёт
+
+Нельзя делать одну сцену:
+"слонёнок испугался + старая слониха разворачивается назад"
+
+Нужно делить:
+scene A — слонёнок испугался
+scene B — слониха разворачивается назад
+
+Нельзя делать одну сцену:
+"всё взрывается движением + копыта бьют пыль + птицы взлетают"
+
+Нужно делить:
+scene A — общий взрыв движения
+scene B — копыта и пыль
+scene C — птицы взлетают с деревьев
+
+ДЕТАЛИ, КОТОРЫЕ ЧАСТО НУЖНО ВЫНОСИТЬ В ОТДЕЛЬНЫЕ СЦЕНЫ:
+- уши животного настороженно поворачиваются;
+- глаза / взгляд / ожидание;
+- копыта и пыль;
+- птицы взлетают;
+- рука / хобот / лапа делает важное действие;
+- герой останавливается;
+- герой разворачивается;
+- мать защищает детёныша;
+- хищник замирает или отступает;
+- небо / свет / ночь / финальный символ.
+
+КАК ДЕЛАТЬ STORY BLOCKS:
+Story block = законченный этап истории.
+
+Блоки нельзя делать механически.
+Блок должен отвечать:
+- что изменилось в истории?
+- какой этап драмы мы проходим?
+- что зритель должен понять?
+- какие сцены внутри блока работают вместе?
+
+Пример структуры блоков:
+block_01 — вступление / мир до события
+block_02 — появление жизни / первых героев
+block_03 — появление угрозы
+block_04 — уязвимый герой / эмоциональная ставка
+block_05 — напряжение перед действием
+block_06 — кульминация / движение / хаос
+block_07 — реакция / защита / перелом
+block_08 — последствия / возвращение тишины
+block_09 — смысл / философский вывод / цикл
+
+Для другой истории названия блоков должны быть другими, по смыслу конкретного сюжета.
+
+ПАУЗЫ И БЕЗРЕЧЕВОЕ ПРОСТРАНСТВО:
+1. Паузы входят в duration_sec сцены.
+2. Короткую паузу между двумя смысловыми сценами обычно делить по midpoint.
+3. Пауза перед важным действием может относиться к следующей сцене.
+4. Пауза после сильной фразы может оставаться в предыдущей сцене.
+5. Длинная пауза может стать отдельной атмосферной b-roll сценой, если в ней есть визуальный смысл.
+6. Нельзя резать так, чтобы конец одной сцены уже рассказывал начало следующего визуального события.
+
+ЕСЛИ ЕСТЬ audio_phrases:
+- Использовать audio_phrases как главный источник таймингов.
+- Можно пересобирать scenes из audio_phrases по смыслу.
+- Нельзя менять сами audio_phrases: phrase_id, start_sec, end_sec, исходный текст.
+- source_phrase_ids каждой сцены должны соответствовать реальным фразам, которые входят в сцену.
+
+ЕСЛИ ЕСТЬ РУЧНАЯ РАЗБИВКА ПОЛЬЗОВАТЕЛЯ:
+- Считать ручные границы пользователя приоритетными.
+- Не перетирать ручную разбивку механической логикой.
+- Можно пересобрать story_blocks и смысловые поля поверх ручной разбивки.
+- Если source_phrase_ids устарели после ручной правки, пересобрать их по фактическому таймингу сцены.
+
+ЧТО ЗАПОЛНЯТЬ ДЛЯ КАЖДОЙ СЦЕНЫ:
+translated_text_ru — нормальный русский смысл сцены, с исправлением ASR-ошибок.
+meaning_hint_ru — что сцена значит в истории.
+scene_goal_ru — зачем эта сцена нужна.
+scene_role_in_block_ru — роль сцены внутри блока.
+block_progress_ru — как сцена двигает блок вперёд.
+photo_prompt_hint_ru — что нужно сгенерировать как стартовую фотографию.
+prompt_hint_ru — как это должно ожить в i2v.
+user_note_ru — важные исправления ASR и пояснения нарезки.
+
+video_prompt, negative_prompt, sound_prompt оставить пустыми до отдельного video-pass.
+
+КРИТЕРИЙ КАЧЕСТВА:
+Если по сцене нельзя представить одну ясную фотографию — сцена нарезана неправильно.
+Если сцена содержит два разных кадра — её нужно разделить.
+Если блок не объясняет этап истории — блок сделан неправильно.`;
 
 
 export const MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU = "GLOBAL STORY BIBLE / ОБЩИЙ ПАСПОРТ ИСТОРИИ. Это не перевод и не переразбивка сцен. Нужно создать общий story bible для всей истории целиком. Не менять audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, story_blocks и scenes. Не менять количество сцен и блоков. Нужно заполнить только верхнеуровневые поля общего описания проекта: project_story_summary_ru, project_core_theme_ru, project_drama_arc_ru, project_visual_bible_ru, project_style_lock_ru, project_world_lock_ru, project_character_identity_lock_ru, project_location_lock_ru, project_time_progression_ru, project_atmosphere_lock_ru, project_camera_language_ru, project_color_progression_ru, project_continuity_rules_ru, project_must_keep_same_ru, project_allowed_variation_ru, project_reference_prompt_en. Это описание потом должно использоваться как глобальная подсказка для всех блоков и сцен, чтобы вся история держала единый стиль, атмосферу, мир и continuity от первого блока до последнего.";
@@ -1245,7 +1436,9 @@ export function buildManualTimingStoryPassJson(project = {}) {
 
   return {
     chatgpt_task: MANUAL_TIMING_STORY_PASS_TASK_RU,
-    split_type: "asr_gap_aware_story_pass",
+    semantic_cut_rules: MANUAL_TIMING_SEMANTIC_CUT_RULES,
+    story_pass_mode: "semantic_story_cut",
+    split_type: "semantic_story_cut_pass",
     audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
     audio_phrases: exportJson.audio_phrases,
     scenes: exportJson.scenes.map((scene) => ({
@@ -1279,8 +1472,24 @@ function isManualTimingStoryPassPayload(raw = {}) {
     ? raw.chatgpt_task
     : JSON.stringify(raw?.chatgpt_task || "");
   return splitType === "asr_gap_aware_story_pass"
+    || splitType === "semantic_story_cut_pass"
+    || String(raw?.story_pass_mode || raw?.storyPassMode || "") === "semantic_story_cut"
+    || task.includes("SEMANTIC STORY CUT PASS")
+    || task.includes("СМЫСЛОВАЯ НАРЕЗКА ИСТОРИИ")
     || task.includes("после ASR + gap-aware scene builder")
     || task.includes("РЕЖИССЁРСКАЯ СБОРКА ИСТОРИИ");
+}
+
+function isSemanticManualTimingStoryPassPayload(raw = {}) {
+  const splitType = String(raw?.split_type || raw?.splitType || "");
+  const storyPassMode = String(raw?.story_pass_mode || raw?.storyPassMode || "");
+  const task = typeof raw?.chatgpt_task === "string"
+    ? raw.chatgpt_task
+    : JSON.stringify(raw?.chatgpt_task || "");
+  return splitType === "semantic_story_cut_pass"
+    || storyPassMode === "semantic_story_cut"
+    || task.includes("SEMANTIC STORY CUT PASS")
+    || task.includes("СМЫСЛОВАЯ НАРЕЗКА ИСТОРИИ");
 }
 
 function isManualTimingStoryBiblePassPayload(raw = {}) {
@@ -1441,6 +1650,52 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
 
   if (!sameManualTimingJson(importedAudioPhrases, baseAudioPhrases)) {
     errors.push("audio_phrases изменились — Story Pass не должен менять ASR-фразы.");
+  }
+
+  if (isSemanticManualTimingStoryPassPayload(raw)) {
+    if (!importedScenes.length) errors.push("scenes не заполнены.");
+    const phraseIds = new Set(baseAudioPhrases.map((phrase) => String(phrase.phrase_id || "")).filter(Boolean));
+    importedScenes.forEach((scene, idx) => {
+      const sceneId = String(scene.scene_id || `scene_${idx + 1}`);
+      [
+        "translated_text_ru",
+        "meaning_hint_ru",
+        "scene_goal_ru",
+        "photo_prompt_hint_ru",
+        "prompt_hint_ru",
+        "scene_role_in_block_ru",
+        "block_progress_ru",
+        "user_note_ru",
+        "story_block_id",
+        "story_block_title_ru",
+        "story_block_position_ru",
+      ].forEach((key) => {
+        if (!String(scene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
+      });
+      normalizeManualTimingSourcePhraseIds(scene.source_phrase_ids).forEach((phraseId) => {
+        if (phraseIds.size && !phraseIds.has(phraseId)) errors.push(`${sceneId}: source_phrase_ids содержит неизвестный phrase_id ${phraseId}.`);
+      });
+      ["video_prompt", "negative_prompt", "sound_prompt"].forEach((key) => {
+        if (String(scene[key] || "").trim()) {
+          errors.push(`${sceneId}: Semantic Story Cut не должен заполнять ${key}.`);
+        }
+      });
+    });
+
+    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+    const realStoryBlocks = storyBlocks.filter((block) => String(block.block_id || "") !== unknownBlockId);
+    if (!realStoryBlocks.length) {
+      errors.push("story_blocks не заполнены.");
+    }
+    realStoryBlocks.forEach((block) => {
+      const blockId = String(block.block_id || "block_without_id");
+      ["title_ru", "summary_ru", "block_goal_ru", "block_reveal_ru", "block_emotion_ru"].forEach((key) => {
+        if (!String(block[key] || "").trim()) errors.push(`${blockId}: не заполнено ${key}.`);
+      });
+      if (!Array.isArray(block.scene_ids) || !block.scene_ids.length) errors.push(`${blockId}: не заполнены scene_ids.`);
+    });
+
+    return { ok: !errors.length, errors };
   }
 
   if (importedScenes.length !== baseScenes.length) {

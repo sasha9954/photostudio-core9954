@@ -422,13 +422,13 @@ function getManualTimingWorkflowLabels(mode = "") {
   return {
     phraseMap: "Создать Audio Phrase Map",
     buildScenes: "Собрать story scenes из ASR",
-    pass: "Story Pass",
-    copyPass: "Скопировать JSON для Story Pass",
-    applyPass: "Применить Story Pass JSON",
-    insertPass: "Вставить Story Pass JSON",
-    panelTitle: "Story Pass JSON",
-    panelHint: "Вставь JSON после Story Pass: он может заполнить только перевод, смысловые блоки и подсказки, без video_prompt/negative_prompt/sound_prompt.",
-    placeholder: "Вставь сюда Story Pass JSON: scenes/story_blocks с сохранёнными таймингами и заполненными смысловыми полями...",
+    pass: "Semantic Story Cut",
+    copyPass: "Скопировать Semantic Story Cut JSON",
+    applyPass: "Применить Semantic Story Cut JSON",
+    insertPass: "Вставить Semantic Story Cut JSON",
+    panelTitle: "Semantic Story Cut JSON",
+    panelHint: "Вставь JSON после Semantic Story Cut: режем не текст, а будущую съёмку — 1 сцена = 1 фото + 1 i2v; video_prompt/negative_prompt/sound_prompt остаются пустыми.",
+    placeholder: "Вставь сюда Semantic Story Cut JSON: scenes/story_blocks с сохранёнными audio_phrases и заполненными смысловыми полями...",
   };
 }
 
