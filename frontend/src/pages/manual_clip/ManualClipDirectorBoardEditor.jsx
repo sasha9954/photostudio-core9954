@@ -10,7 +10,9 @@ import {
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildManualProjectBackupJson,
+  forceWriteManualClipBoardProjectForNode,
   getManualClipBoardMaterialStats,
+  getManualProjectOwnerId,
   hasMeaningfulManualProject,
   pickBestManualClipBoardProject,
   persistManualClipBoardProject,
@@ -29,10 +31,6 @@ const I2V_SOUND_GAIN_MAX_DB = 10;
 const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
-
-function getManualProjectOwnerId(project = {}) {
-  return String(project?.sourceNodeId || project?.nodeId || "").trim();
-}
 
 function projectBelongsToSource(project = {}, sourceNodeId = "") {
   const source = String(sourceNodeId || "").trim();
@@ -681,6 +679,22 @@ export default function ManualClipDirectorBoardEditor({
     console.warn("[manual director] missing sourceNodeId, node-bound board sync disabled");
   };
 
+  const logStorageVerify = (ownerNodeId = getProjectOwnerNodeId(projectRef.current)) => {
+    const safeSourceNodeId = String(ownerNodeId || "").trim();
+    if (!safeSourceNodeId) return;
+    const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
+    const activeProject = readActiveManualClipBoardProject();
+    console.info("[MANUAL BOARD STORAGE VERIFY]", {
+      sourceNodeId: safeSourceNodeId,
+      nodeProjectExists: hasMeaningfulManualProject(nodeProject),
+      nodeProjectOwner: getManualProjectOwnerId(nodeProject),
+      activeProjectOwner: getManualProjectOwnerId(activeProject),
+      nodeProjectStats: getManualClipBoardMaterialStats(nodeProject),
+      activeProjectStats: getManualClipBoardMaterialStats(activeProject),
+      route: typeof window !== "undefined" ? window.location.href : "",
+    });
+  };
+
   const normalizeDirectorProjectOwner = (candidateProject = {}) => {
     const ownerNodeId = getProjectOwnerNodeId(candidateProject);
     if (!ownerNodeId) return candidateProject || {};
@@ -704,9 +718,42 @@ export default function ManualClipDirectorBoardEditor({
       onProjectChange(safeProject, options?.reason || safeProject.lastPersistReason || "manual_director_embedded_update");
       return true;
     }
-    const persisted = persistManualProject(safeProject, options);
+
+    let persisted = persistManualProject(safeProject, options);
+    let readback = ownerNodeId ? readManualClipBoardProjectForNode(ownerNodeId) : null;
+    let readbackOk = hasMeaningfulManualProject(readback)
+      && getManualProjectOwnerId(readback) === ownerNodeId;
+    const stats = getManualClipBoardMaterialStats(safeProject);
+    const canForceWriteCurrentBoard = Boolean(
+      hasMeaningfulManualProject(safeProject)
+      && ownerNodeId
+      && Array.isArray(safeProject.scenes)
+      && safeProject.scenes.length > 0
+    );
+
+    if ((!persisted || !readbackOk) && canForceWriteCurrentBoard) {
+      persisted = forceWriteManualClipBoardProjectForNode(safeProject, {
+        reason: `${options?.reason || "manual_director_persist"}_force_write_after_failed_verify`,
+      });
+      readback = ownerNodeId ? readManualClipBoardProjectForNode(ownerNodeId) : null;
+      readbackOk = hasMeaningfulManualProject(readback)
+        && getManualProjectOwnerId(readback) === ownerNodeId;
+    }
+
+    if (!readbackOk) {
+      console.warn("[MANUAL BOARD PERSIST VERIFY] readback failed", {
+        sourceNodeId: ownerNodeId,
+        persisted,
+        readbackOk,
+        readbackOwner: getManualProjectOwnerId(readback),
+        stats,
+        readbackStats: getManualClipBoardMaterialStats(readback),
+        reason: options?.reason || safeProject.lastPersistReason || "manual_director_persist",
+      });
+    }
+
     dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
-    return persisted;
+    return Boolean(persisted && readbackOk);
   };
 
   useEffect(() => {
@@ -745,20 +792,35 @@ export default function ManualClipDirectorBoardEditor({
         };
         projectRef.current = projectToPersist;
         setProject(projectToPersist);
-        const persisted = persistManualProject(projectToPersist, {
+        const ownerNodeId = sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId;
+        let persisted = persistManualProject(projectToPersist, {
           reason,
           forceReplace: Boolean(navigationProject),
         });
-        dispatchManualDirectorBoardUpdate(
-          sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId,
-          projectToPersist
-        );
+        let readback = ownerNodeId ? readManualClipBoardProjectForNode(ownerNodeId) : null;
+        let readbackOk = hasMeaningfulManualProject(readback)
+          && getManualProjectOwnerId(readback) === ownerNodeId;
+
+        if ((navigationProject || reason === "hydrate_from_navigation_project") && (!persisted || !readbackOk)) {
+          persisted = forceWriteManualClipBoardProjectForNode(projectToPersist, {
+            reason: "force_write_after_navigation_hydrate_failed_verify",
+          });
+          readback = ownerNodeId ? readManualClipBoardProjectForNode(ownerNodeId) : null;
+          readbackOk = hasMeaningfulManualProject(readback)
+            && getManualProjectOwnerId(readback) === ownerNodeId;
+        }
+
+        dispatchManualDirectorBoardUpdate(ownerNodeId, projectToPersist);
         console.info("[MANUAL BOARD HYDRATE] persisted navigation project for reload", {
-          sourceNodeId: sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId,
+          sourceNodeId: ownerNodeId,
           persisted,
+          readbackOk,
+          readbackOwner: getManualProjectOwnerId(readback),
           stats: getManualClipBoardMaterialStats(projectToPersist),
+          readbackStats: getManualClipBoardMaterialStats(readback),
           selectedSceneId: projectToPersist.selectedSceneId,
         });
+        logStorageVerify(ownerNodeId);
       }
     } catch {
       setProject(null);
@@ -794,16 +856,30 @@ export default function ManualClipDirectorBoardEditor({
       setBackupStatus("Нет проекта для сохранения");
       return;
     }
-    const safeProject = {
+    const ownerNodeId = getProjectOwnerNodeId(currentProject);
+    if (!ownerNodeId) {
+      warnMissingSourceNodeId();
+      setBackupStatus("Ошибка сохранения доски");
+      return;
+    }
+    const safeProject = normalizeDirectorProjectOwner({
       ...currentProject,
       selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || "",
       updatedAt: Date.now(),
       lastPersistReason: "manual_force_save_button",
-    };
+    });
     projectRef.current = safeProject;
     setProject(safeProject);
-    persistAndBroadcastDirectorProject(safeProject, { reason: "manual_force_save_button", forceReplace: false });
-    setBackupStatus("Доска сохранена");
+    const wrote = forceWriteManualClipBoardProjectForNode(safeProject, { reason: "manual_force_save_button" });
+    const readback = readManualClipBoardProjectForNode(ownerNodeId);
+    const readbackOk = Boolean(
+      wrote
+      && hasMeaningfulManualProject(readback)
+      && getManualProjectOwnerId(readback) === ownerNodeId
+    );
+    dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
+    logStorageVerify(ownerNodeId);
+    setBackupStatus(readbackOk ? "Доска сохранена" : "Ошибка сохранения доски");
     window.setTimeout(() => setBackupStatus(""), 1800);
   };
 
@@ -1721,6 +1797,7 @@ export default function ManualClipDirectorBoardEditor({
         Назад к AI-разбивке
       </button>
       <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
+      <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
