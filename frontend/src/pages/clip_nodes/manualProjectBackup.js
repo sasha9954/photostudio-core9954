@@ -682,6 +682,102 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   }
 }
 
+
+export function forceWriteManualClipBoardProjectForNode(project = {}, options = {}) {
+  const incomingProject = project && typeof project === "object" ? project : {};
+  const nodeId = String(incomingProject.nodeId || incomingProject.sourceNodeId || "").trim();
+  const reason = String(
+    options?.reason
+    || incomingProject.lastPersistReason
+    || "force_write_manual_clip_board_for_node"
+  );
+
+  if (!nodeId) {
+    console.error("[manual board force write node-scoped] missing nodeId", {
+      reason,
+      projectOwner: getManualProjectOwnerId(incomingProject),
+      stats: getManualClipBoardMaterialStats(incomingProject),
+    });
+    return false;
+  }
+
+  const safeProject = {
+    ...incomingProject,
+    nodeId,
+    sourceNodeId: nodeId,
+    updatedAt: Date.now(),
+    lastPersistReason: reason,
+  };
+  const serialized = JSON.stringify(safeProject);
+  const canonicalKey = getManualClipBoardCanonicalStorageKey();
+  const activeKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY);
+  const activeIdKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY);
+  const nodeScopedKey = getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId));
+  const accountScopeId = getManualProjectAccountScopeId();
+
+  try {
+    writeCanonicalManualClipBoardProject(safeProject);
+    localStorage.setItem(activeKey, serialized);
+    localStorage.setItem(activeIdKey, nodeId);
+    localStorage.setItem(nodeScopedKey, serialized);
+
+    if (canUseLegacyManualProjectStorage()) {
+      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
+      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
+      localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
+    }
+
+    const readback = readManualClipBoardProjectForNode(nodeId);
+    const readbackOwner = getManualProjectOwnerId(readback);
+    const readbackExists = hasMeaningfulManualProject(readback);
+    const wrote = Boolean(readbackExists && readbackOwner === nodeId);
+
+    console.info("[manual board force write node-scoped]", {
+      nodeId,
+      reason,
+      wrote,
+      readbackExists,
+      readbackOwner,
+      stats: getManualClipBoardMaterialStats(safeProject),
+      selectedSceneId: safeProject.selectedSceneId,
+    });
+
+    if (!wrote) {
+      console.error("[manual board force write node-scoped] verify failed", {
+        activeKey,
+        activeIdKey,
+        canonicalKey,
+        nodeScopedKey,
+        accountScopeId,
+        nodeId,
+        readbackRawLength: String(localStorage.getItem(nodeScopedKey) || "").length,
+        readbackOwner,
+        readbackExists,
+      });
+    }
+
+    return wrote;
+  } catch (err) {
+    console.error("[manual board force write node-scoped] write failed", {
+      activeKey,
+      activeIdKey,
+      canonicalKey,
+      nodeScopedKey,
+      accountScopeId,
+      nodeId,
+      readbackRawLength: (() => {
+        try {
+          return String(localStorage.getItem(nodeScopedKey) || "").length;
+        } catch {
+          return 0;
+        }
+      })(),
+      error: String(err?.message || err || "unknown_error"),
+    });
+    return false;
+  }
+}
+
 export function debugManualClipBoardStorageSnapshot() {
   const rows = [];
   try {
