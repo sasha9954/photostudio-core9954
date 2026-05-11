@@ -36,6 +36,10 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "image_url",
   "imageUrl",
   "image_preview_url",
+  "start_image_url",
+  "end_image_url",
+  "start_image_preview_url",
+  "end_image_preview_url",
   "video_url",
   "videoUrl",
   "audio_slice_url",
@@ -159,12 +163,10 @@ function isQuotaExceededError(err) {
   );
 }
 
-function isDataUrlString(value = "") {
+function isBadPersistentUrlString(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
-  return normalized.startsWith("data:image")
-    || normalized.startsWith("data:video")
-    || normalized.startsWith("data:audio")
-    || normalized.startsWith("data:");
+  return normalized.startsWith("data:")
+    || normalized.startsWith("blob:");
 }
 
 function isFileLikeManualStorageObject(value) {
@@ -185,7 +187,7 @@ export function stripLargeManualStorageValue(value, path = "") {
   if (value === undefined || typeof value === "function" || typeof value === "symbol") return undefined;
   if (value === null || typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "string") {
-    if (isDataUrlString(value)) return "";
+    if (isBadPersistentUrlString(value)) return "";
     if (value.length > MANUAL_STORAGE_MAX_STRING_LENGTH) return "";
     return value;
   }
@@ -234,7 +236,7 @@ export function sanitizeManualClipBoardProjectForStorage(project = {}) {
     const safeKey = String(key || "");
     if (MANUAL_STORAGE_TOP_LEVEL_DROP_KEYS.has(safeKey)) return;
     if (safeKey === "payloadPreview") {
-      if (typeof value === "string" && value.length <= 20000 && !isDataUrlString(value)) compact[safeKey] = value;
+      if (typeof value === "string" && value.length <= 20000 && !isBadPersistentUrlString(value)) compact[safeKey] = value;
       return;
     }
     if (MANUAL_STORAGE_DANGEROUS_KEY_RE.test(safeKey)) return;
@@ -988,6 +990,30 @@ function cleanupOldManualClipBoardStorageForQuota(currentNodeId = "") {
 }
 
 
+function removeManualClipBoardForceWriteTargetKeys({ nodeId = "", nodeScopedKey = "", activeKey = "", activeIdKey = "", canonicalKey = "" } = {}) {
+  const removedKeys = [];
+  const removeTargetKey = (key) => {
+    if (!key) return;
+    try {
+      localStorage.removeItem(key);
+      removedKeys.push(key);
+    } catch {}
+  };
+
+  removeTargetKey(nodeScopedKey);
+  removeTargetKey(activeKey);
+  removeTargetKey(activeIdKey);
+  removeTargetKey(canonicalKey);
+
+  if (canUseLegacyManualProjectStorage()) {
+    removeTargetKey(getManualClipBoardProjectStorageKey(nodeId));
+    removeTargetKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY);
+    removeTargetKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY);
+  }
+
+  return removedKeys;
+}
+
 export function forceWriteManualClipBoardProjectForNode(project = {}, options = {}) {
   const incomingProject = project && typeof project === "object" ? project : {};
   const nodeId = String(incomingProject.nodeId || incomingProject.sourceNodeId || "").trim();
@@ -1024,16 +1050,42 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
   const localStorageApproxBytesBeforeWrite = getLocalStorageApproxBytes();
   let serialized = "";
 
+  const removeForceWriteTargetKeys = () => removeManualClipBoardForceWriteTargetKeys({
+    nodeId,
+    nodeScopedKey,
+    activeKey,
+    activeIdKey,
+    canonicalKey,
+  });
+
   const writeAndVerify = () => {
-    localStorage.setItem(canonicalKey, serialized);
-    localStorage.setItem(activeKey, serialized);
-    localStorage.setItem(activeIdKey, nodeId);
+    let nodeScopedWritten = false;
+    const optionalWriteFailures = [];
+    const setOptionalItem = (key, value, label) => {
+      try {
+        localStorage.setItem(key, value);
+      } catch (err) {
+        optionalWriteFailures.push({
+          label,
+          key,
+          errorName: err?.name,
+          errorMessage: err?.message,
+          errorCode: err?.code,
+        });
+      }
+    };
+
     localStorage.setItem(nodeScopedKey, serialized);
+    nodeScopedWritten = true;
+
+    setOptionalItem(activeIdKey, nodeId, "activeIdKey");
+    setOptionalItem(activeKey, serialized, "activeKey");
+    setOptionalItem(canonicalKey, serialized, "canonicalKey");
 
     if (canUseLegacyManualProjectStorage()) {
-      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
-      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
-      localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
+      setOptionalItem(getManualClipBoardProjectStorageKey(nodeId), serialized, "legacyNodeScopedKey");
+      setOptionalItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized, "legacyActiveKey");
+      setOptionalItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId, "legacyActiveIdKey");
     }
 
     const readback = readManualClipBoardProjectForNode(nodeId);
@@ -1045,6 +1097,9 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
       nodeId,
       reason,
       wrote,
+      nodeScopedWritten,
+      optionalWriteFailed: optionalWriteFailures.length > 0,
+      optionalWriteFailuresCount: optionalWriteFailures.length,
       readbackExists,
       readbackOwner,
       serializedKb: Math.round(serialized.length / 1024),
@@ -1052,6 +1107,18 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
       storageStats,
       selectedSceneId: storageProject.selectedSceneId,
     });
+
+    if (optionalWriteFailures.length) {
+      console.warn("[manual board force write node-scoped] partial write", {
+        nodeId,
+        reason,
+        wrote,
+        nodeScopedWritten,
+        readbackExists,
+        readbackOwner,
+        optionalWriteFailures,
+      });
+    }
 
     if (!wrote) {
       console.error("[manual board force write node-scoped] verify failed", {
@@ -1061,6 +1128,8 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
         nodeScopedKey,
         accountScopeId,
         nodeId,
+        nodeScopedWritten,
+        optionalWriteFailures,
         readbackRawLength: String(localStorage.getItem(nodeScopedKey) || "").length,
         readbackOwner,
         readbackExists,
@@ -1075,9 +1144,9 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
 
     return wrote;
   };
-
   try {
     serialized = JSON.stringify(storageProject);
+    removeForceWriteTargetKeys();
     const wrote = writeAndVerify();
     if (wrote) rememberManualClipBoardStorageError(null);
     return wrote;
@@ -1088,6 +1157,7 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
 
     if (quotaExceeded && serialized) {
       removedKeys = cleanupOldManualClipBoardStorageForQuota(nodeId);
+      removedKeys.push(...removeForceWriteTargetKeys());
       try {
         retryWrote = writeAndVerify();
       } catch (retryErr) {
