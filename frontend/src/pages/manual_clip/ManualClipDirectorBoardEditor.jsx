@@ -30,13 +30,61 @@ const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
+function getManualProjectOwnerId(project = {}) {
+  return String(project?.sourceNodeId || project?.nodeId || "").trim();
+}
+
+function projectBelongsToSource(project = {}, sourceNodeId = "") {
+  const source = String(sourceNodeId || "").trim();
+  if (!source) return true;
+  return getManualProjectOwnerId(project) === source;
+}
+
 function readManualActiveProject(sourceNodeId = "", navigationProject = null) {
-  const nodeProject = readManualClipBoardProjectForNode(sourceNodeId);
+  const safeSourceNodeId = String(sourceNodeId || "").trim();
+  const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
   const activeProject = readActiveManualClipBoardProject();
-  const bestProject = pickBestManualClipBoardProject([nodeProject, activeProject, navigationProject]) || activeProject || nodeProject || navigationProject;
-  const source = bestProject === nodeProject
-    ? "node-scoped"
-    : (bestProject === activeProject ? "active" : (bestProject === navigationProject ? "node" : "unknown"));
+
+  if (safeSourceNodeId) {
+    const matchingCandidates = [
+      navigationProject,
+      nodeProject,
+      activeProject,
+    ].filter((candidateProject) => (
+      hasMeaningfulManualProject(candidateProject)
+      && projectBelongsToSource(candidateProject, safeSourceNodeId)
+    ));
+    const bestMatching = pickBestManualClipBoardProject(matchingCandidates);
+    if (bestMatching) {
+      const source = bestMatching === navigationProject
+        ? "navigation"
+        : (bestMatching === nodeProject ? "node-scoped" : "active-matching-source");
+      console.info("[MANUAL BOARD HYDRATE] picked source-bound project", {
+        sourceNodeId: safeSourceNodeId,
+        source,
+        stats: getManualClipBoardMaterialStats(bestMatching),
+      });
+      return bestMatching;
+    }
+
+    console.warn("[MANUAL BOARD HYDRATE] no project for sourceNodeId", {
+      sourceNodeId: safeSourceNodeId,
+      nodeProjectExists: hasMeaningfulManualProject(nodeProject),
+      activeProjectExists: hasMeaningfulManualProject(activeProject),
+      activeOwner: getManualProjectOwnerId(activeProject),
+      navigationProjectExists: hasMeaningfulManualProject(navigationProject),
+      navigationOwner: getManualProjectOwnerId(navigationProject),
+    });
+    return null;
+  }
+
+  const bestProject = pickBestManualClipBoardProject([navigationProject, activeProject, nodeProject])
+    || navigationProject
+    || activeProject
+    || nodeProject;
+  const source = bestProject === navigationProject
+    ? "navigation"
+    : (bestProject === activeProject ? "active" : (bestProject === nodeProject ? "node-scoped" : "unknown"));
   if (bestProject) {
     console.info("[MANUAL BOARD HYDRATE] picked project", {
       source,
