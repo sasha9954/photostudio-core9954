@@ -212,7 +212,9 @@ function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = ge
     sourceNodeId: String(baseProject?.sourceNodeId || baseProject?.nodeId || ""),
     project_mode: String(baseProject?.project_mode || ""),
     project_kind: String(baseProject?.project_kind || ""),
-    format: String(baseProject?.format || "9:16"),
+    format: String(baseProject?.format || baseProject?.aspect_ratio || "9:16"),
+    aspect_ratio: String(baseProject?.aspect_ratio || baseProject?.format || "9:16"),
+    format_locked: false,
     audio: safeAudio,
     audio_source: audioSource,
     markers,
@@ -244,6 +246,9 @@ function buildInitialProject() {
     ...project,
     project_mode: project.project_mode || "",
     project_kind: project.project_kind || "",
+    format: String(project.format || project.aspect_ratio || "9:16"),
+    aspect_ratio: String(project.aspect_ratio || project.format || "9:16"),
+    format_locked: Boolean(project.format_locked),
     audio,
     markers,
     story_blocks,
@@ -739,6 +744,9 @@ export default function ManualTimingEditorPage() {
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
   const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
   const hasActiveBoardProject = hasMeaningfulManualProject(activeBoardProject);
+  const projectFormat = String(project.format || project.aspect_ratio || "9:16");
+  const hasSceneMaterials = scenes.some(sceneHasCreatedMaterials);
+  const isFormatLocked = Boolean(project.format_locked || scenes.length > 0 || hasActiveBoardProject || project.timing_status === "confirmed" || hasSceneMaterials || hasRealStoryBlocks(storyBlocks));
   const isStoryVoiceover = isStoryVoiceoverProject(project);
   const modeConfig = getManualTimingModeConfig(project);
   const isProjectModeSelected = Boolean(modeConfig.mode);
@@ -1110,6 +1118,9 @@ export default function ManualTimingEditorPage() {
       story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
       scenes: nextScenes,
       selectedSceneId,
+      format: projectFormat,
+      aspect_ratio: projectFormat,
+      format_locked: Boolean(extraPatch.format_locked ?? true),
       timing_status: extraPatch.timing_status || (nextScenes.length ? "draft" : project.timing_status || "draft"),
     });
   };
@@ -1688,8 +1699,8 @@ export default function ManualTimingEditorPage() {
 
   const onConfirmTiming = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const nextScenes = scenes.map((scene) => ({ ...scene, quality: "manual_confirmed" }));
-    persist({ ...project, scenes: nextScenes, timing_status: "confirmed" });
+    const nextScenes = scenes.map((scene) => ({ ...scene, quality: "manual_confirmed", format: projectFormat, aspect_ratio: projectFormat }));
+    persist({ ...project, format: projectFormat, aspect_ratio: projectFormat, format_locked: true, scenes: nextScenes, timing_status: "confirmed" });
   };
 
 
@@ -1707,13 +1718,14 @@ export default function ManualTimingEditorPage() {
       step: `${workflowLabels.pass.toLowerCase().replace(/\s+/g, "_")}_ready`,
       format: projectFormat,
       aspect_ratio: projectFormat,
+      format_locked: true,
       audio,
       audio_phrases: audioPhrases,
       story_blocks: storyBlocks,
       scenes: scenes.map((scene) => ({
         ...scene,
-        format: scene.format || scene.aspect_ratio || projectFormat,
-        aspect_ratio: scene.aspect_ratio || scene.format || projectFormat,
+        format: projectFormat,
+        aspect_ratio: projectFormat,
         video_prompt: "",
         negative_prompt: "",
         sound_prompt: "",
@@ -1800,10 +1812,11 @@ export default function ManualTimingEditorPage() {
       ...projectSnapshot,
       format: String(projectSnapshot.format || projectSnapshot.aspect_ratio || "9:16"),
       aspect_ratio: String(projectSnapshot.aspect_ratio || projectSnapshot.format || "9:16"),
+      format_locked: true,
       scenes: Array.isArray(projectSnapshot.scenes) ? projectSnapshot.scenes.map((scene) => ({
         ...scene,
-        format: scene.format || scene.aspect_ratio || projectSnapshot.format || "9:16",
-        aspect_ratio: scene.aspect_ratio || scene.format || projectSnapshot.aspect_ratio || projectSnapshot.format || "9:16",
+        format: projectSnapshot.format || "9:16",
+        aspect_ratio: projectSnapshot.format || "9:16",
       })) : [],
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
@@ -2269,7 +2282,15 @@ export default function ManualTimingEditorPage() {
         <div><b>Курсор:</b> {formatTimingSec(currentTime)}</div>
         <div><b>Сцен:</b> {scenes.length}</div>
         <div><b>Статус:</b> {readableTimingStatus}</div>
+        <label className="manualTimingFormatControl"><b>Формат:</b>
+          <select value={projectFormat} disabled={isFormatLocked} onChange={(e) => persist({ ...project, format: e.target.value, aspect_ratio: e.target.value, format_locked: false })}>
+            <option value="9:16">9:16</option>
+            <option value="16:9">16:9</option>
+            <option value="1:1">1:1</option>
+          </select>
+        </label>
       </div>
+      {isFormatLocked ? <div className="manualTimingFormatLockHint">Формат зафиксирован после создания сцен/доски. Чтобы изменить формат, начните новый проект.</div> : null}
       <div className="manualTimingCompactActions manualTimingAudioReplaceActions">
         <label className={`clipSB_btn clipSB_btnSecondary ${isTimingAudioUploading ? "isDisabled" : ""}`}>
           {isTimingAudioUploading ? "Загрузка аудио…" : (audio.url ? "Заменить аудио" : "Загрузить аудио")}
