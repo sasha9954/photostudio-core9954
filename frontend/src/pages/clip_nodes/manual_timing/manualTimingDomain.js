@@ -1115,6 +1115,8 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
     project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
     format: String(safeProject.format || "9:16"),
     split_type: "ai_story_blocks_split_request",
+    semantic_cut_rules: MANUAL_TIMING_SEMANTIC_CUT_RULES,
+    story_pass_mode: "semantic_story_cut",
     audio_duration_sec: Number(audio.duration_sec || 0),
     language_source: "en",
     language_helper: "ru",
@@ -1128,7 +1130,7 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
       singer_lipsync: "ia2v",
       instrumental: "i2v",
     },
-    global_hint: "Сделай новую разбивку по смысловым блокам. Если есть audio_phrases из ASR, не меняй start_sec/end_sec у audio_phrases: группируй phrase_id в gap-aware scenes через source_phrase_ids. scene.start_sec/end_sec должны покрывать все паузы и всю audio_duration_sec без дыр/overlap; speech_start_sec/speech_end_sec должны соответствовать первой/последней ASR-фразе в scene. Сначала придумай story_blocks; для каждого story_block заполни title_ru, summary_ru, block_goal_ru, block_reveal_ru, block_emotion_ru, color, start_sec, end_sec, scene_ids. Для каждой scene заполни original_text/adapted_text_en, translated_text_ru, meaning_hint_ru, story_block_id, story_block_title_ru, story_block_position_ru, scene_role_in_block_ru, block_progress_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru. Не заполнять video_prompt, negative_prompt, sound_prompt.",
+    global_hint: "Ты режешь не текст, ты режешь будущую съёмку. 1 сцена = 1 понятное фото + 1 i2v-клип. Блок = этап истории, не папка сцен.",
     story_request_ru: "",
     story_blocks: [],
     audio_phrases: normalizeManualTimingAudioPhrases(safeProject.audio_phrases),
@@ -1645,7 +1647,8 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
   const rawScenes = Array.isArray(raw?.scenes) ? raw.scenes : [];
   const importedScenes = rawScenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
   const baseScenes = basePayload.scenes.map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx));
-  const storyBlocks = normalizeManualTimingStoryBlocks(raw?.story_blocks || []);
+  const rawStoryBlocks = Array.isArray(raw?.story_blocks) ? raw.story_blocks : [];
+  const storyBlocks = normalizeManualTimingStoryBlocks(rawStoryBlocks);
   const errors = [];
 
   if (!sameManualTimingJson(importedAudioPhrases, baseAudioPhrases)) {
@@ -1654,9 +1657,42 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
 
   if (isSemanticManualTimingStoryPassPayload(raw)) {
     if (!importedScenes.length) errors.push("scenes не заполнены.");
+
+    const audioDurationSec = roundTimingSec(raw?.audio_duration_sec ?? raw?.audioDurationSec ?? basePayload.audio_duration_sec ?? baseProject?.audio?.duration_sec ?? 0);
     const phraseIds = new Set(baseAudioPhrases.map((phrase) => String(phrase.phrase_id || "")).filter(Boolean));
+    const sceneIds = new Set();
+    const duplicateSceneIds = new Set();
+
+    rawScenes.forEach((rawScene, idx) => {
+      const sceneId = String(rawScene?.scene_id || rawScene?.sceneId || "").trim();
+      if (!sceneId) {
+        errors.push(`scene_${idx + 1}: scene_id не заполнен.`);
+        return;
+      }
+      if (sceneIds.has(sceneId)) duplicateSceneIds.add(sceneId);
+      sceneIds.add(sceneId);
+    });
+    duplicateSceneIds.forEach((sceneId) => errors.push(`${sceneId}: scene_id дублируется.`));
+
     importedScenes.forEach((scene, idx) => {
-      const sceneId = String(scene.scene_id || `scene_${idx + 1}`);
+      const rawScene = rawScenes[idx] || {};
+      const sceneId = String(scene.scene_id || rawScene?.scene_id || rawScene?.sceneId || `scene_${idx + 1}`);
+      const rawStart = Number(rawScene?.start_sec ?? rawScene?.startSec);
+      const rawEnd = Number(rawScene?.end_sec ?? rawScene?.endSec);
+      const start = roundTimingSec(rawStart);
+      const end = roundTimingSec(rawEnd);
+      const sourcePhraseIds = normalizeManualTimingSourcePhraseIds(scene.source_phrase_ids || rawScene?.sourcePhraseIds);
+
+      if (!Number.isFinite(rawStart)) errors.push(`${sceneId}: start_sec должен быть числом.`);
+      if (!Number.isFinite(rawEnd)) errors.push(`${sceneId}: end_sec должен быть числом.`);
+      if (Number.isFinite(rawStart) && Number.isFinite(rawEnd) && !(start < end)) errors.push(`${sceneId}: start_sec должен быть меньше end_sec.`);
+      if (audioDurationSec > 0 && Number.isFinite(rawStart) && Number.isFinite(rawEnd) && (start < -0.01 || end - audioDurationSec > 0.01)) {
+        errors.push(`${sceneId}: тайминг scene вне audio_duration_sec (${audioDurationSec.toFixed(3)} сек).`);
+      }
+      if (!sourcePhraseIds.length) errors.push(`${sceneId}: source_phrase_ids не заполнены.`);
+      sourcePhraseIds.forEach((phraseId) => {
+        if (!phraseIds.has(phraseId)) errors.push(`${sceneId}: source_phrase_ids содержит неизвестный phrase_id ${phraseId}.`);
+      });
       [
         "translated_text_ru",
         "meaning_hint_ru",
@@ -1672,9 +1708,6 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
       ].forEach((key) => {
         if (!String(scene[key] || "").trim()) errors.push(`${sceneId}: не заполнено поле ${key}.`);
       });
-      normalizeManualTimingSourcePhraseIds(scene.source_phrase_ids).forEach((phraseId) => {
-        if (phraseIds.size && !phraseIds.has(phraseId)) errors.push(`${sceneId}: source_phrase_ids содержит неизвестный phrase_id ${phraseId}.`);
-      });
       ["video_prompt", "negative_prompt", "sound_prompt"].forEach((key) => {
         if (String(scene[key] || "").trim()) {
           errors.push(`${sceneId}: Semantic Story Cut не должен заполнять ${key}.`);
@@ -1682,18 +1715,55 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
       });
     });
 
+    for (let idx = 1; idx < importedScenes.length; idx += 1) {
+      const prev = importedScenes[idx - 1];
+      const scene = importedScenes[idx];
+      const prevId = String(prev?.scene_id || `scene_${idx}`);
+      const sceneId = String(scene?.scene_id || `scene_${idx + 1}`);
+      const prevEnd = roundTimingSec(prev?.end_sec);
+      const start = roundTimingSec(scene?.start_sec);
+      if (start < prevEnd - 0.01) {
+        errors.push(`${sceneId}: scenes должны быть отсортированы по start_sec и не перекрываться с ${prevId}.`);
+      }
+    }
+
     const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+    const storyBlockIds = new Set(rawStoryBlocks.map((block) => String(block?.block_id || block?.blockId || block?.id || "").trim()).filter(Boolean));
     const realStoryBlocks = storyBlocks.filter((block) => String(block.block_id || "") !== unknownBlockId);
+    const finalBlockId = String(rawStoryBlocks[rawStoryBlocks.length - 1]?.block_id || rawStoryBlocks[rawStoryBlocks.length - 1]?.blockId || rawStoryBlocks[rawStoryBlocks.length - 1]?.id || "");
+    if (finalBlockId === unknownBlockId) errors.push("Финальный story_block не должен быть block_unknown.");
+
     if (!realStoryBlocks.length) {
       errors.push("story_blocks не заполнены.");
     }
+    importedScenes.forEach((scene, idx) => {
+      const sceneId = String(scene.scene_id || `scene_${idx + 1}`);
+      const blockId = String(scene.story_block_id || "").trim();
+      if (blockId && !storyBlockIds.has(blockId)) errors.push(`${sceneId}: story_block_id ${blockId} отсутствует в story_blocks.`);
+    });
     realStoryBlocks.forEach((block) => {
       const blockId = String(block.block_id || "block_without_id");
       ["title_ru", "summary_ru", "block_goal_ru", "block_reveal_ru", "block_emotion_ru"].forEach((key) => {
         if (!String(block[key] || "").trim()) errors.push(`${blockId}: не заполнено ${key}.`);
       });
-      if (!Array.isArray(block.scene_ids) || !block.scene_ids.length) errors.push(`${blockId}: не заполнены scene_ids.`);
+      if (!Array.isArray(block.scene_ids) || !block.scene_ids.length) {
+        errors.push(`${blockId}: не заполнены scene_ids.`);
+      } else {
+        block.scene_ids.forEach((sceneId) => {
+          const safeSceneId = String(sceneId || "").trim();
+          if (!safeSceneId || !sceneIds.has(safeSceneId)) errors.push(`${blockId}: scene_ids содержит неизвестный scene_id ${safeSceneId || "<empty>"}.`);
+        });
+      }
     });
+    storyBlocks
+      .filter((block) => String(block.block_id || "") === unknownBlockId && storyBlockIds.has(unknownBlockId))
+      .forEach((block) => {
+        const blockId = String(block.block_id || "block_without_id");
+        (Array.isArray(block.scene_ids) ? block.scene_ids : []).forEach((sceneId) => {
+          const safeSceneId = String(sceneId || "").trim();
+          if (!safeSceneId || !sceneIds.has(safeSceneId)) errors.push(`${blockId}: scene_ids содержит неизвестный scene_id ${safeSceneId || "<empty>"}.`);
+        });
+      });
 
     return { ok: !errors.length, errors };
   }
@@ -2032,7 +2102,13 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   const baseAudio = normalizeManualTimingAudio(safeRaw.audio || safeRaw.audio_metadata || safeBase.audio);
   const rawDuration = Number(safeRaw.audio_duration_sec ?? safeRaw.audioDurationSec ?? safeRaw.duration_sec ?? safeRaw.durationSec ?? safeRaw.audio?.duration_sec ?? safeRaw.audio_metadata?.duration_sec ?? 0);
   const durationSec = roundTimingSec(baseAudio.duration_sec || rawDuration || 0);
-  const storyBlocks = normalizeManualTimingStoryBlocks(safeRaw.story_blocks || safeBase.story_blocks);
+  const isSemanticStoryCutImport = isSemanticManualTimingStoryPassPayload(safeRaw);
+  const rawStoryBlocksForImport = Array.isArray(safeRaw.story_blocks) ? safeRaw.story_blocks : (isSemanticStoryCutImport ? [] : safeBase.story_blocks);
+  const rawHasUnknownStoryBlock = Array.isArray(rawStoryBlocksForImport) && rawStoryBlocksForImport.some((block) => String(block?.block_id || block?.blockId || block?.id || "") === MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id);
+  const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(rawStoryBlocksForImport);
+  const storyBlocks = isSemanticStoryCutImport && !rawHasUnknownStoryBlock
+    ? normalizedStoryBlocks.filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id)
+    : normalizedStoryBlocks;
   const audioPhrases = normalizeManualTimingAudioPhrases(safeRaw.audio_phrases || safeRaw.audioPhrases || safeBase.audio_phrases);
   const rawScenes = Array.isArray(safeRaw.scenes) ? safeRaw.scenes : [];
   const importedScenes = rawScenes
@@ -2052,9 +2128,11 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   if (Array.isArray(safeRaw.markers)) markerValues.push(...safeRaw.markers);
   const markers = normalizeManualTimingMarkers(markerValues, durationSec || importedScenes[importedScenes.length - 1]?.end_sec || 0);
   const finalDuration = durationSec || markers[markers.length - 1] || 0;
-  const markerScenes = markers.length >= 2
-    ? buildManualTimingScenesFromMarkers(markers, importedScenes, { durationSec: finalDuration, preserveSceneIds: true })
-    : importedScenes;
+  const markerScenes = isSemanticStoryCutImport
+    ? importedScenes
+    : (markers.length >= 2
+      ? buildManualTimingScenesFromMarkers(markers, importedScenes, { durationSec: finalDuration, preserveSceneIds: true })
+      : importedScenes);
   const scenes = hydrateManualTimingScenesWithStoryBlocks(markerScenes, storyBlocks);
 
   return {
@@ -2219,7 +2297,7 @@ export function buildManualTimingWarnings(project = {}) {
     if (!audioPhrases.length) warnings.push("Нет audio_phrases — сначала создайте Audio Phrase Map.");
     const hasStoryScenes = scenes.some((scene) => normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds).length);
     const hasImportedStoryPass = scenes.some((scene) => String(scene?.translated_text_ru || scene?.meaning_hint_ru || scene?.scene_goal_ru || scene?.prompt_hint_ru || "").trim());
-    if (hasStoryScenes && !hasImportedStoryPass) warnings.push("Story Pass ещё не заполнен — скопируйте JSON для Story Pass и импортируйте результат.");
+    if (hasStoryScenes && !hasImportedStoryPass) warnings.push("Semantic Story Cut ещё не заполнен — скопируйте JSON для Semantic Story Cut и импортируйте результат.");
     if (hasStoryScenes) {
       scenes.forEach((scene) => {
         [

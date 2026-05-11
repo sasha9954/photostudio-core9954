@@ -446,7 +446,7 @@ function getCompactWarningItems(project = {}, warnings = []) {
   const items = [];
   const hasStoryScenes = scenes.some((scene) => normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds).length);
   const hasImportedStoryPass = scenes.some(sceneHasStoryPassFields);
-  if (hasStoryScenes && !hasImportedStoryPass) items.push("Story Pass ещё не заполнен");
+  if (hasStoryScenes && !hasImportedStoryPass) items.push("Semantic Story Cut ещё не заполнен");
   if (safeWarnings.some((warning) => /длин|больше 9|long/i.test(String(warning || "")))) items.push("Есть длинные сцены");
   if (!audioPhrases.length) items.push("Нет audio_phrases");
   if (!items.length && safeWarnings.length) items.push(`Есть предупреждения: ${safeWarnings.length}`);
