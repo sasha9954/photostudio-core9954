@@ -42,6 +42,16 @@ function formatTimingStatus(status) {
   return "пусто";
 }
 
+function getManualProjectOwnerId(project = {}) {
+  return String(project?.sourceNodeId || project?.nodeId || "").trim();
+}
+
+function projectBelongsToNode(project = {}, nodeId = "") {
+  const safeNodeId = String(nodeId || "").trim();
+  if (!safeNodeId) return true;
+  return getManualProjectOwnerId(project) === safeNodeId;
+}
+
 function audioIdentityEquals(a = {}, b = {}) {
   return String(a?.url || "") === String(b?.url || "")
     && String(a?.filename || "") === String(b?.filename || "");
@@ -298,20 +308,21 @@ export default function ManualTimingNode({ id, data }) {
   const onReturnToActiveBoard = () => {
     const nodeScopedProject = readManualClipBoardProjectForNode(id);
     const activeStoredProject = readActiveManualClipBoardProject();
-    const activeProject = pickBestManualClipBoardProject([
-      model.director_board,
-      nodeScopedProject,
-      activeStoredProject,
-    ]) || nodeScopedProject || activeStoredProject || model.director_board;
+    const matchingCandidates = [model.director_board, nodeScopedProject, activeStoredProject]
+      .filter((candidateProject) => hasMeaningfulManualProject(candidateProject) && projectBelongsToNode(candidateProject, id));
+    const activeProject = pickBestManualClipBoardProject(matchingCandidates) || null;
 
     if (hasMeaningfulManualProject(activeProject)) {
-      setStoredActiveBoardProject(activeProject);
-      const stats = getManualClipBoardMaterialStats(activeProject);
+      const safeProject = {
+        ...activeProject,
+        nodeId: id,
+        sourceNodeId: id,
+      };
+      setStoredActiveBoardProject(safeProject);
+      const stats = getManualClipBoardMaterialStats(safeProject);
       if (stats.materialTotal > 0) {
         persistManualClipBoardProject({
-          ...activeProject,
-          nodeId: id,
-          sourceNodeId: id,
+          ...safeProject,
           updatedAt: Date.now(),
           lastPersistReason: "return_to_active_manual_board",
         }, { reason: "return_to_active_manual_board" });
@@ -324,18 +335,30 @@ export default function ManualTimingNode({ id, data }) {
     }
 
     if (hasMeaningfulManualProject(activeProject)) {
+      const safeProject = {
+        ...activeProject,
+        nodeId: id,
+        sourceNodeId: id,
+      };
       navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`, {
-        state: { director_board: activeProject },
+        state: { director_board: safeProject, project: safeProject },
       });
     }
   };
 
   const onDownloadActiveBoardBackup = () => {
-    const storedProject = readManualClipBoardProjectForNode(id) || readActiveManualClipBoardProject();
-    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject, readActiveManualClipBoardProject()]) || storedProject || model.director_board;
+    const storedProject = readManualClipBoardProjectForNode(id);
+    const activeStoredProject = readActiveManualClipBoardProject();
+    const activeProject = pickBestManualClipBoardProject([model.director_board, storedProject, activeStoredProject]
+      .filter((candidateProject) => hasMeaningfulManualProject(candidateProject) && projectBelongsToNode(candidateProject, id)));
     if (!hasMeaningfulManualProject(activeProject)) return;
-    setStoredActiveBoardProject(activeProject);
-    downloadManualBoardBackup(activeProject);
+    const safeProject = {
+      ...activeProject,
+      nodeId: id,
+      sourceNodeId: id,
+    };
+    setStoredActiveBoardProject(safeProject);
+    downloadManualBoardBackup(safeProject);
   };
 
   const onStartFreshWithConfirm = () => {

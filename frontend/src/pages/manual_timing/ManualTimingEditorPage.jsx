@@ -255,7 +255,22 @@ function buildInitialProject() {
 }
 
 function getManualTimingOwnerNodeId(project = {}) {
+  const explicit = String(project?.sourceNodeId || project?.nodeId || "").trim();
+  if (explicit) return explicit;
+  const mode = String(project?.project_mode || project?.projectMode || "story_voiceover").trim() || "story_voiceover";
+  return `manual_timing_standalone_${mode}`;
+}
+
+function getManualProjectOwnerId(project = {}) {
   return String(project?.sourceNodeId || project?.nodeId || "").trim();
+}
+
+function getManualTimingBoardForOwner(ownerNodeId = "") {
+  const safeOwnerNodeId = String(ownerNodeId || "").trim();
+  const nodeBoard = readManualClipBoardProjectForNode(safeOwnerNodeId);
+  if (hasMeaningfulManualProject(nodeBoard)) return nodeBoard;
+  const activeBoard = readActiveManualClipBoardProject();
+  return getManualProjectOwnerId(activeBoard) === safeOwnerNodeId ? activeBoard : null;
 }
 
 function dispatchManualTimingDirectorBoardUpdate(project = {}) {
@@ -709,7 +724,7 @@ export default function ManualTimingEditorPage() {
   const [asrStatus, setAsrStatus] = useState("");
   const [audioUploadStatus, setAudioUploadStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
-  const [activeBoardProject, setActiveBoardProject] = useState(() => readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(buildInitialProject())) || readActiveManualClipBoardProject());
+  const [activeBoardProject, setActiveBoardProject] = useState(() => getManualTimingBoardForOwner(getManualTimingOwnerNodeId(buildInitialProject())));
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -876,12 +891,15 @@ export default function ManualTimingEditorPage() {
   }, [durationSec]);
 
   useEffect(() => {
-    setActiveBoardProject(readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject());
+    setActiveBoardProject(getManualTimingBoardForOwner(getManualTimingOwnerNodeId(project)));
   }, []);
 
   const persist = (nextProject) => {
+    const ownerNodeId = getManualTimingOwnerNodeId(nextProject);
     const safeProject = {
       ...nextProject,
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
       project_mode: nextProject?.project_mode || "",
       project_kind: nextProject?.project_kind || "",
       updatedAt: Date.now(),
@@ -1702,14 +1720,22 @@ export default function ManualTimingEditorPage() {
   };
 
   const onOpenDirectorBoard = () => {
-    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
+    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) {
-      setActiveBoardProject(existingBoard);
-      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(getManualTimingOwnerNodeId(existingBoard) || getManualTimingOwnerNodeId(project))}&mode=open_existing`);
+      const safeBoard = {
+        ...existingBoard,
+        nodeId: ownerNodeId,
+        sourceNodeId: ownerNodeId,
+      };
+      setActiveBoardProject(safeBoard);
+      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
+        state: { director_board: safeBoard, project: safeBoard },
+      });
       return;
     }
-    setCopyStatus("Активная режиссёрская доска не найдена. Создайте новую доску отдельной кнопкой.");
-    window.setTimeout(() => setCopyStatus(""), 3200);
+    setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
+    window.setTimeout(() => setCopyStatus(""), 4200);
   };
 
   const onCreateNewDirectorBoardFromTiming = async () => {
@@ -1719,12 +1745,21 @@ export default function ManualTimingEditorPage() {
     }
     if (handoffStatus) return;
 
-    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
+    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
     const confirmed = window.confirm("Это заменит активную режиссёрскую доску. Сначала скачайте backup. Продолжить?");
     if (!confirmed) return;
 
-    let projectSnapshot = buildDirectorProjectSnapshot();
+    let projectSnapshot = {
+      ...buildDirectorProjectSnapshot(),
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      ownerNodeType: "manualTiming",
+      source: "manual_timing_node",
+      updatedAt: Date.now(),
+      lastPersistReason: "create_new_director_board_from_timing",
+    };
     let handoffWarning = "";
     const needsAudioSlice = Boolean(projectSnapshot?.audio?.url)
       && !(Array.isArray(projectSnapshot.scenes) && projectSnapshot.scenes.every((scene) => String(scene?.audio_slice_url || "").trim()));
@@ -1757,6 +1792,16 @@ export default function ManualTimingEditorPage() {
       }
     }
 
+    projectSnapshot = {
+      ...projectSnapshot,
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      ownerNodeType: "manualTiming",
+      source: "manual_timing_node",
+      updatedAt: Date.now(),
+      lastPersistReason: "create_new_director_board_from_timing",
+    };
+
     dispatchManualTimingDirectorBoardUpdate(projectSnapshot);
     persistManualTimingProject(projectSnapshot);
     persistManualClipBoardProject(projectSnapshot, {
@@ -1766,7 +1811,9 @@ export default function ManualTimingEditorPage() {
     setActiveBoardProject(projectSnapshot);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
-    navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(getManualTimingOwnerNodeId(projectSnapshot))}&mode=open_existing`);
+    navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
+      state: { director_board: projectSnapshot, project: projectSnapshot },
+    });
   };
 
   const onCopyTimingJson = async () => {
@@ -1810,19 +1857,29 @@ export default function ManualTimingEditorPage() {
   };
 
   const onReturnToActiveBoard = () => {
-    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
+    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) {
-      setActiveBoardProject(existingBoard);
-      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(getManualTimingOwnerNodeId(existingBoard) || getManualTimingOwnerNodeId(project))}&mode=open_existing`);
+      const safeBoard = {
+        ...existingBoard,
+        nodeId: ownerNodeId,
+        sourceNodeId: ownerNodeId,
+      };
+      setActiveBoardProject(safeBoard);
+      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
+        state: { director_board: safeBoard, project: safeBoard },
+      });
       return;
     }
-    setCopyStatus("Активная режиссёрская доска не найдена");
+    setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
+    window.setTimeout(() => setCopyStatus(""), 4200);
   };
 
   const onDownloadActiveBoardBackup = () => {
-    const existingBoard = readManualClipBoardProjectForNode(getManualTimingOwnerNodeId(project)) || readActiveManualClipBoardProject();
+    const existingBoard = getManualTimingBoardForOwner(getManualTimingOwnerNodeId(project));
     if (!hasMeaningfulManualProject(existingBoard)) {
-      setCopyStatus("Активная режиссёрская доска не найдена");
+      setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
+      window.setTimeout(() => setCopyStatus(""), 4200);
       return;
     }
     setActiveBoardProject(existingBoard);
