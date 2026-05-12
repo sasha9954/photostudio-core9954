@@ -72,3 +72,5 @@ temp/
 *.tmp
 *.bak
 *.swp
+backend/static/
+clip_local_backup.patch
