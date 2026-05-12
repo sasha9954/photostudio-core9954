@@ -622,6 +622,15 @@ class ClipVideoMMAudioStartIn(BaseModel):
     projectKind: str | None = None
     cfg: int | float | None = None
 
+class ClipVideoMMAudioRemixGainIn(BaseModel):
+    sceneId: str | None = None
+    sourceVideoUrl: str | None = None
+    source_video_url: str | None = None
+    mmaudioVideoUrl: str | None = None
+    mmaudio_video_url: str | None = None
+    generatedAudioGainDb: int | float | None = -6
+    generated_audio_gain_db: int | float | None = None
+
 
 def _clip_video_payload_signature(payload: ClipVideoIn, *, resolved_workflow_key: str = "") -> str:
     import hashlib
@@ -17720,6 +17729,11 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
                 "status": "done",
                 "queueStatus": "done",
                 "videoUrl": final_video_url,
+                "video_url": final_video_url,
+                "mmaudioRawVideoUrl": asset_url(os.path.basename(mmaudio_path)),
+                "mmaudio_raw_video_url": asset_url(os.path.basename(mmaudio_path)),
+                "mmaudioVideoUrl": final_video_url,
+                "mmaudio_video_url": final_video_url,
                 "hasAudio": True,
                 "videoHasAudio": True,
                 "mode": MMAUDIO_WORKFLOW_KEY,
@@ -18115,6 +18129,71 @@ def clip_video_mmaudio_start(payload: ClipVideoMMAudioStartIn):
         **debug_fields,
     }
 
+
+
+@router.post("/clip/video/mmaudio/remix-gain")
+def clip_video_mmaudio_remix_gain(payload: ClipVideoMMAudioRemixGainIn):
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+    source_video_url = str(payload.sourceVideoUrl or payload.source_video_url or "").strip()
+    mmaudio_video_url = str(payload.mmaudioVideoUrl or payload.mmaudio_video_url or "").strip()
+    gain_source = payload.generatedAudioGainDb
+    if gain_source is None:
+        gain_source = payload.generated_audio_gain_db
+    gain_db = _clip_db_gain(gain_source)
+
+    if not source_video_url and not mmaudio_video_url:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "code": "MMAUDIO_REMIX_VIDEO_URL_REQUIRED", "hint": "sourceVideoUrl_or_mmaudioVideoUrl_required"},
+        )
+
+    video_stream_url = source_video_url or mmaudio_video_url
+    audio_stream_url = mmaudio_video_url or source_video_url
+    temp_files: list[str] = []
+    try:
+        source_path, source_err = _resolve_media_input(video_stream_url, temp_files)
+        if source_err or not source_path:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MMAUDIO_REMIX_SOURCE_RESOLVE_FAILED", "hint": source_err or "source_video_not_found"},
+            )
+        mmaudio_path, mmaudio_err = _resolve_media_input(audio_stream_url, temp_files)
+        if mmaudio_err or not mmaudio_path:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "code": "MMAUDIO_REMIX_AUDIO_RESOLVE_FAILED", "hint": mmaudio_err or "mmaudio_video_not_found"},
+            )
+        final_video_url, ffmpeg_err = _replace_video_audio_with_gain(
+            source_video_path=source_path,
+            mmaudio_video_path=mmaudio_path,
+            gain_db=gain_db,
+        )
+        if ffmpeg_err or not final_video_url:
+            return JSONResponse(
+                status_code=500,
+                content={"ok": False, "code": "MMAUDIO_GAIN_REMIX_FAILED", "hint": ffmpeg_err or "ffmpeg_failed"},
+            )
+        return {
+            "ok": True,
+            "sceneId": scene_id,
+            "videoUrl": final_video_url,
+            "video_url": final_video_url,
+            "hasAudio": True,
+            "videoHasAudio": True,
+            "video_has_audio": True,
+            "mode": "mmaudio_gain_remix",
+            "workflowKey": "mmaudio_gain_remix",
+            "resolvedWorkflowKey": "mmaudio_gain_remix",
+            "generatedAudioGainDb": gain_db,
+            "generated_audio_gain_db": gain_db,
+        }
+    finally:
+        for temp_path in temp_files:
+            try:
+                if temp_path and os.path.isfile(temp_path):
+                    os.remove(temp_path)
+            except Exception:
+                pass
 
 
 @router.post("/clip/video/extract-last-frame")

@@ -810,6 +810,7 @@ export default function ManualClipDirectorBoardEditor({
   onProjectChange,
   onClose,
   onMMAudioGenerate,
+  onMMAudioGainRemix,
   embedded = false,
 } = {}) {
   const navigate = useNavigate();
@@ -842,7 +843,7 @@ export default function ManualClipDirectorBoardEditor({
   const [mmaudioModal, setMMAudioModal] = useState(null);
   const [mmaudioPrompt, setMMAudioPrompt] = useState("");
   const [mmaudioNegativePrompt, setMMAudioNegativePrompt] = useState("");
-  const [mmaudioGainDb, setMMAudioGainDb] = useState(-6);
+  const [mmaudioGainDraftDb, setMMAudioGainDraftDb] = useState(-6);
   const [mmaudioModalError, setMMAudioModalError] = useState("");
 
   const getProjectOwnerNodeId = (candidateProject = {}) => String(
@@ -1292,6 +1293,24 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
+  const selectedMMAudioGainDb = useMemo(() => {
+    const raw = selectedScene?.mmaudio_gain_db ?? selectedScene?.generatedAudioGainDb ?? selectedScene?.generated_audio_gain_db;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(-24, Math.min(6, parsed)) : -6;
+  }, [selectedScene?.mmaudio_gain_db, selectedScene?.generatedAudioGainDb, selectedScene?.generated_audio_gain_db]);
+  const selectedHasMMAudioResult = Boolean(
+    selectedScene
+    && (
+      String(selectedScene.mmaudio_status || "").toLowerCase() === "done"
+      || String(selectedScene.mmaudio_video_url || selectedScene.mmaudioVideoUrl || "").trim()
+      || String(selectedScene.generatedAudioPolicy || selectedScene.generated_audio_policy || "").trim() === "mmaudio_generated_audio"
+    )
+  );
+
+  useEffect(() => {
+    setMMAudioGainDraftDb(selectedMMAudioGainDb);
+  }, [selectedScene?.scene_id, selectedMMAudioGainDb]);
+
   const currentBlock = useMemo(() => {
     const blockId = String(selectedScene?.story_block_id || "").trim();
     if (!blockId) return null;
@@ -1696,6 +1715,8 @@ export default function ManualClipDirectorBoardEditor({
       videoPreviewUrl: "",
       mmaudio_video_url: "",
       mmaudioVideoUrl: "",
+      mmaudio_raw_video_url: "",
+      mmaudioRawVideoUrl: "",
       mmaudio_source_video_url: "",
       mmaudioSourceVideoUrl: "",
       original_video_before_mmaudio_url: "",
@@ -1706,6 +1727,10 @@ export default function ManualClipDirectorBoardEditor({
       mmaudioJobId: "",
       mmaudio_error: "",
       mmaudioError: "",
+      mmaudio_gain_status: "",
+      mmaudioGainStatus: "",
+      mmaudio_gain_error: "",
+      mmaudioGainError: "",
       mmaudio_prompt: "",
       mmaudioPrompt: "",
       mmaudio_negative_prompt: "",
@@ -1744,6 +1769,8 @@ export default function ManualClipDirectorBoardEditor({
       videoPreviewUrl: "",
       mmaudio_video_url: "",
       mmaudioVideoUrl: "",
+      mmaudio_raw_video_url: "",
+      mmaudioRawVideoUrl: "",
       mmaudio_source_video_url: "",
       mmaudioSourceVideoUrl: "",
       original_video_before_mmaudio_url: "",
@@ -1754,6 +1781,10 @@ export default function ManualClipDirectorBoardEditor({
       mmaudioJobId: "",
       mmaudio_error: "",
       mmaudioError: "",
+      mmaudio_gain_status: "",
+      mmaudioGainStatus: "",
+      mmaudio_gain_error: "",
+      mmaudioGainError: "",
       mmaudio_prompt: "",
       mmaudioPrompt: "",
       mmaudio_negative_prompt: "",
@@ -1956,7 +1987,6 @@ export default function ManualClipDirectorBoardEditor({
     setMMAudioModal({ sceneId: scene.scene_id, sourceVideoUrl });
     setMMAudioPrompt(String(scene.mmaudio_prompt || scene.sound_prompt || ""));
     setMMAudioNegativePrompt(String(scene.mmaudio_negative_prompt || "music, speech, human voice, singing, distorted audio"));
-    setMMAudioGainDb(Number.isFinite(Number(scene.mmaudio_gain_db ?? scene.generatedAudioGainDb ?? scene.generated_audio_gain_db)) ? Number(scene.mmaudio_gain_db ?? scene.generatedAudioGainDb ?? scene.generated_audio_gain_db) : -6);
     setMMAudioModalError("");
   };
 
@@ -1966,7 +1996,7 @@ export default function ManualClipDirectorBoardEditor({
     const sourceVideoUrl = resolveMMAudioSourceVideoUrl(currentScene);
     const soundPrompt = String(mmaudioPrompt || "").trim();
     const negativeAudioPrompt = String(mmaudioNegativePrompt || "").trim();
-    const generatedAudioGainDb = Math.max(-24, Math.min(6, Number(mmaudioGainDb)));
+    const generatedAudioGainDb = -6;
     if (!sourceVideoUrl) {
       setMMAudioModalError("Сначала сгенерируй или загрузи видео");
       return;
@@ -1979,6 +2009,10 @@ export default function ManualClipDirectorBoardEditor({
       mmaudio_status: "queued",
       mmaudio_error: "",
       mmaudio_source_video_url: sourceVideoUrl,
+      original_video_before_mmaudio_url: currentScene.original_video_before_mmaudio_url || sourceVideoUrl,
+      originalVideoBeforeMMAudioUrl: currentScene.originalVideoBeforeMMAudioUrl || currentScene.original_video_before_mmaudio_url || sourceVideoUrl,
+      generatedAudioGainDb: generatedAudioGainDb,
+      generated_audio_gain_db: generatedAudioGainDb,
       mmaudio_prompt: soundPrompt,
       mmaudio_negative_prompt: negativeAudioPrompt,
       mmaudio_gain_db: generatedAudioGainDb,
@@ -1992,6 +2026,74 @@ export default function ManualClipDirectorBoardEditor({
       }
     } catch (err) {
       updateScene(sceneId, { mmaudio_status: "error", mmaudio_error: String(err?.message || "mmaudio_start_failed") });
+    }
+  };
+
+  const applyMMAudioGain = async () => {
+    const sceneId = String(selectedScene?.scene_id || selectedScene?.id || "").trim();
+    if (!sceneId) return;
+    const gainDb = Math.max(-24, Math.min(6, Number(mmaudioGainDraftDb)));
+    const sourceVideoUrl = String(
+      selectedScene?.original_video_before_mmaudio_url
+      || selectedScene?.originalVideoBeforeMMAudioUrl
+      || selectedScene?.mmaudio_source_video_url
+      || selectedScene?.mmaudioSourceVideoUrl
+      || selectedScene?.video_url
+      || selectedScene?.videoUrl
+      || ""
+    ).trim();
+    const mmaudioVideoUrl = String(
+      selectedScene?.mmaudio_raw_video_url
+      || selectedScene?.mmaudioRawVideoUrl
+      || selectedScene?.mmaudio_video_url
+      || selectedScene?.mmaudioVideoUrl
+      || selectedScene?.video_url
+      || selectedScene?.videoUrl
+      || ""
+    ).trim();
+    if (!sourceVideoUrl && !mmaudioVideoUrl) {
+      updateScene(sceneId, { mmaudio_gain_status: "error", mmaudio_gain_error: "Нет видео для изменения громкости" }, { reason: "manual_mmaudio_gain_missing_video" });
+      return;
+    }
+    updateScene(sceneId, { mmaudio_gain_status: "running", mmaudio_gain_error: "" }, { reason: "manual_mmaudio_gain_running" });
+    try {
+      const out = typeof onMMAudioGainRemix === "function"
+        ? await onMMAudioGainRemix({ sceneId, sourceVideoUrl, mmaudioVideoUrl, generatedAudioGainDb: gainDb })
+        : await fetchJson("/api/clip/video/mmaudio/remix-gain", {
+          method: "POST",
+          timeoutMs: 120000,
+          body: { sceneId, sourceVideoUrl, mmaudioVideoUrl, generatedAudioGainDb: gainDb },
+        });
+      const resultVideoUrl = String(out?.videoUrl || out?.video_url || out?.url || "").trim();
+      if (out?.ok === false || !resultVideoUrl) throw new Error(String(out?.error || out?.hint || out?.code || "mmaudio_gain_remix_failed"));
+      updateScene(sceneId, {
+        video_url: resultVideoUrl,
+        videoUrl: resultVideoUrl,
+        mmaudio_video_url: resultVideoUrl,
+        mmaudioVideoUrl: resultVideoUrl,
+        mmaudio_raw_video_url: selectedScene?.mmaudio_raw_video_url || selectedScene?.mmaudioRawVideoUrl || mmaudioVideoUrl,
+        mmaudioRawVideoUrl: selectedScene?.mmaudioRawVideoUrl || selectedScene?.mmaudio_raw_video_url || mmaudioVideoUrl,
+        original_video_before_mmaudio_url: selectedScene?.original_video_before_mmaudio_url || selectedScene?.originalVideoBeforeMMAudioUrl || sourceVideoUrl,
+        originalVideoBeforeMMAudioUrl: selectedScene?.originalVideoBeforeMMAudioUrl || selectedScene?.original_video_before_mmaudio_url || sourceVideoUrl,
+        video_has_audio: true,
+        videoHasAudio: true,
+        hasAudio: true,
+        generatedAudioPolicy: "mmaudio_generated_audio",
+        generated_audio_policy: "mmaudio_generated_audio",
+        generatedAudioGainDb: gainDb,
+        generated_audio_gain_db: gainDb,
+        mmaudio_gain_db: gainDb,
+        mmaudio_gain_status: "done",
+        mmaudio_gain_error: "",
+        mmaudio_status: "done",
+        mmaudio_error: "",
+        status: "video_ready",
+      }, { reason: "manual_mmaudio_gain_done" });
+    } catch (err) {
+      updateScene(sceneId, {
+        mmaudio_gain_status: "error",
+        mmaudio_gain_error: String(err?.message || "mmaudio_gain_remix_failed"),
+      }, { reason: "manual_mmaudio_gain_error" });
     }
   };
 
@@ -2628,6 +2730,19 @@ export default function ManualClipDirectorBoardEditor({
           <button type="button" className="manualMMAButton" title={selectedMMAudioSourceVideoUrl ? "Дозвучить видео через MMAudio" : "Сначала сгенерируй или загрузи видео"} disabled={!selectedMMAudioSourceVideoUrl || ["queued", "running"].includes(String(selectedScene.mmaudio_status || "").toLowerCase())} onClick={() => openMMAudioModal(selectedScene)}>🪄 MMA</button>
         </div> : null}
         {selectedMMAudioSourceVideoUrl ? <a className="manualVideoLink" href={selectedMMAudioSourceVideoUrl} target="_blank" rel="noreferrer">Открыть видео напрямую</a> : null}
+        {selectedHasMMAudioResult ? <div className="manualMMAGainBox manualMMAGainBoxInline">
+          <div className="manualMMAGainHeader"><div><strong>Громкость MMAAudio</strong><span>Меняет громкость готовой озвучки без новой генерации.</span></div><strong>{Number(mmaudioGainDraftDb)} dB</strong></div>
+          <input className="manualMMAGainSlider" type="range" min="-24" max="6" step="1" value={mmaudioGainDraftDb} onChange={(e) => setMMAudioGainDraftDb(Number(e.target.value))} />
+          <div className="manualMMAGainFooter">
+            <div className="manualMMAPresets">
+              <button type="button" onClick={() => setMMAudioGainDraftDb(-12)}>Тихо -12</button>
+              <button type="button" onClick={() => setMMAudioGainDraftDb(-6)}>Норм -6</button>
+              <button type="button" onClick={() => setMMAudioGainDraftDb(0)}>Громко 0</button>
+            </div>
+            <button type="button" className="manualMMAButton" disabled={selectedScene.mmaudio_gain_status === "running"} onClick={applyMMAudioGain}>{selectedScene.mmaudio_gain_status === "running" ? "Применяем..." : "Применить громкость"}</button>
+          </div>
+          {selectedScene.mmaudio_gain_status === "error" ? <div className="manualError">Громкость MMAudio: {selectedScene.mmaudio_gain_error || "Ошибка применения"}</div> : null}
+        </div> : null}
         {selectedScene.mmaudio_status === "queued" || selectedScene.mmaudio_status === "running" ? <div className="manualVideoInfo">🪄 MMAudio: {selectedScene.mmaudio_status === "queued" ? "в очереди" : "генерация звука"}</div> : null}
         {selectedScene.mmaudio_status === "error" ? <div className="manualError">MMAudio: {selectedScene.mmaudio_error || "Ошибка дозвучки"}</div> : null}
         {selectedScene.image_upload_status === "uploading" ? <div className="manualVideoInfo">Фото сохраняется на сервер...</div> : null}
@@ -2641,17 +2756,14 @@ export default function ManualClipDirectorBoardEditor({
       {mmaudioModal ? <div className="manualMMAModalBackdrop" role="dialog" aria-modal="true">
         <div className="manualMMAModal">
           <h3>Дозвучить видео</h3>
-          <label className="manualPromptBlock">Sound prompt<textarea value={mmaudioPrompt} onChange={(e) => setMMAudioPrompt(e.target.value)} placeholder="Realistic ocean surf sound, waves, wind, raw field recording. No music, no voice." /></label>
-          <label className="manualNegativePromptBlock">Negative audio prompt<textarea value={mmaudioNegativePrompt} onChange={(e) => setMMAudioNegativePrompt(e.target.value)} placeholder="music, voice, speech, singing, distorted audio" /></label>
-          <div className="manualMMAGainBox">
-            <div className="manualMMAGainHeader"><span>Громкость MMAAudio</span><strong>{Number(mmaudioGainDb)} dB</strong></div>
-            <input className="manualMMAGainSlider" type="range" min="-24" max="6" step="1" value={mmaudioGainDb} onChange={(e) => setMMAudioGainDb(Number(e.target.value))} />
-            <div className="manualMMAPresets">
-              <button type="button" onClick={() => setMMAudioGainDb(-12)}>Тихо -12</button>
-              <button type="button" onClick={() => setMMAudioGainDb(-6)}>Норм -6</button>
-              <button type="button" onClick={() => setMMAudioGainDb(0)}>Громко 0</button>
-            </div>
-          </div>
+          <label className="manualMMAField">
+            <span>Sound prompt</span>
+            <textarea value={mmaudioPrompt} onChange={(e) => setMMAudioPrompt(e.target.value)} placeholder="Realistic ocean surf sound, waves, wind, raw field recording. No music, no voice." />
+          </label>
+          <label className="manualMMAField">
+            <span>Negative audio prompt</span>
+            <textarea value={mmaudioNegativePrompt} onChange={(e) => setMMAudioNegativePrompt(e.target.value)} placeholder="music, voice, speech, singing, distorted audio" />
+          </label>
           {mmaudioModalError ? <div className="manualError">{mmaudioModalError}</div> : null}
           <div className="manualMMAActions">
             <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => setMMAudioModal(null)}>Отмена</button>
