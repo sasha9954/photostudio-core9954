@@ -34,6 +34,7 @@ from app.engine.comfy_remote import (
     extract_video_result,
     submit_comfy_prompt,
     upload_image_to_comfy,
+    upload_video_to_comfy,
     wait_for_comfy_result,
     run_comfy_image_to_video,
 )
@@ -17619,7 +17620,7 @@ def _replace_video_audio_with_gain(*, source_video_path: str, mmaudio_video_path
         return None, f"ffmpeg_failed:{str(exc)[:300]}"
     if proc.returncode != 0:
         return None, f"ffmpeg_failed:{(proc.stderr or proc.stdout or '')[-500:]}"
-    return _asset_url(out_name), None
+    return asset_url(out_name), None
 
 
 def _patch_mmaudio_workflow(workflow: dict, *, comfy_video_name: str, sound_prompt: str, negative_prompt: str, gain_db: float, cfg_value=None) -> dict:
@@ -17680,7 +17681,7 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
             raise RuntimeError(resolve_err or "source_video_not_found")
         with open(source_path, "rb") as f:
             video_bytes = f.read()
-        comfy_video_name, upload_err = upload_image_to_comfy(video_bytes, f"mmaudio_source_{uuid4().hex}.mp4")
+        comfy_video_name, upload_err = upload_video_to_comfy(video_bytes, f"mmaudio_source_{uuid4().hex}.mp4")
         if upload_err or not comfy_video_name:
             raise RuntimeError(upload_err or "comfy_video_upload_failed")
         with open(workflow_path, "r", encoding="utf-8") as f:
