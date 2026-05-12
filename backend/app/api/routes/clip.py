@@ -17553,6 +17553,13 @@ MMAUDIO_WORKFLOW_FILE = "backend/app/workflows/mmaudio-sound-design.json"
 MMAUDIO_PATCHED_NODE_IDS = ["91", "92", "97"]
 
 
+def _resolve_mmaudio_comfy_base_url() -> tuple[str, str]:
+    lab_url = str(getattr(settings, "COMFY_LAB_URL", None) or "").strip().rstrip("/")
+    if lab_url:
+        return lab_url, "COMFY_LAB_URL"
+    return str(settings.COMFY_BASE_URL or "").strip().rstrip("/"), "COMFY_BASE_URL"
+
+
 def _clip_db_gain(value, default: float = -6.0) -> float:
     parsed = _safe_float(value)
     if parsed is None or not math.isfinite(float(parsed)):
@@ -17585,8 +17592,13 @@ def _save_url_or_file_as_asset(source: str, *, prefix: str = "mmaudio_comfy", ex
     return out_path, None
 
 
-def _download_comfy_file_ref_to_asset(file_ref: str, *, prefix: str = "mmaudio_comfy") -> tuple[str | None, str | None, str]:
-    public_url, file_meta, strategy = build_public_comfy_file_url(file_ref)
+def _download_comfy_file_ref_to_asset(
+    file_ref: str,
+    *,
+    prefix: str = "mmaudio_comfy",
+    base_url: str | None = None,
+) -> tuple[str | None, str | None, str]:
+    public_url, file_meta, strategy = build_public_comfy_file_url(file_ref, base_url=base_url)
     if not file_meta:
         return None, "comfy_file_ref_invalid", ""
     source_url = public_url
@@ -17594,7 +17606,7 @@ def _download_comfy_file_ref_to_asset(file_ref: str, *, prefix: str = "mmaudio_c
         filename = quote(str(file_meta.get("filename") or "").strip())
         subfolder = quote(str(file_meta.get("subfolder") or "").strip())
         file_type = quote(str(file_meta.get("type") or "output").strip() or "output")
-        comfy_base = str(settings.COMFY_BASE_URL or "").strip().rstrip("/")
+        comfy_base = str(base_url or settings.COMFY_BASE_URL or "").strip().rstrip("/")
         if subfolder:
             source_url = f"{comfy_base}/view?filename={filename}&subfolder={subfolder}&type={file_type}"
         else:
@@ -17672,7 +17684,10 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
     gain_db = _clip_db_gain(payload.generatedAudioGainDb)
     temp_files: list[str] = []
     workflow_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "workflows", "mmaudio-sound-design.json"))
+    mmaudio_comfy_base_url, mmaudio_comfy_base_url_kind = _resolve_mmaudio_comfy_base_url()
     debug_base = {
+        "comfyBaseUrlUsed": mmaudio_comfy_base_url,
+        "comfyBaseUrlKind": mmaudio_comfy_base_url_kind,
         "requestedSoundPromptPreview": sound_prompt[:300],
         "requestedNegativeAudioPromptPreview": negative_prompt[:300],
         "sourceVideoUrl": video_url,
@@ -17690,7 +17705,11 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
             raise RuntimeError(resolve_err or "source_video_not_found")
         with open(source_path, "rb") as f:
             video_bytes = f.read()
-        comfy_video_name, upload_err = upload_video_to_comfy(video_bytes, f"mmaudio_source_{uuid4().hex}.mp4")
+        comfy_video_name, upload_err = upload_video_to_comfy(
+            video_bytes,
+            f"mmaudio_source_{uuid4().hex}.mp4",
+            base_url=mmaudio_comfy_base_url,
+        )
         if upload_err or not comfy_video_name:
             raise RuntimeError(upload_err or "comfy_video_upload_failed")
         with open(workflow_path, "r", encoding="utf-8") as f:
@@ -17703,20 +17722,31 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
             gain_db=gain_db,
             cfg_value=getattr(payload, "cfg", None),
         )
-        prompt_id, prompt_err = submit_comfy_prompt(patched)
+        prompt_id, prompt_err = submit_comfy_prompt(patched, base_url=mmaudio_comfy_base_url)
         if prompt_err or not prompt_id:
             raise RuntimeError(prompt_err or "comfy_prompt_failed")
         with CLIP_VIDEO_JOBS_LOCK:
             job = CLIP_VIDEO_JOBS.get(job_id) or {}
             job.update({"comfyPromptId": prompt_id, "providerJobId": prompt_id, "updatedAt": time.time()})
             CLIP_VIDEO_JOBS[job_id] = job
-        history, history_err = wait_for_comfy_result(prompt_id, timeout_sec=3600, poll_interval_sec=3, workflow_key=MMAUDIO_WORKFLOW_KEY, workflow_file=MMAUDIO_WORKFLOW_FILE)
+        history, history_err = wait_for_comfy_result(
+            prompt_id,
+            timeout_sec=3600,
+            poll_interval_sec=3,
+            workflow_key=MMAUDIO_WORKFLOW_KEY,
+            workflow_file=MMAUDIO_WORKFLOW_FILE,
+            base_url=mmaudio_comfy_base_url,
+        )
         if history_err or not history:
             raise RuntimeError(history_err or "comfy_history_missing")
         file_ref, extract_err = extract_video_result(history)
         if extract_err or not file_ref:
             raise RuntimeError(extract_err or "comfy_video_output_missing")
-        mmaudio_path, save_err, handoff_strategy = _download_comfy_file_ref_to_asset(file_ref, prefix="mmaudio_raw")
+        mmaudio_path, save_err, handoff_strategy = _download_comfy_file_ref_to_asset(
+            file_ref,
+            prefix="mmaudio_raw",
+            base_url=mmaudio_comfy_base_url,
+        )
         if save_err or not mmaudio_path:
             raise RuntimeError(save_err or "mmaudio_raw_save_failed")
         final_video_url, ffmpeg_err = _replace_video_audio_with_gain(source_video_path=source_path, mmaudio_video_path=mmaudio_path, gain_db=gain_db)
@@ -18076,7 +18106,10 @@ def clip_video_mmaudio_start(payload: ClipVideoMMAudioStartIn):
     job_id = uuid4().hex
     queued_at = time.time()
     queue_position = int(CLIP_VIDEO_QUEUE.qsize()) + 1
+    mmaudio_comfy_base_url, mmaudio_comfy_base_url_kind = _resolve_mmaudio_comfy_base_url()
     debug_fields = {
+        "comfyBaseUrlUsed": mmaudio_comfy_base_url,
+        "comfyBaseUrlKind": mmaudio_comfy_base_url_kind,
         "requestedSoundPromptPreview": sound_prompt[:300],
         "requestedNegativeAudioPromptPreview": negative_prompt[:300],
         "sourceVideoUrl": video_url,
@@ -18140,6 +18173,7 @@ def clip_video_mmaudio_remix_gain(payload: ClipVideoMMAudioRemixGainIn):
     if gain_source is None:
         gain_source = payload.generated_audio_gain_db
     gain_db = _clip_db_gain(gain_source)
+    mmaudio_comfy_base_url, mmaudio_comfy_base_url_kind = _resolve_mmaudio_comfy_base_url()
 
     if not source_video_url and not mmaudio_video_url:
         return JSONResponse(
@@ -18186,6 +18220,8 @@ def clip_video_mmaudio_remix_gain(payload: ClipVideoMMAudioRemixGainIn):
             "resolvedWorkflowKey": "mmaudio_gain_remix",
             "generatedAudioGainDb": gain_db,
             "generated_audio_gain_db": gain_db,
+            "comfyBaseUrlUsed": mmaudio_comfy_base_url,
+            "comfyBaseUrlKind": mmaudio_comfy_base_url_kind,
         }
     finally:
         for temp_path in temp_files:
