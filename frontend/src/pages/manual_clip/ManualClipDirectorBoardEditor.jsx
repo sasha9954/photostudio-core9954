@@ -1985,7 +1985,7 @@ export default function ManualClipDirectorBoardEditor({
       return;
     }
     setMMAudioModal({ sceneId: scene.scene_id, sourceVideoUrl });
-    setMMAudioPrompt(String(scene.mmaudio_prompt || scene.sound_prompt || ""));
+    setMMAudioPrompt(String(scene.mmaudio_prompt || ""));
     setMMAudioNegativePrompt(String(scene.mmaudio_negative_prompt || "music, speech, human voice, singing, distorted audio"));
     setMMAudioModalError("");
   };
