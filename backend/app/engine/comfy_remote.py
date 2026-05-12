@@ -771,10 +771,7 @@ def upload_audio_to_comfy(
     return None, last_error
 
 
-def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
-    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
-    connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
-    read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
+def _build_comfy_prompt_request_payload(workflow: dict) -> dict:
     disable_pbar = bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True))
     disable_pbar_top_level = bool(getattr(settings, "COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL", True))
     request_payload: dict = {"prompt": workflow}
@@ -784,6 +781,16 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
             # Compatibility fallback for desktop/fork wrappers that inspect top-level request fields
             # instead of reading extra_data forwarded to queue execution context.
             request_payload["disable_pbar"] = True
+    return request_payload
+
+
+def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
+    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
+    connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
+    read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
+    disable_pbar = bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True))
+    disable_pbar_top_level = bool(getattr(settings, "COMFY_DISABLE_PBAR_COMPAT_TOP_LEVEL", True))
+    request_payload = _build_comfy_prompt_request_payload(workflow)
     logger.info(
         "[COMFY REMOTE] request prompt url=%s connect_timeout=%s read_timeout=%s disable_pbar=%s disable_pbar_top_level=%s payload_keys=%s",
         url,
@@ -818,17 +825,176 @@ def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
     return prompt_id, None
 
 
-def _write_debug_workflow_dump(*, scene_id: str, workflow_key: str, workflow: dict) -> tuple[str, str]:
-    safe_scene_id = str(scene_id or "").strip() or "scene"
+def _safe_debug_filename_part(value: str, fallback: str = "debug") -> str:
+    raw = str(value or "").strip() or fallback
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in raw)
+    safe = safe.strip("._-") or fallback
+    return safe[:120]
+
+
+def _debug_workflow_dump_dir() -> Path:
     dump_dir = Path(__file__).resolve().parents[2] / "static" / "debug_workflows"
     dump_dir.mkdir(parents=True, exist_ok=True)
-    dump_filename = f"last_{str(workflow_key or 'workflow').strip() or 'workflow'}_{safe_scene_id}_sent_to_comfy.json"
-    dump_path = dump_dir / dump_filename
-    payload = json.dumps(workflow, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    workflow_md5 = hashlib.md5(payload).hexdigest()
-    with open(dump_path, "w", encoding="utf-8") as wf_dump_file:
-        json.dump(workflow, wf_dump_file, ensure_ascii=False, indent=2)
-    return str(dump_path), workflow_md5
+    return dump_dir
+
+
+def _write_debug_json_dump(*, scene_id: str, workflow_key: str, suffix: str, payload: dict) -> tuple[str, str]:
+    safe_scene_id = _safe_debug_filename_part(scene_id, "scene")
+    safe_workflow_key = _safe_debug_filename_part(workflow_key, "workflow")
+    safe_suffix = _safe_debug_filename_part(suffix, "debug")
+    dump_path = _debug_workflow_dump_dir() / f"last_{safe_workflow_key}_{safe_scene_id}_{safe_suffix}.json"
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    payload_md5 = hashlib.md5(raw).hexdigest()
+    with open(dump_path, "w", encoding="utf-8") as dump_file:
+        json.dump(payload, dump_file, ensure_ascii=False, indent=2)
+    return str(dump_path), payload_md5
+
+
+def _write_debug_workflow_dump(*, scene_id: str, workflow_key: str, workflow: dict) -> tuple[str, str]:
+    return _write_debug_json_dump(
+        scene_id=scene_id,
+        workflow_key=workflow_key,
+        suffix="sent_to_comfy",
+        payload=workflow,
+    )
+
+
+def _workflow_node_title(node: dict) -> str:
+    if not isinstance(node, dict):
+        return ""
+    meta = node.get("_meta") if isinstance(node.get("_meta"), dict) else {}
+    title = str(meta.get("title") or node.get("title") or "").strip()
+    if title:
+        return title
+    return str((node.get("properties") or {}).get("Node name for S&R") if isinstance(node.get("properties"), dict) else "" or "").strip()
+
+
+def _workflow_node_class(node: dict) -> str:
+    if not isinstance(node, dict):
+        return ""
+    return str(node.get("class_type") or node.get("type") or "").strip()
+
+
+def _workflow_node_input(node: dict, key: str):
+    if not isinstance(node, dict):
+        return None
+    inputs = node.get("inputs")
+    if isinstance(inputs, dict):
+        return inputs.get(key)
+    return None
+
+
+def _workflow_node_text_value(node: dict) -> str:
+    text = _workflow_node_input(node, "text")
+    if isinstance(text, str):
+        return text
+    widgets = node.get("widgets_values") if isinstance(node, dict) else None
+    if isinstance(widgets, list):
+        for item in widgets:
+            if isinstance(item, str) and item.strip():
+                return item
+    return ""
+
+
+def _iter_debug_workflow_nodes(workflow: dict):
+    if not isinstance(workflow, dict):
+        return
+    # API prompt format: {"128": {"class_type": "CLIPTextEncode", "inputs": {...}}, ...}
+    for node_id, node in workflow.items():
+        if isinstance(node, dict) and ("class_type" in node or "inputs" in node):
+            yield str(node_id), node, "root"
+    # UI workflow format: {"nodes": [...], "definitions": {"subgraphs": [{"nodes": [...]}]}}
+    nodes = workflow.get("nodes")
+    if isinstance(nodes, list):
+        for node in nodes:
+            if isinstance(node, dict):
+                yield str(node.get("id") or ""), node, "ui.nodes"
+    definitions = workflow.get("definitions")
+    subgraphs = definitions.get("subgraphs") if isinstance(definitions, dict) else []
+    if isinstance(subgraphs, list):
+        for subgraph in subgraphs:
+            sg_name = str((subgraph or {}).get("name") or (subgraph or {}).get("id") or "subgraph") if isinstance(subgraph, dict) else "subgraph"
+            sg_nodes = subgraph.get("nodes") if isinstance(subgraph, dict) else []
+            if not isinstance(sg_nodes, list):
+                continue
+            for node in sg_nodes:
+                if isinstance(node, dict):
+                    yield str(node.get("id") or ""), node, f"subgraph:{sg_name}"
+
+
+def _build_debug_workflow_summary(
+    *,
+    scene_id: str,
+    workflow_key: str,
+    workflow_file: str,
+    workflow: dict,
+    request_payload: dict | None = None,
+    prompt_id: str = "",
+) -> dict:
+    positive_nodes: list[dict] = []
+    negative_nodes: list[dict] = []
+    load_image_nodes: list[dict] = []
+    timing_nodes: list[dict] = []
+    for node_id, node, source in _iter_debug_workflow_nodes(workflow):
+        class_type = _workflow_node_class(node)
+        class_l = class_type.lower()
+        title = _workflow_node_title(node)
+        title_l = title.lower()
+        text_value = _workflow_node_text_value(node)
+        if "cliptextencode" in class_l or text_value:
+            target = None
+            if "negative" in title_l:
+                target = negative_nodes
+            elif "positive" in title_l or text_value:
+                target = positive_nodes
+            if target is not None and text_value:
+                target.append({
+                    "node_id": node_id,
+                    "source": source,
+                    "class_type": class_type,
+                    "title": title,
+                    "text": text_value,
+                    "text_preview": text_value[:800],
+                    "text_length": len(text_value),
+                })
+        if class_l == "loadimage" or "loadimage" in class_l:
+            image_value = _workflow_node_input(node, "image")
+            if image_value is None:
+                widgets = node.get("widgets_values") if isinstance(node, dict) else None
+                if isinstance(widgets, list) and widgets:
+                    image_value = widgets[0]
+            load_image_nodes.append({
+                "node_id": node_id,
+                "source": source,
+                "class_type": class_type,
+                "title": title,
+                "image": image_value,
+            })
+        if any(hint in title_l for hint in ("duration", "frame rate", "fps", "width", "height")):
+            value = _workflow_node_input(node, "value")
+            widgets = node.get("widgets_values") if isinstance(node, dict) else None
+            if value is None and isinstance(widgets, list) and widgets:
+                value = widgets[0]
+            timing_nodes.append({
+                "node_id": node_id,
+                "source": source,
+                "class_type": class_type,
+                "title": title,
+                "value": value,
+            })
+    return {
+        "scene_id": str(scene_id or "").strip(),
+        "workflow_key": str(workflow_key or "").strip(),
+        "workflow_file": str(workflow_file or "").strip(),
+        "prompt_id": str(prompt_id or "").strip(),
+        "request_payload_keys": sorted(list((request_payload or {}).keys())),
+        "request_payload_has_prompt": bool(isinstance((request_payload or {}).get("prompt"), dict)),
+        "positive_prompt_nodes": positive_nodes,
+        "negative_prompt_nodes": negative_nodes,
+        "load_image_nodes": load_image_nodes,
+        "timing_nodes": timing_nodes,
+        "note": "This summary is extracted from the exact workflow/request payload prepared for Comfy. Full JSON is saved next to this file.",
+    }
 
 
 def wait_for_comfy_result(
@@ -1579,10 +1745,18 @@ def _discover_first_last_patch_nodes(workflow: dict) -> dict:
         if "height" in title_l and not discovered["height_node_id"]:
             discovered["height_node_id"] = str(node_id)
             continue
-        if "fps" in title_l and not discovered["fps_node_id"]:
+        is_fps_title = any(
+            hint in title_l
+            for hint in ("fps", "frame rate", "frame_rate", "framerate")
+        )
+        is_length_title = any(
+            hint in title_l
+            for hint in ("length", "duration", "frames", "frame count", "frame_count", "num frames", "num_frames")
+        )
+        if is_fps_title and not discovered["fps_node_id"]:
             discovered["fps_node_id"] = str(node_id)
             continue
-        if any(hint in title_l for hint in ("length", "duration", "frame")) and not discovered["length_node_id"]:
+        if is_length_title and not discovered["length_node_id"]:
             discovered["length_node_id"] = str(node_id)
 
     node_consumers = _collect_node_output_consumers(workflow)
@@ -1701,6 +1875,60 @@ def _patch_audio_frames(workflow: dict, frames: int) -> None:
         inputs["frames_number"] = int(frames)
 
 
+
+
+def _apply_ltx_clean_direct_timing_patch(workflow: dict, *, frames: int, fps: int, width: int, height: int) -> dict[str, object]:
+    """Hard-patch the known LTX 2.3 clean i2v AV nodes.
+
+    The clean sound workflow exposes Length/FPS/size through Primitive nodes. Some
+    Comfy executions returned a 1-frame mp4 even after the primitive Length node was
+    patched, so for this workflow we also write literal values directly into the
+    latent/audio/video nodes that consume timing.
+    """
+    debug: dict[str, object] = {
+        "applied": False,
+        "patchedNodeInputs": [],
+        "before": {},
+        "after": {},
+    }
+
+    def _set(node_id: str, key: str, value) -> None:
+        node = workflow.get(str(node_id))
+        if not isinstance(node, dict):
+            return
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict) or key not in inputs:
+            return
+        marker = f"{node_id}.{key}"
+        debug["before"][marker] = inputs.get(key)
+        inputs[key] = value
+        debug["after"][marker] = value
+        debug["patchedNodeInputs"].append(marker)
+        debug["applied"] = True
+
+    safe_frames = max(2, int(frames or 0))
+    safe_fps = max(1, int(fps or 0))
+    safe_width = max(16, int(width or 0))
+    safe_height = max(16, int(height or 0))
+
+    _set("267:225", "value", safe_frames)
+    _set("267:260", "value", safe_fps)
+    _set("267:257", "value", safe_width)
+    _set("267:258", "value", safe_height)
+
+    _set("267:228", "length", safe_frames)
+    _set("267:228", "width", safe_width)
+    _set("267:228", "height", safe_height)
+    _set("267:214", "frames_number", safe_frames)
+    _set("267:214", "frame_rate", safe_fps)
+    _set("267:242", "fps", safe_fps)
+
+    debug["frames"] = safe_frames
+    debug["fps"] = safe_fps
+    debug["width"] = safe_width
+    debug["height"] = safe_height
+    return debug
+
 def _is_linked_input(value) -> bool:
     return isinstance(value, (list, tuple, dict))
 
@@ -1714,9 +1942,24 @@ def _patch_duration_and_frames(
 ) -> dict:
     requested_duration = float(requested_duration_sec)
     normalized_workflow_key = str(workflow_key or "").strip().lower()
+    # The LTX 2.3 first/last + sound workflow is sensitive to its native
+    # timing graph. In ComfyUI, both video and generated audio latents keep
+    # their length linked to the shared math node (Duration * FPS + 1).
+    # Do not replace those linked inputs with literal frame counts here.
+    preserve_native_linked_timing = normalized_workflow_key == "first_last_sound_clean"
     resolved_fps = int(max(1, int(round(float(fps_hint or _resolve_workflow_fps(workflow))))))
-    frames = max(1, int(round(requested_duration * float(resolved_fps))))
-    duration_int = max(1, int(round(requested_duration)))
+    if preserve_native_linked_timing:
+        # Match the way this workflow is used from ComfyUI: Duration is an
+        # integer primitive and the shared math node computes
+        # Duration * FPS + 1 for both video and generated-audio latents.
+        # For a 5.17s target, generate a clean 6s native clip and let the
+        # assembly/validation layer trim it, instead of generating 5s and
+        # padding/looping the tail.
+        duration_int = max(1, int(math.ceil(requested_duration)))
+        frames = max(1, int(duration_int * resolved_fps + 1))
+    else:
+        frames = max(1, int(round(requested_duration * float(resolved_fps))))
+        duration_int = max(1, int(round(requested_duration)))
     duration_patch_ids: list[str] = []
     fps_patch_ids: list[str] = []
     frames_patch_ids: list[str] = []
@@ -1856,7 +2099,8 @@ def _patch_duration_and_frames(
                             if next_id and next_id not in visited:
                                 queue.append(next_id)
             if chain_patched:
-                frames_patch_ids.append(str(node_id))
+                if not (preserve_native_linked_timing and str(key).strip().lower() in {"length", "frames_number"}):
+                    frames_patch_ids.append(str(node_id))
 
     # Priority C: fallback direct literal frame fields.
     for node_id, node in workflow.items():
@@ -1876,6 +2120,12 @@ def _patch_duration_and_frames(
             length_value = inputs.get("length")
             if not _is_linked_input(length_value):
                 continue
+            if preserve_native_linked_timing:
+                # Keep EmptyLTXVLatentVideo.length linked to the workflow math
+                # node. Directly replacing it with a literal frame count made
+                # first_last_sound_clean diverge from the same workflow run
+                # inside ComfyUI and caused jumpy transitions / repeated audio.
+                continue
             if not _is_video_latent_branch_node(node):
                 continue
             _remember_length_value(workflow_length_before, str(node_id), length_value)
@@ -1884,12 +2134,42 @@ def _patch_duration_and_frames(
             linked_length_patch_ids.append(str(node_id))
             _remember_length_value(workflow_length_after, str(node_id), int(frames))
 
-    # Priority D: keep legacy reserve behavior.
+    # Priority D: for first/last + sound workflows, video and generated-audio
+    # latents must use the exact same frame count. The workflow's Duration node is
+    # an integer, so a 5.17s request at 25fps becomes 5*25+1=126 frames on the
+    # audio branch while the video latent is patched to 129 frames. That mismatch
+    # creates short/looped audio and can make the transition feel jumpy.
+    if normalized_workflow_key in F_L_WORKFLOW_KEYS and not preserve_native_linked_timing:
+        for node_id, node in workflow.items():
+            if not isinstance(node, dict):
+                continue
+            inputs = node.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            class_type = str(node.get("class_type") or "").strip().lower()
+            title_l = _node_title_lower(node)
+            is_audio_latent_settings = (
+                "emptylatentaudio" in class_type
+                or "audio latent" in title_l
+                or ("frames_number" in inputs and "audio_vae" in inputs)
+            )
+            if not is_audio_latent_settings:
+                continue
+            if "frames_number" in inputs:
+                _remember_length_value(workflow_length_before, str(node_id), inputs.get("frames_number"))
+                inputs["frames_number"] = int(frames)
+                frames_patch_ids.append(str(node_id))
+                _remember_length_value(workflow_length_after, str(node_id), int(frames))
+            if "frame_rate" in inputs:
+                inputs["frame_rate"] = int(resolved_fps)
+                fps_patch_ids.append(str(node_id))
+
+    # Priority E: keep legacy reserve behavior for non-linked audio frame fields.
     _patch_audio_frames(workflow, frames)
 
     return {
         "requestedDurationSec": float(requested_duration),
-        "providerDurationSec": float(requested_duration),
+        "providerDurationSec": float((frames / float(resolved_fps)) if preserve_native_linked_timing else requested_duration),
         "fps": int(resolved_fps),
         "frames": int(frames),
         "duration_patch_applied": bool(duration_patch_ids),
@@ -2834,6 +3114,8 @@ def _patch_workflow_inputs(
     image_name: str,
     prompt: str,
     negative_prompt: str = "",
+    start_image_name: str = "",
+    end_image_name: str = "",
     width: int,
     height: int,
     requested_duration_sec: float,
@@ -2946,8 +3228,47 @@ def _patch_workflow_inputs(
             patch_values.append((str(first_last_discovery["length_node_id"]), "value", int(frames)))
         if first_last_discovery.get("fps_node_id"):
             patch_values.append((str(first_last_discovery["fps_node_id"]), "value", int(fps)))
-        if first_last_discovery.get("image_node_ids"):
-            patch_values.append((str(first_last_discovery["image_node_ids"][0]), "image", image_name))
+        image_node_ids = [str(item) for item in (first_last_discovery.get("image_node_ids") or []) if str(item).strip()]
+        if image_node_ids:
+            start_node_id = ""
+            end_node_id = ""
+            for candidate_id in image_node_ids:
+                candidate_node = wf.get(str(candidate_id))
+                candidate_inputs = candidate_node.get("inputs") if isinstance(candidate_node, dict) else {}
+                current_image_value = str((candidate_inputs or {}).get("image") or "").strip().lower()
+                candidate_title = _node_title_lower(candidate_node if isinstance(candidate_node, dict) else {})
+                if ("start" in candidate_title or "first" in candidate_title or "runtime_start" in current_image_value) and not start_node_id:
+                    start_node_id = str(candidate_id)
+                if ("end" in candidate_title or "last" in candidate_title or "runtime_end" in current_image_value) and not end_node_id:
+                    end_node_id = str(candidate_id)
+
+            if not start_node_id and image_node_ids:
+                # Prefer the non-end placeholder as start; older exports may only expose generic titles.
+                for candidate_id in image_node_ids:
+                    if candidate_id != end_node_id:
+                        start_node_id = str(candidate_id)
+                        break
+            if not end_node_id and len(image_node_ids) > 1:
+                for candidate_id in image_node_ids:
+                    if candidate_id != start_node_id:
+                        end_node_id = str(candidate_id)
+                        break
+
+            resolved_start_image_name = str(start_image_name or image_name or "").strip()
+            resolved_end_image_name = str(end_image_name or "").strip()
+            if start_node_id and resolved_start_image_name:
+                patch_values.append((start_node_id, "image", resolved_start_image_name))
+            if end_node_id and resolved_end_image_name:
+                patch_values.append((end_node_id, "image", resolved_end_image_name))
+            elif end_node_id:
+                optional_fallback_misses.append(
+                    {
+                        "workflowKey": normalized_workflow_key,
+                        "missingNodeId": str(end_node_id),
+                        "inputKey": "image",
+                        "reason": "first_last_end_image_name_missing",
+                    }
+                )
         fallback_patch_values = [
             (*FIXED_IMAGE_VIDEO_NODES["image"], image_name),
             (*FIXED_IMAGE_VIDEO_NODES["prompt"], prompt),
@@ -3032,8 +3353,12 @@ def _patch_workflow_inputs(
             if isinstance(negative_inputs, dict):
                 workflow_static_negative_prompt = str(negative_inputs.get("text") or negative_inputs.get("value") or "").strip()
                 scene_negative_prompt = str(negative_prompt or "").strip()
-                if scene_negative_prompt:
-                    if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"}:
+                clean_field_exact_workflow = normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"}
+                should_patch_negative = bool(scene_negative_prompt) or clean_field_exact_workflow
+                if should_patch_negative:
+                    if clean_field_exact_workflow:
+                        # Clean/manual workflows must not inherit any static workflow negative bank.
+                        # Even an empty user negative field must actively clear the negative node.
                         effective_negative_prompt = scene_negative_prompt
                     else:
                         effective_negative_prompt = _dedupe_prompt_tokens_csv(workflow_static_negative_prompt, scene_negative_prompt)
@@ -3048,10 +3373,10 @@ def _patch_workflow_inputs(
                             return None, err, None, None, {}
                         negative_prompt_node_patched = True
                         negative_prompt_patched_node_ids.append(str(resolved_negative_prompt_node_id))
-                        negative_prompt_source = "scene"
-                        if normalized_workflow_key in {"ltx23_i2v_sound_clean", "first_last_sound_clean"}:
+                        negative_prompt_source = "scene" if scene_negative_prompt else "scene_empty_clear"
+                        if clean_field_exact_workflow:
                             logger.info(
-                                "[LTX CLEAN WORKFLOW PATCH] patched negative node 247 node_id=%s input_key=%s preview=%r",
+                                "[LTX CLEAN WORKFLOW PATCH] patched negative node field-exact node_id=%s input_key=%s preview=%r",
                                 str(resolved_negative_prompt_node_id),
                                 str(input_key),
                                 _preview_value(effective_negative_prompt, limit=180),
@@ -3079,6 +3404,17 @@ def _patch_workflow_inputs(
     )
     fps = int(timing_patch_debug.get("fps") or fps)
     frames = int(timing_patch_debug.get("frames") or frames)
+    clean_direct_timing_debug: dict[str, object] = {}
+    if normalized_workflow_key == "ltx23_i2v_sound_clean":
+        clean_direct_timing_debug = _apply_ltx_clean_direct_timing_patch(
+            wf,
+            frames=int(frames),
+            fps=int(fps),
+            width=int(width),
+            height=int(height),
+        )
+        if clean_direct_timing_debug.get("applied"):
+            logger.warning("[COMFY LTX CLEAN DIRECT TIMING PATCH] %s", clean_direct_timing_debug)
 
     if seed is not None:
         seed_targets: list[tuple[str, str]] = []
@@ -3190,6 +3526,9 @@ def _patch_workflow_inputs(
         "workflowLengthBefore": workflow_length_before_debug,
         "workflowLengthAfter": timing_patch_debug.get("workflow_length_after") or {},
         "lengthNodeValueSent": length_node_value_sent,
+        "cleanDirectTimingPatch": clean_direct_timing_debug,
+        "cleanDirectTimingPatchApplied": bool(clean_direct_timing_debug.get("applied")) if isinstance(clean_direct_timing_debug, dict) else False,
+        "cleanDirectTimingPatchedNodeInputs": clean_direct_timing_debug.get("patchedNodeInputs") if isinstance(clean_direct_timing_debug, dict) else [],
         "patchedNegativePromptNodeIds": list(dict.fromkeys(negative_prompt_patched_node_ids)),
         "widthNodeValue": _read_node_input(wf, resolved_width_node_id_for_debug, "value"),
         "heightNodeValue": _read_node_input(wf, resolved_height_node_id_for_debug, "value"),
@@ -3218,6 +3557,8 @@ def _patch_workflow_inputs(
             "height_node_value": discovery_debug.get("heightNodeValue"),
             "length_node_id": discovery_debug.get("patchedLengthNodeId"),
             "length_node_value": discovery_debug.get("lengthNodeValueSent"),
+            "clean_direct_timing_patch_applied": discovery_debug.get("cleanDirectTimingPatchApplied"),
+            "clean_direct_timing_patched_node_inputs": discovery_debug.get("cleanDirectTimingPatchedNodeInputs"),
         },
     )
     logger.info(
@@ -3471,11 +3812,11 @@ def run_comfy_image_to_video(
     scene_negative_prompt = str(negative_prompt or "").strip()
     uploaded_start_name = uploaded_name
     uploaded_end_name = ""
-    if start_image_bytes and normalized_workflow_key in {"f_l", "f_l_sound"}:
+    if start_image_bytes and normalized_workflow_key in F_L_WORKFLOW_KEYS:
         uploaded_start_name, start_upload_err = upload_image_to_comfy(start_image_bytes, f"{Path(image_filename).stem}_start.jpg")
         if start_upload_err or not uploaded_start_name:
             return None, f"upload_failed:{start_upload_err or 'start_image_upload_failed'}"
-    if end_image_bytes and normalized_workflow_key in {"f_l", "f_l_sound"}:
+    if end_image_bytes and normalized_workflow_key in F_L_WORKFLOW_KEYS:
         uploaded_end_name, end_upload_err = upload_image_to_comfy(end_image_bytes, f"{Path(image_filename).stem}_end.jpg")
         if end_upload_err or not uploaded_end_name:
             return None, f"upload_failed:{end_upload_err or 'end_image_upload_failed'}"
@@ -3485,6 +3826,8 @@ def run_comfy_image_to_video(
         image_name=uploaded_name,
         prompt=effective_prompt,
         negative_prompt=scene_negative_prompt,
+        start_image_name=uploaded_start_name,
+        end_image_name=uploaded_end_name,
         width=int(width),
         height=int(height),
         requested_duration_sec=float(requested_duration_sec),
@@ -3516,7 +3859,7 @@ def run_comfy_image_to_video(
     )
     final_workflow_dump_path = ""
     i2v_final_node_dump: dict[str, object] = {}
-    if normalized_workflow_key in {"i2v", "i2v_sound"}:
+    if normalized_workflow_key in {"i2v", "i2v_sound", "ltx23_i2v_sound_clean"}:
         fps_from_node = _read_node_input(patched_workflow, "267:260", "value")
         try:
             resolved_i2v_fps = int(round(float(fps_from_node)))
@@ -3613,7 +3956,7 @@ def run_comfy_image_to_video(
     expected_second_image_value = ""
     start_frame_image_bound = False
     end_frame_image_bound = False
-    if normalized_workflow_key in {"f_l", "f_l_sound"}:
+    if normalized_workflow_key in F_L_WORKFLOW_KEYS:
         if not uploaded_end_name:
             return None, "capability_error:LTX_SECOND_FRAME_REQUIRED:end_image_missing_for_first_last_workflow"
         first_last_patch_debug = _patch_first_last_images(
@@ -4321,11 +4664,34 @@ def run_comfy_image_to_video(
     )
     workflow_dump_path = ""
     workflow_md5 = ""
+    request_payload_dump_path = ""
+    request_payload_md5 = ""
+    workflow_summary_dump_path = ""
+    request_payload_for_debug = _build_comfy_prompt_request_payload(patched_workflow)
     try:
         workflow_dump_path, workflow_md5 = _write_debug_workflow_dump(
             scene_id=str(scene_id or "").strip(),
             workflow_key=normalized_workflow_key,
             workflow=patched_workflow,
+        )
+        request_payload_dump_path, request_payload_md5 = _write_debug_json_dump(
+            scene_id=str(scene_id or "").strip(),
+            workflow_key=normalized_workflow_key,
+            suffix="request_payload_POST_prompt",
+            payload=request_payload_for_debug,
+        )
+        workflow_summary = _build_debug_workflow_summary(
+            scene_id=str(scene_id or "").strip(),
+            workflow_key=normalized_workflow_key,
+            workflow_file=workflow_source,
+            workflow=patched_workflow,
+            request_payload=request_payload_for_debug,
+        )
+        workflow_summary_dump_path, _ = _write_debug_json_dump(
+            scene_id=str(scene_id or "").strip(),
+            workflow_key=normalized_workflow_key,
+            suffix="summary_prompts_images_timing",
+            payload=workflow_summary,
         )
     except Exception as exc:
         logger.warning(
@@ -4342,6 +4708,9 @@ def run_comfy_image_to_video(
             "workflowFile": workflow_source,
             "workflowMd5": workflow_md5,
             "workflowDumpPath": workflow_dump_path,
+            "requestPayloadMd5": request_payload_md5,
+            "requestPayloadDumpPath": request_payload_dump_path,
+            "workflowSummaryDumpPath": workflow_summary_dump_path,
             "promptNodeIds": prompt_patched_node_ids,
             "audioNodeIds": audio_patch_node_ids,
             "width": int(width),
@@ -4368,6 +4737,9 @@ def run_comfy_image_to_video(
             "promptIdReceived": bool(prompt_id and not submit_err),
             "workflowMd5": workflow_md5,
             "workflowDumpPath": workflow_dump_path,
+            "requestPayloadMd5": request_payload_md5,
+            "requestPayloadDumpPath": request_payload_dump_path,
+            "workflowSummaryDumpPath": workflow_summary_dump_path,
             "promptId": str(prompt_id or ""),
         },
     )
@@ -4466,6 +4838,11 @@ def run_comfy_image_to_video(
             "workflow_file": Path(str(workflow_source)).name,
             "workflow": workflow_source,
             "workflow_path": workflow_source,
+            "workflow_dump_path": workflow_dump_path,
+            "request_payload_dump_path": request_payload_dump_path,
+            "workflow_summary_dump_path": workflow_summary_dump_path,
+            "workflow_md5": workflow_md5,
+            "request_payload_md5": request_payload_md5,
             "requestedDurationSec": float(requested_duration_sec),
             "providerDurationSec": float(requested_duration_sec),
             "workflow_family": workflow_family,
@@ -4541,6 +4918,9 @@ def run_comfy_image_to_video(
             "workflowLengthBefore": (workflow_discovery_debug or {}).get("workflowLengthBefore") or {},
             "workflowLengthAfter": (workflow_discovery_debug or {}).get("workflowLengthAfter") or {},
             "lengthNodeValueSent": (workflow_discovery_debug or {}).get("lengthNodeValueSent"),
+            "cleanDirectTimingPatch": (workflow_discovery_debug or {}).get("cleanDirectTimingPatch") or {},
+            "cleanDirectTimingPatchApplied": bool((workflow_discovery_debug or {}).get("cleanDirectTimingPatchApplied")),
+            "cleanDirectTimingPatchedNodeInputs": (workflow_discovery_debug or {}).get("cleanDirectTimingPatchedNodeInputs") or [],
             "patchedNegativePromptNodeIds": (workflow_discovery_debug or {}).get("patchedNegativePromptNodeIds") or [],
             "sceneStartSec": scene_start_sec,
             "sceneEndSec": scene_end_sec,

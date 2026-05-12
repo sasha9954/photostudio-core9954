@@ -461,7 +461,9 @@ export function getManualClipBoardMaterialStats(project = {}) {
 }
 
 export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, existingProject, options = {}) {
-  if (options?.forceReplace || options?.explicitReset || options?.allowMaterialLoss) return false;
+  const reason = String(options?.reason || nextProject?.lastPersistReason || "").toLowerCase();
+  const isIntentionalMaterialDelete = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/.test(reason);
+  if (options?.forceReplace || options?.explicitReset || options?.allowMaterialLoss || isIntentionalMaterialDelete) return false;
   const nextStats = getManualClipBoardMaterialStats(nextProject);
   const existingStats = getManualClipBoardMaterialStats(existingProject);
   if (existingStats.materialTotal <= 0) return false;
@@ -841,9 +843,13 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     return false;
   }
 
+  const isIntentionalMaterialDelete = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/.test(reason.toLowerCase());
+
   if (
     !forceReplace
     && !explicitReset
+    && !options?.allowMaterialLoss
+    && !isIntentionalMaterialDelete
     && hasMeaningfulManualProject(existing)
     && existingStats.materialTotal > 0
     && nextStats.materialTotal === 0

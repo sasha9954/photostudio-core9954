@@ -25592,7 +25592,7 @@ return base;
     };
   }, [manualDirectorSourceNode, manualDirectorEditor.sourceNodeId]);
 
-  const patchManualTimingDirectorBoard = useCallback((sourceNodeId, nextProject, reason = "manual_director_update") => {
+  const patchManualTimingDirectorBoard = useCallback((sourceNodeId, nextProject, reason = "manual_director_update", persistOptions = {}) => {
     const safeSourceNodeId = String(sourceNodeId || "").trim();
     if (!safeSourceNodeId || !nextProject) return;
 
@@ -25606,7 +25606,10 @@ return base;
       lastPersistReason: reason,
     };
 
-    const persisted = persistManualClipBoardProject(safeProject, { reason });
+    const persisted = persistManualClipBoardProject(safeProject, {
+      ...(persistOptions || {}),
+      reason,
+    });
     const protectedProject = persisted
       ? safeProject
       : (pickBestManualClipBoardProject([
@@ -27157,7 +27160,7 @@ const hydrate = useCallback((source = "unknown") => {
             embedded
             sourceNodeId={manualDirectorEditor.sourceNodeId}
             project={manualDirectorBoardProject}
-            onProjectChange={(nextProject, reason) => patchManualTimingDirectorBoard(manualDirectorEditor.sourceNodeId, nextProject, reason)}
+            onProjectChange={(nextProject, reason, persistOptions) => patchManualTimingDirectorBoard(manualDirectorEditor.sourceNodeId, nextProject, reason, persistOptions)}
             onClose={closeManualTimingDirectorBoard}
           />
         </div>

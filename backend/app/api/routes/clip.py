@@ -1276,7 +1276,7 @@ LTX_MODEL_KEY_TO_MODEL_SPEC = {
 LTX_WORKFLOW_KEY_DEFAULT_MODEL_KEY = {
     "i2v": "ltx23_dev_fp8",
     "ltx23_i2v_sound_clean": "ltx23_dev_fp8",
-    "first_last_sound_clean": "ltx23_dev_fp8",
+    "first_last_sound_clean": "ltx23_distilled_fp8",
     "i2v_sound": "ltx23_dev_fp8",
     "lip_sync": "ltx23_dev_fp8",
     "f_l": "ltx23_distilled_fp8",
@@ -3270,16 +3270,10 @@ def _combine_negative_prompts(*parts: Any) -> str:
 
 
 LTX_CLEAN_WORKFLOW_KEYS = {"ltx23_i2v_sound_clean", "first_last_sound_clean"}
-LTX_CLEAN_BASE_NEGATIVE_PROMPT = (
-    "music, background music, soundtrack, score, underscore, cinematic underscore, emotional underscore, "
-    "musical bed, ambient music bed, cinematic bed, drone music, synth pad, strings, orchestral pad, "
-    "tonal pad, melody, instruments, rhythm, beat, drums, singing, choir, vocals, extra voices, "
-    "repeated phrase, long narration, echo, heavy reverb, robotic voice, cartoon voice, distorted voice, "
-    "trailer boom, horror sound design, artificial impact sound, sudden scene change, location drift, "
-    "new landscape, new animals appearing, hard zoom, orbit camera, spin camera, chaotic shake, "
-    "fast drone movement, text overlay, HUD, UI elements, CGI look, cartoon look, warped grass, "
-    "warped trees, warped wildlife, distorted animals, extra limbs, flickering sky, distorted waterline"
-)
+# Manual/clean sound workflows must not receive hidden backend prompt banks.
+# The Comfy workflow is conditioned directly by the user fields: 139:128 = video prompt,
+# 139:112 = the second user prompt field (often visual prompt + Sound: ...).
+LTX_CLEAN_BASE_NEGATIVE_PROMPT = ""
 
 
 def _ltx_clean_scene_value(scene: Any, *keys: str) -> str:
@@ -3330,8 +3324,7 @@ def buildLtxCleanPositivePrompt(scene: Any, project: Any | None = None) -> str:
     """Build the two-field LTX 2.3 clean positive prompt sent to Comfy."""
     video_prompt = _ltx_clean_scene_value(scene, "video_prompt", "videoPrompt", "i2v_prompt_en")
     sound_prompt = _ltx_clean_scene_value(scene, "sound_prompt", "soundPrompt")
-    ambience_hint = _ltx_clean_scene_value(scene, "ambience_hint", "ambienceHint", "ambient_sound_prompt", "ambientSoundPrompt")
-    physical_sounds = _combine_negative_prompts(sound_prompt, ambience_hint).replace(",", ";")
+    physical_sounds = _combine_negative_prompts(sound_prompt).replace(",", ";")
     voice_mode = _ltx_clean_voice_mode(scene)
     speech_text = _ltx_clean_scene_value(scene, "speech_text", "speechText", "narrator_text_ru", "narratorTextRu", "narrator_text_en", "narratorTextEn")
     voice_profile = _ltx_clean_scene_value(scene, "voice_profile", "voiceProfile", "narrator_voice_profile_en", "narratorVoiceProfileEn") or "natural narrator"
@@ -3362,26 +3355,32 @@ def buildLtxCleanPositivePrompt(scene: Any, project: Any | None = None) -> str:
         audio_lines.append("No composed music. No soundtrack. No score. No musical bed. Voice plus raw field recording only.")
     else:
         audio_lines.append("Audio must be raw outdoor field recording only.")
-        audio_lines.append(f"Physical sounds: {physical_sounds or 'wind, grass movement, insects, birds, water, dust, leaves, distant visible animal movement'}.")
+        if physical_sounds:
+            audio_lines.append(f"Physical sounds: {physical_sounds}.")
+        else:
+            audio_lines.append("Physical sounds must match only the visible scene and current scene sound prompt.")
         audio_lines.append("No composed music. No soundtrack. No score. No musical bed. Raw field recording only.")
 
     return _join_prompt_parts("\n".join(visual_lines), "\n".join(audio_lines))
 
 
 def buildLtxCleanNegativePrompt(scene: Any, project: Any | None = None) -> str:
-    """Build the two-field LTX 2.3 clean negative prompt sent to Comfy."""
-    voice_mode = _ltx_clean_voice_mode(scene)
-    speech_text = _ltx_clean_scene_value(scene, "speech_text", "speechText", "narrator_text_ru", "narratorTextRu", "narrator_text_en", "narratorTextEn")
-    additions = []
-    if voice_mode == "voiceover":
-        additions.extend(["wrong language"])
-        if re.search(r"[А-Яа-яЁё]", speech_text or ""):
-            additions.append("English speech")
-        additions.extend(["repeated phrase", "extra voices"])
-    else:
-        additions.extend(["narrator", "speech", "human voice"])
-    user_negative = _ltx_clean_scene_value(scene, "negative_prompt", "negativePrompt", "video_negative_prompt", "videoNegativePrompt")
-    return _combine_negative_prompts(LTX_CLEAN_BASE_NEGATIVE_PROMPT, user_negative, ", ".join(additions))
+    """Return exactly the user-supplied second prompt/negative field for clean LTX workflows.
+
+    Important: in the current first_last_sound_clean Comfy graph, node 139:112 is wired as the
+    ``negative`` conditioning input, but the working ComfyUI API uses it as the second prompt field
+    that may include a Sound: block. Do not append backend bans such as music/background music/
+    narrator/speech here.
+    """
+    return _ltx_clean_scene_value(
+        scene,
+        "negative_prompt",
+        "negativePrompt",
+        "video_negative_prompt",
+        "videoNegativePrompt",
+        "final_negative_prompt",
+        "finalNegativePrompt",
+    )
 
 
 def _build_ltx_clean_scene_context(payload: ClipVideoIn, scene_contract: dict[str, Any] | None, *, video_prompt: str, route_kind: str) -> dict[str, Any]:
@@ -3393,7 +3392,7 @@ def _build_ltx_clean_scene_context(payload: ClipVideoIn, scene_contract: dict[st
         "positive_prompt": str(getattr(payload, "positivePrompt", None) or getattr(payload, "positive_prompt", None) or contract.get("positive_prompt") or contract.get("positivePrompt") or ""),
         "negative_prompt": str(getattr(payload, "negativePrompt", None) or getattr(payload, "negative_prompt", None) or getattr(payload, "videoNegativePrompt", None) or getattr(payload, "video_negative_prompt", None) or contract.get("negative_prompt") or contract.get("negativePrompt") or ""),
         "sound_prompt": str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or contract.get("sound_prompt") or contract.get("soundPrompt") or ""),
-        "ambience_hint": str(getattr(payload, "ambienceHint", None) or getattr(payload, "ambience_hint", None) or getattr(payload, "ambientSoundPrompt", None) or getattr(payload, "ambient_sound_prompt", None) or contract.get("ambience_hint") or contract.get("ambient_sound_prompt") or ""),
+        "ambience_hint": "",
         "speech_text": str(getattr(payload, "speechText", None) or getattr(payload, "speech_text", None) or contract.get("speech_text") or contract.get("speechText") or ""),
         "voice_profile": str(getattr(payload, "voiceProfile", None) or getattr(payload, "voice_profile", None) or contract.get("voice_profile") or contract.get("voiceProfile") or ""),
         "delivery_style": str(getattr(payload, "deliveryStyle", None) or getattr(payload, "delivery_style", None) or contract.get("delivery_style") or contract.get("deliveryStyle") or ""),
@@ -3416,8 +3415,16 @@ def _resolve_manual_clip_route_kind(payload: ClipVideoIn, workflow_key: str | No
         or ""
     ).strip().lower()
 
-    if normalized_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS or render_mode in {"first_last", "first_last_sound", "f_l", "f_l_sound"} or route_hint in {"first_last", "first_last_sound", "f_l", "f_l_sound"}:
-        return "first_last_sound" if (normalized_workflow_key == "f_l_sound" or render_mode in {"first_last_sound", "f_l_sound"} or route_hint in {"first_last_sound", "f_l_sound"}) else "first_last"
+    if (
+        normalized_workflow_key in LTX_FIRST_LAST_WORKFLOW_KEYS
+        or render_mode in {"first_last", "first_last_sound", "f_l", "f_l_sound", "first_last_sound_clean"}
+        or route_hint in {"first_last", "first_last_sound", "f_l", "f_l_sound", "first_last_sound_clean"}
+    ):
+        return "first_last_sound" if (
+            normalized_workflow_key in {"f_l_sound", "first_last_sound_clean"}
+            or render_mode in {"first_last_sound", "f_l_sound", "first_last_sound_clean"}
+            or route_hint in {"first_last_sound", "f_l_sound", "first_last_sound_clean"}
+        ) else "first_last"
     if normalized_workflow_key in {"lip_sync", "lip_sync_music"} or render_mode in {"lip_sync", "lip_sync_music", "avatar_lipsync"} or route_hint in {"ia2v", "lip_sync", "lip_sync_music"}:
         return "lip_sync"
     if render_mode in {"i2v_text", "voiceover"} or route_hint in {"i2v_text", "voiceover"}:
@@ -3631,7 +3638,10 @@ def _resolve_manual_clip_negative_prompt(
         preset = MANUAL_CLIP_FIRST_LAST_NEGATIVE_PROMPT
     else:
         preset = MANUAL_CLIP_I2V_NEGATIVE_PROMPT
-    if route_kind in {"i2v_sound", "i2v_text", "first_last_sound"} and negative_audio_prompt:
+    if route_kind in {"i2v_sound", "first_last_sound"}:
+        # Clean sound routes use the user field exactly as node 139:112 input.
+        return raw_negative
+    if route_kind == "i2v_text" and negative_audio_prompt:
         raw_negative = _combine_negative_prompts(raw_negative, negative_audio_prompt)
     return _combine_negative_prompts(raw_negative, preset)
 
@@ -18537,39 +18547,63 @@ def clip_video(payload: ClipVideoIn):
             prompt_source_label = "legacy_backend_builder"
         clean_route_kind = _resolve_manual_clip_route_kind(payload, final_workflow_key, scene_contract_for_prompt)
         if final_workflow_key in LTX_CLEAN_WORKFLOW_KEYS or clean_route_kind in {"i2v_sound", "i2v_text", "first_last_sound"}:
-            clean_scene = _build_ltx_clean_scene_context(
+            # Clean LTX sound workflow is intentionally simple for the positive side:
+            # Comfy receives the user-facing positive prompt directly.
+            # For the negative side we still merge in the shared LTX bans plus any
+            # manual negative / helper negative-audio bans the user typed.
+            direct_positive_prompt = str(
+                getattr(payload, "positivePrompt", None)
+                or getattr(payload, "positive_prompt", None)
+                or getattr(payload, "videoPrompt", None)
+                or ""
+            ).strip()
+            direct_sound_prompt = str(getattr(payload, "soundPrompt", None) or getattr(payload, "sound_prompt", None) or "").strip()
+            if clean_route_kind == "first_last_sound" and direct_sound_prompt:
+                direct_positive_prompt = _build_manual_first_last_effective_prompt(
+                    base_prompt=direct_positive_prompt or str(scene_video_prompt or effective_prompt or "").strip(),
+                    transition_prompt=str(getattr(payload, "transitionActionPrompt", None) or getattr(payload, "transition_action_prompt", None) or "").strip(),
+                    seconds=float(generation_duration_sec or requested_duration or 5.0),
+                    sound_prompt=direct_sound_prompt,
+                )
+            elif clean_route_kind == "i2v_text":
+                if direct_sound_prompt and direct_sound_prompt not in direct_positive_prompt:
+                    direct_positive_prompt = _join_prompt_parts(direct_positive_prompt, direct_sound_prompt)
+            effective_prompt = direct_positive_prompt or str(scene_video_prompt or effective_prompt or "").strip()
+            # Manual clean sound workflows are transported as raw user fields only.
+            # 139:128 gets the video/motion prompt. 139:112 gets the user's second prompt field
+            # (for first_last_sound_clean this is often visual prompt + Sound: ...).
+            # No backend negative banks or helper audio bans are appended here.
+            direct_scene_ctx = _build_ltx_clean_scene_context(
                 payload,
                 scene_contract_for_prompt,
-                video_prompt=scene_video_prompt or effective_prompt,
+                video_prompt=effective_prompt,
                 route_kind=clean_route_kind,
             )
-            explicit_final_positive = str(getattr(payload, "finalPositivePrompt", None) or getattr(payload, "final_positive_prompt", None) or "").strip()
-            explicit_final_negative = str(getattr(payload, "finalNegativePrompt", None) or getattr(payload, "final_negative_prompt", None) or "").strip()
-            effective_prompt = explicit_final_positive or buildLtxCleanPositivePrompt(clean_scene, None)
-            scene_video_negative_prompt = explicit_final_negative or buildLtxCleanNegativePrompt(clean_scene, None)
-            prompt_source_label = "ltx_clean_two_field_prompt_contract"
+            scene_video_negative_prompt = buildLtxCleanNegativePrompt(direct_scene_ctx)
+            prompt_source_label = "ltx_clean_manual_fields_only_contract"
             prompt_debug.update({
                 "effectivePromptLength": len(effective_prompt),
                 "effectivePromptPreview": _prompt_preview(effective_prompt, 500),
                 "effectivePromptSource": prompt_source_label,
-                "promptBuilderMode": "ltx_clean_positive_negative_only",
-                "finalPositivePrompt": effective_prompt,
-                "finalNegativePrompt": scene_video_negative_prompt,
+                "promptBuilderMode": "ltx_clean_manual_fields_only",
+                "finalPositivePrompt": "",
+                "finalNegativePrompt": "",
                 "finalPositivePromptPreview": _prompt_preview(effective_prompt, 500),
                 "finalNegativePromptPreview": _prompt_preview(scene_video_negative_prompt, 500),
                 "ltxCleanPromptContractApplied": True,
-                "ltxCleanVoiceMode": _ltx_clean_voice_mode(clean_scene),
+                "ltxCleanAutoAssemblyDisabled": True,
+                "ltxCleanDirectPositivePrompt": True,
+                "ltxCleanManualFieldsOnly": True,
             })
             print(
-                "[LTX CLEAN PROMPT CONTRACT] "
+                "[LTX CLEAN DIRECT PROMPT CONTRACT] "
                 + json.dumps(
                     {
                         "sceneId": scene_id,
                         "workflowKey": final_workflow_key,
                         "routeKind": clean_route_kind,
-                        "voiceMode": _ltx_clean_voice_mode(clean_scene),
-                        "finalPositivePromptPreview": _prompt_preview(effective_prompt, 320),
-                        "finalNegativePromptPreview": _prompt_preview(scene_video_negative_prompt, 320),
+                        "positivePromptPreview": _prompt_preview(effective_prompt, 320),
+                        "negativePromptPreview": _prompt_preview(scene_video_negative_prompt, 320),
                     },
                     ensure_ascii=False,
                 )

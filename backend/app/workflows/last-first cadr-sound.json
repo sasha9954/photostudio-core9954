@@ -17,20 +17,20 @@
   },
   "137": {
     "inputs": {
-      "image": "__RUNTIME_END_IMAGE__.png"
+      "image": "сло.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "Last image / end frame"
+      "title": "Загрузить изображение"
     }
   },
   "138": {
     "inputs": {
-      "image": "__RUNTIME_START_IMAGE__.png"
+      "image": "зеб.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
-      "title": "First image / start frame"
+      "title": "Загрузить изображение"
     }
   },
   "139:99": {
@@ -48,7 +48,7 @@
   },
   "139:100": {
     "inputs": {
-      "noise_seed": 364125615690640
+      "noise_seed": 435928346104410
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -73,7 +73,7 @@
     },
     "class_type": "LTXVEmptyLatentAudio",
     "_meta": {
-      "title": "Clean audio latent settings"
+      "title": "LTXV Пустое латентное аудио"
     }
   },
   "139:104": {
@@ -194,7 +194,7 @@
   },
   "139:114": {
     "inputs": {
-      "value": 25
+      "value": 24
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -376,7 +376,7 @@
   },
   "139:113": {
     "inputs": {
-      "value": 720
+      "value": 1280
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -385,7 +385,7 @@
   },
   "139:98": {
     "inputs": {
-      "value": 1280
+      "value": 720
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -409,7 +409,7 @@
     },
     "class_type": "CreateVideo",
     "_meta": {
-      "title": "Create video with clean generated audio"
+      "title": "Создать видео"
     }
   },
   "139:105": {
@@ -445,7 +445,7 @@
     },
     "class_type": "LTXVAudioVAEDecode",
     "_meta": {
-      "title": "Clean audio VAE decode"
+      "title": "LTXV Декодирование аудио VAE"
     }
   },
   "139:121": {
@@ -462,7 +462,7 @@
   },
   "139:128": {
     "inputs": {
-      "text": "Visual block:\nUse the uploaded first image as the exact first frame and visual anchor.\nUse the uploaded last image as the exact final frame target.\nPreserve the same scene, framing, horizon, location, and visible objects between the two images.\nUse one continuous physically plausible transition and one camera movement only.\nAnimate only visible elements.\nScene motion: __RUNTIME_POSITIVE_PROMPT__\n\nAudio block:\nAudio must be raw outdoor field recording only unless the runtime prompt explicitly requests one voice.\nPhysical sounds must match only the visible environment and the runtime sound prompt.\nNo composed music. No soundtrack. No score. No musical bed. Raw field recording only.",
+      "text": "",
       "clip": [
         "139:103",
         0
@@ -470,7 +470,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Positive Prompt"
+      "title": "Кодирование текста CLIP (Запрос)"
     }
   },
   "139:127": {
@@ -544,7 +544,7 @@
   },
   "139:112": {
     "inputs": {
-      "text": "music, background music, soundtrack, score, underscore, cinematic underscore, emotional underscore, musical bed, ambient music bed, cinematic bed, drone music, synth pad, strings, orchestral pad, tonal pad, melody, instruments, rhythm, beat, drums, singing, choir, vocals, extra voices, repeated phrase, long narration, echo, heavy reverb, robotic voice, cartoon voice, distorted voice, trailer boom, horror sound design, artificial impact sound, sudden scene change, location drift, new landscape, new animals appearing, hard zoom, orbit camera, spin camera, chaotic shake, fast drone movement, text overlay, HUD, UI elements, CGI look, cartoon look, warped grass, warped trees, warped wildlife, distorted animals, extra limbs, flickering sky, distorted waterline, unrelated scene, unrelated environment, unrelated subject, unrelated object, random background, background morphing, subject replacement, object replacement, identity drift, mismatched start frame, mismatched end frame, jump cut, teleportation, flicker, ghosting, double exposure, unstable geometry, surreal deformation, broken anatomy, extra limbs, duplicated subject, bad hands, distorted face, low quality, blurry, captions, logo, watermark, letters, random signage",
+      "text": "",
       "clip": [
         "139:103",
         0
@@ -552,7 +552,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Negative Prompt"
+      "title": "Кодирование текста CLIP (Запрос)"
     }
   }
 }

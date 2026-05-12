@@ -17,7 +17,7 @@
   },
   "269": {
     "inputs": {
-      "image": "погоня.jpg"
+      "image": "слоны гор.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -35,7 +35,7 @@
   },
   "267:237": {
     "inputs": {
-      "noise_seed": 1038485440989735
+      "noise_seed": 178846010684788
     },
     "class_type": "RandomNoise",
     "_meta": {
@@ -374,7 +374,7 @@
   },
   "267:258": {
     "inputs": {
-      "value": 1280
+      "value": 720
     },
     "class_type": "PrimitiveInt",
     "_meta": {
@@ -557,24 +557,11 @@
   },
   "267:257": {
     "inputs": {
-      "value": 720
+      "value": 1280
     },
     "class_type": "PrimitiveInt",
     "_meta": {
       "title": "Width"
-    }
-  },
-  "267:247": {
-    "inputs": {
-      "text": "pc game, console game, video game, cartoon, childish, ugly",
-      "clip": [
-        "267:243",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "Кодирование текста CLIP (Запрос)"
     }
   },
   "267:231": {
@@ -656,11 +643,24 @@
   },
   "267:266": {
     "inputs": {
-      "value": "A high-octane 90s action movie scene, vertical format. The camera follows from behind as a young man in a dark tracksuit sprints desperately down a cracked grey sidewalk. Right behind him, a white and blue \"Militsiya\" UAZ patrol car with a \"02\" logo is chasing him, partially driving on the curb. Intense motion blur on the ground and wheels. Glowing red and blue police lights flash rapidly, reflecting off the weathered apartment buildings. Atmosphere is gritty, overcast, and cinematic."
+      "value": ""
     },
     "class_type": "PrimitiveStringMultiline",
     "_meta": {
-      "title": "Prompt"
+      "title": "Positive Prompt / Video + Audio"
+    }
+  },
+  "267:247": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "267:243",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt / Audio Ban"
     }
   }
 }
