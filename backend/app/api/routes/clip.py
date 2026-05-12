@@ -17,7 +17,7 @@ import mimetypes
 import time
 import threading
 import queue
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 from typing import Any
 
@@ -29,7 +29,14 @@ from app.core.static_paths import STATIC_DIR, ASSETS_DIR, ensure_static_dirs, as
 from app.engine.video_engine import _download_image_from_source
 from app.engine.gemini_rest import post_generate_content
 from app.engine.comfy_reference_profile import build_reference_profiles, resolve_reference_role_type, summarize_profiles
-from app.engine.comfy_remote import run_comfy_image_to_video
+from app.engine.comfy_remote import (
+    build_public_comfy_file_url,
+    extract_video_result,
+    submit_comfy_prompt,
+    upload_image_to_comfy,
+    wait_for_comfy_result,
+    run_comfy_image_to_video,
+)
 from app.engine.audio_analyzer import analyze_audio
 from app.engine.prompt_layers import (
     build_clip_video_motion_prompt,
@@ -604,7 +611,15 @@ class ClipVideoIn(BaseModel):
     generatedAudioGainDb: int | float | None = None
     generated_audio_gain_db: int | float | None = None
 
-
+class ClipVideoMMAudioStartIn(BaseModel):
+    sceneId: str | None = None
+    videoUrl: str | None = None
+    soundPrompt: str | None = None
+    negativeAudioPrompt: str | None = None
+    generatedAudioGainDb: int | float | None = -6
+    replaceSceneVideo: bool | None = True
+    projectKind: str | None = None
+    cfg: int | float | None = None
 
 
 def _clip_video_payload_signature(payload: ClipVideoIn, *, resolved_workflow_key: str = "") -> str:
@@ -17523,6 +17538,220 @@ def clip_video_comfy_output(request: Request, filename: str, subfolder: str = ""
     return StreamingResponse(_stream_and_close(), headers=response_headers, status_code=int(upstream.status_code or 200))
 
 
+MMAUDIO_WORKFLOW_KEY = "mmaudio_sound_design"
+MMAUDIO_WORKFLOW_FILE = "backend/app/workflows/mmaudio-sound-design.json"
+MMAUDIO_PATCHED_NODE_IDS = ["91", "92", "97"]
+
+
+def _clip_db_gain(value, default: float = -6.0) -> float:
+    parsed = _safe_float(value)
+    if parsed is None or not math.isfinite(float(parsed)):
+        parsed = default
+    return max(-24.0, min(6.0, float(parsed)))
+
+
+def _save_url_or_file_as_asset(source: str, *, prefix: str = "mmaudio_comfy", ext: str = "mp4") -> tuple[str | None, str | None]:
+    safe_source = str(source or "").strip()
+    if not safe_source:
+        return None, "source_empty"
+    _ensure_assets_dir()
+    safe_ext = (ext or "mp4").lower().lstrip(".") or "mp4"
+    filename = f"{prefix}_{uuid4().hex}.{safe_ext}"
+    out_path = os.path.join(str(ASSETS_DIR), filename)
+    try:
+        if os.path.isfile(safe_source):
+            with open(safe_source, "rb") as src, open(out_path, "wb") as dst:
+                dst.write(src.read())
+        else:
+            resp = requests.get(safe_source, timeout=(20, 300), stream=True)
+            if resp.status_code >= 400:
+                return None, f"download_http_{resp.status_code}:{resp.text[:200]}"
+            with open(out_path, "wb") as dst:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        dst.write(chunk)
+    except Exception as exc:
+        return None, f"asset_save_failed:{str(exc)[:300]}"
+    return out_path, None
+
+
+def _download_comfy_file_ref_to_asset(file_ref: str, *, prefix: str = "mmaudio_comfy") -> tuple[str | None, str | None, str]:
+    public_url, file_meta, strategy = build_public_comfy_file_url(file_ref)
+    if not file_meta:
+        return None, "comfy_file_ref_invalid", ""
+    source_url = public_url
+    if not file_meta.get("is_absolute_url"):
+        filename = quote(str(file_meta.get("filename") or "").strip())
+        subfolder = quote(str(file_meta.get("subfolder") or "").strip())
+        file_type = quote(str(file_meta.get("type") or "output").strip() or "output")
+        comfy_base = str(settings.COMFY_BASE_URL or "").strip().rstrip("/")
+        if subfolder:
+            source_url = f"{comfy_base}/view?filename={filename}&subfolder={subfolder}&type={file_type}"
+        else:
+            source_url = f"{comfy_base}/view?filename={filename}&type={file_type}"
+    saved_path, err = _save_url_or_file_as_asset(source_url, prefix=prefix, ext="mp4")
+    return saved_path, err, strategy
+
+
+def _replace_video_audio_with_gain(*, source_video_path: str, mmaudio_video_path: str, gain_db: float) -> tuple[str | None, str | None]:
+    _ensure_assets_dir()
+    out_name = f"mmaudio_sound_design_{uuid4().hex}.mp4"
+    out_path = os.path.join(str(ASSETS_DIR), out_name)
+    gain_expr = f"volume={float(gain_db):.1f}dB"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", source_video_path,
+        "-i", mmaudio_video_path,
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
+        "-filter:a", gain_expr,
+        "-c:a", "aac",
+        "-shortest",
+        "-movflags", "+faststart",
+        out_path,
+    ]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600)
+    except FileNotFoundError:
+        return None, "ffmpeg_missing_install_and_add_to_PATH"
+    except Exception as exc:
+        return None, f"ffmpeg_failed:{str(exc)[:300]}"
+    if proc.returncode != 0:
+        return None, f"ffmpeg_failed:{(proc.stderr or proc.stdout or '')[-500:]}"
+    return _asset_url(out_name), None
+
+
+def _patch_mmaudio_workflow(workflow: dict, *, comfy_video_name: str, sound_prompt: str, negative_prompt: str, gain_db: float, cfg_value=None) -> dict:
+    patched = json.loads(json.dumps(workflow))
+    load_inputs = patched["91"].setdefault("inputs", {})
+    load_inputs.update({
+        "video": comfy_video_name,
+        "force_rate": 0,
+        "custom_width": 0,
+        "custom_height": 0,
+        "frame_load_cap": 0,
+        "skip_first_frames": 0,
+        "select_every_nth": 1,
+    })
+    sampler_inputs = patched["92"].setdefault("inputs", {})
+    sampler_inputs.update({
+        "prompt": sound_prompt,
+        "negative_prompt": negative_prompt,
+        "steps": 25,
+        "cfg": _safe_float(cfg_value) if _safe_float(cfg_value) is not None else 3,
+        "seed": int.from_bytes(os.urandom(4), "big"),
+        "force_offload": True,
+        "mask_away_clip": False,
+    })
+    combine_inputs = patched["97"].setdefault("inputs", {})
+    combine_inputs.update({
+        "filename_prefix": "MMAudio_sound_design",
+        "format": "video/h264-mp4",
+        "crf": 19,
+        "save_output": True,
+    })
+    return patched
+
+
+def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+    video_url = str(payload.videoUrl or "").strip()
+    sound_prompt = str(payload.soundPrompt or "").strip()
+    negative_prompt = str(payload.negativeAudioPrompt or "").strip()
+    gain_db = _clip_db_gain(payload.generatedAudioGainDb)
+    temp_files: list[str] = []
+    workflow_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "workflows", "mmaudio-sound-design.json"))
+    debug_base = {
+        "requestedSoundPromptPreview": sound_prompt[:300],
+        "requestedNegativeAudioPromptPreview": negative_prompt[:300],
+        "sourceVideoUrl": video_url,
+        "workflowFile": MMAUDIO_WORKFLOW_FILE,
+        "patchedNodeIds": MMAUDIO_PATCHED_NODE_IDS,
+        "generatedAudioGainDb": gain_db,
+    }
+    with CLIP_VIDEO_JOBS_LOCK:
+        job = CLIP_VIDEO_JOBS.get(job_id) or {}
+        job.update({"status": "running", "queueStatus": "running", "updatedAt": time.time(), "startedAt": job.get("startedAt") or time.time(), **debug_base})
+        CLIP_VIDEO_JOBS[job_id] = job
+    try:
+        source_path, resolve_err = _resolve_media_input(video_url, temp_files)
+        if resolve_err or not source_path or not os.path.isfile(source_path):
+            raise RuntimeError(resolve_err or "source_video_not_found")
+        with open(source_path, "rb") as f:
+            video_bytes = f.read()
+        comfy_video_name, upload_err = upload_image_to_comfy(video_bytes, f"mmaudio_source_{uuid4().hex}.mp4")
+        if upload_err or not comfy_video_name:
+            raise RuntimeError(upload_err or "comfy_video_upload_failed")
+        with open(workflow_path, "r", encoding="utf-8") as f:
+            workflow = json.load(f)
+        patched = _patch_mmaudio_workflow(
+            workflow,
+            comfy_video_name=comfy_video_name,
+            sound_prompt=sound_prompt,
+            negative_prompt=negative_prompt,
+            gain_db=gain_db,
+            cfg_value=getattr(payload, "cfg", None),
+        )
+        prompt_id, prompt_err = submit_comfy_prompt(patched)
+        if prompt_err or not prompt_id:
+            raise RuntimeError(prompt_err or "comfy_prompt_failed")
+        with CLIP_VIDEO_JOBS_LOCK:
+            job = CLIP_VIDEO_JOBS.get(job_id) or {}
+            job.update({"comfyPromptId": prompt_id, "providerJobId": prompt_id, "updatedAt": time.time()})
+            CLIP_VIDEO_JOBS[job_id] = job
+        history, history_err = wait_for_comfy_result(prompt_id, timeout_sec=3600, poll_interval_sec=3, workflow_key=MMAUDIO_WORKFLOW_KEY, workflow_file=MMAUDIO_WORKFLOW_FILE)
+        if history_err or not history:
+            raise RuntimeError(history_err or "comfy_history_missing")
+        file_ref, extract_err = extract_video_result(history)
+        if extract_err or not file_ref:
+            raise RuntimeError(extract_err or "comfy_video_output_missing")
+        mmaudio_path, save_err, handoff_strategy = _download_comfy_file_ref_to_asset(file_ref, prefix="mmaudio_raw")
+        if save_err or not mmaudio_path:
+            raise RuntimeError(save_err or "mmaudio_raw_save_failed")
+        final_video_url, ffmpeg_err = _replace_video_audio_with_gain(source_video_path=source_path, mmaudio_video_path=mmaudio_path, gain_db=gain_db)
+        if ffmpeg_err or not final_video_url:
+            raise RuntimeError(ffmpeg_err or "mmaudio_gain_apply_failed")
+        with CLIP_VIDEO_JOBS_LOCK:
+            job = CLIP_VIDEO_JOBS.get(job_id) or {}
+            job.update({
+                "ok": True,
+                "status": "done",
+                "queueStatus": "done",
+                "videoUrl": final_video_url,
+                "hasAudio": True,
+                "videoHasAudio": True,
+                "mode": MMAUDIO_WORKFLOW_KEY,
+                "workflowKey": MMAUDIO_WORKFLOW_KEY,
+                "resolvedWorkflowKey": MMAUDIO_WORKFLOW_KEY,
+                "provider": "comfy_remote",
+                "providerJobId": prompt_id,
+                "generatedAudioGainDb": gain_db,
+                "generated_audio_gain_db": gain_db,
+                "error": "",
+                "completedAt": time.time(),
+                "updatedAt": time.time(),
+                "comfyOutputFileRef": file_ref,
+                "comfyOutputHandoffStrategy": handoff_strategy,
+                **debug_base,
+            })
+            CLIP_VIDEO_JOBS[job_id] = job
+    except Exception as exc:
+        err_text = str(exc)[:500]
+        with CLIP_VIDEO_JOBS_LOCK:
+            job = CLIP_VIDEO_JOBS.get(job_id) or {}
+            job.update({"ok": False, "status": "error", "queueStatus": "error", "error": err_text, "completedAt": time.time(), "updatedAt": time.time(), **debug_base})
+            CLIP_VIDEO_JOBS[job_id] = job
+    finally:
+        for path in temp_files:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+
+
 def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
     source_image_url = str(payload.imageUrl or payload.startImageUrl or payload.endImageUrl or "").strip()
     scene_id = str(payload.sceneId or "").strip() or "scene"
@@ -17797,7 +18026,10 @@ def _clip_video_queue_worker_loop():
                 })
                 CLIP_VIDEO_JOBS[job_id] = job
 
-            _run_clip_video_job(job_id, payload)
+            if isinstance(item, dict) and str(item.get("kind") or "").strip() == "mmaudio_sound_design":
+                _run_mmaudio_video_job(job_id, payload)
+            else:
+                _run_clip_video_job(job_id, payload)
 
         except Exception as error:
             if job_id:
@@ -17813,6 +18045,75 @@ def _clip_video_queue_worker_loop():
                     CLIP_VIDEO_JOBS[job_id] = job
         finally:
             CLIP_VIDEO_QUEUE.task_done()
+
+@router.post("/clip/video/mmaudio/start")
+def clip_video_mmaudio_start(payload: ClipVideoMMAudioStartIn):
+    scene_id = str(payload.sceneId or "").strip() or "scene"
+    video_url = str(payload.videoUrl or "").strip()
+    sound_prompt = str(payload.soundPrompt or "").strip()
+    negative_prompt = str(payload.negativeAudioPrompt or "").strip()
+    gain_db = _clip_db_gain(payload.generatedAudioGainDb)
+    if not video_url:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "MMAUDIO_VIDEO_URL_REQUIRED", "hint": "videoUrl_required"})
+    if not sound_prompt:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "MMAUDIO_SOUND_PROMPT_REQUIRED", "hint": "soundPrompt_required"})
+
+    job_id = uuid4().hex
+    queued_at = time.time()
+    queue_position = int(CLIP_VIDEO_QUEUE.qsize()) + 1
+    debug_fields = {
+        "requestedSoundPromptPreview": sound_prompt[:300],
+        "requestedNegativeAudioPromptPreview": negative_prompt[:300],
+        "sourceVideoUrl": video_url,
+        "workflowFile": MMAUDIO_WORKFLOW_FILE,
+        "patchedNodeIds": MMAUDIO_PATCHED_NODE_IDS,
+        "generatedAudioGainDb": gain_db,
+    }
+    with CLIP_VIDEO_JOBS_LOCK:
+        CLIP_VIDEO_JOBS[job_id] = {
+            "ok": True,
+            "jobId": job_id,
+            "job_id": job_id,
+            "id": job_id,
+            "sceneId": scene_id,
+            "provider": "comfy_remote",
+            "providerJobId": None,
+            "comfyPromptId": None,
+            "status": "queued",
+            "queueStatus": "queued",
+            "queuePosition": queue_position,
+            "queuedAt": queued_at,
+            "startedAt": None,
+            "completedAt": None,
+            "updatedAt": queued_at,
+            "videoUrl": None,
+            "hasAudio": False,
+            "videoHasAudio": False,
+            "mode": MMAUDIO_WORKFLOW_KEY,
+            "workflowKey": MMAUDIO_WORKFLOW_KEY,
+            "resolvedWorkflowKey": MMAUDIO_WORKFLOW_KEY,
+            "replaceSceneVideo": bool(payload.replaceSceneVideo),
+            "projectKind": str(payload.projectKind or "").strip(),
+            "error": "",
+            **debug_fields,
+        }
+    CLIP_VIDEO_QUEUE.put({"kind": MMAUDIO_WORKFLOW_KEY, "job_id": job_id, "payload": payload})
+    ensure_clip_video_queue_worker_started()
+    return {
+        "ok": True,
+        "jobId": job_id,
+        "job_id": job_id,
+        "id": job_id,
+        "sceneId": scene_id,
+        "status": "queued",
+        "queueStatus": "queued",
+        "queuePosition": queue_position,
+        "statusEndpoint": f"/api/clip/video/status/{job_id}",
+        "mode": MMAUDIO_WORKFLOW_KEY,
+        "workflowKey": MMAUDIO_WORKFLOW_KEY,
+        **debug_fields,
+    }
+
 
 
 @router.post("/clip/video/extract-last-frame")
