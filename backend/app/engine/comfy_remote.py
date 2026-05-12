@@ -580,18 +580,25 @@ def _is_progress_bar_io_failure(failed_trace: dict) -> bool:
     return is_failure
 
 
-def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
+def upload_file_to_comfy(
+    file_bytes: bytes,
+    filename: str,
+    *,
+    content_type: str = "application/octet-stream",
+) -> tuple[str | None, str | None]:
     url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
-    safe_name = str(filename or "source.jpg").strip() or "source.jpg"
-    size_bytes = len(image_bytes or b"")
+    safe_name = str(filename or "source.bin").strip() or "source.bin"
+    safe_content_type = str(content_type or "application/octet-stream").strip() or "application/octet-stream"
+    size_bytes = len(file_bytes or b"")
     connect_timeout = max(20, int(settings.COMFY_UPLOAD_CONNECT_TIMEOUT_SEC or 20))
     read_timeout = max(180, int(settings.COMFY_UPLOAD_READ_TIMEOUT_SEC or 180))
     max_attempts = max(4, int(settings.COMFY_UPLOAD_MAX_ATTEMPTS or 4))
 
     logger.info(
-        "[COMFY REMOTE] upload start url=%s filename=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
+        "[COMFY REMOTE] file upload start url=%s filename=%s content_type=%s size_bytes=%s connect_timeout=%s read_timeout=%s max_attempts=%s",
         url,
         safe_name,
+        safe_content_type,
         size_bytes,
         connect_timeout,
         read_timeout,
@@ -599,7 +606,7 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
     )
 
     files = {
-        "image": (safe_name, image_bytes, "application/octet-stream"),
+        "image": (safe_name, file_bytes, safe_content_type),
     }
     data = {"type": "input", "overwrite": "true"}
 
@@ -609,7 +616,7 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
             resp = requests.post(url, files=files, data=data, timeout=(connect_timeout, read_timeout))
             body_snippet = _response_body_snippet(resp)
             logger.info(
-                "[COMFY REMOTE] upload response attempt=%s status=%s body=%r",
+                "[COMFY REMOTE] file upload response attempt=%s status=%s body=%r",
                 attempt,
                 resp.status_code,
                 body_snippet,
@@ -627,11 +634,11 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
             return None, f"upload_name_missing:{str(payload)[:300]}"
         except ConnectTimeout as exc:
             last_error = f"upload_connect_timeout:{str(exc)[:300]}"
-            logger.warning("[COMFY REMOTE] upload connect timeout attempt=%s url=%s error=%s", attempt, url, str(exc)[:200])
+            logger.warning("[COMFY REMOTE] file upload connect timeout attempt=%s url=%s error=%s", attempt, url, str(exc)[:200])
         except ReadTimeout as exc:
             last_error = f"upload_read_timeout:{str(exc)[:300]}"
             logger.warning(
-                "[COMFY REMOTE] upload read timeout attempt=%s url=%s size_bytes=%s error=%s",
+                "[COMFY REMOTE] file upload read timeout attempt=%s url=%s size_bytes=%s error=%s",
                 attempt,
                 url,
                 size_bytes,
@@ -639,15 +646,23 @@ def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None
             )
         except RequestException as exc:
             last_error = f"upload_request_error:{str(exc)[:300]}"
-            logger.warning("[COMFY REMOTE] upload request error attempt=%s url=%s error=%s", attempt, url, str(exc)[:200])
+            logger.warning("[COMFY REMOTE] file upload request error attempt=%s url=%s error=%s", attempt, url, str(exc)[:200])
             return None, last_error
 
         if attempt < max_attempts:
             backoff_sec = min(8.0, 2.0 * attempt)
-            logger.info("[COMFY REMOTE] upload retrying attempt=%s next_attempt=%s sleep_sec=%.1f", attempt, attempt + 1, backoff_sec)
+            logger.info("[COMFY REMOTE] file upload retrying attempt=%s next_attempt=%s sleep_sec=%.1f", attempt, attempt + 1, backoff_sec)
             time.sleep(backoff_sec)
 
     return None, last_error
+
+
+def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
+    return upload_file_to_comfy(image_bytes, filename, content_type="application/octet-stream")
+
+
+def upload_video_to_comfy(video_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
+    return upload_file_to_comfy(video_bytes, filename, content_type="video/mp4")
 
 
 def upload_audio_to_comfy(
