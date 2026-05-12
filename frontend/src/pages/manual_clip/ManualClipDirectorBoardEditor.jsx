@@ -522,6 +522,31 @@ function resolveManualStatusVideoUrl(out = {}) {
   ).trim();
 }
 
+
+const MMAUDIO_VIDEO_SOURCE_FIELDS = [
+  "video_url",
+  "videoUrl",
+  "generatedVideoUrl",
+  "generated_video_url",
+  "finalVideoUrl",
+  "final_video_url",
+  "resultVideoUrl",
+  "result_video_url",
+  "videoAssetUrl",
+  "video_asset_url",
+  "videoPreviewUrl",
+  "video_preview_url",
+  "mmaudio_video_url",
+];
+
+function resolveMMAudioSourceVideoUrl(scene = {}) {
+  for (const field of MMAUDIO_VIDEO_SOURCE_FIELDS) {
+    const value = String(scene?.[field] || "").trim();
+    if (value && !value.startsWith("mock://")) return value;
+  }
+  return "";
+}
+
 function resolveManualStatusVideoHasAudio(out = {}) {
   return Boolean(out?.videoHasAudio ?? out?.hasAudio ?? out?.video_has_audio ?? false);
 }
@@ -784,6 +809,7 @@ export default function ManualClipDirectorBoardEditor({
   sourceNodeId = "",
   onProjectChange,
   onClose,
+  onMMAudioGenerate,
   embedded = false,
 } = {}) {
   const navigate = useNavigate();
@@ -813,6 +839,11 @@ export default function ManualClipDirectorBoardEditor({
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [playbackRange, setPlaybackRange] = useState({ startSec: 0, endSec: null });
   const [uploadAspectWarning, setUploadAspectWarning] = useState(null);
+  const [mmaudioModal, setMMAudioModal] = useState(null);
+  const [mmaudioPrompt, setMMAudioPrompt] = useState("");
+  const [mmaudioNegativePrompt, setMMAudioNegativePrompt] = useState("");
+  const [mmaudioGainDb, setMMAudioGainDb] = useState(-6);
+  const [mmaudioModalError, setMMAudioModalError] = useState("");
 
   const getProjectOwnerNodeId = (candidateProject = {}) => String(
     sourceNodeIdFromRoute
@@ -1884,6 +1915,54 @@ export default function ManualClipDirectorBoardEditor({
     }
   };
 
+  const openMMAudioModal = (scene = {}) => {
+    const sourceVideoUrl = resolveMMAudioSourceVideoUrl(scene);
+    if (!sourceVideoUrl) {
+      updateScene(scene.scene_id, { mmaudio_status: "error", mmaudio_error: "Сначала сгенерируй или загрузи видео" });
+      return;
+    }
+    setMMAudioModal({ sceneId: scene.scene_id, sourceVideoUrl });
+    setMMAudioPrompt(String(scene.mmaudio_prompt || scene.sound_prompt || ""));
+    setMMAudioNegativePrompt(String(scene.mmaudio_negative_prompt || "music, speech, human voice, singing, distorted audio"));
+    setMMAudioGainDb(Number.isFinite(Number(scene.mmaudio_gain_db ?? scene.generatedAudioGainDb ?? scene.generated_audio_gain_db)) ? Number(scene.mmaudio_gain_db ?? scene.generatedAudioGainDb ?? scene.generated_audio_gain_db) : -6);
+    setMMAudioModalError("");
+  };
+
+  const submitMMAudioModal = async () => {
+    const sceneId = String(mmaudioModal?.sceneId || "").trim();
+    const currentScene = (projectRef.current?.scenes || []).find((scene) => String(scene?.scene_id || scene?.id || "") === sceneId) || selectedScene || {};
+    const sourceVideoUrl = resolveMMAudioSourceVideoUrl(currentScene);
+    const soundPrompt = String(mmaudioPrompt || "").trim();
+    const negativeAudioPrompt = String(mmaudioNegativePrompt || "").trim();
+    const generatedAudioGainDb = Math.max(-24, Math.min(6, Number(mmaudioGainDb)));
+    if (!sourceVideoUrl) {
+      setMMAudioModalError("Сначала сгенерируй или загрузи видео");
+      return;
+    }
+    if (!soundPrompt) {
+      setMMAudioModalError("Заполни Sound prompt");
+      return;
+    }
+    updateScene(sceneId, {
+      mmaudio_status: "queued",
+      mmaudio_error: "",
+      mmaudio_source_video_url: sourceVideoUrl,
+      mmaudio_prompt: soundPrompt,
+      mmaudio_negative_prompt: negativeAudioPrompt,
+      mmaudio_gain_db: generatedAudioGainDb,
+    });
+    setMMAudioModal(null);
+    try {
+      if (typeof onMMAudioGenerate === "function") {
+        await onMMAudioGenerate({ sceneId, sourceVideoUrl, soundPrompt, negativeAudioPrompt, generatedAudioGainDb });
+      } else {
+        throw new Error("mmaudio_parent_handler_missing");
+      }
+    } catch (err) {
+      updateScene(sceneId, { mmaudio_status: "error", mmaudio_error: String(err?.message || "mmaudio_start_failed") });
+    }
+  };
+
   async function pollManualSceneVideo(sceneId, jobId, attempt = 0) {
     const maxAttempts = 180;
     const delayMs = 5000;
@@ -2487,7 +2566,7 @@ export default function ManualClipDirectorBoardEditor({
           <span>Image: <strong>{selectedImageAspectMeta.label || "unknown"}</strong>{selectedImageAspectMeta.width && selectedImageAspectMeta.height ? ` / ${selectedImageAspectMeta.width}x${selectedImageAspectMeta.height}` : " / unknown"}</span>
           {selectedImageAspectMismatch ? <span className="manualAspectMismatchBadge">Формат фото не совпадает с проектом</span> : null}
         </div>
-        {isFirstLastRoute(selectedScene.route) && !selectedScene.video_url ? (
+        {isFirstLastRoute(selectedScene.route) && !resolveMMAudioSourceVideoUrl(selectedScene) ? (
           <div className="manualFirstLastPanel">
             <div className="manualFirstLastSlot">
               <label className="clipSB_btn manualUploadBtn">Первый кадр<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "start")} /></label>
@@ -2504,16 +2583,20 @@ export default function ManualClipDirectorBoardEditor({
               <label className="clipSB_btn manualUploadBtn">Заменить фото<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "main")} /></label>
               <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteScenePhoto(selectedScene)} disabled={!selectedScene.image_url && !selectedScene.image_preview_url}>Удалить фото</button>
               <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteSceneVideo(selectedScene)} disabled={!selectedScene.video_url}>Удалить видео</button>
+              <button type="button" className="manualMMAButton" title={resolveMMAudioSourceVideoUrl(selectedScene) ? "Дозвучить видео через MMAudio" : "Сначала сгенерируй или загрузи видео"} disabled={!resolveMMAudioSourceVideoUrl(selectedScene) || ["queued", "running"].includes(String(selectedScene.mmaudio_status || "").toLowerCase())} onClick={() => openMMAudioModal(selectedScene)}>🪄 MMA</button>
             </div>
-            <div className="manualMediaWindow">{selectedScene.video_url ? (selectedScene.video_url.startsWith("mock://") ? <div className="manualMockReady">Mock video ready</div> : <video key={selectedScene.video_url} controls preload="metadata" src={selectedScene.video_url} />) : selectedScene.image_preview_url ? <img src={selectedScene.image_preview_url} alt="Scene preview" /> : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>
+            <div className="manualMediaWindow">{resolveMMAudioSourceVideoUrl(selectedScene) ? <video key={resolveMMAudioSourceVideoUrl(selectedScene)} controls preload="metadata" src={resolveMMAudioSourceVideoUrl(selectedScene)} /> : selectedScene.image_preview_url ? <img src={selectedScene.image_preview_url} alt="Scene preview" /> : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>
           </>
         )}
-        {isFirstLastRoute(selectedScene.route) ? <div className="manualRepairActions">
+        {isFirstLastRoute(selectedScene.route) && !resolveMMAudioSourceVideoUrl(selectedScene) ? <div className="manualRepairActions">
           <label className="clipSB_btn manualUploadBtn">Заменить фото<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "main")} /></label>
           <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteScenePhoto(selectedScene)} disabled={!selectedScene.image_url && !selectedScene.image_preview_url && !selectedScene.start_image_url && !selectedScene.start_image_preview_url}>Удалить фото</button>
           <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteSceneVideo(selectedScene)} disabled={!selectedScene.video_url}>Удалить видео</button>
+          <button type="button" className="manualMMAButton" title={resolveMMAudioSourceVideoUrl(selectedScene) ? "Дозвучить видео через MMAudio" : "Сначала сгенерируй или загрузи видео"} disabled={!resolveMMAudioSourceVideoUrl(selectedScene) || ["queued", "running"].includes(String(selectedScene.mmaudio_status || "").toLowerCase())} onClick={() => openMMAudioModal(selectedScene)}>🪄 MMA</button>
         </div> : null}
-        {selectedScene.video_url && !selectedScene.video_url.startsWith("mock://") ? <a className="manualVideoLink" href={selectedScene.video_url} target="_blank" rel="noreferrer">Открыть видео напрямую</a> : null}
+        {resolveMMAudioSourceVideoUrl(selectedScene) ? <a className="manualVideoLink" href={resolveMMAudioSourceVideoUrl(selectedScene)} target="_blank" rel="noreferrer">Открыть видео напрямую</a> : null}
+        {selectedScene.mmaudio_status === "queued" || selectedScene.mmaudio_status === "running" ? <div className="manualVideoInfo">🪄 MMAudio: {selectedScene.mmaudio_status === "queued" ? "в очереди" : "генерация звука"}</div> : null}
+        {selectedScene.mmaudio_status === "error" ? <div className="manualError">MMAudio: {selectedScene.mmaudio_error || "Ошибка дозвучки"}</div> : null}
         {selectedScene.image_upload_status === "uploading" ? <div className="manualVideoInfo">Фото сохраняется на сервер...</div> : null}
         {selectedScene.image_upload_status === "extracting_last_frame" ? <div className="manualVideoInfo">Извлекаем последний кадр предыдущей сцены...</div> : null}
         {selectedScene.image_upload_status === "error" ? <div className="manualError">{selectedScene.image_upload_error || "Ошибка загрузки фото"}</div> : null}
@@ -2521,6 +2604,28 @@ export default function ManualClipDirectorBoardEditor({
         {selectedScene.route === "ia2v" ? <div className="manualVideoInfo">Lip-sync сцена: в финальном монтаже используем основной аудиотрек, звук видео можно игнорировать.</div> : null}
         {isFirstLastRoute(selectedScene.route) ? <div className="manualVideoInfo">First/last инструмент: загрузите первый и последний кадр. После генерации будет показано одно видео; после удаления видео снова появятся два окна кадров.</div> : <div className="manualVideoInfo">Для продолжения сцены можно взять последний кадр предыдущего готового видео как стартовое фото текущей сцены.</div>}
       </section> : null}
+
+      {mmaudioModal ? <div className="manualMMAModalBackdrop" role="dialog" aria-modal="true">
+        <div className="manualMMAModal">
+          <h3>Дозвучить видео</h3>
+          <label className="manualPromptBlock">Sound prompt<textarea value={mmaudioPrompt} onChange={(e) => setMMAudioPrompt(e.target.value)} placeholder="Realistic ocean surf sound, waves, wind, raw field recording. No music, no voice." /></label>
+          <label className="manualNegativePromptBlock">Negative audio prompt<textarea value={mmaudioNegativePrompt} onChange={(e) => setMMAudioNegativePrompt(e.target.value)} placeholder="music, voice, speech, singing, distorted audio" /></label>
+          <div className="manualMMAGainBox">
+            <div className="manualMMAGainHeader"><span>Громкость MMAAudio</span><strong>{Number(mmaudioGainDb)} dB</strong></div>
+            <input className="manualMMAGainSlider" type="range" min="-24" max="6" step="1" value={mmaudioGainDb} onChange={(e) => setMMAudioGainDb(Number(e.target.value))} />
+            <div className="manualMMAPresets">
+              <button type="button" onClick={() => setMMAudioGainDb(-12)}>Тихо -12</button>
+              <button type="button" onClick={() => setMMAudioGainDb(-6)}>Норм -6</button>
+              <button type="button" onClick={() => setMMAudioGainDb(0)}>Громко 0</button>
+            </div>
+          </div>
+          {mmaudioModalError ? <div className="manualError">{mmaudioModalError}</div> : null}
+          <div className="manualMMAActions">
+            <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => setMMAudioModal(null)}>Отмена</button>
+            <button type="button" className="manualMMAButton" onClick={submitMMAudioModal}>🪄 Сгенерировать</button>
+          </div>
+        </div>
+      </div> : null}
 
     </div>
   </div>;

@@ -25636,6 +25636,117 @@ return base;
     }));
   }, [setNodes, bindHandlers]);
 
+  const patchManualDirectorScene = useCallback((sourceNodeId, sceneId, patchOrUpdater, reason = "manual_director_scene_update") => {
+    const safeSourceNodeId = String(sourceNodeId || "").trim();
+    const safeSceneId = String(sceneId || "").trim();
+    if (!safeSourceNodeId || !safeSceneId) return null;
+    const nodeBoard = nodesRef.current?.find((node) => node.id === safeSourceNodeId && node.type === "manualTiming")?.data?.director_board;
+    const baseProject = pickBestManualClipBoardProject([
+      readManualClipBoardProjectForNode(safeSourceNodeId),
+      readActiveManualClipBoardProject(),
+      nodeBoard,
+      manualDirectorBoardProject,
+    ]) || manualDirectorBoardProject || {};
+    const scenes = Array.isArray(baseProject.scenes) ? baseProject.scenes : [];
+    let changed = false;
+    const nextScenes = scenes.map((scene) => {
+      const currentId = String(scene?.scene_id || scene?.id || "").trim();
+      if (currentId !== safeSceneId) return scene;
+      changed = true;
+      const patch = typeof patchOrUpdater === "function" ? patchOrUpdater(scene || {}) : (patchOrUpdater || {});
+      return { ...(scene || {}), ...(patch || {}) };
+    });
+    if (!changed) return null;
+    const nextProject = { ...baseProject, scenes: nextScenes };
+    patchManualTimingDirectorBoard(safeSourceNodeId, nextProject, reason);
+    return nextProject;
+  }, [manualDirectorBoardProject, patchManualTimingDirectorBoard]);
+
+  const pollManualMMAudioJob = useCallback((sourceNodeId, sceneId, jobId, sourceVideoUrl, selectedGainDb, attempt = 0) => {
+    const maxAttempts = 240;
+    const delayMs = 5000;
+    window.setTimeout(async () => {
+      try {
+        const out = await fetchJson(`/api/clip/video/status/${encodeURIComponent(jobId)}`, { method: "GET", timeoutMs: 60000 });
+        const status = String(out?.status || "").toLowerCase();
+        const resultVideoUrl = String(out?.videoUrl || out?.video_url || out?.resultVideoUrl || out?.result_video_url || "").trim();
+        if (["done", "ready", "success", "completed"].includes(status) && resultVideoUrl) {
+          patchManualDirectorScene(sourceNodeId, sceneId, (scene = {}) => ({
+            video_url: resultVideoUrl,
+            videoUrl: resultVideoUrl,
+            mmaudio_video_url: resultVideoUrl,
+            original_video_before_mmaudio_url: scene.original_video_before_mmaudio_url || sourceVideoUrl,
+            video_has_audio: true,
+            videoHasAudio: true,
+            hasAudio: true,
+            mmaudio_status: "done",
+            mmaudio_error: "",
+            generatedAudioPolicy: "mmaudio_generated_audio",
+            generated_audio_policy: "mmaudio_generated_audio",
+            generatedAudioGainDb: selectedGainDb,
+            generated_audio_gain_db: selectedGainDb,
+            mmaudio_gain_db: selectedGainDb,
+            status: "video_ready",
+          }), "manual_mmaudio_done");
+          return;
+        }
+        if (["error", "failed", "stopped", "not_found"].includes(status)) {
+          patchManualDirectorScene(sourceNodeId, sceneId, {
+            mmaudio_status: "error",
+            mmaudio_error: String(out?.error || out?.hint || out?.code || "mmaudio_failed"),
+          }, "manual_mmaudio_error");
+          return;
+        }
+        if (attempt >= maxAttempts) {
+          patchManualDirectorScene(sourceNodeId, sceneId, { mmaudio_status: "error", mmaudio_error: "mmaudio_poll_timeout" }, "manual_mmaudio_timeout");
+          return;
+        }
+        patchManualDirectorScene(sourceNodeId, sceneId, { mmaudio_status: status === "running" ? "running" : "queued", mmaudio_error: "" }, "manual_mmaudio_poll");
+        pollManualMMAudioJob(sourceNodeId, sceneId, jobId, sourceVideoUrl, selectedGainDb, attempt + 1);
+      } catch (err) {
+        if (attempt >= maxAttempts) {
+          patchManualDirectorScene(sourceNodeId, sceneId, { mmaudio_status: "error", mmaudio_error: String(err?.message || "mmaudio_poll_failed") }, "manual_mmaudio_poll_error");
+          return;
+        }
+        pollManualMMAudioJob(sourceNodeId, sceneId, jobId, sourceVideoUrl, selectedGainDb, attempt + 1);
+      }
+    }, attempt === 0 ? 1200 : delayMs);
+  }, [patchManualDirectorScene]);
+
+  const handleManualMMAudioGenerate = useCallback(async ({ sceneId, sourceVideoUrl, soundPrompt, negativeAudioPrompt, generatedAudioGainDb }) => {
+    const sourceNodeId = String(manualDirectorEditor.sourceNodeId || "").trim();
+    const safeSceneId = String(sceneId || "").trim();
+    const safeVideoUrl = String(sourceVideoUrl || "").trim();
+    const gainDb = Math.max(-24, Math.min(6, Number(generatedAudioGainDb)));
+    if (!sourceNodeId || !safeSceneId || !safeVideoUrl) throw new Error("mmaudio_missing_scene_or_video");
+    const out = await fetchJson("/api/clip/video/mmaudio/start", {
+      method: "POST",
+      timeoutMs: 60000,
+      body: {
+        sceneId: safeSceneId,
+        videoUrl: safeVideoUrl,
+        soundPrompt,
+        negativeAudioPrompt,
+        generatedAudioGainDb: gainDb,
+        replaceSceneVideo: true,
+        projectKind: "manual_clip",
+      },
+    });
+    const jobId = String(out?.jobId || out?.job_id || out?.id || "").trim();
+    if (out?.ok === false || !jobId) throw new Error(String(out?.error || out?.hint || out?.code || "mmaudio_start_failed"));
+    patchManualDirectorScene(sourceNodeId, safeSceneId, {
+      mmaudio_status: "queued",
+      mmaudio_job_id: jobId,
+      mmaudio_source_video_url: safeVideoUrl,
+      mmaudio_prompt: soundPrompt,
+      mmaudio_negative_prompt: negativeAudioPrompt,
+      mmaudio_gain_db: gainDb,
+      mmaudio_error: "",
+    }, "manual_mmaudio_queued");
+    pollManualMMAudioJob(sourceNodeId, safeSceneId, jobId, safeVideoUrl, gainDb);
+    return out;
+  }, [manualDirectorEditor.sourceNodeId, patchManualDirectorScene, pollManualMMAudioJob]);
+
   const bindHandlersRef = useRef(bindHandlers);
   const narrativeSourceRefreshSignatureRef = useRef("");
 
@@ -27161,6 +27272,7 @@ const hydrate = useCallback((source = "unknown") => {
             sourceNodeId={manualDirectorEditor.sourceNodeId}
             project={manualDirectorBoardProject}
             onProjectChange={(nextProject, reason, persistOptions) => patchManualTimingDirectorBoard(manualDirectorEditor.sourceNodeId, nextProject, reason, persistOptions)}
+            onMMAudioGenerate={handleManualMMAudioGenerate}
             onClose={closeManualTimingDirectorBoard}
           />
         </div>
