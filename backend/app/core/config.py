@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     # Remote ComfyUI image-to-video
     COMFY_BASE_URL: str
-    COMFY_LAB_URL: str = ""
+    COMFY_LAB_URL: str | None = None
     COMFY_OUTPUT_HANDOFF_STRATEGY: str = "backend_proxy"
     COMFY_UPLOAD_CONNECT_TIMEOUT_SEC: int = 10
     COMFY_UPLOAD_READ_TIMEOUT_SEC: int = 120

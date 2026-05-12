@@ -448,12 +448,14 @@ def _fetch_comfy_global_history_entry(
     *,
     connect_timeout: int,
     read_timeout: int,
+    base_url: str | None = None,
 ) -> tuple[dict | None, str | None]:
     safe_prompt_id = str(prompt_id or "").strip()
     if not safe_prompt_id:
         return None, "prompt_id_empty"
 
-    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history"
+    safe_base_url = str(base_url or settings.COMFY_BASE_URL).rstrip("/")
+    url = f"{safe_base_url}/history"
     try:
         resp = requests.get(url, timeout=(connect_timeout, read_timeout))
         body_snippet = _response_body_snippet(resp)
@@ -585,8 +587,10 @@ def upload_file_to_comfy(
     filename: str,
     *,
     content_type: str = "application/octet-stream",
+    base_url: str | None = None,
 ) -> tuple[str | None, str | None]:
-    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/upload/image"
+    safe_base_url = str(base_url or settings.COMFY_BASE_URL).rstrip("/")
+    url = f"{safe_base_url}/upload/image"
     safe_name = str(filename or "source.bin").strip() or "source.bin"
     safe_content_type = str(content_type or "application/octet-stream").strip() or "application/octet-stream"
     size_bytes = len(file_bytes or b"")
@@ -657,12 +661,22 @@ def upload_file_to_comfy(
     return None, last_error
 
 
-def upload_image_to_comfy(image_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
-    return upload_file_to_comfy(image_bytes, filename, content_type="application/octet-stream")
+def upload_image_to_comfy(
+    image_bytes: bytes,
+    filename: str,
+    *,
+    base_url: str | None = None,
+) -> tuple[str | None, str | None]:
+    return upload_file_to_comfy(image_bytes, filename, content_type="application/octet-stream", base_url=base_url)
 
 
-def upload_video_to_comfy(video_bytes: bytes, filename: str) -> tuple[str | None, str | None]:
-    return upload_file_to_comfy(video_bytes, filename, content_type="video/mp4")
+def upload_video_to_comfy(
+    video_bytes: bytes,
+    filename: str,
+    *,
+    base_url: str | None = None,
+) -> tuple[str | None, str | None]:
+    return upload_file_to_comfy(video_bytes, filename, content_type="video/mp4", base_url=base_url)
 
 
 def upload_audio_to_comfy(
@@ -799,8 +813,9 @@ def _build_comfy_prompt_request_payload(workflow: dict) -> dict:
     return request_payload
 
 
-def submit_comfy_prompt(workflow: dict) -> tuple[str | None, str | None]:
-    url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/prompt"
+def submit_comfy_prompt(workflow: dict, *, base_url: str | None = None) -> tuple[str | None, str | None]:
+    safe_base_url = str(base_url or settings.COMFY_BASE_URL).rstrip("/")
+    url = f"{safe_base_url}/prompt"
     connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
     read_timeout = max(120, int(settings.COMFY_PROMPT_READ_TIMEOUT_SEC or 120))
     disable_pbar = bool(getattr(settings, "COMFY_DISABLE_PBAR_FOR_REMOTE", True))
@@ -1019,11 +1034,13 @@ def wait_for_comfy_result(
     *,
     workflow_key: str = "",
     workflow_file: str = "",
+    base_url: str | None = None,
 ) -> tuple[dict | None, str | None]:
     safe_prompt_id = str(prompt_id or "").strip()
     if not safe_prompt_id:
         return None, "prompt_id_empty"
 
+    safe_base_url = str(base_url or settings.COMFY_BASE_URL).rstrip("/")
     deadline = time.time() + max(1800, int(timeout_sec or 0))
     sleep_sec = max(2, int(poll_interval_sec or 2))
     connect_timeout = max(20, int(settings.COMFY_PROMPT_CONNECT_TIMEOUT_SEC or 20))
@@ -1039,7 +1056,7 @@ def wait_for_comfy_result(
         return float(min(12, max(1, int(base_sec)) + min(6, streak)))
 
     while time.time() < deadline:
-        url = f"{str(settings.COMFY_BASE_URL).rstrip('/')}/history/{safe_prompt_id}"
+        url = f"{safe_base_url}/history/{safe_prompt_id}"
         logger.info(
             "[COMFY REMOTE] request history url=%s connect_timeout=%s read_timeout=%s",
             url,
@@ -1078,6 +1095,7 @@ def wait_for_comfy_result(
                         safe_prompt_id,
                         connect_timeout=connect_timeout,
                         read_timeout=read_timeout,
+                        base_url=safe_base_url,
                     )
                     if recovered_payload and _history_entry_has_outputs(recovered_payload.get(safe_prompt_id)):
                         logger.warning(
@@ -1162,6 +1180,7 @@ def wait_for_comfy_result(
                         safe_prompt_id,
                         connect_timeout=connect_timeout,
                         read_timeout=read_timeout,
+                        base_url=safe_base_url,
                     )
                     if recovered_payload and _history_entry_has_outputs(recovered_payload.get(safe_prompt_id)):
                         logger.warning(
@@ -1221,6 +1240,7 @@ def wait_for_comfy_result(
         safe_prompt_id,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
+        base_url=safe_base_url,
     )
     if recovered_payload and _history_entry_has_outputs(recovered_payload.get(safe_prompt_id)):
         logger.warning(
@@ -1430,13 +1450,13 @@ def _build_comfy_view_url(file_meta: dict, *, base_url: str) -> str:
     return f"{safe_base}/view?filename={quote(filename)}&type={quote(file_type)}"
 
 
-def build_public_comfy_file_url(filename_or_subpath: str) -> tuple[str, dict | None, str]:
+def build_public_comfy_file_url(filename_or_subpath: str, *, base_url: str | None = None) -> tuple[str, dict | None, str]:
     file_meta = parse_comfy_file_ref(filename_or_subpath)
     if not file_meta:
         return "", None, "unknown"
     strategy = str(settings.COMFY_OUTPUT_HANDOFF_STRATEGY or "backend_proxy").strip().lower() or "backend_proxy"
 
-    direct_url = _build_comfy_view_url(file_meta, base_url=str(settings.COMFY_BASE_URL))
+    direct_url = _build_comfy_view_url(file_meta, base_url=str(base_url or settings.COMFY_BASE_URL))
     if not direct_url:
         return "", file_meta, strategy
 
