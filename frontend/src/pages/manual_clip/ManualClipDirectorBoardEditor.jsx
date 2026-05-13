@@ -14,6 +14,7 @@ import {
   forceWriteManualClipBoardProjectForNode,
   getLastManualClipBoardStorageError,
   getManualClipBoardMaterialStats,
+  logManualBoardMediaRefs,
   getManualProjectOwnerId,
   hasMeaningfulManualProject,
   persistManualClipBoardProject,
@@ -255,8 +256,17 @@ function pickNewestManualBoardCandidate(candidates = [], openState = {}) {
   return ranked[0] || null;
 }
 
-function readManualActiveProject(sourceNodeId = "", navigationProject = null) {
+function readManualActiveProject(sourceNodeId = "", navigationProject = null, options = {}) {
   const safeSourceNodeId = String(sourceNodeId || "").trim();
+  if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
+    logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId: safeSourceNodeId });
+    console.info("[MANUAL BOARD EMBEDDED PICK]", {
+      sourceNodeId: safeSourceNodeId,
+      picked: "explicit_navigation_project",
+      stats: getManualClipBoardMaterialStats(navigationProject),
+    });
+    return navigationProject;
+  }
   const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
   const activeProject = readActiveManualClipBoardProject();
   const openState = readManualClipBoardOpenState();
@@ -697,130 +707,160 @@ function toBool(value, fallback = false) {
   return fallback;
 }
 
-function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null) {
-  const start = Number(scene.start_sec || 0);
-  const end = Number(scene.end_sec || start);
-  const blockId = String(scene.story_block_id || "").trim();
+function shouldBlockManualOldDataUrlUpload(project = {}) {
+  return ["manual_new_project_from_audio_split", "manual_new_project_from_audio_split_open_embedded"].includes(String(project?.lastPersistReason || ""));
+}
+
+function stripBlockedManualSceneDataUrls(scene = {}, project = {}, sceneIndex = 0) {
+  if (!shouldBlockManualOldDataUrlUpload(project)) return scene || {};
+  const nextScene = { ...(scene || {}) };
+  [
+    "image_url",
+    "image_preview_url",
+    "start_image_url",
+    "start_image_preview_url",
+    "end_image_url",
+    "end_image_preview_url",
+    "generated_image_url",
+  ].forEach((key) => {
+    const value = String(nextScene[key] || "").trim();
+    if (/^(data:image|data:video|blob:)/i.test(value)) {
+      console.info("[MANUAL BOARD BLOCK OLD DATAURL UPLOAD]", {
+        sceneId: String(nextScene.scene_id || nextScene.id || `scene_${sceneIndex + 1}`),
+        key,
+        reason: project?.lastPersistReason || "explicit_new_project_hydrate",
+      });
+      nextScene[key] = "";
+    }
+  });
+  return nextScene;
+}
+
+function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = {}) {
+  const cleanInputScene = stripBlockedManualSceneDataUrls(scene, project, idx);
+  const start = Number(cleanInputScene.start_sec || 0);
+  const end = Number(cleanInputScene.end_sec || start);
+  const blockId = String(cleanInputScene.story_block_id || "").trim();
   const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
   return {
-    scene_id: String(scene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
-    index: Number(scene.index || idx + 1),
-    route: ROUTES.includes(scene.route) ? scene.route : "i2v",
+    scene_id: String(cleanInputScene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
+    index: Number(cleanInputScene.index || idx + 1),
+    route: ROUTES.includes(cleanInputScene.route) ? cleanInputScene.route : "i2v",
     start_sec: start,
     end_sec: end,
-    speech_start_sec: Number(scene.speech_start_sec ?? scene.speechStartSec ?? start) || start,
-    speech_end_sec: Number(scene.speech_end_sec ?? scene.speechEndSec ?? end) || end,
+    speech_start_sec: Number(cleanInputScene.speech_start_sec ?? cleanInputScene.speechStartSec ?? start) || start,
+    speech_end_sec: Number(cleanInputScene.speech_end_sec ?? cleanInputScene.speechEndSec ?? end) || end,
     duration_sec: Number((Math.max(0, end - start)).toFixed(3)),
-    use_sound_suggestion: toBool(scene.use_sound_suggestion),
-    contains_vocal_assumption: toBool(scene.contains_vocal_assumption),
-    contains_instrumental_assumption: toBool(scene.contains_instrumental_assumption),
-    contains_vocal: toBool(scene.contains_vocal, toBool(scene.contains_vocal_assumption)),
-    contains_instrumental: toBool(scene.contains_instrumental, toBool(scene.contains_instrumental_assumption)),
-    story_time: String(scene.story_time || ""),
-    scene_type: String(scene.scene_type || ""),
-    drama_hint: String(scene.drama_hint || ""),
-    short_note: String(scene.short_note || ""),
-    scene_goal_ru: String(scene.scene_goal_ru || ""),
-    photo_prompt_hint_ru: String(scene.photo_prompt_hint_ru || ""),
-    prompt_hint_ru: String(scene.prompt_hint_ru || scene.photo_prompt_hint_ru || ""),
-    user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || ""),
-    story_position_ru: String(scene.story_position_ru || scene.story_time || ""),
+    use_sound_suggestion: toBool(cleanInputScene.use_sound_suggestion),
+    contains_vocal_assumption: toBool(cleanInputScene.contains_vocal_assumption),
+    contains_instrumental_assumption: toBool(cleanInputScene.contains_instrumental_assumption),
+    contains_vocal: toBool(cleanInputScene.contains_vocal, toBool(cleanInputScene.contains_vocal_assumption)),
+    contains_instrumental: toBool(cleanInputScene.contains_instrumental, toBool(cleanInputScene.contains_instrumental_assumption)),
+    story_time: String(cleanInputScene.story_time || ""),
+    scene_type: String(cleanInputScene.scene_type || ""),
+    drama_hint: String(cleanInputScene.drama_hint || ""),
+    short_note: String(cleanInputScene.short_note || ""),
+    scene_goal_ru: String(cleanInputScene.scene_goal_ru || ""),
+    photo_prompt_hint_ru: String(cleanInputScene.photo_prompt_hint_ru || ""),
+    prompt_hint_ru: String(cleanInputScene.prompt_hint_ru || cleanInputScene.photo_prompt_hint_ru || ""),
+    user_note_ru: String(cleanInputScene.user_note_ru || cleanInputScene.user_notes_ru || ""),
+    story_position_ru: String(cleanInputScene.story_position_ru || cleanInputScene.story_time || ""),
     story_block_id: blockId,
-    story_block_title_ru: String(scene.story_block_title_ru || block?.title_ru || ""),
-    story_block_color: String(scene.story_block_color || block?.color || ""),
-    story_block_position_ru: String(scene.story_block_position_ru || ""),
-    story_block_goal_ru: String(scene.story_block_goal_ru || block?.block_goal_ru || block?.goal_ru || ""),
-    story_block_reveal_ru: String(scene.story_block_reveal_ru || block?.block_reveal_ru || block?.reveal_ru || ""),
-    story_block_emotion_ru: String(scene.story_block_emotion_ru || block?.block_emotion_ru || block?.emotion_ru || ""),
-    original_text: String(scene.original_text || ""),
-    translated_text_ru: String(scene.translated_text_ru || ""),
-    meaning_hint_ru: String(scene.meaning_hint_ru || ""),
-    source_text_en: String(scene.source_text_en || ""),
-    adapted_text_en: String(scene.adapted_text_en || ""),
-    scene_role_in_block_ru: String(scene.scene_role_in_block_ru || ""),
-    block_progress_ru: String(scene.block_progress_ru || ""),
-    scene_global_context_ru: String(scene.scene_global_context_ru || ""),
-    continuity_anchor_ru: String(scene.continuity_anchor_ru || ""),
-    must_match_project_identity_ru: String(scene.must_match_project_identity_ru || ""),
-    must_match_block_style_ru: String(scene.must_match_block_style_ru || ""),
-    storyboard_frame_role_ru: String(scene.storyboard_frame_role_ru || ""),
-    source_image_prompt_en: String(scene.source_image_prompt_en || ""),
-    source_image_prompt_ru: String(scene.source_image_prompt_ru || ""),
-    source_image_negative_prompt_en: String(scene.source_image_negative_prompt_en || ""),
-    i2v_prompt_en: String(scene.i2v_prompt_en || ""),
-    i2v_negative_prompt_en: String(scene.i2v_negative_prompt_en || ""),
-    composition_ru: String(scene.composition_ru || ""),
-    camera_angle_ru: String(scene.camera_angle_ru || ""),
-    subject_lock_ru: String(scene.subject_lock_ru || ""),
-    background_lock_ru: String(scene.background_lock_ru || ""),
-    continuity_from_previous_scene_ru: String(scene.continuity_from_previous_scene_ru || ""),
-    must_keep_same_ru: String(scene.must_keep_same_ru || ""),
-    allowed_variation_ru: String(scene.allowed_variation_ru || ""),
-    source_phrase_ids: normalizeSourcePhraseIds(scene.source_phrase_ids || scene.sourcePhraseIds),
-    video_prompt: String(scene.video_prompt || ""),
-    positive_prompt: String(scene.positive_prompt || ""),
-    negative_prompt: String(scene.negative_prompt || ""),
-    sound_prompt: String(scene.sound_prompt || ""),
-    negative_audio_prompt: String(scene.negative_audio_prompt || ""),
-    audio_mode: String(scene.audio_mode || ""),
-    voice_mode: String(scene.voice_mode || ""),
-    voice_preset_id: String(scene.voice_preset_id || ""),
-    voice_language: String(scene.voice_language || ""),
-    voice_role: String(scene.voice_role || ""),
-    voice_gender: String(scene.voice_gender || ""),
-    speech_text: String(scene.speech_text || ""),
-    voice_profile: String(scene.voice_profile || ""),
-    delivery_style: String(scene.delivery_style || ""),
-    ambient_sound_prompt: String(scene.ambient_sound_prompt || ""),
-    sound_mix_note_ru: String(scene.sound_mix_note_ru || ""),
-    song_block_id: String(scene.song_block_id || ""),
-    song_block_type: String(scene.song_block_type || ""),
-    song_block_title_ru: String(scene.song_block_title_ru || ""),
-    lyrics_text: String(scene.lyrics_text || ""),
-    lip_sync_required: Boolean(scene.lip_sync_required),
-    vocal_owner_role: String(scene.vocal_owner_role || ""),
-    visual_role_ru: String(scene.visual_role_ru || ""),
-    performance_role_ru: String(scene.performance_role_ru || ""),
-    speaker_id: String(scene.speaker_id || ""),
-    speaker_name: String(scene.speaker_name || ""),
-    topic_block_id: String(scene.topic_block_id || ""),
-    topic_block_title_ru: String(scene.topic_block_title_ru || ""),
-    narrator_text_en: String(scene.narrator_text_en || ""),
-    narrator_text_ru: String(scene.narrator_text_ru || ""),
-    speaker_text_en: String(scene.speaker_text_en || ""),
-    speaker_text_ru: String(scene.speaker_text_ru || ""),
-    generated_speech_required: Boolean(scene.generated_speech_required),
-    voice_profile_id: String(scene.voice_profile_id || ""),
-    narrator_voice_profile_en: String(scene.narrator_voice_profile_en || ""),
-    negative_voice_traits: String(scene.negative_voice_traits || ""),
-    broll_hint_ru: String(scene.broll_hint_ru || ""),
-    format: normalizeProjectAspectFormat(scene.format || scene.aspect_ratio),
-    aspect_ratio: normalizeProjectAspectFormat(scene.aspect_ratio || scene.format),
-    image_width: Number(scene.image_width || 0),
-    image_height: Number(scene.image_height || 0),
-    image_aspect_ratio: Number(scene.image_aspect_ratio || 0),
-    image_aspect_label: String(scene.image_aspect_label || ""),
-    image_url: String(scene.image_url || scene.start_image_url || ""),
-    start_image_url: String(scene.start_image_url || scene.image_url || ""),
-    end_image_url: String(scene.end_image_url || ""),
-    image_preview_url: String(scene.image_preview_url || scene.start_image_preview_url || ""),
-    start_image_preview_url: String(scene.start_image_preview_url || scene.image_preview_url || ""),
-    end_image_preview_url: String(scene.end_image_preview_url || ""),
-    image_upload_status: String(scene.image_upload_status || ""),
-    image_upload_error: String(scene.image_upload_error || ""),
-    video_url: String(scene.video_url || scene.videoUrl || ""),
-    audio_slice_url: String(scene.audio_slice_url || ""),
-    audio_slice_duration_sec: Number(scene.audio_slice_duration_sec || 0),
-    status: String(scene.status || "draft"),
-    error: String(scene.error || ""),
-    audio_extracted: Boolean(scene.audio_extracted),
-    video_job_id: String(scene.video_job_id || ""),
-    video_error: String(scene.video_error || ""),
-    video_has_audio: Boolean(scene.video_has_audio),
-    generated_audio_policy: String(scene.generated_audio_policy || ""),
-    generated_audio_gain_db: Number(scene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
-    keep_generated_audio: Boolean(scene.keep_generated_audio),
-    video_request_payload_preview: scene.video_request_payload_preview || null,
+    story_block_title_ru: String(cleanInputScene.story_block_title_ru || block?.title_ru || ""),
+    story_block_color: String(cleanInputScene.story_block_color || block?.color || ""),
+    story_block_position_ru: String(cleanInputScene.story_block_position_ru || ""),
+    story_block_goal_ru: String(cleanInputScene.story_block_goal_ru || block?.block_goal_ru || block?.goal_ru || ""),
+    story_block_reveal_ru: String(cleanInputScene.story_block_reveal_ru || block?.block_reveal_ru || block?.reveal_ru || ""),
+    story_block_emotion_ru: String(cleanInputScene.story_block_emotion_ru || block?.block_emotion_ru || block?.emotion_ru || ""),
+    original_text: String(cleanInputScene.original_text || ""),
+    translated_text_ru: String(cleanInputScene.translated_text_ru || ""),
+    meaning_hint_ru: String(cleanInputScene.meaning_hint_ru || ""),
+    source_text_en: String(cleanInputScene.source_text_en || ""),
+    adapted_text_en: String(cleanInputScene.adapted_text_en || ""),
+    scene_role_in_block_ru: String(cleanInputScene.scene_role_in_block_ru || ""),
+    block_progress_ru: String(cleanInputScene.block_progress_ru || ""),
+    scene_global_context_ru: String(cleanInputScene.scene_global_context_ru || ""),
+    continuity_anchor_ru: String(cleanInputScene.continuity_anchor_ru || ""),
+    must_match_project_identity_ru: String(cleanInputScene.must_match_project_identity_ru || ""),
+    must_match_block_style_ru: String(cleanInputScene.must_match_block_style_ru || ""),
+    storyboard_frame_role_ru: String(cleanInputScene.storyboard_frame_role_ru || ""),
+    source_image_prompt_en: String(cleanInputScene.source_image_prompt_en || ""),
+    source_image_prompt_ru: String(cleanInputScene.source_image_prompt_ru || ""),
+    source_image_negative_prompt_en: String(cleanInputScene.source_image_negative_prompt_en || ""),
+    i2v_prompt_en: String(cleanInputScene.i2v_prompt_en || ""),
+    i2v_negative_prompt_en: String(cleanInputScene.i2v_negative_prompt_en || ""),
+    composition_ru: String(cleanInputScene.composition_ru || ""),
+    camera_angle_ru: String(cleanInputScene.camera_angle_ru || ""),
+    subject_lock_ru: String(cleanInputScene.subject_lock_ru || ""),
+    background_lock_ru: String(cleanInputScene.background_lock_ru || ""),
+    continuity_from_previous_scene_ru: String(cleanInputScene.continuity_from_previous_scene_ru || ""),
+    must_keep_same_ru: String(cleanInputScene.must_keep_same_ru || ""),
+    allowed_variation_ru: String(cleanInputScene.allowed_variation_ru || ""),
+    source_phrase_ids: normalizeSourcePhraseIds(cleanInputScene.source_phrase_ids || cleanInputScene.sourcePhraseIds),
+    video_prompt: String(cleanInputScene.video_prompt || ""),
+    positive_prompt: String(cleanInputScene.positive_prompt || ""),
+    negative_prompt: String(cleanInputScene.negative_prompt || ""),
+    sound_prompt: String(cleanInputScene.sound_prompt || ""),
+    negative_audio_prompt: String(cleanInputScene.negative_audio_prompt || ""),
+    audio_mode: String(cleanInputScene.audio_mode || ""),
+    voice_mode: String(cleanInputScene.voice_mode || ""),
+    voice_preset_id: String(cleanInputScene.voice_preset_id || ""),
+    voice_language: String(cleanInputScene.voice_language || ""),
+    voice_role: String(cleanInputScene.voice_role || ""),
+    voice_gender: String(cleanInputScene.voice_gender || ""),
+    speech_text: String(cleanInputScene.speech_text || ""),
+    voice_profile: String(cleanInputScene.voice_profile || ""),
+    delivery_style: String(cleanInputScene.delivery_style || ""),
+    ambient_sound_prompt: String(cleanInputScene.ambient_sound_prompt || ""),
+    sound_mix_note_ru: String(cleanInputScene.sound_mix_note_ru || ""),
+    song_block_id: String(cleanInputScene.song_block_id || ""),
+    song_block_type: String(cleanInputScene.song_block_type || ""),
+    song_block_title_ru: String(cleanInputScene.song_block_title_ru || ""),
+    lyrics_text: String(cleanInputScene.lyrics_text || ""),
+    lip_sync_required: Boolean(cleanInputScene.lip_sync_required),
+    vocal_owner_role: String(cleanInputScene.vocal_owner_role || ""),
+    visual_role_ru: String(cleanInputScene.visual_role_ru || ""),
+    performance_role_ru: String(cleanInputScene.performance_role_ru || ""),
+    speaker_id: String(cleanInputScene.speaker_id || ""),
+    speaker_name: String(cleanInputScene.speaker_name || ""),
+    topic_block_id: String(cleanInputScene.topic_block_id || ""),
+    topic_block_title_ru: String(cleanInputScene.topic_block_title_ru || ""),
+    narrator_text_en: String(cleanInputScene.narrator_text_en || ""),
+    narrator_text_ru: String(cleanInputScene.narrator_text_ru || ""),
+    speaker_text_en: String(cleanInputScene.speaker_text_en || ""),
+    speaker_text_ru: String(cleanInputScene.speaker_text_ru || ""),
+    generated_speech_required: Boolean(cleanInputScene.generated_speech_required),
+    voice_profile_id: String(cleanInputScene.voice_profile_id || ""),
+    narrator_voice_profile_en: String(cleanInputScene.narrator_voice_profile_en || ""),
+    negative_voice_traits: String(cleanInputScene.negative_voice_traits || ""),
+    broll_hint_ru: String(cleanInputScene.broll_hint_ru || ""),
+    format: normalizeProjectAspectFormat(cleanInputScene.format || cleanInputScene.aspect_ratio),
+    aspect_ratio: normalizeProjectAspectFormat(cleanInputScene.aspect_ratio || cleanInputScene.format),
+    image_width: Number(cleanInputScene.image_width || 0),
+    image_height: Number(cleanInputScene.image_height || 0),
+    image_aspect_ratio: Number(cleanInputScene.image_aspect_ratio || 0),
+    image_aspect_label: String(cleanInputScene.image_aspect_label || ""),
+    image_url: String(cleanInputScene.image_url || cleanInputScene.start_image_url || ""),
+    start_image_url: String(cleanInputScene.start_image_url || cleanInputScene.image_url || ""),
+    end_image_url: String(cleanInputScene.end_image_url || ""),
+    image_preview_url: String(cleanInputScene.image_preview_url || cleanInputScene.start_image_preview_url || ""),
+    start_image_preview_url: String(cleanInputScene.start_image_preview_url || cleanInputScene.image_preview_url || ""),
+    end_image_preview_url: String(cleanInputScene.end_image_preview_url || ""),
+    image_upload_status: String(cleanInputScene.image_upload_status || ""),
+    image_upload_error: String(cleanInputScene.image_upload_error || ""),
+    video_url: String(cleanInputScene.video_url || cleanInputScene.videoUrl || ""),
+    audio_slice_url: String(cleanInputScene.audio_slice_url || ""),
+    audio_slice_duration_sec: Number(cleanInputScene.audio_slice_duration_sec || 0),
+    status: String(cleanInputScene.status || "draft"),
+    error: String(cleanInputScene.error || ""),
+    audio_extracted: Boolean(cleanInputScene.audio_extracted),
+    video_job_id: String(cleanInputScene.video_job_id || ""),
+    video_error: String(cleanInputScene.video_error || ""),
+    video_has_audio: Boolean(cleanInputScene.video_has_audio),
+    generated_audio_policy: String(cleanInputScene.generated_audio_policy || ""),
+    generated_audio_gain_db: Number(cleanInputScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
+    keep_generated_audio: Boolean(cleanInputScene.keep_generated_audio),
+    video_request_payload_preview: cleanInputScene.video_request_payload_preview || null,
   };
 }
 
@@ -918,6 +958,7 @@ export default function ManualClipDirectorBoardEditor({
   onMMAudioGenerate,
   onMMAudioGainRemix,
   embedded = false,
+  manualBoardExplicitNewProject = false,
 } = {}) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1027,6 +1068,7 @@ export default function ManualClipDirectorBoardEditor({
         isOpen: true,
         sourceNodeId: ownerNodeId,
         selectedSceneId: safeProject.selectedSceneId || selectedSceneIdRef.current || "",
+        manualBoardExplicitNewProject: ["manual_new_project_from_audio_split", "manual_new_project_from_audio_split_open_embedded"].includes(String(persistReason || "")),
         project_id: safeProject.project_id || safeProject.projectId || "",
         input_signature: safeProject.input_signature || safeProject.inputSignature || "",
         routePath: "/studio/storyboard",
@@ -1087,7 +1129,16 @@ export default function ManualClipDirectorBoardEditor({
 
   useEffect(() => {
     const navigationProject = location.state?.director_board || location.state?.project || null;
-    const parsedProject = embedded ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject) : readManualActiveProject(sourceNodeIdFromRoute, navigationProject);
+    const openState = readManualClipBoardOpenState();
+    const explicitNewProject = Boolean(
+      manualBoardExplicitNewProject
+      || location.state?.manualBoardExplicitNewProject === true
+      || openState?.manualBoardExplicitNewProject === true
+      || ["manual_new_project_from_audio_split", "manual_new_project_from_audio_split_open_embedded"].includes(String((embeddedProject || navigationProject)?.lastPersistReason || ""))
+    );
+    const parsedProject = embedded
+      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject })
+      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject });
     if (!hasMeaningfulManualProject(parsedProject)) {
       setProject(null);
       setSelectedSceneId("");
@@ -1100,7 +1151,7 @@ export default function ManualClipDirectorBoardEditor({
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
       const scenes = Array.isArray(parsed?.scenes) ? parsed.scenes.map((scene, idx) => {
-        const normalizedScene = normalizeScene(scene, idx, storyBlockLookup);
+        const normalizedScene = normalizeScene(scene, idx, storyBlockLookup, parsed);
         return {
           ...normalizedScene,
           format: normalizeProjectAspectFormat(normalizedScene.format) || projectFormat,
@@ -2609,6 +2660,35 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const selectedMMAudioSourceVideoUrl = selectedScene ? resolveMMAudioSourceVideoUrl(selectedScene) : "";
+
+  const selectedDisplayMedia = useMemo(() => {
+    if (!selectedScene) return { url: "", field: "none", type: "empty" };
+    const candidates = [
+      { field: "mmaudio_video_url", type: "video", url: selectedScene.mmaudio_video_url || selectedScene.mmaudioVideoUrl },
+      { field: "video_url", type: "video", url: selectedScene.video_url || selectedScene.videoUrl },
+      { field: "generated_video_url", type: "video", url: selectedScene.generated_video_url || selectedScene.generatedVideoUrl },
+      { field: "final_video_url", type: "video", url: selectedScene.final_video_url || selectedScene.finalVideoUrl },
+      { field: "result_video_url", type: "video", url: selectedScene.result_video_url || selectedScene.resultVideoUrl },
+      { field: "image_preview_url", type: "image", url: selectedScene.image_preview_url },
+      { field: "image_url", type: "image", url: selectedScene.image_url },
+      { field: "generated_image_url", type: "image", url: selectedScene.generated_image_url || selectedScene.generatedImageUrl },
+      { field: "start_image_url", type: "image", url: selectedScene.start_image_url || selectedScene.startImageUrl },
+    ];
+    const winner = candidates.find((candidate) => String(candidate.url || "").trim()) || { field: "none", type: "empty", url: "" };
+    return { ...winner, url: String(winner.url || "").trim() };
+  }, [selectedScene]);
+
+  useEffect(() => {
+    if (!selectedScene) return;
+    console.info("[MANUAL BOARD DISPLAY MEDIA SOURCE]", {
+      sceneId: String(selectedScene.scene_id || selectedScene.id || ""),
+      displayImageUrl: selectedDisplayMedia.type === "image" ? selectedDisplayMedia.url : "",
+      displayMediaUrl: selectedDisplayMedia.url,
+      field: selectedDisplayMedia.field,
+      type: selectedDisplayMedia.type,
+    });
+  }, [selectedScene?.scene_id, selectedDisplayMedia.url, selectedDisplayMedia.field, selectedDisplayMedia.type]);
+
   const selectedProjectFormat = selectedScene ? resolveProjectAspectFormat(projectRef.current || project, selectedScene) : resolveProjectAspectFormat(projectRef.current || project);
   const selectedImageAspectMeta = selectedScene ? getSceneImageAspectMeta(selectedScene) : { width: 0, height: 0, label: "unknown", ratio: 0 };
   const selectedImageAspectMismatch = Boolean(selectedScene && isSceneImageAspectMismatch(selectedScene, selectedProjectFormat));
@@ -2967,7 +3047,7 @@ export default function ManualClipDirectorBoardEditor({
               <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteSceneVideo(selectedScene)} disabled={!selectedMMAudioSourceVideoUrl}>Удалить видео</button>
               <button type="button" className="manualMMAButton" title={selectedMMAudioSourceVideoUrl ? "Дозвучить видео через MMAudio" : "Сначала сгенерируй или загрузи видео"} disabled={!selectedMMAudioSourceVideoUrl || ["queued", "running"].includes(String(selectedScene.mmaudio_status || "").toLowerCase())} onClick={() => openMMAudioModal(selectedScene)}>🪄 MMA</button>
             </div>
-            <div className="manualMediaWindow">{selectedMMAudioSourceVideoUrl ? <video key={selectedMMAudioSourceVideoUrl} controls preload="metadata" src={selectedMMAudioSourceVideoUrl} /> : selectedScene.image_preview_url ? <img src={selectedScene.image_preview_url} alt="Scene preview" /> : selectedScene.image_url ? <img src={selectedScene.image_url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>
+            <div className="manualMediaWindow">{selectedDisplayMedia.type === "video" ? <video key={selectedDisplayMedia.url} controls preload="metadata" src={selectedDisplayMedia.url} /> : selectedDisplayMedia.type === "image" ? <img src={selectedDisplayMedia.url} alt="Scene preview" /> : <div>Нет image/video preview</div>}</div>
           </>
         )}
         {isFirstLastRoute(selectedScene.route) && !selectedMMAudioSourceVideoUrl ? <div className="manualRepairActions">
