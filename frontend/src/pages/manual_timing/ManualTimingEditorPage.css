@@ -1722,3 +1722,56 @@
   color: #facc15;
   font-size: 13px;
 }
+
+.manualTimingNewBoardOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(10px);
+}
+
+.manualTimingNewBoardDialog {
+  width: min(560px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid rgba(250, 204, 21, 0.42);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.96));
+  color: #f8fafc;
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+}
+
+.manualTimingNewBoardDialog h3 {
+  margin: 0;
+  color: #fff7d6;
+  font-size: 20px;
+}
+
+.manualTimingNewBoardDialog p {
+  margin: 0;
+  color: #fde68a;
+}
+
+.manualTimingNewBoardMeta {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.manualTimingNewBoardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
