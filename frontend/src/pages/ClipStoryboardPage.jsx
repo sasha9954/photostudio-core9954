@@ -36,6 +36,7 @@ import ManualClipDirectorBoardEditor from "./manual_clip/ManualClipDirectorBoard
 import {
   readActiveManualClipBoardProject,
   hasMeaningfulManualProject,
+  manualClipBoardProjectsShareIdentity,
   pickBestManualClipBoardProject,
   persistManualClipBoardProject,
   readManualClipBoardProjectForNode,
@@ -25564,10 +25565,17 @@ return base;
     const activeBoard = readActiveManualClipBoardProject();
     const activeBoardOwnerNodeId = String(activeBoard?.sourceNodeId || activeBoard?.nodeId || "").trim();
     const currentSourceNodeId = String(manualDirectorEditor.sourceNodeId || "").trim();
-    const activeBoardForThisNode = currentSourceNodeId && activeBoardOwnerNodeId === currentSourceNodeId
+    const storedBoardForNodeRaw = readManualClipBoardProjectForNode(currentSourceNodeId);
+    const storedBoardForNode = hasMeaningfulManualProject(nodeBoard)
+      && hasMeaningfulManualProject(storedBoardForNodeRaw)
+      && !manualClipBoardProjectsShareIdentity(storedBoardForNodeRaw, nodeBoard)
+      ? null
+      : storedBoardForNodeRaw;
+    const activeBoardForThisNode = currentSourceNodeId
+      && activeBoardOwnerNodeId === currentSourceNodeId
+      && (!hasMeaningfulManualProject(storedBoardForNode) || manualClipBoardProjectsShareIdentity(activeBoard, storedBoardForNode))
       ? activeBoard
       : null;
-    const storedBoardForNode = readManualClipBoardProjectForNode(currentSourceNodeId);
     const best = pickBestManualClipBoardProject([
       nodeBoard,
       storedBoardForNode,
@@ -25641,9 +25649,21 @@ return base;
     const safeSceneId = String(sceneId || "").trim();
     if (!safeSourceNodeId || !safeSceneId) return null;
     const nodeBoard = nodesRef.current?.find((node) => node.id === safeSourceNodeId && node.type === "manualTiming")?.data?.director_board;
+    const nodeScopedBoardRaw = readManualClipBoardProjectForNode(safeSourceNodeId);
+    const nodeScopedBoard = hasMeaningfulManualProject(nodeBoard)
+      && hasMeaningfulManualProject(nodeScopedBoardRaw)
+      && !manualClipBoardProjectsShareIdentity(nodeScopedBoardRaw, nodeBoard)
+      ? null
+      : nodeScopedBoardRaw;
+    const activeBoard = readActiveManualClipBoardProject();
+    const activeBoardForSource = activeBoard
+      && String(activeBoard?.sourceNodeId || activeBoard?.nodeId || "").trim() === safeSourceNodeId
+      && (!hasMeaningfulManualProject(nodeScopedBoard) || manualClipBoardProjectsShareIdentity(activeBoard, nodeScopedBoard))
+      ? activeBoard
+      : null;
     const baseProject = pickBestManualClipBoardProject([
-      readManualClipBoardProjectForNode(safeSourceNodeId),
-      readActiveManualClipBoardProject(),
+      nodeScopedBoard,
+      activeBoardForSource,
       nodeBoard,
       manualDirectorBoardProject,
     ]) || manualDirectorBoardProject || {};
