@@ -3,6 +3,7 @@ export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project
 export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY = "manual_clip_board_active_project";
 export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY = "manual_clip_board_active_project_id";
 export const MANUAL_CLIP_BOARD_CANONICAL_PROJECT_KEY = "manual_clip_board_canonical_project";
+export const MANUAL_CLIP_BOARD_OPEN_STATE_KEY = "photostudio_manual_director_open_state";
 
 
 const MANUAL_STORAGE_MAX_STRING_LENGTH = 200000;
@@ -168,6 +169,38 @@ export function readManualProjectJsonStorage(key) {
   } catch {
     return null;
   }
+}
+
+
+export function getManualClipBoardOpenStateStorageKey() {
+  return getAccountScopedStorageKey(MANUAL_CLIP_BOARD_OPEN_STATE_KEY);
+}
+
+export function readManualClipBoardOpenState() {
+  return readManualProjectJsonStorage(getManualClipBoardOpenStateStorageKey());
+}
+
+export function writeManualClipBoardOpenState(state = {}) {
+  try {
+    const payload = {
+      ...(state || {}),
+      isOpen: Boolean(state?.isOpen),
+      sourceNodeId: String(state?.sourceNodeId || "").trim(),
+      selectedSceneId: String(state?.selectedSceneId || "").trim(),
+      project_id: String(state?.project_id || state?.projectId || "").trim(),
+      input_signature: String(state?.input_signature || state?.inputSignature || "").trim(),
+      routePath: String(state?.routePath || "").trim(),
+      updatedAt: Number(state?.updatedAt || Date.now()),
+    };
+    localStorage.setItem(getManualClipBoardOpenStateStorageKey(), JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearManualClipBoardOpenState(extra = {}) {
+  return writeManualClipBoardOpenState({ ...(extra || {}), isOpen: false, updatedAt: Date.now() });
 }
 
 export function readCanonicalManualClipBoardProject() {
@@ -1048,7 +1081,10 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const nextStats = getManualClipBoardMaterialStats(safeProject);
 
   if (hasMeaningfulManualProject(existing) && !manualClipBoardProjectsShareIdentity(safeProject, existing) && !forceReplace && !explicitReset) {
-    console.warn("[MANUAL BOARD PERSIST PROTECT] skipped identity mismatch", {
+    console.warn("[MANUAL BOARD REJECT OLD SNAPSHOT]", {
+      candidate: { revision: safeProject?.revision, updatedAt: safeProject?.updatedAt, stats: nextStats },
+      current: { revision: existing?.revision, updatedAt: existing?.updatedAt, stats: existingStats },
+      rejectReason: "identity_mismatch",
       nodeId,
       existingOwner: getManualProjectOwnerId(existing),
       incomingOwner: getManualProjectOwnerId(safeProject),
@@ -1060,7 +1096,10 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   }
 
   if (shouldSkipManualBoardPersistToProtectMaterials(safeProject, existing, options)) {
-    console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
+    console.warn("[MANUAL BOARD REJECT OLD SNAPSHOT]", {
+      candidate: { revision: safeProject?.revision, updatedAt: safeProject?.updatedAt, stats: nextStats },
+      current: { revision: existing?.revision, updatedAt: existing?.updatedAt, stats: existingStats },
+      rejectReason: "protect_materials",
       nodeId,
       activeExistingRawOwner,
       activeWasIgnoredBecauseDifferentOwner,
@@ -1083,7 +1122,10 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     && nextStats.materialTotal === 0
     && nextStats.scenes >= existingStats.scenes * 0.8
   ) {
-    console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
+    console.warn("[MANUAL BOARD REJECT OLD SNAPSHOT]", {
+      candidate: { revision: safeProject?.revision, updatedAt: safeProject?.updatedAt, stats: nextStats },
+      current: { revision: existing?.revision, updatedAt: existing?.updatedAt, stats: existingStats },
+      rejectReason: "protect_materials",
       nodeId,
       activeExistingRawOwner,
       activeWasIgnoredBecauseDifferentOwner,
@@ -1113,7 +1155,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       }
     }
     rememberManualClipBoardStorageError(null);
-    console.debug("[manual board persist]", {
+    console.info("[MANUAL BOARD PERSIST WRITE]", {
       target: "canonical+active+node",
       canonicalKey: getManualClipBoardCanonicalStorageKey(),
       reason,
@@ -1121,6 +1163,12 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       explicitReset,
       nodeId,
       sourceNodeId: storageProject.sourceNodeId,
+      project_id: storageProject.project_id || storageProject.projectId || "",
+      input_signature: storageProject.input_signature || storageProject.inputSignature || "",
+      revision: storageProject.revision || 0,
+      deletionRevision: storageProject.deletionRevision || storageProject.deletion_revision || storageProject.deleted_media_revision || 0,
+      stats: storageStats,
+      embedded: Boolean(options?.embedded),
       incomingStats: nextStats,
       storageStats,
       storageSerializedKb: Math.round(serialized.length / 1024),
