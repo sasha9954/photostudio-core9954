@@ -570,7 +570,7 @@ export default function ManualTimingNode({ id, data }) {
         {audioUploadError ? <div className="manualTimingNode_uploadError">{audioUploadError}</div> : null}
 
         <div className="manualTimingNodeActions manualTimingNode_actions">
-          <button className="clipSB_btn" onClick={onOpenEditor} disabled={!isProjectModeSelected}>Открыть редактор</button>
+          <button className="clipSB_btn" onClick={onOpenEditor} disabled={!isProjectModeSelected}>Открыть редактор тайминга</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={!isProjectModeSelected || !isModeReadyForJson} title={copyJsonTitle}>{copyJsonLabel}</button>
           <label className={`clipSB_btn clipSB_btnSecondary manualTimingNode_upload ${isAudioUploading ? "isDisabled" : ""}`}>
             {isAudioUploading ? "Загрузка…" : (effectiveAudio.url ? "Заменить аудио" : "Загрузить аудио")}
@@ -579,6 +579,7 @@ export default function ManualTimingNode({ id, data }) {
           <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onDeleteAudio} disabled={isAudioUploading || !effectiveAudio.url}>Удалить аудио</button>
           {hasConnectedAudio && (isManualAudioOverride || isAudioBlocked) ? <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onUseConnectedAudio} disabled={isAudioUploading}>Взять AUDIO-вход</button> : null}
         </div>
+        <div className="manualTimingNode_editorHint">Новая доска создаётся внутри редактора кнопкой ‘Создать новую доску из тайминга’.</div>
       </div>
       <Handle type="source" position={Position.Right} id="manual_timing_out" />
     </NodeShell>

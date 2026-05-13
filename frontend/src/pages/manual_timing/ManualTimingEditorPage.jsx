@@ -7,6 +7,7 @@ import {
   computeManualProjectInputSignature,
   clearManualClipBoardProjectForNode,
   getAccountScopedStorageKey,
+  getManualClipBoardMaterialStats,
   hasManualBoardMaterials,
   hasMeaningfulManualProject,
   readActiveManualClipBoardProject,
@@ -1740,16 +1741,24 @@ export default function ManualTimingEditorPage() {
 
 
   const requestNewBoardReplaceConfirmation = ({ existingBoard, newBoard }) => new Promise((resolve) => {
-    if (!hasMeaningfulManualProject(existingBoard) || !hasManualBoardMaterials(existingBoard) || !manualBoardIdentityChanged(existingBoard, newBoard)) {
+    const identityChanged = manualBoardIdentityChanged(existingBoard, newBoard);
+    if (!hasMeaningfulManualProject(existingBoard) || !hasManualBoardMaterials(existingBoard)) {
       resolve("create");
       return;
     }
+    console.info("[MANUAL BOARD NEW PROJECT CONFIRM REQUIRED]", {
+      sourceNodeId: getManualTimingOwnerNodeId(project),
+      oldStats: getManualClipBoardMaterialStats(existingBoard),
+      newStats: getManualClipBoardMaterialStats(newBoard),
+      identityChanged,
+    });
     newBoardConfirmResolverRef.current = resolve;
     setNewBoardConfirm({
       existingBoard,
       newBoard,
       oldIdentity: getManualBoardIdentityParts(existingBoard),
       newIdentity: getManualBoardIdentityParts(newBoard),
+      identityChanged,
     });
   });
 
@@ -1789,6 +1798,23 @@ export default function ManualTimingEditorPage() {
       selectedSceneId: selectedScene?.scene_id || project.selectedSceneId || scenes[0]?.scene_id || "",
       timing_status: project.timing_status || "confirmed",
     };
+  };
+
+
+  const onBackToNode = () => {
+    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    console.info("[MANUAL TIMING BACK TO NODE]", { sourceNodeId: ownerNodeId });
+    console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "back_to_node", sourceNodeId: ownerNodeId });
+    writeManualClipBoardOpenState({
+      isOpen: false,
+      sourceNodeId: ownerNodeId,
+      routePath: STORYBOARD_ROUTE,
+      reason: "back_to_node",
+      updatedAt: Date.now(),
+    });
+    navigate(STORYBOARD_ROUTE, {
+      state: { focusManualTimingNodeId: ownerNodeId, manualBoardSkipOpenStateReason: "back_to_node" },
+    });
   };
 
   const onOpenDirectorBoard = () => {
@@ -2386,7 +2412,7 @@ export default function ManualTimingEditorPage() {
           <div className="manualTimingModeSubtitle">{modeConfig.subtitle}</div>
         </div>
         <div className="manualTimingModeHeaderActions">
-          <button className="clipSB_btn clipSB_btnSecondary manualTimingBackButton" onClick={() => navigate(-1)}>← Назад к ноде</button>
+          <button className="clipSB_btn clipSB_btnSecondary manualTimingBackButton" onClick={onBackToNode}>← Назад к ноде</button>
           <span className="manualTimingModeBadge">{modeConfig.badge}</span>
         </div>
       </div>
