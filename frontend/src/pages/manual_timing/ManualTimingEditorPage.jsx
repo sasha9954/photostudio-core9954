@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { API_BASE } from "../../services/api";
 import {
   buildManualProjectBackupJson,
@@ -498,6 +498,32 @@ function getManualTimingBoardForOwner(ownerNodeId = "") {
   return getManualProjectOwnerId(activeBoard) === safeOwnerNodeId ? activeBoard : null;
 }
 
+function getManualTimingRouteSourceNodeId(location = {}, project = {}) {
+  const stateSourceNodeId = String(location?.state?.sourceNodeId || "").trim();
+  const querySourceNodeId = (() => {
+    try {
+      return String(new URLSearchParams(location?.search || "").get("sourceNodeId") || "").trim();
+    } catch {
+      return "";
+    }
+  })();
+  const projectSourceNodeId = String(project?.sourceNodeId || project?.nodeId || "").trim();
+  return stateSourceNodeId || querySourceNodeId || projectSourceNodeId;
+}
+
+function resolveManualTimingOwnerNode(location = {}, project = {}) {
+  const routeSourceNodeId = getManualTimingRouteSourceNodeId(location, project);
+  const projectSourceNodeId = String(project?.sourceNodeId || project?.nodeId || "").trim();
+  const fallbackOwnerNodeId = getManualTimingOwnerNodeId(project);
+  const finalOwnerNodeId = routeSourceNodeId || projectSourceNodeId || fallbackOwnerNodeId;
+  return {
+    routeSourceNodeId,
+    projectSourceNodeId,
+    fallbackOwnerNodeId,
+    finalOwnerNodeId,
+  };
+}
+
 function getManualBoardIdentityParts(project = {}) {
   return {
     projectId: String(project?.project_id || project?.projectId || "").trim(),
@@ -528,11 +554,11 @@ function downloadManualBoardBackupJson(project = {}, filename = "manual_clip_boa
   URL.revokeObjectURL(url);
 }
 
-function dispatchManualTimingDirectorBoardUpdate(project = {}) {
-  const sourceNodeId = getManualTimingOwnerNodeId(project);
+function dispatchManualTimingDirectorBoardUpdate(project = {}, explicitSourceNodeId = "") {
+  const sourceNodeId = String(explicitSourceNodeId || getManualTimingOwnerNodeId(project) || "").trim();
   if (!sourceNodeId || typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("manual-director-board:update", {
-    detail: { sourceNodeId, project },
+    detail: { sourceNodeId, project: { ...project, nodeId: sourceNodeId, sourceNodeId } },
   }));
 }
 
@@ -961,11 +987,14 @@ function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = [], allAud
 
 export default function ManualTimingEditorPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const initialProjectRef = useRef(null);
+  if (!initialProjectRef.current) initialProjectRef.current = buildInitialProject();
   const audioRef = useRef(null);
   const timelineRef = useRef(null);
   const playUntilRef = useRef(null);
   const rafRef = useRef(null);
-  const [project, setProject] = useState(() => buildInitialProject());
+  const [project, setProject] = useState(() => initialProjectRef.current);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
@@ -979,7 +1008,10 @@ export default function ManualTimingEditorPage() {
   const [asrStatus, setAsrStatus] = useState("");
   const [audioUploadStatus, setAudioUploadStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
-  const [activeBoardProject, setActiveBoardProject] = useState(() => getManualTimingBoardForOwner(getManualTimingOwnerNodeId(buildInitialProject())));
+  const [activeBoardProject, setActiveBoardProject] = useState(() => {
+    const { finalOwnerNodeId } = resolveManualTimingOwnerNode(location, initialProjectRef.current);
+    return getManualTimingBoardForOwner(finalOwnerNodeId);
+  });
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
   const newBoardConfirmResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
@@ -1003,6 +1035,15 @@ export default function ManualTimingEditorPage() {
   const modeConfig = getManualTimingModeConfig(project);
   const isProjectModeSelected = Boolean(modeConfig.mode);
   const mainActionsDisabled = !isProjectModeSelected;
+  const manualTimingOwner = useMemo(() => resolveManualTimingOwnerNode(location, project), [
+    location?.search,
+    location?.state,
+    project?.sourceNodeId,
+    project?.nodeId,
+    project?.project_mode,
+    project?.projectMode,
+  ]);
+  const { routeSourceNodeId, projectSourceNodeId, fallbackOwnerNodeId, finalOwnerNodeId } = manualTimingOwner;
   const isTimingAudioUploading = audioUploadStatus === "uploading";
   const workflowLabels = getManualTimingWorkflowLabels(modeConfig.mode);
   const routeOptions = getManualTimingRouteOptions(modeConfig.mode);
@@ -1151,11 +1192,20 @@ export default function ManualTimingEditorPage() {
   }, [durationSec]);
 
   useEffect(() => {
-    setActiveBoardProject(getManualTimingBoardForOwner(getManualTimingOwnerNodeId(project)));
-  }, []);
+    console.info("[MANUAL TIMING OWNER RESOLVED]", {
+      routeSourceNodeId,
+      projectSourceNodeId,
+      fallbackOwnerNodeId,
+      finalOwnerNodeId,
+    });
+  }, [routeSourceNodeId, projectSourceNodeId, fallbackOwnerNodeId, finalOwnerNodeId]);
+
+  useEffect(() => {
+    setActiveBoardProject(getManualTimingBoardForOwner(finalOwnerNodeId));
+  }, [finalOwnerNodeId]);
 
   const persist = (nextProject) => {
-    const ownerNodeId = getManualTimingOwnerNodeId(nextProject);
+    const ownerNodeId = String(routeSourceNodeId || nextProject?.sourceNodeId || nextProject?.nodeId || getManualTimingOwnerNodeId(nextProject) || finalOwnerNodeId || "").trim();
     const safeProject = {
       ...nextProject,
       nodeId: ownerNodeId,
@@ -1963,7 +2013,7 @@ export default function ManualTimingEditorPage() {
       return;
     }
     console.info("[MANUAL BOARD NEW PROJECT CONFIRM REQUIRED]", {
-      sourceNodeId: getManualTimingOwnerNodeId(project),
+      sourceNodeId: finalOwnerNodeId,
       oldStats: getManualClipBoardMaterialStats(existingBoard),
       newStats: getManualClipBoardMaterialStats(newBoard),
       identityChanged,
@@ -1986,7 +2036,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const buildDirectorProjectSnapshot = () => {
-    const sourceNodeId = getManualTimingOwnerNodeId(project);
+    const sourceNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
     const sceneCleanStats = getManualNewBoardCleanSceneStats(scenes);
     const cleanScenes = scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat));
@@ -2014,7 +2064,7 @@ export default function ManualTimingEditorPage() {
 
 
   const onBackToNode = () => {
-    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const ownerNodeId = finalOwnerNodeId;
     console.info("[MANUAL TIMING BACK TO NODE]", { sourceNodeId: ownerNodeId });
     console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "back_to_node", sourceNodeId: ownerNodeId });
     writeManualClipBoardOpenState({
@@ -2030,7 +2080,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onOpenDirectorBoard = () => {
-    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const ownerNodeId = finalOwnerNodeId;
     const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) {
       const safeBoard = {
@@ -2064,7 +2114,7 @@ export default function ManualTimingEditorPage() {
     }
     if (handoffStatus) return;
 
-    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const ownerNodeId = finalOwnerNodeId;
     const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
 
@@ -2100,6 +2150,11 @@ export default function ManualTimingEditorPage() {
       newIdentity: getManualBoardIdentityParts(projectSnapshot),
       oldHasMaterials: hasManualBoardMaterials(existingBoard),
       identityChanged: manualBoardIdentityChanged(existingBoard, projectSnapshot),
+    });
+    console.info("[MANUAL BOARD NEW PROJECT TARGET OWNER]", {
+      sourceNodeId: ownerNodeId,
+      existingBoardStats: getManualClipBoardMaterialStats(existingBoard),
+      newProjectStats: getManualClipBoardMaterialStats(projectSnapshot),
     });
 
     const replaceChoice = await requestNewBoardReplaceConfirmation({ existingBoard, newBoard: projectSnapshot });
@@ -2182,7 +2237,7 @@ export default function ManualTimingEditorPage() {
       updatedAt: Date.now(),
     });
     console.info('[MANUAL BOARD CANONICAL ROUTE] route="/studio/storyboard"', { sourceNodeId: ownerNodeId });
-    dispatchManualTimingDirectorBoardUpdate(replacedProject);
+    dispatchManualTimingDirectorBoardUpdate(replacedProject, ownerNodeId);
     persistManualTimingProject(replacedProject);
     setActiveBoardProject(replacedProject);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
@@ -2241,7 +2296,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onReturnToActiveBoard = () => {
-    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const ownerNodeId = finalOwnerNodeId;
     const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) {
       const safeBoard = {
@@ -2269,7 +2324,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onDownloadActiveBoardBackup = () => {
-    const existingBoard = getManualTimingBoardForOwner(getManualTimingOwnerNodeId(project));
+    const existingBoard = getManualTimingBoardForOwner(finalOwnerNodeId);
     if (!hasMeaningfulManualProject(existingBoard)) {
       setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
       window.setTimeout(() => setCopyStatus(""), 4200);
@@ -2282,7 +2337,7 @@ export default function ManualTimingEditorPage() {
   const onStartNewAnalysisWithConfirm = () => {
     const confirmed = window.confirm("Начать новый разбор? Это очистит активную режиссёрскую доску, текущее аудио, ASR-фразы и сцены тайминга. Сначала скачайте backup, если нужно сохранить старую доску.");
     if (!confirmed) return;
-    const ownerNodeId = getManualTimingOwnerNodeId(project);
+    const ownerNodeId = finalOwnerNodeId;
     clearManualClipBoardProjectForNode(ownerNodeId, { clearActive: true, clearCanonical: true });
     setActiveBoardProject(null);
     const nextProject = buildManualTimingProjectForAudioChange(project, getEmptyManualTimingAudio(), "none");

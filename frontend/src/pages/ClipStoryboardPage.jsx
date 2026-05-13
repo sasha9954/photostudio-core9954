@@ -11528,15 +11528,28 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
       return;
     }
 
-    const sourceNodeId = String(navigationState?.sourceNodeId || openState?.sourceNodeId || navigationProject?.sourceNodeId || navigationProject?.nodeId || "").trim();
-    const sourceNode = nodes.find((node) => node.id === sourceNodeId && node.type === "manualTiming");
-    const nodeBoard = sourceNode?.data?.director_board || null;
-    const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
-    const activeBoard = readActiveManualClipBoardProject();
     const explicitNewProjectFromNavigation = Boolean(
       navigationState?.manualBoardExplicitNewProject === true
       && hasMeaningfulManualProject(navigationProject)
     );
+    const navigationSourceNodeId = String(navigationState?.sourceNodeId || "").trim();
+    const sourceNodeId = String(
+      explicitNewProjectFromNavigation
+        ? navigationSourceNodeId
+        : (navigationSourceNodeId || openState?.sourceNodeId || navigationProject?.sourceNodeId || navigationProject?.nodeId || "")
+    ).trim();
+    const sourceNode = nodes.find((node) => node.id === sourceNodeId && node.type === "manualTiming");
+    const nodeBoard = sourceNode?.data?.director_board || null;
+    const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
+    const activeBoard = readActiveManualClipBoardProject();
+    if (explicitNewProjectFromNavigation) {
+      console.info("[MANUAL BOARD EMBEDDED SOURCE NODE FOUND]", {
+        sourceNodeId,
+        nodeExists: Boolean(sourceNode),
+        nodeBoardStatsBeforeOverwrite: getManualClipBoardMaterialStats(nodeBoard),
+        canonicalBoardStatsAfterOverwrite: getManualClipBoardMaterialStats(navigationProject),
+      });
+    }
     const stateProjectId = String(
       navigationState?.manualBoardForceProjectId
       || openState?.forceProjectId

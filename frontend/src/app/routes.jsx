@@ -62,6 +62,7 @@ export default function AppRoutes() {
         <Route path="/studio/manual-clip-board" element={<RequireAuth><ManualClipDirectorPage /></RequireAuth>} />
         <Route path="/studio/manual-clip-audio-preview" element={<RequireAuth><ManualClipAudioPreviewPage /></RequireAuth>} />
         <Route path="/studio/manual-timing" element={<RequireAuth><ManualTimingEditorPage /></RequireAuth>} />
+        <Route path="/studio/manual-timing-editor" element={<RequireAuth><ManualTimingEditorPage /></RequireAuth>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
