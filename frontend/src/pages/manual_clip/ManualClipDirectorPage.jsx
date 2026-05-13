@@ -27,6 +27,7 @@ export default function ManualClipDirectorPage() {
       replace: true,
       state: {
         openManualDirectorBoard: true,
+        closeLegacyScenarioEditors: true,
         sourceNodeId,
         director_board: project,
         project,

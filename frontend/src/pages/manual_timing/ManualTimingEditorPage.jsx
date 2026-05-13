@@ -5,7 +5,6 @@ import {
   buildManualProjectBackupJson,
   canUseLegacyManualProjectStorage,
   computeManualProjectInputSignature,
-  clearManualClipBoardProjectForNode,
   getAccountScopedStorageKey,
   getManualClipBoardMaterialStats,
   logManualBoardMediaRefs,
@@ -2142,7 +2141,12 @@ export default function ManualTimingEditorPage() {
       updatedAt: Date.now(),
     });
     navigate(STORYBOARD_ROUTE, {
-      state: { focusManualTimingNodeId: ownerNodeId, manualBoardSkipOpenStateReason: "back_to_node" },
+      state: {
+        focusManualTimingNodeId: ownerNodeId,
+        manualBoardSkipOpenStateReason: "back_to_node",
+        closeManualDirectorBoard: true,
+        closeLegacyScenarioEditors: true,
+      },
     });
   };
 
@@ -2166,7 +2170,7 @@ export default function ManualTimingEditorPage() {
         updatedAt: Date.now(),
       });
       navigate(STORYBOARD_ROUTE, {
-        state: { openManualDirectorBoard: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
+        state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
       });
       return;
     }
@@ -2326,6 +2330,7 @@ export default function ManualTimingEditorPage() {
         sourceNodeId: ownerNodeId,
         director_board: replacedProject,
         project: replacedProject,
+        closeLegacyScenarioEditors: true,
       },
     });
   };
@@ -2390,7 +2395,7 @@ export default function ManualTimingEditorPage() {
         updatedAt: Date.now(),
       });
       navigate(STORYBOARD_ROUTE, {
-        state: { openManualDirectorBoard: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
+        state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
       });
       return;
     }
@@ -2410,11 +2415,8 @@ export default function ManualTimingEditorPage() {
   };
 
   const onStartNewAnalysisWithConfirm = () => {
-    const confirmed = window.confirm("Начать новый разбор? Это очистит активную режиссёрскую доску, текущее аудио, ASR-фразы и сцены тайминга. Сначала скачайте backup, если нужно сохранить старую доску.");
+    const confirmed = window.confirm("Начать новый разбор? Это очистит текущее аудио, ASR-фразы и сцены тайминга. Режиссёрская доска не удаляется — скачайте backup отдельно, если нужно.");
     if (!confirmed) return;
-    const ownerNodeId = finalOwnerNodeId;
-    clearManualClipBoardProjectForNode(ownerNodeId, { clearActive: true, clearCanonical: true });
-    setActiveBoardProject(null);
     const nextProject = buildManualTimingProjectForAudioChange(project, getEmptyManualTimingAudio(), "none");
     persist(nextProject);
     setAsrStatus("");

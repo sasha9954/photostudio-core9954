@@ -11166,8 +11166,58 @@ export default function ClipStoryboardPage() {
     sourceNodeId: "",
   });
 
+  function closeLegacyScenarioEditors(reason = "manual_board_canonical_mode") {
+    console.info("[STORYBOARD CLOSE LEGACY EDITORS]", { reason });
+    setScenarioEditor((prev) => ({
+      ...(prev || {}),
+      open: false,
+      nodeId: null,
+      selected: 0,
+      selectedSceneId: "",
+    }));
+    setActiveScenarioStoryboardId(null);
+    setIsScenarioStoryboardOpen(false);
+    setActiveScenarioPipelineDebugId(null);
+    setIsScenarioPipelineDebugOpen(false);
+  }
+
+  const getManualBoardCanonicalModeReason = (options = {}) => {
+    const includeManualDirectorEditor = options?.includeManualDirectorEditor !== false;
+    const navState = location?.state || {};
+    const focusManualTimingNodeId = String(navState?.focusManualTimingNodeId || "").trim();
+    if (navState?.openManualDirectorBoard === true) return "navigation_open_manual_director_board";
+    if (navState?.manualBoardExplicitNewProject === true) return "manualBoardExplicitNewProject";
+    if (focusManualTimingNodeId) return "focusManualTimingNodeId";
+    if (navState?.manualBoardSkipOpenStateReason === "back_to_node") return "back_to_node";
+    if (navState?.closeManualDirectorBoard === true) return "closeManualDirectorBoard";
+    if (navState?.closeLegacyScenarioEditors === true) return "closeLegacyScenarioEditors";
+    if (includeManualDirectorEditor && manualDirectorEditor.open) return "manual_director_editor_open";
+    const openState = readManualClipBoardOpenState();
+    if (openState?.isOpen && String(openState?.routePath || "") === "/studio/storyboard") return "manual_clip_board_open_state";
+    return "";
+  };
+
+  const isManualTimingLegacyEditorBlocked = (nodeId = "") => {
+    const canonicalReason = getManualBoardCanonicalModeReason();
+    if (canonicalReason) return canonicalReason;
+    const safeNodeId = String(nodeId || "").trim();
+    const node = safeNodeId ? (nodes || []).find((item) => item?.id === safeNodeId) : null;
+    const projectKind = String(
+      node?.data?.project_kind
+      || node?.data?.projectKind
+      || node?.data?.project_mode
+      || node?.data?.projectMode
+      || ""
+    ).trim().toLowerCase();
+    if (node?.type === "manualTiming") return "manualTimingNode";
+    if (["manual_clip", "story_voiceover"].includes(projectKind)) return `manual_project_kind:${projectKind}`;
+    return "";
+  };
+
   const openManualTimingDirectorBoard = useCallback((sourceNodeId) => {
     const safeSourceNodeId = String(sourceNodeId || "").trim();
+    console.info("[STORYBOARD CANONICAL MANUAL BOARD MODE]", { reason: "open_manual_timing_director_board", sourceNodeId: safeSourceNodeId });
+    closeLegacyScenarioEditors("open_manual_timing_director_board");
     const project = readManualClipBoardProjectForNode(safeSourceNodeId) || null;
     writeManualClipBoardOpenState({
       isOpen: true,
@@ -11186,6 +11236,7 @@ export default function ClipStoryboardPage() {
 
   const closeManualTimingDirectorBoard = useCallback(() => {
     clearManualClipBoardOpenState({ routePath: "/studio/storyboard" });
+    closeLegacyScenarioEditors("close_manual_director_board");
     setManualDirectorEditor({ open: false, sourceNodeId: "" });
   }, []);
 
@@ -11506,7 +11557,10 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const requestedFromNavigation = Boolean(navigationState?.openManualDirectorBoard);
     const focusManualTimingNodeId = String(navigationState?.focusManualTimingNodeId || "").trim();
     if (focusManualTimingNodeId && !requestedFromNavigation) {
+      console.info("[STORYBOARD BACK TO NODE CANVAS ONLY]", { sourceNodeId: focusManualTimingNodeId, navigationState });
       console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "back_to_node", sourceNodeId: focusManualTimingNodeId });
+      closeLegacyScenarioEditors("back_to_node");
+      setManualDirectorEditor({ open: false, sourceNodeId: "" });
       writeManualClipBoardOpenState({
         isOpen: false,
         sourceNodeId: focusManualTimingNodeId,
@@ -11523,6 +11577,13 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     }
     const openState = readManualClipBoardOpenState();
     const shouldOpenFromState = Boolean(openState?.isOpen && String(openState.routePath || "") === "/studio/storyboard");
+    if (requestedFromNavigation || shouldOpenFromState) {
+      console.info("[STORYBOARD CANONICAL MANUAL BOARD MODE]", {
+        reason: requestedFromNavigation ? "navigation_open_manual_director_board" : "manual_clip_board_open_state",
+        sourceNodeId: String(navigationState?.sourceNodeId || openState?.sourceNodeId || "").trim(),
+      });
+      closeLegacyScenarioEditors(requestedFromNavigation ? "navigation_open_manual_director_board" : "manual_clip_board_open_state");
+    }
     if (!requestedFromNavigation && !shouldOpenFromState) {
       console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "closed_or_wrong_route", openState });
       manualDirectorOpenRestoreAttemptedRef.current = true;
@@ -11698,6 +11759,7 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
         stats: getManualClipBoardMaterialStats(canonicalBoard),
       });
     }
+    console.info(`[STORYBOARD OVERLAY OPEN] type="manual_director_board"`, { sourceNodeId });
     setManualDirectorEditor({ open: true, sourceNodeId });
   }, [location?.state, nodes, setNodes]);
 
@@ -11745,9 +11807,16 @@ const updateAssemblyGain = useCallback((field, value) => {
 const updateAssemblySceneAudioGainDb = useCallback((value) => updateAssemblyGain("sceneAudioGainDb", value), [updateAssemblyGain]);
 const updateAssemblyMasterAudioGainDb = useCallback((value) => updateAssemblyGain("masterAudioGainDb", value), [updateAssemblyGain]);
 const onOpenScenarioStoryboard = useCallback((nodeId) => {
+  const blockReason = isManualTimingLegacyEditorBlocked(nodeId);
+  if (blockReason) {
+    console.info("[STORYBOARD BLOCK OLD SCENARIO EDITOR_FOR_MANUAL_TIMING]", { reason: blockReason, nodeId: String(nodeId || "") });
+    closeLegacyScenarioEditors(`block_old_scenario_editor:${blockReason}`);
+    return;
+  }
+  console.info(`[STORYBOARD OVERLAY OPEN] type="legacy_scenario_editor"`, { nodeId: String(nodeId || "") });
   setActiveScenarioStoryboardId(nodeId || null);
   setIsScenarioStoryboardOpen(true);
-}, []);
+}, [nodes, location?.state, manualDirectorEditor.open]);
 const onOpenScenarioPipelineDebug = useCallback((nodeId) => {
   setActiveScenarioPipelineDebugId(nodeId || null);
   setIsScenarioPipelineDebugOpen(true);
@@ -11903,14 +11972,23 @@ useEffect(() => {
         };
       });
     });
-    setActiveScenarioStoryboardId(rescueNodeId || null);
-    setIsScenarioStoryboardOpen(true);
-    setScenarioEditor((prev) => ({
-      ...prev,
-      open: true,
-      nodeId: rescueNodeId || prev?.nodeId || null,
-      selectedSceneId: persistedSelectedSceneId || persistedScenes[0]?.sceneId || persistedScenes[0]?.segment_id || "",
-    }));
+    const legacyRestoreBlockReason = isManualTimingLegacyEditorBlocked(rescueNodeId);
+    if (legacyRestoreBlockReason) {
+      console.info("[STORYBOARD BLOCK OLD SCENARIO_MODAL_FOR_MANUAL_TIMING]", { reason: legacyRestoreBlockReason, nodeId: rescueNodeId || "", source: "runtime_restore" });
+      console.info("[STORYBOARD BLOCK OLD SCENARIO EDITOR_FOR_MANUAL_TIMING]", { reason: legacyRestoreBlockReason, nodeId: rescueNodeId || "", source: "runtime_restore" });
+      closeLegacyScenarioEditors(`runtime_restore:${legacyRestoreBlockReason}`);
+    } else {
+      console.info(`[STORYBOARD OVERLAY OPEN] type="legacy_scenario_editor"`, { nodeId: rescueNodeId || "", source: "runtime_restore" });
+      console.info(`[STORYBOARD OVERLAY OPEN] type="legacy_scenario_modal"`, { nodeId: rescueNodeId || "", source: "runtime_restore" });
+      setActiveScenarioStoryboardId(rescueNodeId || null);
+      setIsScenarioStoryboardOpen(true);
+      setScenarioEditor((prev) => ({
+        ...prev,
+        open: true,
+        nodeId: rescueNodeId || prev?.nodeId || null,
+        selectedSceneId: persistedSelectedSceneId || persistedScenes[0]?.sceneId || persistedScenes[0]?.segment_id || "",
+      }));
+    }
     storyboardRuntimeRestoredRef.current = true;
     console.info("[SCENARIO RUNTIME]", { storyboard_runtime_hydrate_scene_count: persistedScenes.length, storyboard_runtime_hydrate_selected_scene: persistedSelectedSceneId, storyboard_runtime_restore_success: true, storyboard_runtime_restore_scene_count: persistedScenes.length, storyboard_runtime_restore_generated_asset_count: Number(parsed?.diagnostics?.generatedAssetCount || 0), storyboard_runtime_restore_video_url_count: Number(parsed?.diagnostics?.videoUrlCount || 0), storyboard_runtime_restore_montage_restored: Number(parsed?.diagnostics?.montageCount || 0) > 0, storyboard_runtime_restore_source: parsed.sourceKey || "runtime_persist", storyboard_runtime_restore_target_node_id: rescueNodeId, storyboard_runtime_restore_completed: true });
   } catch (error) {
@@ -26661,13 +26739,18 @@ const hydrate = useCallback((source = "unknown") => {
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${hydratedNodes.length} edgesAfter=${hydratedEdges.length}`);
       setNodes(bindHandlers(hydratedNodes, { nodesNow: hydratedNodes, edgesNow: hydratedEdges, traceReason: "hydrate:storage" }));
       setEdges(hydratedEdges);
+      const savedScenarioEditorNodeId = savedUi?.scenarioEditor?.nodeId ? String(savedUi.scenarioEditor.nodeId) : null;
+      const savedLegacyBlockReason = isManualTimingLegacyEditorBlocked(savedScenarioEditorNodeId);
       if (savedUi?.scenarioEditor && typeof savedUi.scenarioEditor === "object") {
+        if (savedLegacyBlockReason && savedUi.scenarioEditor.open) {
+          console.info("[STORYBOARD BLOCK OLD SCENARIO_MODAL_FOR_MANUAL_TIMING]", { reason: savedLegacyBlockReason, nodeId: savedScenarioEditorNodeId || "", source: "hydrate_saved_ui" });
+        }
         setScenarioEditor((prev) => ({
           ...prev,
-          open: !!savedUi.scenarioEditor.open,
-          nodeId: savedUi.scenarioEditor.nodeId ? String(savedUi.scenarioEditor.nodeId) : null,
-          selected: Number.isFinite(Number(savedUi.scenarioEditor.selected)) ? Number(savedUi.scenarioEditor.selected) : 0,
-          selectedSceneId: String(savedUi.scenarioEditor.selectedSceneId || ""),
+          open: savedLegacyBlockReason ? false : !!savedUi.scenarioEditor.open,
+          nodeId: savedLegacyBlockReason ? null : savedScenarioEditorNodeId,
+          selected: savedLegacyBlockReason ? 0 : (Number.isFinite(Number(savedUi.scenarioEditor.selected)) ? Number(savedUi.scenarioEditor.selected) : 0),
+          selectedSceneId: savedLegacyBlockReason ? "" : String(savedUi.scenarioEditor.selectedSceneId || ""),
         }));
       }
       if (savedUi?.comfyEditor && typeof savedUi.comfyEditor === "object") {
@@ -26678,8 +26761,11 @@ const hydrate = useCallback((source = "unknown") => {
           selected: Number.isFinite(Number(savedUi.comfyEditor.selected)) ? Number(savedUi.comfyEditor.selected) : 0,
         }));
       }
-      setActiveScenarioStoryboardId(savedUi?.activeScenarioStoryboardId ? String(savedUi.activeScenarioStoryboardId) : null);
-      setIsScenarioStoryboardOpen(!!savedUi?.isScenarioStoryboardOpen);
+      if (savedLegacyBlockReason && savedUi?.isScenarioStoryboardOpen) {
+        console.info("[STORYBOARD BLOCK OLD SCENARIO EDITOR_FOR_MANUAL_TIMING]", { reason: savedLegacyBlockReason, nodeId: String(savedUi?.activeScenarioStoryboardId || ""), source: "hydrate_saved_ui" });
+      }
+      setActiveScenarioStoryboardId(savedLegacyBlockReason ? null : (savedUi?.activeScenarioStoryboardId ? String(savedUi.activeScenarioStoryboardId) : null));
+      setIsScenarioStoryboardOpen(savedLegacyBlockReason ? false : !!savedUi?.isScenarioStoryboardOpen);
       setActiveScenarioPipelineDebugId(savedUi?.activeScenarioPipelineDebugId ? String(savedUi.activeScenarioPipelineDebugId) : null);
       setIsScenarioPipelineDebugOpen(!!savedUi?.isScenarioPipelineDebugOpen);
       if (CLIP_TRACE_BRAIN_REFRESH) {
@@ -27599,6 +27685,41 @@ const hydrate = useCallback((source = "unknown") => {
     [nodes.length, edges.length]
   );
 
+  const legacyScenarioBlockReason = isManualTimingLegacyEditorBlocked(activeScenarioStoryboardId || scenarioEditor?.nodeId || "");
+  const canRenderLegacyScenarioModal = Boolean(scenarioEditor.open) && !legacyScenarioBlockReason;
+  const canRenderLegacyScenarioStoryboardEditor = Boolean(isScenarioStoryboardOpen) && !legacyScenarioBlockReason;
+
+  useEffect(() => {
+    if (!legacyScenarioBlockReason) return;
+    if (scenarioEditor.open) {
+      console.info("[STORYBOARD BLOCK OLD SCENARIO_MODAL_FOR_MANUAL_TIMING]", { reason: legacyScenarioBlockReason, nodeId: String(scenarioEditor?.nodeId || ""), source: "render_gate" });
+    }
+    if (isScenarioStoryboardOpen) {
+      console.info("[STORYBOARD BLOCK OLD SCENARIO EDITOR_FOR_MANUAL_TIMING]", { reason: legacyScenarioBlockReason, nodeId: String(activeScenarioStoryboardId || ""), source: "render_gate" });
+    }
+    if (scenarioEditor.open || isScenarioStoryboardOpen) {
+      closeLegacyScenarioEditors(`render_gate:${legacyScenarioBlockReason}`);
+    }
+  }, [legacyScenarioBlockReason, scenarioEditor.open, scenarioEditor?.nodeId, isScenarioStoryboardOpen, activeScenarioStoryboardId]);
+
+  useEffect(() => {
+    if (manualDirectorEditor.open && manualDirectorSourceNode) {
+      console.info(`[STORYBOARD OVERLAY OPEN] type="manual_director_board"`, { sourceNodeId: manualDirectorEditor.sourceNodeId });
+    }
+  }, [manualDirectorEditor.open, manualDirectorEditor.sourceNodeId, manualDirectorSourceNode]);
+
+  useEffect(() => {
+    if (canRenderLegacyScenarioModal) {
+      console.info(`[STORYBOARD OVERLAY OPEN] type="legacy_scenario_modal"`, { nodeId: String(scenarioEditor?.nodeId || "") });
+    }
+  }, [canRenderLegacyScenarioModal, scenarioEditor?.nodeId]);
+
+  useEffect(() => {
+    if (canRenderLegacyScenarioStoryboardEditor) {
+      console.info(`[STORYBOARD OVERLAY OPEN] type="legacy_scenario_editor"`, { nodeId: String(activeScenarioStoryboardId || "") });
+    }
+  }, [canRenderLegacyScenarioStoryboardEditor, activeScenarioStoryboardId]);
+
   return (
     <div className="clipSB_root">
       {manualDirectorEditor.open && manualDirectorSourceNode ? (
@@ -27739,7 +27860,7 @@ const hydrate = useCallback((source = "unknown") => {
       </div>
 
       
-      {scenarioEditor.open ? (
+      {canRenderLegacyScenarioModal ? (
         <div className="clipSB_scenarioOverlay" onClick={() => {
           setScenarioEditor((s) => ({ ...s, open: false }));
           closeLightbox();
@@ -28343,7 +28464,7 @@ const hydrate = useCallback((source = "unknown") => {
       ) : null}
 
       <ScenarioStoryboardEditor
-        open={isScenarioStoryboardOpen}
+        open={canRenderLegacyScenarioStoryboardEditor}
         nodeId={activeScenarioStoryboardNode?.id || null}
         storyboardRevision={activeScenarioStoryboardNode?.data?.storyboardRevision || ""}
         storyboardSignature={activeScenarioStoryboardNode?.data?.storyboardSignature || ""}
