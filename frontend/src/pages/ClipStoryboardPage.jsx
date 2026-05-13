@@ -25635,31 +25635,71 @@ return base;
   ), [nodes, manualDirectorEditor.sourceNodeId]);
 
   const manualDirectorBoardProject = useMemo(() => {
-    const nodeBoard = manualDirectorSourceNode?.data?.director_board;
-    const activeBoard = readActiveManualClipBoardProject();
-    const activeBoardOwnerNodeId = String(activeBoard?.sourceNodeId || activeBoard?.nodeId || "").trim();
     const currentSourceNodeId = String(manualDirectorEditor.sourceNodeId || "").trim();
-    const storedBoardForNodeRaw = readManualClipBoardProjectForNode(currentSourceNodeId);
-    const storedBoardForNode = hasMeaningfulManualProject(nodeBoard)
-      && hasMeaningfulManualProject(storedBoardForNodeRaw)
-      && !manualClipBoardProjectsShareIdentity(storedBoardForNodeRaw, nodeBoard)
-      ? null
-      : storedBoardForNodeRaw;
-    const activeBoardForThisNode = currentSourceNodeId
-      && activeBoardOwnerNodeId === currentSourceNodeId
-      && (!hasMeaningfulManualProject(storedBoardForNode) || manualClipBoardProjectsShareIdentity(activeBoard, storedBoardForNode))
-      ? activeBoard
-      : null;
-    const best = pickBestManualClipBoardProject([
-      nodeBoard,
-      storedBoardForNode,
-      activeBoardForThisNode,
-    ]);
+    const nodeBoard = manualDirectorSourceNode?.data?.director_board;
+    const storedBoardForNode = readManualClipBoardProjectForNode(currentSourceNodeId);
+    const activeBoard = readActiveManualClipBoardProject();
+    const openState = readManualClipBoardOpenState();
+    const openProjectId = String(openState?.project_id || openState?.projectId || "").trim();
+    const openInputSignature = String(openState?.input_signature || openState?.inputSignature || "").trim();
+    const projectOwnerId = (project) => String(project?.sourceNodeId || project?.nodeId || "").trim();
+    const projectId = (project) => String(project?.project_id || project?.projectId || "").trim();
+    const inputSignature = (project) => String(project?.input_signature || project?.inputSignature || "").trim();
+    const matchesOpenState = (project) => {
+      if (!openProjectId && !openInputSignature) return false;
+      if (openProjectId && projectId(project) !== openProjectId) return false;
+      if (openInputSignature && inputSignature(project) !== openInputSignature) return false;
+      return true;
+    };
+    const candidateLogEntry = (candidate) => {
+      const scoreData = scoreManualClipBoardProject(candidate?.project || {});
+      return {
+        sourceNodeId: currentSourceNodeId,
+        source: candidate?.source || "unknown",
+        project_id: projectId(candidate?.project),
+        input_signature: inputSignature(candidate?.project),
+        revision: scoreData.revision,
+        deletionRevision: scoreData.deletionRevision,
+        updatedAt: scoreData.updatedAt,
+        stats: scoreData.stats,
+        selectedSceneId: String(candidate?.project?.selectedSceneId || "").trim(),
+        openStateMatch: Boolean(candidate?.openStateMatch),
+      };
+    };
+    const candidates = [
+      { source: "nodeBoard", project: nodeBoard },
+      { source: "stored", project: storedBoardForNode },
+      { source: "active", project: activeBoard },
+    ]
+      .filter(({ project }) => hasMeaningfulManualProject(project))
+      .filter(({ project }) => !currentSourceNodeId || projectOwnerId(project) === currentSourceNodeId)
+      .map((candidate) => ({
+        ...candidate,
+        openStateMatch: matchesOpenState(candidate.project),
+        scoreData: scoreManualClipBoardProject(candidate.project),
+      }))
+      .sort((a, b) => {
+        if (Number(b.openStateMatch) !== Number(a.openStateMatch)) return Number(b.openStateMatch) - Number(a.openStateMatch);
+        if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
+        if (b.scoreData.revision !== a.scoreData.revision) return b.scoreData.revision - a.scoreData.revision;
+        if (b.scoreData.updatedAt !== a.scoreData.updatedAt) return b.scoreData.updatedAt - a.scoreData.updatedAt;
+        if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
+        if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
+        return b.scoreData.score - a.scoreData.score;
+      });
+    const picked = candidates[0] || null;
 
-    if (hasMeaningfulManualProject(best)) return best;
+    if (picked?.project) {
+      console.info("[MANUAL BOARD PROJECT PICK]", {
+        sourceNodeId: currentSourceNodeId,
+        picked: candidateLogEntry(picked),
+        candidates: candidates.map(candidateLogEntry),
+      });
+      return picked.project;
+    }
 
     const sourceData = manualDirectorSourceNode?.data || {};
-    return {
+    const fallbackProject = {
       source: "manual_timing_node",
       ownerNodeType: "manualTiming",
       nodeId: manualDirectorEditor.sourceNodeId,
@@ -25672,6 +25712,15 @@ return base;
       selectedSceneId: sourceData.selectedSceneId || sourceData.scenes?.[0]?.scene_id || "",
       updatedAt: Date.now(),
     };
+    console.info("[MANUAL BOARD PROJECT PICK]", {
+      sourceNodeId: currentSourceNodeId,
+      picked: {
+        ...candidateLogEntry({ source: "fallback", project: fallbackProject }),
+        source: "fallback",
+      },
+      candidates: [],
+    });
+    return fallbackProject;
   }, [manualDirectorSourceNode, manualDirectorEditor.sourceNodeId]);
 
   const patchManualTimingDirectorBoard = useCallback((sourceNodeId, nextProject, reason = "manual_director_update", persistOptions = {}) => {
