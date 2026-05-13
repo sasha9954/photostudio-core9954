@@ -11764,6 +11764,103 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   }, [location?.state, nodes, setNodes]);
 
 const [edges, setEdges] = useEdgesState(defaultEdges);
+
+const summarizeLegacyScenarioStoryboardNodeData = useCallback((node) => {
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  return {
+    type: String(node?.type || ""),
+    title: String(data?.title || data?.label || data?.name || ""),
+    contentType: String(data?.contentType || data?.content_type || ""),
+    scenarioMode: String(data?.scenarioMode || data?.mode || data?.project_kind || data?.projectKind || ""),
+    sourceNodeId: String(data?.sourceNodeId || data?.source_node_id || ""),
+    sourceScenesCount: Array.isArray(data?.sourceScenes) ? data.sourceScenes.length : (Number.isFinite(Number(data?.sourceScenes)) ? Number(data.sourceScenes) : 0),
+    sceneContractSource: String(data?.sceneContractSource || data?.scene_source || data?.sceneSource || ""),
+    scenesCount: Array.isArray(data?.scenes) ? data.scenes.length : 0,
+    status: String(data?.status || ""),
+  };
+}, []);
+
+const isLegacyScenarioStoryboardNodeForManualTiming = useCallback((node, options = {}) => {
+  if (node?.type !== "scenarioStoryboard") return false;
+  const data = node?.data && typeof node.data === "object" ? node.data : {};
+  const reasons = [];
+  const modeCandidates = [
+    data?.contentType,
+    data?.content_type,
+    data?.scenarioMode,
+    data?.mode,
+    data?.project_kind,
+    data?.projectKind,
+    data?.incomingMode,
+    data?.scenarioPackage?.contentType,
+    data?.scenarioPackage?.content_type,
+    data?.scenarioPackage?.mode,
+    data?.storyboardOut?.contentType,
+    data?.storyboardOut?.content_type,
+    data?.storyboardOut?.mode,
+  ].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+  if (modeCandidates.some((value) => ["story", "history", "manual", "manual_clip", "story_voiceover"].includes(value))) {
+    reasons.push(`mode:${modeCandidates.join("|")}`);
+  }
+  const hasSourceScenes = Array.isArray(data?.sourceScenes)
+    ? data.sourceScenes.length > 0
+    : Number.isFinite(Number(data?.sourceScenes)) && Number(data.sourceScenes) > 0;
+  const sceneSource = String(data?.sceneContractSource || data?.scene_source || data?.sceneSource || data?.sourceScene || "").trim();
+  if (hasSourceScenes && !sceneSource) reasons.push("sourceScenes_without_scene_source");
+  const sourceNodeId = String(data?.sourceNodeId || data?.source_node_id || "").trim();
+  const nodesToInspect = Array.isArray(options?.nodes) ? options.nodes : (nodesRef.current || nodes || []);
+  if (sourceNodeId && nodesToInspect.some((item) => String(item?.id || "") === sourceNodeId && item?.type === "manualTiming")) {
+    reasons.push("sourceNodeId_manualTiming");
+  }
+  const canonicalReason = String(options?.canonicalReason || getManualBoardCanonicalModeReason()).trim();
+  if (canonicalReason) reasons.push(`manual_canonical:${canonicalReason}`);
+  const titleCandidates = [data?.title, data?.label, data?.name, data?.nodeTitle].map((value) => String(value || "").trim().toLowerCase()).filter(Boolean);
+  const looksLikeGeneratedScenarioStoryboard = titleCandidates.includes("scenario storyboard")
+    || (String(node?.type || "") === "scenarioStoryboard" && String(data?.status || "").trim().toLowerCase() === "ready" && !sceneSource && (Array.isArray(data?.scenes) ? data.scenes.length > 0 : hasSourceScenes));
+  if (looksLikeGeneratedScenarioStoryboard) reasons.push("generated_title_scenario_storyboard");
+  if (!reasons.length) return false;
+  console.info("[STORYBOARD LEGACY SCENARIO NODE DETECTED]", {
+    nodeId: String(node?.id || ""),
+    reason: reasons.join(","),
+    dataSummary: summarizeLegacyScenarioStoryboardNodeData(node),
+  });
+  return true;
+}, [getManualBoardCanonicalModeReason, nodes, summarizeLegacyScenarioStoryboardNodeData]);
+
+const removeLegacyScenarioStoryboardNodes = useCallback((reason = "manual_board_canonical_mode") => {
+  const removedNodeIds = [];
+  setNodes((prev) => {
+    const safePrev = Array.isArray(prev) ? prev : [];
+    const canonicalReason = String(reason || getManualBoardCanonicalModeReason()).trim();
+    const next = safePrev.filter((nodeItem) => {
+      const shouldRemove = isLegacyScenarioStoryboardNodeForManualTiming(nodeItem, { nodes: safePrev, canonicalReason });
+      if (shouldRemove) removedNodeIds.push(String(nodeItem?.id || ""));
+      return !shouldRemove;
+    });
+    return removedNodeIds.length ? next : prev;
+  });
+  if (removedNodeIds.length) {
+    const removedSet = new Set(removedNodeIds);
+    setEdges((prev) => (Array.isArray(prev) ? prev.filter((edge) => !removedSet.has(String(edge?.source || "")) && !removedSet.has(String(edge?.target || ""))) : prev));
+    closeLegacyScenarioEditors(reason);
+    console.info("[STORYBOARD REMOVE LEGACY SCENARIO NODES]", {
+      reason,
+      removedNodeIds,
+      removedCount: removedNodeIds.length,
+    });
+  }
+  return removedNodeIds;
+}, [getManualBoardCanonicalModeReason, isLegacyScenarioStoryboardNodeForManualTiming, setEdges, setNodes]);
+
+useEffect(() => {
+  const canonicalReason = getManualBoardCanonicalModeReason();
+  if (!canonicalReason) return;
+  const safeNodes = Array.isArray(nodes) ? nodes : [];
+  const hasLegacyScenarioNode = safeNodes.some((nodeItem) => isLegacyScenarioStoryboardNodeForManualTiming(nodeItem, { nodes: safeNodes, canonicalReason }));
+  if (!hasLegacyScenarioNode) return;
+  removeLegacyScenarioStoryboardNodes(canonicalReason);
+}, [getManualBoardCanonicalModeReason, isLegacyScenarioStoryboardNodeForManualTiming, nodes, removeLegacyScenarioStoryboardNodes]);
+
 const updateAssemblyAudioMode = useCallback((mode) => {
   const aliasMap = {
     master_plus_scene_audio: "mix_master_scene",
@@ -11930,6 +12027,19 @@ useEffect(() => {
 
   const persistedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
   const rescueNodeId = restoreNodeId || String(parsed?.nodeId || `scenario_storyboard_restored_${Date.now()}`).trim();
+  const manualRuntimeRestoreBlockReason = getManualBoardCanonicalModeReason();
+  if (manualRuntimeRestoreBlockReason) {
+    runtimeHydratedRef.current = true;
+    storyboardRuntimeRestoredRef.current = true;
+    console.info("[STORYBOARD BLOCK LEGACY SCENARIO NODE RESTORE_FOR_MANUAL_TIMING]", {
+      reason: manualRuntimeRestoreBlockReason,
+      nodeId: rescueNodeId || "",
+      source: "runtime_restore",
+    });
+    closeLegacyScenarioEditors(`runtime_restore:${manualRuntimeRestoreBlockReason}`);
+    removeLegacyScenarioStoryboardNodes(`runtime_restore:${manualRuntimeRestoreBlockReason}`);
+    return;
+  }
   runtimeHydratedRef.current = true;
   try {
     setNodes((prev) => {
@@ -11995,7 +12105,7 @@ useEffect(() => {
     storyboardRuntimeRestoredRef.current = true;
     console.warn("[SCENARIO RUNTIME] restore failed", error);
   }
-}, [activeScenarioStoryboardId, activeScenarioStoryboardNode?.id, initialRestoreComplete, nodes, readScenarioRuntimeSnapshot, setNodes]);
+}, [activeScenarioStoryboardId, activeScenarioStoryboardNode?.id, initialRestoreComplete, nodes, readScenarioRuntimeSnapshot, removeLegacyScenarioStoryboardNodes, setNodes]);
 useEffect(() => {
   if (!storyboardRuntimeRestoredRef.current) {
     console.info("[SCENARIO RUNTIME]", {
@@ -20864,8 +20974,16 @@ Aspect ratio: ${imageFormat}`,
 
 
   const removeNode = useCallback((nodeId) => {
-    setNodes((prev) => prev.filter((n) => n.id !== nodeId));
-    setEdges((prev) => prev.filter((e) => e.source !== nodeId && e.target !== nodeId));
+    const safeNodeId = String(nodeId || "").trim();
+    const targetNode = (nodesRef.current || []).find((nodeItem) => String(nodeItem?.id || "") === safeNodeId) || null;
+    if (targetNode?.type === "scenarioStoryboard") {
+      console.info("[STORYBOARD LEGACY SCENARIO NODE REMOVED_BY_USER]", { nodeId: safeNodeId });
+      setActiveScenarioStoryboardId((prev) => (String(prev || "") === safeNodeId ? null : prev));
+      setIsScenarioStoryboardOpen(false);
+      setScenarioEditor((prev) => (String(prev?.nodeId || "") === safeNodeId ? { ...(prev || {}), open: false, nodeId: null, selected: 0, selectedSceneId: "" } : prev));
+    }
+    setNodes((prev) => prev.filter((n) => n.id !== safeNodeId));
+    setEdges((prev) => prev.filter((e) => e.source !== safeNodeId && e.target !== safeNodeId));
   }, [setNodes, setEdges]);
 
   
@@ -26599,7 +26717,7 @@ const hydrate = useCallback((source = "unknown") => {
       const hydratedActiveManualBoardProject = readActiveManualClipBoardProject();
       const activeBoardSourceNodeId = String(hydratedActiveManualBoardProject?.sourceNodeId || hydratedActiveManualBoardProject?.nodeId || "").trim();
       const hydratedNodesBase = cleanNodes.length ? cleanNodes : defaultNodes;
-      const hydratedNodes = activeBoardSourceNodeId && hasMeaningfulManualProject(hydratedActiveManualBoardProject)
+      let hydratedNodes = activeBoardSourceNodeId && hasMeaningfulManualProject(hydratedActiveManualBoardProject)
         ? hydratedNodesBase.map((nodeItem) => {
           if (nodeItem.id !== activeBoardSourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
           const currentBoard = nodeItem.data?.director_board || {};
@@ -26628,7 +26746,23 @@ const hydrate = useCallback((source = "unknown") => {
           };
         })
         : hydratedNodesBase;
-      const hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
+      let hydratedEdges = cleanEdges.length ? cleanEdges : defaultEdges;
+      const hydrateManualCanonicalReason = getManualBoardCanonicalModeReason({ includeManualDirectorEditor: true });
+      if (hydrateManualCanonicalReason) {
+        const legacyScenarioNodeIds = hydratedNodes
+          .filter((nodeItem) => isLegacyScenarioStoryboardNodeForManualTiming(nodeItem, { nodes: hydratedNodes, canonicalReason: hydrateManualCanonicalReason }))
+          .map((nodeItem) => String(nodeItem?.id || "").trim())
+          .filter(Boolean);
+        if (legacyScenarioNodeIds.length) {
+          const legacyScenarioNodeIdSet = new Set(legacyScenarioNodeIds);
+          hydratedNodes = hydratedNodes.filter((nodeItem) => !legacyScenarioNodeIdSet.has(String(nodeItem?.id || "")));
+          hydratedEdges = hydratedEdges.filter((edgeItem) => !legacyScenarioNodeIdSet.has(String(edgeItem?.source || "")) && !legacyScenarioNodeIdSet.has(String(edgeItem?.target || "")));
+          console.info("[STORYBOARD HYDRATE DROP LEGACY SCENARIO NODES]", {
+            removedNodeIds: legacyScenarioNodeIds,
+            reason: hydrateManualCanonicalReason,
+          });
+        }
+      }
       const normalizedViewport = savedViewport && Number.isFinite(Number(savedViewport.x)) && Number.isFinite(Number(savedViewport.y)) && Number.isFinite(Number(savedViewport.zoom))
         ? {
           x: Number(savedViewport.x),
@@ -26871,6 +27005,7 @@ const hydrate = useCallback((source = "unknown") => {
     user,
     shouldInvalidateClipStoryboardStorage,
     isClipHydrationBlocked,
+    isLegacyScenarioStoryboardNodeForManualTiming,
     clearClipStoryboardStorageForCurrentAccount,
   ]);
 
