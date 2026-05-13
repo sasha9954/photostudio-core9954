@@ -11198,50 +11198,6 @@ export default function ClipStoryboardPage() {
     };
   }, []);
 
-  useEffect(() => {
-    if (manualDirectorOpenRestoreAttemptedRef.current) return;
-    if (typeof window === "undefined" || window.location.pathname !== "/studio/storyboard") return;
-    const openState = readManualClipBoardOpenState();
-    if (!openState?.isOpen || String(openState.routePath || "") !== "/studio/storyboard") {
-      console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "closed_or_wrong_route", openState });
-      manualDirectorOpenRestoreAttemptedRef.current = true;
-      return;
-    }
-    const sourceNodeId = String(openState.sourceNodeId || "").trim();
-    const sourceNode = nodes.find((node) => node.id === sourceNodeId && node.type === "manualTiming");
-    const nodeBoard = sourceNode?.data?.director_board || null;
-    const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
-    const board = pickBestManualClipBoardProject([nodeBoard, storedBoard]) || nodeBoard || storedBoard;
-    const stateProjectId = String(openState.project_id || openState.projectId || "").trim();
-    const stateSignature = String(openState.input_signature || openState.inputSignature || "").trim();
-    const boardProjectId = String(board?.project_id || board?.projectId || "").trim();
-    const boardSignature = String(board?.input_signature || board?.inputSignature || "").trim();
-    const identityMatches = (!stateProjectId || !boardProjectId || stateProjectId === boardProjectId)
-      && (!stateSignature || !boardSignature || stateSignature === boardSignature);
-
-    if (!sourceNodeId || !sourceNode || !hasMeaningfulManualProject(board) || !identityMatches) {
-      console.info("[MANUAL BOARD SKIP OPEN STATE]", {
-        reason: !sourceNodeId ? "missing_source" : (!sourceNode ? "source_node_missing" : (!hasMeaningfulManualProject(board) ? "board_missing" : "identity_mismatch")),
-        sourceNodeId,
-        stateProjectId,
-        boardProjectId,
-        stateSignature,
-        boardSignature,
-      });
-      manualDirectorOpenRestoreAttemptedRef.current = Boolean(!sourceNodeId || (nodes.length && sourceNode));
-      return;
-    }
-
-    manualDirectorOpenRestoreAttemptedRef.current = true;
-    console.info("[MANUAL BOARD RESTORE OPEN STATE]", {
-      sourceNodeId,
-      selectedSceneId: openState.selectedSceneId,
-      project_id: boardProjectId,
-      input_signature: boardSignature,
-      updatedAt: openState.updatedAt,
-    });
-    setManualDirectorEditor({ open: true, sourceNodeId });
-  }, [nodes]);
 
 
   useEffect(() => {
@@ -11539,6 +11495,51 @@ useEffect(() => {
   );
 
 const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
+  useEffect(() => {
+    if (manualDirectorOpenRestoreAttemptedRef.current) return;
+    if (typeof window === "undefined" || window.location.pathname !== "/studio/storyboard") return;
+    const openState = readManualClipBoardOpenState();
+    if (!openState?.isOpen || String(openState.routePath || "") !== "/studio/storyboard") {
+      console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "closed_or_wrong_route", openState });
+      manualDirectorOpenRestoreAttemptedRef.current = true;
+      return;
+    }
+    const sourceNodeId = String(openState.sourceNodeId || "").trim();
+    const sourceNode = nodes.find((node) => node.id === sourceNodeId && node.type === "manualTiming");
+    const nodeBoard = sourceNode?.data?.director_board || null;
+    const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
+    const board = pickBestManualClipBoardProject([nodeBoard, storedBoard]) || nodeBoard || storedBoard;
+    const stateProjectId = String(openState.project_id || openState.projectId || "").trim();
+    const stateSignature = String(openState.input_signature || openState.inputSignature || "").trim();
+    const boardProjectId = String(board?.project_id || board?.projectId || "").trim();
+    const boardSignature = String(board?.input_signature || board?.inputSignature || "").trim();
+    const identityMatches = (!stateProjectId || !boardProjectId || stateProjectId === boardProjectId)
+      && (!stateSignature || !boardSignature || stateSignature === boardSignature);
+
+    if (!sourceNodeId || !sourceNode || !hasMeaningfulManualProject(board) || !identityMatches) {
+      console.info("[MANUAL BOARD SKIP OPEN STATE]", {
+        reason: !sourceNodeId ? "missing_source" : (!sourceNode ? "source_node_missing" : (!hasMeaningfulManualProject(board) ? "board_missing" : "identity_mismatch")),
+        sourceNodeId,
+        stateProjectId,
+        boardProjectId,
+        stateSignature,
+        boardSignature,
+      });
+      manualDirectorOpenRestoreAttemptedRef.current = Boolean(!sourceNodeId || (nodes.length && sourceNode));
+      return;
+    }
+
+    manualDirectorOpenRestoreAttemptedRef.current = true;
+    console.info("[MANUAL BOARD RESTORE OPEN STATE]", {
+      sourceNodeId,
+      selectedSceneId: openState.selectedSceneId,
+      project_id: boardProjectId,
+      input_signature: boardSignature,
+      updatedAt: openState.updatedAt,
+    });
+    setManualDirectorEditor({ open: true, sourceNodeId });
+  }, [nodes]);
+
 const [edges, setEdges] = useEdgesState(defaultEdges);
 const updateAssemblyAudioMode = useCallback((mode) => {
   const aliasMap = {
