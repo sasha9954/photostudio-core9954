@@ -162,6 +162,15 @@ function getEmptyManualTimingAudio() {
   return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
 }
 
+function sanitizeAudioForRouteState(audio = {}) {
+  return {
+    url: String(audio?.url || ""),
+    filename: String(audio?.filename || ""),
+    duration_sec: Number(audio?.duration_sec || 0),
+    duration_ms: Number(audio?.duration_ms || 0),
+  };
+}
+
 function buildManualTimingAudioResetPatch(base = {}, nextAudio = getEmptyManualTimingAudio(), audioSource = "") {
   const safeAudio = normalizeManualTimingAudio(nextAudio);
   const durationSec = Number(safeAudio.duration_sec || 0);
@@ -312,13 +321,12 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onOpenPodcastComposer = () => {
-    const project = persistProject();
+    persistProject();
     navigate(`/studio/podcast-audio-composer?sourceNodeId=${encodeURIComponent(id)}`, {
       state: {
         sourceNodeId: id,
         fromStoryboard: true,
-        audio: effectiveAudio,
-        project,
+        audio: sanitizeAudioForRouteState(effectiveAudio),
       },
     });
   };
