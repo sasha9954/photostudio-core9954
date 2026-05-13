@@ -618,24 +618,90 @@ export function getManualClipBoardMaterialStats(project = {}) {
   };
 }
 
+const MANUAL_BOARD_REAL_USER_MATERIAL_UPDATE_REASONS = new Set([
+  "selected_scene_user",
+  "delete_scene_video_user",
+  "delete_scene_photo_user",
+  "delete_first_last_start_image_user",
+  "delete_first_last_end_image_user",
+  "manual_video_queued",
+  "manual_video_done",
+  "manual_video_error",
+  "manual_mmaudio_queued",
+  "manual_mmaudio_done",
+  "manual_mmaudio_error",
+  "manual_mmaudio_gain_done",
+  "upload_scene_image",
+  "update_scene",
+  "manual_director_embedded_update",
+]);
+
+function logManualBoardPersistDecision(label, nextProject, existingProject, extra = {}) {
+  try {
+    const nextStats = getManualClipBoardMaterialStats(nextProject);
+    const existingStats = getManualClipBoardMaterialStats(existingProject);
+    console.info(label, {
+      sourceNodeId: String(nextProject?.sourceNodeId || nextProject?.nodeId || existingProject?.sourceNodeId || existingProject?.nodeId || "").trim(),
+      source: String(nextProject?.source || existingProject?.source || "manual_timing_node"),
+      project_id: String(nextProject?.project_id || nextProject?.projectId || ""),
+      input_signature: String(nextProject?.input_signature || nextProject?.inputSignature || ""),
+      revision: Number(nextProject?.revision || 0) || 0,
+      deletionRevision: Number(nextProject?.deletionRevision || nextProject?.deletion_revision || nextProject?.deleted_media_revision || 0) || 0,
+      updatedAt: Number(nextProject?.updatedAt || nextProject?.updated_at || 0) || 0,
+      stats: nextStats,
+      selectedSceneId: String(nextProject?.selectedSceneId || "").trim(),
+      existing: {
+        project_id: String(existingProject?.project_id || existingProject?.projectId || ""),
+        input_signature: String(existingProject?.input_signature || existingProject?.inputSignature || ""),
+        revision: Number(existingProject?.revision || 0) || 0,
+        deletionRevision: Number(existingProject?.deletionRevision || existingProject?.deletion_revision || existingProject?.deleted_media_revision || 0) || 0,
+        updatedAt: Number(existingProject?.updatedAt || existingProject?.updated_at || 0) || 0,
+        stats: existingStats,
+        selectedSceneId: String(existingProject?.selectedSceneId || "").trim(),
+      },
+      ...extra,
+    });
+  } catch {}
+}
+
 export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, existingProject, options = {}) {
   const reason = String(options?.reason || nextProject?.lastPersistReason || "").toLowerCase();
   const isIntentionalMaterialDelete = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/.test(reason);
-  if (options?.forceReplace || options?.explicitReset || options?.allowMaterialLoss || isIntentionalMaterialDelete) return false;
+  const isRealUserMaterialUpdate = MANUAL_BOARD_REAL_USER_MATERIAL_UPDATE_REASONS.has(reason) || isIntentionalMaterialDelete;
+  if (options?.forceReplace || options?.explicitReset || options?.allowMaterialLoss) return false;
   const nextStats = getManualClipBoardMaterialStats(nextProject);
   const existingStats = getManualClipBoardMaterialStats(existingProject);
   const sameIdentity = manualClipBoardProjectsShareIdentity(nextProject, existingProject);
-  if (!sameIdentity && hasMeaningfulManualProject(existingProject)) return true;
+  if (!sameIdentity && hasMeaningfulManualProject(existingProject)) {
+    logManualBoardPersistDecision("[MANUAL BOARD PERSIST BLOCK OLDER]", nextProject, existingProject, { reason, blockReason: "identity_mismatch" });
+    return true;
+  }
   const nextRevision = Number(nextProject?.revision || 0) || 0;
   const existingRevision = Number(existingProject?.revision || 0) || 0;
   const nextDeletionRevision = Number(nextProject?.deletionRevision || nextProject?.deletion_revision || nextProject?.deleted_media_revision || 0) || 0;
   const existingDeletionRevision = Number(existingProject?.deletionRevision || existingProject?.deletion_revision || existingProject?.deleted_media_revision || 0) || 0;
   const nextUpdatedAt = Number(nextProject?.updatedAt || nextProject?.updated_at || 0) || 0;
   const existingUpdatedAt = Number(existingProject?.updatedAt || existingProject?.updated_at || 0) || 0;
-  if (existingDeletionRevision > nextDeletionRevision && !isIntentionalMaterialDelete) return true;
-  if (existingRevision > nextRevision && existingUpdatedAt > nextUpdatedAt && !isIntentionalMaterialDelete) return true;
+
+  if (sameIdentity && (
+    nextDeletionRevision > existingDeletionRevision
+    || nextRevision > existingRevision
+    || (nextUpdatedAt > existingUpdatedAt && isRealUserMaterialUpdate)
+  )) {
+    logManualBoardPersistDecision("[MANUAL BOARD PERSIST ALLOW NEWER]", nextProject, existingProject, { reason });
+    return false;
+  }
+
+  if (existingDeletionRevision > nextDeletionRevision) {
+    logManualBoardPersistDecision("[MANUAL BOARD PERSIST BLOCK OLDER]", nextProject, existingProject, { reason, blockReason: "older_deletion_revision" });
+    return true;
+  }
+  if (existingRevision > nextRevision && existingUpdatedAt > nextUpdatedAt) {
+    logManualBoardPersistDecision("[MANUAL BOARD PERSIST BLOCK OLDER]", nextProject, existingProject, { reason, blockReason: "older_revision_and_updated_at" });
+    return true;
+  }
   if (existingStats.materialTotal <= 0) return false;
-  return nextStats.materialScore < existingStats.materialScore
+  const losesMaterials = nextStats.materialScore < existingStats.materialScore
     || nextStats.materialTotal < existingStats.materialTotal
     || nextStats.videoCount < existingStats.videoCount
     || nextStats.imageCount < existingStats.imageCount
@@ -646,6 +712,11 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
     || nextStats.generatedAudio < existingStats.generatedAudio
     || nextStats.payloadPreviews < existingStats.payloadPreviews
     || nextStats.videoHasAudio < existingStats.videoHasAudio;
+  if (losesMaterials) {
+    logManualBoardPersistDecision("[MANUAL BOARD PERSIST BLOCK OLDER]", nextProject, existingProject, { reason, blockReason: "same_or_older_revision_material_loss" });
+    return true;
+  }
+  return false;
 }
 
 function getManualClipBoardDeletionRevision(project = {}) {
