@@ -10,11 +10,13 @@ import {
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildManualProjectBackupJson,
+  computeManualProjectInputSignature,
   forceWriteManualClipBoardProjectForNode,
   getLastManualClipBoardStorageError,
   getManualClipBoardMaterialStats,
   getManualProjectOwnerId,
   hasMeaningfulManualProject,
+  manualClipBoardProjectsShareIdentity,
   pickBestManualClipBoardProject,
   persistManualClipBoardProject,
   readActiveManualClipBoardProject,
@@ -172,30 +174,63 @@ function projectBelongsToSource(project = {}, sourceNodeId = "") {
   return getManualProjectOwnerId(project) === source;
 }
 
+function logManualBoardHydratePick(source, project = {}, extra = {}) {
+  console.info("[MANUAL BOARD HYDRATE PICK]", {
+    source,
+    owner: getManualProjectOwnerId(project),
+    project_id: project?.project_id || project?.projectId || "",
+    input_signature: project?.input_signature || project?.inputSignature || computeManualProjectInputSignature(project),
+    stats: getManualClipBoardMaterialStats(project),
+    ...extra,
+  });
+}
+
+function logManualBoardSkipStale(source, project = {}, targetProject = {}, reason = "identity_mismatch") {
+  console.warn("[MANUAL BOARD SKIP STALE]", {
+    source,
+    reason,
+    owner: getManualProjectOwnerId(project),
+    project_id: project?.project_id || project?.projectId || "",
+    input_signature: project?.input_signature || project?.inputSignature || computeManualProjectInputSignature(project),
+    targetOwner: getManualProjectOwnerId(targetProject),
+    targetProjectId: targetProject?.project_id || targetProject?.projectId || "",
+    targetInputSignature: targetProject?.input_signature || targetProject?.inputSignature || computeManualProjectInputSignature(targetProject),
+    stats: getManualClipBoardMaterialStats(project),
+  });
+}
+
 function readManualActiveProject(sourceNodeId = "", navigationProject = null) {
   const safeSourceNodeId = String(sourceNodeId || "").trim();
   const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
   const activeProject = readActiveManualClipBoardProject();
+  const targetProject = hasMeaningfulManualProject(navigationProject) ? navigationProject : nodeProject;
+  const candidates = [
+    { source: "navigation", project: navigationProject },
+    { source: "node-scoped", project: nodeProject },
+    { source: "active", project: activeProject },
+  ];
 
   if (safeSourceNodeId) {
-    const matchingCandidates = [
-      navigationProject,
-      nodeProject,
-      activeProject,
-    ].filter((candidateProject) => (
-      hasMeaningfulManualProject(candidateProject)
-      && projectBelongsToSource(candidateProject, safeSourceNodeId)
-    ));
+    const matchingCandidates = candidates
+      .filter(({ project: candidateProject }) => hasMeaningfulManualProject(candidateProject))
+      .filter(({ source, project: candidateProject }) => {
+        const sourceMatches = projectBelongsToSource(candidateProject, safeSourceNodeId);
+        const identityMatches = !hasMeaningfulManualProject(targetProject)
+          || candidateProject === targetProject
+          || manualClipBoardProjectsShareIdentity(candidateProject, targetProject);
+        if (!sourceMatches || !identityMatches) {
+          logManualBoardSkipStale(source, candidateProject, targetProject || { sourceNodeId: safeSourceNodeId }, !sourceMatches ? "owner_mismatch" : "input_signature_mismatch");
+          return false;
+        }
+        return true;
+      })
+      .map(({ project: candidateProject }) => candidateProject);
     const bestMatching = pickBestManualClipBoardProject(matchingCandidates);
     if (bestMatching) {
       const source = bestMatching === navigationProject
         ? "navigation"
         : (bestMatching === nodeProject ? "node-scoped" : "active-matching-source");
-      console.info("[MANUAL BOARD HYDRATE] picked source-bound project", {
-        sourceNodeId: safeSourceNodeId,
-        source,
-        stats: getManualClipBoardMaterialStats(bestMatching),
-      });
+      logManualBoardHydratePick(source, bestMatching, { sourceNodeId: safeSourceNodeId });
       return bestMatching;
     }
 
@@ -210,19 +245,14 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null) {
     return null;
   }
 
-  const bestProject = pickBestManualClipBoardProject([navigationProject, activeProject, nodeProject])
+  const bestProject = pickBestManualClipBoardProject(candidates.map(({ project: candidateProject }) => candidateProject))
     || navigationProject
     || activeProject
     || nodeProject;
   const source = bestProject === navigationProject
     ? "navigation"
     : (bestProject === activeProject ? "active" : (bestProject === nodeProject ? "node-scoped" : "unknown"));
-  if (bestProject) {
-    console.info("[MANUAL BOARD HYDRATE] picked project", {
-      source,
-      stats: getManualClipBoardMaterialStats(bestProject),
-    });
-  }
+  if (bestProject) logManualBoardHydratePick(source, bestProject);
   return bestProject;
 }
 
@@ -523,6 +553,31 @@ function resolveManualStatusVideoUrl(out = {}) {
 }
 
 
+const MANUAL_VIDEO_RESULT_FIELDS = [
+  "video_url",
+  "videoUrl",
+  "generated_video_url",
+  "generatedVideoUrl",
+  "final_video_url",
+  "finalVideoUrl",
+  "result_video_url",
+  "resultVideoUrl",
+  "video_asset_url",
+  "videoAssetUrl",
+  "video_preview_url",
+  "videoPreviewUrl",
+  "mmaudio_video_url",
+  "mmaudioVideoUrl",
+];
+
+function resolveManualSceneFinalVideoUrl(scene = {}) {
+  for (const field of MANUAL_VIDEO_RESULT_FIELDS) {
+    const value = String(scene?.[field] || "").trim();
+    if (value && !value.startsWith("mock://")) return value;
+  }
+  return "";
+}
+
 const MMAUDIO_VIDEO_SOURCE_FIELDS = [
   "video_url",
   "videoUrl",
@@ -821,6 +876,7 @@ export default function ManualClipDirectorBoardEditor({
   const videoStartInFlightRef = useRef(new Set());
   const videoPollErrorCountRef = useRef(new Map());
   const resumedVideoJobsRef = useRef(new Set());
+  const terminalVideoJobsRef = useRef(new Set());
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
@@ -879,6 +935,8 @@ export default function ManualClipDirectorBoardEditor({
     const ownerNodeId = getProjectOwnerNodeId(candidateProject);
     if (!ownerNodeId) return candidateProject || {};
     const projectFormat = resolveLockedProjectFormat(candidateProject);
+    const inputSignature = String(candidateProject?.input_signature || candidateProject?.inputSignature || computeManualProjectInputSignature(candidateProject)).trim();
+    const projectId = String(candidateProject?.project_id || candidateProject?.projectId || (inputSignature ? `manual_${ownerNodeId}_${inputSignature}` : `manual_${ownerNodeId}`)).trim();
     return {
       ...(candidateProject || {}),
       format: projectFormat,
@@ -891,6 +949,13 @@ export default function ManualClipDirectorBoardEditor({
       ownerNodeType: candidateProject?.ownerNodeType || "manualTiming",
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
+      ownerNodeId,
+      project_id: projectId,
+      projectId,
+      input_signature: inputSignature,
+      inputSignature,
+      audio_signature: String(candidateProject?.audio_signature || candidateProject?.audioSignature || computeManualProjectInputSignature(candidateProject, { audioOnly: true })).trim(),
+      story_signature: String(candidateProject?.story_signature || candidateProject?.storySignature || computeManualProjectInputSignature(candidateProject, { storyOnly: true })).trim(),
     };
   };
 
@@ -1155,15 +1220,15 @@ export default function ManualClipDirectorBoardEditor({
     if (!project || !Array.isArray(scenes) || !scenes.length) return;
 
     scenes.forEach((scene) => {
-      const jobId = String(scene?.video_job_id || "").trim();
+      const jobId = String(scene?.video_job_id || scene?.videoJobId || "").trim();
       const sceneId = String(scene?.scene_id || "").trim();
       const status = String(scene?.status || "").trim();
 
       if (!sceneId || !jobId) return;
-      if (scene?.video_url) return;
-      if (!["video_running", "video_queued"].includes(status)) return;
-
       const key = `${sceneId}:${jobId}`;
+      if (resolveManualSceneFinalVideoUrl(scene)) return;
+      if (!["video_running", "video_queued"].includes(status)) return;
+      if (terminalVideoJobsRef.current.has(key)) return;
       if (resumedVideoJobsRef.current.has(key)) return;
 
       resumedVideoJobsRef.current.add(key);
@@ -1656,11 +1721,18 @@ export default function ManualClipDirectorBoardEditor({
       return { ...scene, ...(patch || {}) };
     });
     const persistReason = options?.reason || "update_scene";
+    const isDeletionUpdate = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/i.test(persistReason);
+    const now = Date.now();
     const nextProject = normalizeDirectorProjectOwner({
       ...baseProject,
       scenes: nextScenes,
       selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId,
-      updatedAt: Date.now(),
+      updatedAt: now,
+      revision: (Number(baseProject.revision || 0) || 0) + 1,
+      deletionRevision: isDeletionUpdate ? Math.max(Number(baseProject.deletionRevision || baseProject.deletion_revision || 0) || 0, now) : (Number(baseProject.deletionRevision || baseProject.deletion_revision || 0) || 0),
+      deletion_revision: isDeletionUpdate ? Math.max(Number(baseProject.deletion_revision || baseProject.deletionRevision || 0) || 0, now) : (Number(baseProject.deletion_revision || baseProject.deletionRevision || 0) || 0),
+      deleted_media_revision: isDeletionUpdate ? Math.max(Number(baseProject.deleted_media_revision || baseProject.deletedMediaRevision || 0) || 0, now) : (Number(baseProject.deleted_media_revision || baseProject.deletedMediaRevision || 0) || 0),
+      deletedMediaRevision: isDeletionUpdate ? Math.max(Number(baseProject.deletedMediaRevision || baseProject.deleted_media_revision || 0) || 0, now) : (Number(baseProject.deletedMediaRevision || baseProject.deleted_media_revision || 0) || 0),
       lastPersistReason: persistReason,
     });
 
@@ -1752,6 +1824,10 @@ export default function ManualClipDirectorBoardEditor({
       keepGeneratedAudio: false,
       video_request_payload_preview: null,
       videoRequestPayloadPreview: null,
+      video_deleted_at: Date.now(),
+      videoDeletedAt: Date.now(),
+      deleted_media_revision: Date.now(),
+      deletedMediaRevision: Date.now(),
       error: "",
     };
     return {
@@ -1806,6 +1882,10 @@ export default function ManualClipDirectorBoardEditor({
       keepGeneratedAudio: false,
       video_request_payload_preview: null,
       videoRequestPayloadPreview: null,
+      video_deleted_at: Date.now(),
+      videoDeletedAt: Date.now(),
+      deleted_media_revision: Date.now(),
+      deletedMediaRevision: Date.now(),
       error: "",
       status: resolveManualSceneStatus(sceneWithoutVideo),
     };
@@ -1841,8 +1921,25 @@ export default function ManualClipDirectorBoardEditor({
       image_upload_status: "",
       image_upload_error: "",
       ...clearManualStalePromptFields(),
+      generated_image_url: "",
+      generatedImageUrl: "",
+      end_image_url: "",
+      endImageUrl: "",
+      end_image_preview_url: "",
+      endImagePreviewUrl: "",
+      startImageUrl: "",
+      startImagePreviewUrl: "",
+      imagePreviewUrl: "",
+      photo_deleted_at: Date.now(),
+      photoDeletedAt: Date.now(),
+      deleted_media_revision: Date.now(),
+      deletedMediaRevision: Date.now(),
       status: "draft",
-    }));
+    }), {
+      reason: "delete_scene_photo_user",
+      allowMaterialLoss: true,
+      explicitReset: true,
+    });
   };
 
   const onUploadImage = async (sceneId, file, slot = "main") => {
@@ -2100,6 +2197,13 @@ export default function ManualClipDirectorBoardEditor({
   async function pollManualSceneVideo(sceneId, jobId, attempt = 0) {
     const maxAttempts = 180;
     const delayMs = 5000;
+    const pollKey = `${sceneId}:${jobId}`;
+    const currentSceneBeforePoll = (Array.isArray(projectRef.current?.scenes) ? projectRef.current.scenes : []).find((scene) => scene.scene_id === sceneId);
+    const currentJobId = String(currentSceneBeforePoll?.video_job_id || currentSceneBeforePoll?.videoJobId || "").trim();
+    const currentStatus = String(currentSceneBeforePoll?.status || "").toLowerCase();
+    if (!currentSceneBeforePoll || currentJobId !== String(jobId || "").trim() || !["video_queued", "video_running"].includes(currentStatus) || resolveManualSceneFinalVideoUrl(currentSceneBeforePoll) || terminalVideoJobsRef.current.has(pollKey)) {
+      return;
+    }
     try {
       const statusOut = await getManualSceneVideoStatus(jobId);
       const status = String(statusOut?.status || "").toLowerCase();
@@ -2108,6 +2212,7 @@ export default function ManualClipDirectorBoardEditor({
 
       if (isDoneStatus && doneVideoUrl) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        terminalVideoJobsRef.current.add(pollKey);
         const videoHasAudio = resolveManualStatusVideoHasAudio(statusOut);
 
         updateScene(sceneId, (currentScene = {}) => ({
@@ -2138,6 +2243,7 @@ export default function ManualClipDirectorBoardEditor({
 
       if (isDoneStatus && !doneVideoUrl) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        terminalVideoJobsRef.current.add(pollKey);
         updateScene(sceneId, {
           status: "video_error",
           video_job_id: jobId,
@@ -2149,6 +2255,7 @@ export default function ManualClipDirectorBoardEditor({
 
       if (status === "error" || status === "stopped" || status === "not_found") {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        terminalVideoJobsRef.current.add(pollKey);
         updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: String(statusOut?.error || statusOut?.hint || "video_job_failed"), error: String(statusOut?.error || statusOut?.hint || "video_job_failed") });
         return;
       }
@@ -2159,6 +2266,7 @@ export default function ManualClipDirectorBoardEditor({
       }
       if (attempt >= maxAttempts) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        terminalVideoJobsRef.current.add(pollKey);
         updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: "video_poll_timeout", error: "video_poll_timeout" });
         return;
       }
@@ -2187,6 +2295,7 @@ export default function ManualClipDirectorBoardEditor({
         videoPollErrorCountRef.current.delete(key);
       }
 
+      terminalVideoJobsRef.current.add(pollKey);
       updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: String(err?.message || "video_poll_failed"), error: String(err?.message || "video_poll_failed") });
     }
   }

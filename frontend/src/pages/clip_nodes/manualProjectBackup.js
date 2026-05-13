@@ -42,6 +42,50 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "end_image_preview_url",
   "video_url",
   "videoUrl",
+  "generated_video_url",
+  "generatedVideoUrl",
+  "final_video_url",
+  "finalVideoUrl",
+  "result_video_url",
+  "resultVideoUrl",
+  "video_asset_url",
+  "videoAssetUrl",
+  "video_preview_url",
+  "videoPreviewUrl",
+  "mmaudio_video_url",
+  "mmaudioVideoUrl",
+  "mmaudio_raw_video_url",
+  "mmaudioRawVideoUrl",
+  "mmaudio_source_video_url",
+  "mmaudioSourceVideoUrl",
+  "original_video_before_mmaudio_url",
+  "originalVideoBeforeMMAudioUrl",
+  "mmaudio_status",
+  "mmaudioStatus",
+  "mmaudio_job_id",
+  "mmaudioJobId",
+  "mmaudio_error",
+  "mmaudioError",
+  "mmaudio_gain_status",
+  "mmaudioGainStatus",
+  "mmaudio_prompt",
+  "mmaudioPrompt",
+  "mmaudio_negative_prompt",
+  "mmaudioNegativePrompt",
+  "mmaudio_gain_db",
+  "generatedAudioPolicy",
+  "generated_audio_policy",
+  "generatedAudioGainDb",
+  "generated_audio_gain_db",
+  "video_has_audio",
+  "videoHasAudio",
+  "hasAudio",
+  "deleted_media_revision",
+  "deletedMediaRevision",
+  "video_deleted_at",
+  "videoDeletedAt",
+  "photo_deleted_at",
+  "photoDeletedAt",
   "audio_slice_url",
   "audio_slice_duration_sec",
   "status",
@@ -279,6 +323,61 @@ function normalizeAudioMetadata(project = {}) {
   };
 }
 
+
+function stableManualStringHash(value = "") {
+  const text = String(value || "");
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function computeManualProjectInputSignature(project = {}, options = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = normalizeAudioMetadata(safeProject);
+  const storyBlocks = Array.isArray(safeProject.story_blocks) ? safeProject.story_blocks : [];
+  const phrases = Array.isArray(safeProject.audio_phrases) ? safeProject.audio_phrases : [];
+  const markers = Array.isArray(safeProject.markers) ? safeProject.markers : [];
+  const scenes = Array.isArray(safeProject.scenes) ? safeProject.scenes : [];
+  const audioParts = [audio.url, audio.filename, Number(audio.duration_sec || 0).toFixed(3)].join("|");
+  const storyParts = JSON.stringify({
+    blocks: storyBlocks.map((block, index) => ({
+      id: block?.block_id || block?.id || block?.story_block_id || index,
+      text: block?.text || block?.translated_text_ru || block?.summary_ru || block?.title || "",
+    })),
+    phrases: phrases.map((phrase, index) => ({ id: phrase?.id || index, text: phrase?.text || phrase?.phrase || phrase?.translated_text_ru || "" })),
+    markers: markers.map((marker, index) => ({ id: marker?.id || index, start: marker?.start_sec, end: marker?.end_sec, text: marker?.text || "" })),
+    scenes: scenes.map((scene, index) => ({ id: scene?.scene_id || scene?.id || index, start: scene?.start_sec, end: scene?.end_sec, text: scene?.translated_text_ru || scene?.scene_goal_ru || "" })),
+  });
+  if (options?.audioOnly) return `audio:${stableManualStringHash(audioParts)}`;
+  if (options?.storyOnly) return `story:${stableManualStringHash(storyParts)}`;
+  return `input:${stableManualStringHash(`${audioParts}::${storyParts}`)}`;
+}
+
+function getManualProjectProjectId(project = {}) {
+  return String(project?.project_id || project?.projectId || "").trim();
+}
+
+export function getManualProjectInputSignature(project = {}) {
+  return String(project?.input_signature || project?.inputSignature || computeManualProjectInputSignature(project)).trim();
+}
+
+export function manualClipBoardProjectsShareIdentity(a = {}, b = {}) {
+  if (!hasMeaningfulManualProject(a) || !hasMeaningfulManualProject(b)) return true;
+  const ownerA = getManualProjectOwnerId(a);
+  const ownerB = getManualProjectOwnerId(b);
+  if (ownerA && ownerB && ownerA !== ownerB) return false;
+  const projectA = getManualProjectProjectId(a);
+  const projectB = getManualProjectProjectId(b);
+  if (projectA && projectB && projectA !== projectB) return false;
+  const signatureA = getManualProjectInputSignature(a);
+  const signatureB = getManualProjectInputSignature(b);
+  if (signatureA && signatureB && signatureA !== signatureB) return false;
+  return true;
+}
+
 export function buildManualProjectBackupJson(project = {}, { source = "manual_project" } = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audioMetadata = normalizeAudioMetadata(safeProject);
@@ -308,6 +407,17 @@ export function buildManualProjectBackupJson(project = {}, { source = "manual_pr
     scenes: compactArray(safeProject.scenes),
     selectedSceneId: String(safeProject.selectedSceneId || ""),
     timing_status: String(safeProject.timing_status || ""),
+    project_id: String(safeProject.project_id || safeProject.projectId || ""),
+    projectId: String(safeProject.projectId || safeProject.project_id || ""),
+    sourceNodeId: String(safeProject.sourceNodeId || safeProject.nodeId || ""),
+    ownerNodeId: String(safeProject.ownerNodeId || safeProject.sourceNodeId || safeProject.nodeId || ""),
+    input_signature: String(safeProject.input_signature || safeProject.inputSignature || computeManualProjectInputSignature(safeProject)),
+    audio_signature: String(safeProject.audio_signature || safeProject.audioSignature || computeManualProjectInputSignature(safeProject, { audioOnly: true })),
+    story_signature: String(safeProject.story_signature || safeProject.storySignature || computeManualProjectInputSignature(safeProject, { storyOnly: true })),
+    revision: Number(safeProject.revision || 0) || 0,
+    deletionRevision: Number(safeProject.deletionRevision || safeProject.deletion_revision || 0) || 0,
+    deletion_revision: Number(safeProject.deletion_revision || safeProject.deletionRevision || 0) || 0,
+    deleted_media_revision: Number(safeProject.deleted_media_revision || safeProject.deletedMediaRevision || 0) || 0,
     updatedAt,
   };
 }
@@ -353,7 +463,20 @@ export function getManualClipBoardMaterialStats(project = {}) {
     || hasText(scene?.start_image_preview_url)
     || hasText(scene?.end_image_preview_url)
   );
-  const sceneHasVideo = (scene = {}) => Boolean(hasText(scene?.video_url) || hasText(scene?.videoUrl));
+  const sceneHasVideo = (scene = {}) => Boolean(
+    hasText(scene?.video_url)
+    || hasText(scene?.videoUrl)
+    || hasText(scene?.generated_video_url)
+    || hasText(scene?.generatedVideoUrl)
+    || hasText(scene?.final_video_url)
+    || hasText(scene?.finalVideoUrl)
+    || hasText(scene?.result_video_url)
+    || hasText(scene?.resultVideoUrl)
+    || hasText(scene?.video_asset_url)
+    || hasText(scene?.videoAssetUrl)
+    || hasText(scene?.mmaudio_video_url)
+    || hasText(scene?.mmaudioVideoUrl)
+  );
   const sceneHasVideoPrompt = (scene = {}) => Boolean(
     hasText(scene?.video_prompt)
     || hasText(scene?.negative_prompt)
@@ -379,7 +502,7 @@ export function getManualClipBoardMaterialStats(project = {}) {
     || hasText(scene?.storyboard_frame_role_ru)
   );
   const sceneHasPrompt = (scene = {}) => sceneHasVideoPrompt(scene) || sceneHasPhotoPrompt(scene);
-  const sceneHasJob = (scene = {}) => hasText(scene?.video_job_id);
+  const sceneHasJob = (scene = {}) => hasText(scene?.video_job_id) || hasText(scene?.videoJobId) || hasText(scene?.mmaudio_job_id) || hasText(scene?.mmaudioJobId);
   const sceneHasReadyStatus = (scene = {}) => readyStatuses.has(String(scene?.status || "").trim());
   const sceneHasAudioSlice = (scene = {}) => Boolean(
     hasText(scene?.audio_slice_url)
@@ -397,7 +520,7 @@ export function getManualClipBoardMaterialStats(project = {}) {
     );
   };
   const sceneHasPayloadPreview = (scene = {}) => hasTruthyMaterial(scene?.video_request_payload_preview);
-  const sceneHasVideoAudioFlag = (scene = {}) => scene?.video_has_audio === true;
+  const sceneHasVideoAudioFlag = (scene = {}) => scene?.video_has_audio === true || scene?.videoHasAudio === true || scene?.hasAudio === true;
   const customRouteCount = scenes.filter((scene) => {
     const route = String(scene?.route || "").trim().toLowerCase();
     return route && route !== "i2v";
@@ -409,6 +532,7 @@ export function getManualClipBoardMaterialStats(project = {}) {
   const promptCount = scenes.filter(sceneHasPrompt).length;
   const audioSliceCount = scenes.filter(sceneHasAudioSlice).length;
   const jobCount = scenes.filter(sceneHasJob).length;
+  const mmaudioJobCount = scenes.filter((scene) => hasText(scene?.mmaudio_job_id) || hasText(scene?.mmaudioJobId)).length;
   const readyStatusCount = scenes.filter(sceneHasReadyStatus).length;
   const generatedAudioCount = scenes.filter(sceneHasGeneratedAudio).length;
   const payloadPreviewCount = scenes.filter(sceneHasPayloadPreview).length;
@@ -451,6 +575,7 @@ export function getManualClipBoardMaterialStats(project = {}) {
     audioSlices: audioSliceCount,
     videoJobs: jobCount,
     readyStatuses: readyStatusCount,
+    mmaudioJobs: mmaudioJobCount,
     generatedAudio: generatedAudioCount,
     payloadPreviews: payloadPreviewCount,
     videoHasAudio: videoAudioFlagCount,
@@ -466,6 +591,16 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
   if (options?.forceReplace || options?.explicitReset || options?.allowMaterialLoss || isIntentionalMaterialDelete) return false;
   const nextStats = getManualClipBoardMaterialStats(nextProject);
   const existingStats = getManualClipBoardMaterialStats(existingProject);
+  const sameIdentity = manualClipBoardProjectsShareIdentity(nextProject, existingProject);
+  if (!sameIdentity && hasMeaningfulManualProject(existingProject)) return true;
+  const nextRevision = Number(nextProject?.revision || 0) || 0;
+  const existingRevision = Number(existingProject?.revision || 0) || 0;
+  const nextDeletionRevision = Number(nextProject?.deletionRevision || nextProject?.deletion_revision || nextProject?.deleted_media_revision || 0) || 0;
+  const existingDeletionRevision = Number(existingProject?.deletionRevision || existingProject?.deletion_revision || existingProject?.deleted_media_revision || 0) || 0;
+  const nextUpdatedAt = Number(nextProject?.updatedAt || nextProject?.updated_at || 0) || 0;
+  const existingUpdatedAt = Number(existingProject?.updatedAt || existingProject?.updated_at || 0) || 0;
+  if (existingDeletionRevision > nextDeletionRevision && !isIntentionalMaterialDelete) return true;
+  if (existingRevision > nextRevision && existingUpdatedAt > nextUpdatedAt && !isIntentionalMaterialDelete) return true;
   if (existingStats.materialTotal <= 0) return false;
   return nextStats.materialScore < existingStats.materialScore
     || nextStats.materialTotal < existingStats.materialTotal
@@ -488,6 +623,9 @@ export function scoreManualClipBoardProject(project = {}) {
     updatedAt,
     score:
       stats.materialScore
+      + stats.mmaudioJobs * 5000
+      + (Number(project?.deletionRevision || project?.deletion_revision || project?.deleted_media_revision || project?.deletedMediaRevision || 0) || 0) * 0.001
+      + (Number(project?.revision || 0) || 0) * 0.0001
       + stats.customRoutes * 50
       + stats.scenes
       + Math.min(updatedAt / 1000000000000, 10),
@@ -521,6 +659,9 @@ export function pickBestManualClipBoardProject(candidates = []) {
       }
       if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
         return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
+      }
+      if (b.scoreData.stats.mmaudioJobs !== a.scoreData.stats.mmaudioJobs) {
+        return b.scoreData.stats.mmaudioJobs - a.scoreData.stats.mmaudioJobs;
       }
       if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
         return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
@@ -706,7 +847,8 @@ export function readActiveManualClipBoardProject() {
     } catch {}
   }
 
-  candidates.push(...readScopedManualClipBoardProjectCandidates());
+  // Do not scan every node-scoped board as an active candidate: a richer old project
+  // from another source can otherwise resurrect media into a new board.
 
   const best = pickBestManualClipBoardProject(candidates);
   if (!best) return null;
@@ -822,7 +964,9 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     && hasMeaningfulManualProject(activeExistingRaw)
     && !manualProjectBelongsToNode(activeExistingRaw, nodeId)
   );
-  const activeExisting = nodeId && manualProjectBelongsToNode(activeExistingRaw, nodeId)
+  const activeExisting = nodeId
+    && manualProjectBelongsToNode(activeExistingRaw, nodeId)
+    && manualClipBoardProjectsShareIdentity(safeProject, activeExistingRaw)
     ? activeExistingRaw
     : null;
   const existing = nodeId
@@ -830,6 +974,18 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     : pickBestManualClipBoardProject([nodeScopedExisting, activeExistingRaw]);
   const existingStats = getManualClipBoardMaterialStats(existing);
   const nextStats = getManualClipBoardMaterialStats(safeProject);
+
+  if (hasMeaningfulManualProject(existing) && !manualClipBoardProjectsShareIdentity(safeProject, existing) && !forceReplace && !explicitReset) {
+    console.warn("[MANUAL BOARD PERSIST PROTECT] skipped identity mismatch", {
+      nodeId,
+      existingOwner: getManualProjectOwnerId(existing),
+      incomingOwner: getManualProjectOwnerId(safeProject),
+      existingSignature: getManualProjectInputSignature(existing),
+      incomingSignature: getManualProjectInputSignature(safeProject),
+      reason: reason || "manual_board_identity_mismatch",
+    });
+    return false;
+  }
 
   if (shouldSkipManualBoardPersistToProtectMaterials(safeProject, existing, options)) {
     console.warn("[MANUAL BOARD PERSIST PROTECT] skipped overwrite", {
