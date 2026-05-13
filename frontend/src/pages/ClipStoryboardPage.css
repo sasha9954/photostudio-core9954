@@ -5800,5 +5800,5 @@ body.ps_clip_fullscreen .mainCol {
   inset: 0;
   z-index: 3000;
   background: #050712;
-  overflow: auto;
+  overflow: hidden;
 }

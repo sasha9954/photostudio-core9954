@@ -24,6 +24,7 @@ import {
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
   unwrapManualProjectBackupJson,
+  writeManualClipBoardOpenState,
 } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualClipDirectorPage.css";
 
@@ -966,16 +967,38 @@ export default function ManualClipDirectorBoardEditor({
       return false;
     }
     const safeProject = normalizeDirectorProjectOwner(candidateProject);
+    const persistReason = options?.reason || safeProject.lastPersistReason || "manual_director_persist";
+    const persistOptions = { ...(options || {}), reason: persistReason, embedded };
+
     if (embedded && typeof onProjectChange === "function") {
-      onProjectChange(
-        safeProject,
-        options?.reason || safeProject.lastPersistReason || "manual_director_embedded_update",
-        options
-      );
+      const persisted = persistManualProject(safeProject, persistOptions);
+      dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
+      writeManualClipBoardOpenState({
+        isOpen: true,
+        sourceNodeId: ownerNodeId,
+        selectedSceneId: safeProject.selectedSceneId || selectedSceneIdRef.current || "",
+        project_id: safeProject.project_id || safeProject.projectId || "",
+        input_signature: safeProject.input_signature || safeProject.inputSignature || "",
+        routePath: "/studio/storyboard",
+        updatedAt: Date.now(),
+      });
+      console.info("[MANUAL BOARD PERSIST WRITE]", {
+        reason: persistReason,
+        sourceNodeId: ownerNodeId,
+        project_id: safeProject.project_id || safeProject.projectId || "",
+        input_signature: safeProject.input_signature || safeProject.inputSignature || "",
+        revision: safeProject.revision || 0,
+        deletionRevision: safeProject.deletionRevision || safeProject.deletion_revision || safeProject.deleted_media_revision || 0,
+        updatedAt: safeProject.updatedAt,
+        stats: getManualClipBoardMaterialStats(safeProject),
+        embedded: true,
+        directLocalPersisted: persisted,
+      });
+      onProjectChange(safeProject, persistReason, persistOptions);
       return true;
     }
 
-    let persisted = persistManualProject(safeProject, options);
+    let persisted = persistManualProject(safeProject, persistOptions);
     let readback = ownerNodeId ? readManualClipBoardProjectForNode(ownerNodeId) : null;
     let readbackOk = hasMeaningfulManualProject(readback)
       && getManualProjectOwnerId(readback) === ownerNodeId;
@@ -1034,7 +1057,8 @@ export default function ManualClipDirectorBoardEditor({
           aspect_ratio: normalizeProjectAspectFormat(normalizedScene.aspect_ratio) || normalizeProjectAspectFormat(normalizedScene.format) || projectFormat,
         };
       }) : [];
-      const selectedSceneIdForHydrate = String(parsed?.selectedSceneId || scenes[0]?.scene_id || "");
+      const parsedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
+      const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId) ? parsedSelectedSceneId : String(scenes[0]?.scene_id || "");
       const hydratedProject = normalizeDirectorProjectOwner({
         ...parsed,
         format: projectFormat,
@@ -1708,6 +1732,27 @@ export default function ManualClipDirectorBoardEditor({
       .filter(Boolean);
   }, [selectedScene?.user_note_ru]);
 
+  const selectSceneByUser = (sceneId) => {
+    const safeSceneId = String(sceneId || "").trim();
+    const baseProject = projectRef.current || project || {};
+    const sceneExists = Array.isArray(baseProject.scenes) && baseProject.scenes.some((scene) => scene.scene_id === safeSceneId);
+    if (!safeSceneId || !sceneExists) return;
+    selectedSceneIdRef.current = safeSceneId;
+    setSelectedSceneId(safeSceneId);
+    const nextProject = normalizeDirectorProjectOwner({
+      ...baseProject,
+      selectedSceneId: safeSceneId,
+      updatedAt: Date.now(),
+      revision: (Number(baseProject.revision || 0) || 0) + 1,
+      lastPersistReason: "selected_scene_user",
+    });
+    projectRef.current = nextProject;
+    setProject(nextProject);
+    if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
+      persistAndBroadcastDirectorProject(nextProject, { reason: "selected_scene_user" });
+    }
+  };
+
   useEffect(() => {
     setIsUserNoteEditorOpen(false);
   }, [selectedSceneId]);
@@ -1723,10 +1768,18 @@ export default function ManualClipDirectorBoardEditor({
     const persistReason = options?.reason || "update_scene";
     const isDeletionUpdate = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/i.test(persistReason);
     const now = Date.now();
+    const refSelectedSceneId = String(selectedSceneIdRef.current || "").trim();
+    const baseSelectedSceneId = String(baseProject.selectedSceneId || "").trim();
+    const nextSelectedSceneId = prevScenes.some((scene) => scene.scene_id === refSelectedSceneId)
+      ? refSelectedSceneId
+      : (prevScenes.some((scene) => scene.scene_id === baseSelectedSceneId) ? baseSelectedSceneId : String(prevScenes[0]?.scene_id || ""));
+    if (/job|poll|video_done|video_queued|video_running|mmaudio/i.test(persistReason) && nextSelectedSceneId !== sceneId) {
+      console.info("[MANUAL BOARD BLOCK AUTO SELECT FROM JOB]", { reason: persistReason, sceneId, selectedSceneId: nextSelectedSceneId });
+    }
     const nextProject = normalizeDirectorProjectOwner({
       ...baseProject,
       scenes: nextScenes,
-      selectedSceneId: selectedSceneIdRef.current || baseProject.selectedSceneId || sceneId,
+      selectedSceneId: nextSelectedSceneId,
       updatedAt: now,
       revision: (Number(baseProject.revision || 0) || 0) + 1,
       deletionRevision: isDeletionUpdate ? Math.max(Number(baseProject.deletionRevision || baseProject.deletion_revision || 0) || 0, now) : (Number(baseProject.deletionRevision || baseProject.deletion_revision || 0) || 0),
@@ -1904,37 +1957,76 @@ export default function ManualClipDirectorBoardEditor({
     );
   };
 
+  const clearStartFramePatch = (scene = {}) => ({
+    ...clearVideoPatch(scene),
+    image_url: "",
+    imageUrl: "",
+    start_image_url: "",
+    startImageUrl: "",
+    image_preview_url: "",
+    imagePreviewUrl: "",
+    start_image_preview_url: "",
+    startImagePreviewUrl: "",
+    generated_image_url: "",
+    generatedImageUrl: "",
+    image_width: 0,
+    image_height: 0,
+    image_aspect_ratio: 0,
+    image_aspect_label: "",
+    image_upload_status: "",
+    image_upload_error: "",
+    ...clearManualStalePromptFields(),
+    photo_deleted_at: Date.now(),
+    photoDeletedAt: Date.now(),
+    deleted_media_revision: Date.now(),
+    deletedMediaRevision: Date.now(),
+    status: "draft",
+  });
+
+  const clearEndFramePatch = (scene = {}) => ({
+    ...clearVideoPatch(scene),
+    end_image_url: "",
+    endImageUrl: "",
+    end_image_preview_url: "",
+    endImagePreviewUrl: "",
+    image_upload_status: "",
+    image_upload_error: "",
+    photo_deleted_at: Date.now(),
+    photoDeletedAt: Date.now(),
+    deleted_media_revision: Date.now(),
+    deletedMediaRevision: Date.now(),
+    status: "draft",
+  });
+
+  const onDeleteFirstLastStartImage = (scene) => {
+    if (!scene?.scene_id) return;
+    if (scene.video_url && !window.confirm("Удаление первого кадра также удалит видео этой сцены. Продолжить?")) return;
+    updateScene(scene.scene_id, (currentScene = {}) => clearStartFramePatch(currentScene), {
+      reason: "delete_first_last_start_image_user",
+      allowMaterialLoss: true,
+      explicitReset: true,
+    });
+  };
+
+  const onDeleteFirstLastEndImage = (scene) => {
+    if (!scene?.scene_id) return;
+    if (scene.video_url && !window.confirm("Удаление последнего кадра также удалит видео этой сцены. Продолжить?")) return;
+    updateScene(scene.scene_id, (currentScene = {}) => clearEndFramePatch(currentScene), {
+      reason: "delete_first_last_end_image_user",
+      allowMaterialLoss: true,
+      explicitReset: true,
+    });
+  };
+
   const onDeleteScenePhoto = (scene) => {
     if (!scene?.scene_id) return;
     if (scene.video_url && !window.confirm("Удаление фото также удалит видео этой сцены. Продолжить?")) return;
     updateScene(scene.scene_id, (currentScene = {}) => ({
-      ...clearVideoPatch(currentScene),
-      image_url: "",
-      imageUrl: "",
-      start_image_url: "",
-      image_preview_url: "",
-      start_image_preview_url: "",
-      image_width: 0,
-      image_height: 0,
-      image_aspect_ratio: 0,
-      image_aspect_label: "",
-      image_upload_status: "",
-      image_upload_error: "",
-      ...clearManualStalePromptFields(),
-      generated_image_url: "",
-      generatedImageUrl: "",
+      ...clearStartFramePatch(currentScene),
       end_image_url: "",
       endImageUrl: "",
       end_image_preview_url: "",
       endImagePreviewUrl: "",
-      startImageUrl: "",
-      startImagePreviewUrl: "",
-      imagePreviewUrl: "",
-      photo_deleted_at: Date.now(),
-      photoDeletedAt: Date.now(),
-      deleted_media_revision: Date.now(),
-      deletedMediaRevision: Date.now(),
-      status: "draft",
     }), {
       reason: "delete_scene_photo_user",
       allowMaterialLoss: true,
@@ -2515,7 +2607,7 @@ export default function ManualClipDirectorBoardEditor({
           type="button"
           className={`storyboardBlockChip ${isActive ? "storyboardBlockChipActive" : ""}`}
           style={{ "--storyboard-block-color": block.color || "#8aa4ff" }}
-          onClick={() => firstScene ? setSelectedSceneId(firstScene.scene_id) : undefined}
+          onClick={() => firstScene ? selectSceneByUser(firstScene.scene_id) : undefined}
           disabled={!firstScene}
         >
           {block.title_ru || blockId} · {blockSceneCounts.get(blockId) || 0}
@@ -2563,7 +2655,7 @@ export default function ManualClipDirectorBoardEditor({
             key={scene.scene_id}
             className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}
             style={scene.story_block_color ? { "--storyboard-block-color": scene.story_block_color } : undefined}
-            onClick={() => setSelectedSceneId(scene.scene_id)}
+            onClick={() => selectSceneByUser(scene.scene_id)}
           >
             <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
             {(sceneBlockNumber || sceneBlockTitle) ? <span className="manualStoryBlockBadges">
@@ -2833,8 +2925,8 @@ export default function ManualClipDirectorBoardEditor({
           </>
         )}
         {isFirstLastRoute(selectedScene.route) && !selectedMMAudioSourceVideoUrl ? <div className="manualRepairActions">
-          <label className="clipSB_btn manualUploadBtn">Заменить фото<input type="file" accept="image/*" hidden onChange={(e) => onUploadImage(selectedScene.scene_id, e.target.files?.[0], "main")} /></label>
-          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteScenePhoto(selectedScene)} disabled={!selectedScene.image_url && !selectedScene.image_preview_url && !selectedScene.start_image_url && !selectedScene.start_image_preview_url}>Удалить фото</button>
+          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteFirstLastStartImage(selectedScene)} disabled={!selectedScene.image_url && !selectedScene.image_preview_url && !selectedScene.start_image_url && !selectedScene.start_image_preview_url}>Удалить первый кадр</button>
+          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteFirstLastEndImage(selectedScene)} disabled={!selectedScene.end_image_url && !selectedScene.end_image_preview_url}>Удалить последний кадр</button>
           <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={() => onDeleteSceneVideo(selectedScene)} disabled={!selectedMMAudioSourceVideoUrl}>Удалить видео</button>
           <button type="button" className="manualMMAButton" title={selectedMMAudioSourceVideoUrl ? "Дозвучить видео через MMAudio" : "Сначала сгенерируй или загрузи видео"} disabled={!selectedMMAudioSourceVideoUrl || ["queued", "running"].includes(String(selectedScene.mmaudio_status || "").toLowerCase())} onClick={() => openMMAudioModal(selectedScene)}>🪄 MMA</button>
         </div> : null}

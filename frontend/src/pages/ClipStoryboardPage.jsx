@@ -41,6 +41,10 @@ import {
   persistManualClipBoardProject,
   readManualClipBoardProjectForNode,
   scoreManualClipBoardProject,
+  getManualClipBoardMaterialStats,
+  readManualClipBoardOpenState,
+  writeManualClipBoardOpenState,
+  clearManualClipBoardOpenState,
 } from "./clip_nodes/manualProjectBackup.js";
 import {
   normalizeRenderProfile,
@@ -11149,6 +11153,7 @@ export default function ClipStoryboardPage() {
   const comfyVideoJobsBySceneRef = useRef(new Map());
   const comfyPromptSyncTimersRef = useRef(new Map());
   const comfyPromptSyncInFlightRef = useRef(new Map());
+  const manualDirectorOpenRestoreAttemptedRef = useRef(false);
   const renderTraceSnapshotRef = useRef(null);
   const renderTraceLastLogRef = useRef({ ts: 0, signature: "" });
   const bindHandlersTraceRef = useRef({ ts: 0, changed: null });
@@ -11160,13 +11165,25 @@ export default function ClipStoryboardPage() {
   });
 
   const openManualTimingDirectorBoard = useCallback((sourceNodeId) => {
+    const safeSourceNodeId = String(sourceNodeId || "").trim();
+    const project = readManualClipBoardProjectForNode(safeSourceNodeId) || null;
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: safeSourceNodeId,
+      selectedSceneId: String(project?.selectedSceneId || project?.scenes?.[0]?.scene_id || "").trim(),
+      project_id: String(project?.project_id || project?.projectId || "").trim(),
+      input_signature: String(project?.input_signature || project?.inputSignature || "").trim(),
+      routePath: "/studio/storyboard",
+      updatedAt: Date.now(),
+    });
     setManualDirectorEditor({
       open: true,
-      sourceNodeId: String(sourceNodeId || ""),
+      sourceNodeId: safeSourceNodeId,
     });
   }, []);
 
   const closeManualTimingDirectorBoard = useCallback(() => {
+    clearManualClipBoardOpenState({ routePath: "/studio/storyboard" });
     setManualDirectorEditor({ open: false, sourceNodeId: "" });
   }, []);
 
@@ -11180,6 +11197,51 @@ export default function ClipStoryboardPage() {
       window.removeEventListener("storage", refresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (manualDirectorOpenRestoreAttemptedRef.current) return;
+    if (typeof window === "undefined" || window.location.pathname !== "/studio/storyboard") return;
+    const openState = readManualClipBoardOpenState();
+    if (!openState?.isOpen || String(openState.routePath || "") !== "/studio/storyboard") {
+      console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "closed_or_wrong_route", openState });
+      manualDirectorOpenRestoreAttemptedRef.current = true;
+      return;
+    }
+    const sourceNodeId = String(openState.sourceNodeId || "").trim();
+    const sourceNode = nodes.find((node) => node.id === sourceNodeId && node.type === "manualTiming");
+    const nodeBoard = sourceNode?.data?.director_board || null;
+    const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
+    const board = pickBestManualClipBoardProject([nodeBoard, storedBoard]) || nodeBoard || storedBoard;
+    const stateProjectId = String(openState.project_id || openState.projectId || "").trim();
+    const stateSignature = String(openState.input_signature || openState.inputSignature || "").trim();
+    const boardProjectId = String(board?.project_id || board?.projectId || "").trim();
+    const boardSignature = String(board?.input_signature || board?.inputSignature || "").trim();
+    const identityMatches = (!stateProjectId || !boardProjectId || stateProjectId === boardProjectId)
+      && (!stateSignature || !boardSignature || stateSignature === boardSignature);
+
+    if (!sourceNodeId || !sourceNode || !hasMeaningfulManualProject(board) || !identityMatches) {
+      console.info("[MANUAL BOARD SKIP OPEN STATE]", {
+        reason: !sourceNodeId ? "missing_source" : (!sourceNode ? "source_node_missing" : (!hasMeaningfulManualProject(board) ? "board_missing" : "identity_mismatch")),
+        sourceNodeId,
+        stateProjectId,
+        boardProjectId,
+        stateSignature,
+        boardSignature,
+      });
+      manualDirectorOpenRestoreAttemptedRef.current = Boolean(!sourceNodeId || (nodes.length && sourceNode));
+      return;
+    }
+
+    manualDirectorOpenRestoreAttemptedRef.current = true;
+    console.info("[MANUAL BOARD RESTORE OPEN STATE]", {
+      sourceNodeId,
+      selectedSceneId: openState.selectedSceneId,
+      project_id: boardProjectId,
+      input_signature: boardSignature,
+      updatedAt: openState.updatedAt,
+    });
+    setManualDirectorEditor({ open: true, sourceNodeId });
+  }, [nodes]);
 
 
   useEffect(() => {
@@ -25530,6 +25592,17 @@ return base;
       const project = event?.detail?.project;
       if (!sourceNodeId || !project) return;
       setActiveManualBoardProject(project);
+      if (manualDirectorEditor.open && sourceNodeId === String(manualDirectorEditor.sourceNodeId || "").trim()) {
+        writeManualClipBoardOpenState({
+          isOpen: true,
+          sourceNodeId,
+          selectedSceneId: String(project?.selectedSceneId || "").trim(),
+          project_id: String(project?.project_id || project?.projectId || "").trim(),
+          input_signature: String(project?.input_signature || project?.inputSignature || "").trim(),
+          routePath: "/studio/storyboard",
+          updatedAt: Date.now(),
+        });
+      }
       setNodes((prev) => bindHandlers(prev.map((nodeItem) => {
         if (nodeItem.id !== sourceNodeId || nodeItem.type !== "manualTiming") return nodeItem;
         return {
@@ -25554,7 +25627,7 @@ return base;
     };
     window.addEventListener("manual-director-board:update", onManualDirectorBoardUpdate);
     return () => window.removeEventListener("manual-director-board:update", onManualDirectorBoardUpdate);
-  }, [bindHandlers, setNodes]);
+  }, [bindHandlers, setNodes, manualDirectorEditor.open, manualDirectorEditor.sourceNodeId]);
 
   const manualDirectorSourceNode = useMemo(() => (
     nodes.find((node) => node.id === manualDirectorEditor.sourceNodeId && node.type === "manualTiming") || null
@@ -25604,19 +25677,43 @@ return base;
     const safeSourceNodeId = String(sourceNodeId || "").trim();
     if (!safeSourceNodeId || !nextProject) return;
 
+    const now = Date.now();
     const safeProject = {
       ...nextProject,
       source: "manual_timing_node",
       ownerNodeType: "manualTiming",
       nodeId: safeSourceNodeId,
       sourceNodeId: safeSourceNodeId,
-      updatedAt: Date.now(),
+      updatedAt: now,
+      revision: Number(nextProject?.revision || 0) || 1,
       lastPersistReason: reason,
     };
 
     const persisted = persistManualClipBoardProject(safeProject, {
       ...(persistOptions || {}),
       reason,
+      embedded: true,
+    });
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: safeSourceNodeId,
+      selectedSceneId: String(safeProject?.selectedSceneId || "").trim(),
+      project_id: String(safeProject?.project_id || safeProject?.projectId || "").trim(),
+      input_signature: String(safeProject?.input_signature || safeProject?.inputSignature || "").trim(),
+      routePath: "/studio/storyboard",
+      updatedAt: Date.now(),
+    });
+    console.info("[MANUAL BOARD PERSIST WRITE]", {
+      reason,
+      sourceNodeId: safeSourceNodeId,
+      project_id: safeProject?.project_id || safeProject?.projectId || "",
+      input_signature: safeProject?.input_signature || safeProject?.inputSignature || "",
+      revision: safeProject?.revision || 0,
+      deletionRevision: safeProject?.deletionRevision || safeProject?.deletion_revision || safeProject?.deleted_media_revision || 0,
+      updatedAt: safeProject?.updatedAt,
+      stats: getManualClipBoardMaterialStats(safeProject),
+      embedded: true,
+      persisted,
     });
     const protectedProject = persisted
       ? safeProject
