@@ -1933,12 +1933,17 @@ export default function ManualTimingEditorPage() {
       reason: "manual_new_project_from_audio_split",
       routePath: STORYBOARD_ROUTE,
     }) || projectSnapshot;
+    const replacedProjectId = String(replacedProject?.project_id || replacedProject?.projectId || "").trim();
+    const replacedInputSignature = String(replacedProject?.input_signature || replacedProject?.inputSignature || "").trim();
     writeManualClipBoardOpenState({
       isOpen: true,
       sourceNodeId: ownerNodeId,
       selectedSceneId: String(replacedProject?.selectedSceneId || replacedProject?.scenes?.[0]?.scene_id || "").trim(),
-      project_id: String(replacedProject?.project_id || replacedProject?.projectId || "").trim(),
-      input_signature: String(replacedProject?.input_signature || replacedProject?.inputSignature || "").trim(),
+      project_id: replacedProjectId,
+      input_signature: replacedInputSignature,
+      manualBoardExplicitNewProject: true,
+      forceProjectId: replacedProjectId,
+      forceInputSignature: replacedInputSignature,
       routePath: STORYBOARD_ROUTE,
       updatedAt: Date.now(),
     });
@@ -1949,7 +1954,15 @@ export default function ManualTimingEditorPage() {
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
     navigate(STORYBOARD_ROUTE, {
-      state: { openManualDirectorBoard: true, sourceNodeId: ownerNodeId, director_board: replacedProject, project: replacedProject },
+      state: {
+        openManualDirectorBoard: true,
+        manualBoardExplicitNewProject: true,
+        manualBoardForceProjectId: replacedProjectId,
+        manualBoardForceInputSignature: replacedInputSignature,
+        sourceNodeId: ownerNodeId,
+        director_board: replacedProject,
+        project: replacedProject,
+      },
     });
   };
 
