@@ -618,6 +618,19 @@ export function getManualClipBoardMaterialStats(project = {}) {
   };
 }
 
+
+export function hasManualBoardMaterials(project = {}) {
+  const stats = getManualClipBoardMaterialStats(project);
+  return Boolean(
+    (Number(stats.images || stats.imageCount || 0) || 0) > 0
+    || (Number(stats.videos || stats.videoCount || 0) || 0) > 0
+    || (Number(stats.prompts || stats.promptCount || 0) || 0) > 0
+    || (Number(stats.videoJobs || 0) || 0) > 0
+    || (Number(stats.mmaudioJobs || 0) || 0) > 0
+    || (Number(stats.materialTotal || 0) || 0) > 0
+  );
+}
+
 const MANUAL_BOARD_REAL_USER_MATERIAL_UPDATE_REASONS = new Set([
   "selected_scene_user",
   "delete_scene_video_user",
@@ -1122,6 +1135,107 @@ export function clearManualClipBoardProjectForNode(nodeId = "", options = {}) {
 
     return true;
   } catch {
+    return false;
+  }
+}
+
+export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {}, options = {}) {
+  const safeNodeId = String(nodeId || newProject?.nodeId || newProject?.sourceNodeId || "").trim();
+  const reason = String(options?.reason || newProject?.lastPersistReason || "manual_new_project_from_audio_split");
+  if (!safeNodeId) {
+    console.error("[MANUAL BOARD NEW PROJECT REPLACE] missing nodeId", {
+      reason,
+      projectOwner: getManualProjectOwnerId(newProject),
+      stats: getManualClipBoardMaterialStats(newProject),
+    });
+    return false;
+  }
+
+  const firstSceneId = Array.isArray(newProject?.scenes)
+    ? String(newProject.scenes[0]?.scene_id || newProject.scenes[0]?.id || "").trim()
+    : "";
+  const previousNodeProject = readManualClipBoardProjectForNode(safeNodeId);
+  const previousRevision = getManualClipBoardRevision(previousNodeProject);
+  const previousDeletionRevision = getManualClipBoardDeletionRevision(previousNodeProject);
+  const nextRevision = Math.max(1, Number(newProject?.revision || 0) || 0, previousRevision + 1);
+  const nextDeletionRevision = Math.max(
+    Number(newProject?.deletionRevision || newProject?.deletion_revision || newProject?.deleted_media_revision || 0) || 0,
+    previousDeletionRevision + 1,
+    nextRevision,
+  );
+  const safeProject = {
+    ...(newProject || {}),
+    nodeId: safeNodeId,
+    sourceNodeId: safeNodeId,
+    selectedSceneId: firstSceneId,
+    revision: nextRevision,
+    project_revision: nextRevision,
+    projectRevision: nextRevision,
+    deletionRevision: nextDeletionRevision,
+    deletion_revision: nextDeletionRevision,
+    deleted_media_revision: nextDeletionRevision,
+    deletedMediaRevision: nextDeletionRevision,
+    updatedAt: Date.now(),
+    lastPersistReason: reason,
+  };
+  const storageProject = sanitizeManualClipBoardProjectForStorage(safeProject);
+  const serialized = JSON.stringify(storageProject);
+  const canonicalKey = getManualClipBoardCanonicalStorageKey();
+  const activeKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY);
+  const activeIdKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY);
+  const nodeScopedKey = getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(safeNodeId));
+
+  try {
+    clearManualClipBoardProjectForNode(safeNodeId, { clearActive: true, clearCanonical: true });
+    localStorage.setItem(canonicalKey, serialized);
+    localStorage.setItem(activeKey, serialized);
+    localStorage.setItem(activeIdKey, safeNodeId);
+    localStorage.setItem(nodeScopedKey, serialized);
+
+    if (canUseLegacyManualProjectStorage()) {
+      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
+      localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, safeNodeId);
+      localStorage.setItem(getManualClipBoardProjectStorageKey(safeNodeId), serialized);
+    }
+
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: safeNodeId,
+      selectedSceneId: storageProject.selectedSceneId || "",
+      project_id: String(storageProject.project_id || storageProject.projectId || "").trim(),
+      input_signature: String(storageProject.input_signature || storageProject.inputSignature || "").trim(),
+      routePath: options?.routePath || "/studio/storyboard",
+      updatedAt: Date.now(),
+    });
+    rememberManualClipBoardStorageError(null);
+    console.info("[MANUAL BOARD NEW PROJECT REPLACE]", {
+      nodeId: safeNodeId,
+      reason,
+      forceReplace: options?.forceReplace !== false,
+      explicitReset: options?.explicitReset !== false,
+      allowMaterialLoss: options?.allowMaterialLoss !== false,
+      project_id: storageProject.project_id || storageProject.projectId || "",
+      input_signature: storageProject.input_signature || storageProject.inputSignature || "",
+      audio_signature: storageProject.audio_signature || storageProject.audioSignature || "",
+      story_signature: storageProject.story_signature || storageProject.storySignature || "",
+      revision: storageProject.revision || 0,
+      deletionRevision: storageProject.deletionRevision || storageProject.deletion_revision || storageProject.deleted_media_revision || 0,
+      selectedSceneId: storageProject.selectedSceneId || "",
+      stats: getManualClipBoardMaterialStats(storageProject),
+    });
+    return storageProject;
+  } catch (err) {
+    const errorInfo = {
+      reason: isQuotaExceededError(err) ? "quota_exceeded" : "replace_failed",
+      errorName: err?.name,
+      errorMessage: err?.message,
+      errorCode: err?.code,
+      serializedLength: serialized.length,
+      serializedKb: Math.round(serialized.length / 1024),
+      nodeId: safeNodeId,
+    };
+    rememberManualClipBoardStorageError(errorInfo);
+    console.error("[MANUAL BOARD NEW PROJECT REPLACE] failed", errorInfo);
     return false;
   }
 }

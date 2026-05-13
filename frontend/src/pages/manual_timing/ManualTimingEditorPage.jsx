@@ -4,14 +4,16 @@ import { API_BASE } from "../../services/api";
 import {
   buildManualProjectBackupJson,
   canUseLegacyManualProjectStorage,
+  computeManualProjectInputSignature,
   clearManualClipBoardProjectForNode,
   getAccountScopedStorageKey,
+  hasManualBoardMaterials,
   hasMeaningfulManualProject,
-  persistManualClipBoardProject,
   readActiveManualClipBoardProject,
   readManualClipBoardProjectForNode,
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
+  replaceManualClipBoardProjectForNode,
   unwrapManualProjectBackupJson,
 } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualTimingEditorPage.css";
@@ -276,6 +278,36 @@ function getManualTimingBoardForOwner(ownerNodeId = "") {
   if (hasMeaningfulManualProject(nodeBoard)) return nodeBoard;
   const activeBoard = readActiveManualClipBoardProject();
   return getManualProjectOwnerId(activeBoard) === safeOwnerNodeId ? activeBoard : null;
+}
+
+function getManualBoardIdentityParts(project = {}) {
+  return {
+    projectId: String(project?.project_id || project?.projectId || "").trim(),
+    inputSignature: String(project?.input_signature || project?.inputSignature || "").trim(),
+    audioSignature: String(project?.audio_signature || project?.audioSignature || "").trim(),
+    storySignature: String(project?.story_signature || project?.storySignature || "").trim(),
+  };
+}
+
+function manualBoardIdentityChanged(oldBoard = {}, newBoard = {}) {
+  if (!hasMeaningfulManualProject(oldBoard) || !hasMeaningfulManualProject(newBoard)) return false;
+  const oldIdentity = getManualBoardIdentityParts(oldBoard);
+  const newIdentity = getManualBoardIdentityParts(newBoard);
+  return ["projectId", "inputSignature", "audioSignature", "storySignature"].some((key) => (
+    oldIdentity[key] && newIdentity[key] && oldIdentity[key] !== newIdentity[key]
+  ));
+}
+
+function downloadManualBoardBackupJson(project = {}, filename = "manual_clip_board_backup.json") {
+  const blob = new Blob([JSON.stringify(buildManualProjectBackupJson(project, { source: "manual_timing_editor_new_project_replace" }), null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function dispatchManualTimingDirectorBoardUpdate(project = {}) {
@@ -730,6 +762,8 @@ export default function ManualTimingEditorPage() {
   const [audioUploadStatus, setAudioUploadStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
   const [activeBoardProject, setActiveBoardProject] = useState(() => getManualTimingBoardForOwner(getManualTimingOwnerNodeId(buildInitialProject())));
+  const [newBoardConfirm, setNewBoardConfirm] = useState(null);
+  const newBoardConfirmResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
@@ -1704,6 +1738,27 @@ export default function ManualTimingEditorPage() {
   };
 
 
+  const requestNewBoardReplaceConfirmation = ({ existingBoard, newBoard }) => new Promise((resolve) => {
+    if (!hasMeaningfulManualProject(existingBoard) || !hasManualBoardMaterials(existingBoard) || !manualBoardIdentityChanged(existingBoard, newBoard)) {
+      resolve("create");
+      return;
+    }
+    newBoardConfirmResolverRef.current = resolve;
+    setNewBoardConfirm({
+      existingBoard,
+      newBoard,
+      oldIdentity: getManualBoardIdentityParts(existingBoard),
+      newIdentity: getManualBoardIdentityParts(newBoard),
+    });
+  });
+
+  const resolveNewBoardReplaceConfirmation = (choice) => {
+    const resolver = newBoardConfirmResolverRef.current;
+    newBoardConfirmResolverRef.current = null;
+    setNewBoardConfirm(null);
+    if (typeof resolver === "function") resolver(choice);
+  };
+
   const buildDirectorProjectSnapshot = () => {
     const sourceNodeId = getManualTimingOwnerNodeId(project);
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
@@ -1764,8 +1819,6 @@ export default function ManualTimingEditorPage() {
     const ownerNodeId = getManualTimingOwnerNodeId(project);
     const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
-    const confirmed = window.confirm("Это заменит активную режиссёрскую доску. Сначала скачайте backup. Продолжить?");
-    if (!confirmed) return;
 
     let projectSnapshot = {
       ...buildDirectorProjectSnapshot(),
@@ -1773,9 +1826,45 @@ export default function ManualTimingEditorPage() {
       sourceNodeId: ownerNodeId,
       ownerNodeType: "manualTiming",
       source: "manual_timing_node",
+      selectedSceneId: scenes[0]?.scene_id || "",
       updatedAt: Date.now(),
-      lastPersistReason: "create_new_director_board_from_timing",
+      lastPersistReason: "manual_new_project_from_audio_split",
     };
+    const inputSignature = computeManualProjectInputSignature(projectSnapshot);
+    const audioSignature = computeManualProjectInputSignature(projectSnapshot, { audioOnly: true });
+    const storySignature = computeManualProjectInputSignature(projectSnapshot, { storyOnly: true });
+    const projectId = `manual_${ownerNodeId}_${inputSignature}_${Date.now()}`;
+    projectSnapshot = {
+      ...projectSnapshot,
+      project_id: projectId,
+      projectId,
+      input_signature: inputSignature,
+      inputSignature,
+      audio_signature: audioSignature,
+      audioSignature,
+      story_signature: storySignature,
+      storySignature,
+    };
+
+    console.info("[MANUAL BOARD NEW PROJECT REQUEST]", {
+      sourceNodeId: ownerNodeId,
+      oldIdentity: getManualBoardIdentityParts(existingBoard),
+      newIdentity: getManualBoardIdentityParts(projectSnapshot),
+      oldHasMaterials: hasManualBoardMaterials(existingBoard),
+      identityChanged: manualBoardIdentityChanged(existingBoard, projectSnapshot),
+    });
+
+    const replaceChoice = await requestNewBoardReplaceConfirmation({ existingBoard, newBoard: projectSnapshot });
+    if (replaceChoice === "cancel") {
+      console.info("[MANUAL BOARD NEW PROJECT CANCELLED]", { sourceNodeId: ownerNodeId });
+      setCopyStatus("Создание новой доски отменено — старая доска сохранена.");
+      window.setTimeout(() => setCopyStatus(""), 3200);
+      return;
+    }
+    if (replaceChoice === "backup") {
+      console.info("[MANUAL BOARD NEW PROJECT CONFIRM BACKUP]", { sourceNodeId: ownerNodeId });
+      downloadManualBoardBackupJson(existingBoard);
+    }
     let handoffWarning = "";
     const needsAudioSlice = Boolean(projectSnapshot?.audio?.url)
       && !(Array.isArray(projectSnapshot.scenes) && projectSnapshot.scenes.every((scene) => String(scene?.audio_slice_url || "").trim()));
@@ -1822,21 +1911,25 @@ export default function ManualTimingEditorPage() {
       sourceNodeId: ownerNodeId,
       ownerNodeType: "manualTiming",
       source: "manual_timing_node",
+      selectedSceneId: projectSnapshot.scenes?.[0]?.scene_id || "",
       updatedAt: Date.now(),
-      lastPersistReason: "create_new_director_board_from_timing",
+      lastPersistReason: "manual_new_project_from_audio_split",
     };
 
-    dispatchManualTimingDirectorBoardUpdate(projectSnapshot);
-    persistManualTimingProject(projectSnapshot);
-    persistManualClipBoardProject(projectSnapshot, {
+    const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectSnapshot, {
       forceReplace: true,
-      reason: "create_new_director_board_from_timing",
-    });
-    setActiveBoardProject(projectSnapshot);
+      explicitReset: true,
+      allowMaterialLoss: true,
+      reason: "manual_new_project_from_audio_split",
+      routePath: "/studio/storyboard",
+    }) || projectSnapshot;
+    dispatchManualTimingDirectorBoardUpdate(replacedProject);
+    persistManualTimingProject(replacedProject);
+    setActiveBoardProject(replacedProject);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
     navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
-      state: { director_board: projectSnapshot, project: projectSnapshot },
+      state: { director_board: replacedProject, project: replacedProject },
     });
   };
 
@@ -2736,6 +2829,21 @@ export default function ManualTimingEditorPage() {
 
       <p className="manualTimingPage_hint">Размечай песню по слуху: вступление, куплет, припев, проигрыш. Пиши заметки к отрезкам — они потом отобразятся в “Подсказка сцены” в режиссёрской доске.</p>
     </div>
+    {newBoardConfirm ? <div className="manualTimingNewBoardOverlay" role="presentation" onClick={() => resolveNewBoardReplaceConfirmation("cancel")}>
+      <div className="manualTimingNewBoardDialog" role="dialog" aria-modal="true" aria-labelledby="manualTimingNewBoardTitle" onClick={(event) => event.stopPropagation()}>
+        <h3 id="manualTimingNewBoardTitle">В доске уже есть старый проект</h3>
+        <p>Сохранить backup перед созданием нового проекта?</p>
+        <div className="manualTimingNewBoardMeta">
+          <span>Старый: {newBoardConfirm.oldIdentity?.projectId || newBoardConfirm.oldIdentity?.inputSignature || "—"}</span>
+          <span>Новый: {newBoardConfirm.newIdentity?.projectId || newBoardConfirm.newIdentity?.inputSignature || "—"}</span>
+        </div>
+        <div className="manualTimingNewBoardActions">
+          <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={() => resolveNewBoardReplaceConfirmation("backup")}>Скачать backup и создать новый</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => resolveNewBoardReplaceConfirmation("create")}>Создать новый без backup</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => resolveNewBoardReplaceConfirmation("cancel")}>Отмена</button>
+        </div>
+      </div>
+    </div> : null}
     {quickEditSceneId && quickEditDraft ? <div className="manualTimingQuickEditOverlay" onClick={closeQuickEdit} role="presentation">
       <div className="manualTimingQuickEditModal" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Быстрая правка сцены">
         <div className="manualTimingQuickEditHeader">
