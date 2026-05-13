@@ -11503,6 +11503,23 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const navigationState = location?.state || {};
     const navigationProject = navigationState?.director_board || navigationState?.project || null;
     const requestedFromNavigation = Boolean(navigationState?.openManualDirectorBoard);
+    const focusManualTimingNodeId = String(navigationState?.focusManualTimingNodeId || "").trim();
+    if (focusManualTimingNodeId && !requestedFromNavigation) {
+      console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "back_to_node", sourceNodeId: focusManualTimingNodeId });
+      writeManualClipBoardOpenState({
+        isOpen: false,
+        sourceNodeId: focusManualTimingNodeId,
+        routePath: "/studio/storyboard",
+        reason: "back_to_node",
+        updatedAt: Date.now(),
+      });
+      setNodes((prev) => prev.map((nodeItem) => ({
+        ...nodeItem,
+        selected: nodeItem.id === focusManualTimingNodeId,
+      })));
+      manualDirectorOpenRestoreAttemptedRef.current = true;
+      return;
+    }
     const openState = readManualClipBoardOpenState();
     const shouldOpenFromState = Boolean(openState?.isOpen && String(openState.routePath || "") === "/studio/storyboard");
     if (!requestedFromNavigation && !shouldOpenFromState) {
