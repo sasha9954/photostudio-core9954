@@ -5,7 +5,6 @@ import { API_BASE } from "../../../services/api";
 import { NodeShell } from "../comfy/comfyNodeShared";
 import {
   buildManualProjectBackupJson,
-  clearManualClipBoardProjectForNode,
   hasMeaningfulManualProject,
   readActiveManualClipBoardProject,
   readManualClipBoardProjectForNode,
@@ -357,7 +356,7 @@ export default function ManualTimingNode({ id, data }) {
         updatedAt: Date.now(),
       });
       navigate("/studio/storyboard", {
-        state: { openManualDirectorBoard: true, sourceNodeId: id, director_board: safeProject, project: safeProject },
+        state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: id, director_board: safeProject, project: safeProject },
       });
     }
   };
@@ -378,10 +377,8 @@ export default function ManualTimingNode({ id, data }) {
   };
 
   const onStartFreshWithConfirm = () => {
-    const confirmed = window.confirm("Это очистит активную режиссёрскую доску и начнёт новый разбор с текущим аудио. Сначала скачайте backup. Продолжить?");
+    const confirmed = window.confirm("Начать новый разбор с текущим аудио? Это очистит только разметку тайминга/ASR в ноде. Режиссёрская доска не удаляется.");
     if (!confirmed) return;
-    clearManualClipBoardProjectForNode(id, { clearActive: true, clearCanonical: true });
-    setStoredActiveBoardProject(null);
     const currentAudio = effectiveAudio?.url ? effectiveAudio : getEmptyManualTimingAudio();
     const resetPatch = buildManualTimingAudioResetPatch(model, currentAudio, currentAudio.url ? (audioSource || (hasConnectedAudio ? "connected" : "manual_upload")) : "");
     const nextProject = {

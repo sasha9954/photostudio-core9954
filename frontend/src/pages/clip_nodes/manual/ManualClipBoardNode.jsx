@@ -670,7 +670,7 @@ export default function ManualClipBoardNode({ id, data }) {
       updatedAt: Date.now(),
     });
     navigate("/studio/storyboard", {
-      state: { openManualDirectorBoard: true, sourceNodeId: id, director_board: protectedPayload, project: protectedPayload },
+      state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: id, director_board: protectedPayload, project: protectedPayload },
     });
   };
 
