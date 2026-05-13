@@ -615,68 +615,140 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
     || nextStats.videoHasAudio < existingStats.videoHasAudio;
 }
 
+function getManualClipBoardDeletionRevision(project = {}) {
+  return Number(
+    project?.deletionRevision
+    || project?.deletion_revision
+    || project?.deleted_media_revision
+    || project?.deletedMediaRevision
+    || 0,
+  ) || 0;
+}
+
+function getManualClipBoardRevision(project = {}) {
+  return Number(project?.revision || project?.project_revision || project?.projectRevision || 0) || 0;
+}
+
 export function scoreManualClipBoardProject(project = {}) {
   const stats = getManualClipBoardMaterialStats(project);
-  const updatedAt = Number(project?.updatedAt || project?.updated_at || 0);
+  const updatedAt = Number(project?.updatedAt || project?.updated_at || 0) || 0;
+  const deletionRevision = getManualClipBoardDeletionRevision(project);
+  const revision = getManualClipBoardRevision(project);
   return {
     stats,
     updatedAt,
+    deletionRevision,
+    revision,
     score:
       stats.materialScore
       + stats.mmaudioJobs * 5000
-      + (Number(project?.deletionRevision || project?.deletion_revision || project?.deleted_media_revision || project?.deletedMediaRevision || 0) || 0) * 0.001
-      + (Number(project?.revision || 0) || 0) * 0.0001
       + stats.customRoutes * 50
       + stats.scenes
       + Math.min(updatedAt / 1000000000000, 10),
   };
 }
 
+function logManualClipBoardNewerRevisionPick(winner, olderRicherCandidates = []) {
+  if (!olderRicherCandidates.length) return;
+  try {
+    console.info("[MANUAL BOARD PICK NEWER REVISION]", {
+      picked: {
+        project_id: winner?.project?.project_id || winner?.project?.projectId || "",
+        nodeId: winner?.project?.nodeId || winner?.project?.sourceNodeId || "",
+        deletionRevision: winner?.scoreData?.deletionRevision,
+        revision: winner?.scoreData?.revision,
+        updatedAt: winner?.scoreData?.updatedAt,
+        materialScore: winner?.scoreData?.stats?.materialScore,
+        materialTotal: winner?.scoreData?.stats?.materialTotal,
+      },
+      skipped: olderRicherCandidates.map(({ project, scoreData }) => ({
+        project_id: project?.project_id || project?.projectId || "",
+        nodeId: project?.nodeId || project?.sourceNodeId || "",
+        deletionRevision: scoreData?.deletionRevision,
+        revision: scoreData?.revision,
+        updatedAt: scoreData?.updatedAt,
+        materialScore: scoreData?.stats?.materialScore,
+        materialTotal: scoreData?.stats?.materialTotal,
+      })),
+    });
+  } catch {}
+}
+
+function manualClipBoardProjectSort(a, b) {
+  if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) {
+    return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
+  }
+  if (b.scoreData.revision !== a.scoreData.revision) {
+    return b.scoreData.revision - a.scoreData.revision;
+  }
+  if (b.scoreData.updatedAt !== a.scoreData.updatedAt) {
+    return b.scoreData.updatedAt - a.scoreData.updatedAt;
+  }
+  if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) {
+    return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
+  }
+  if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) {
+    return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
+  }
+  if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
+    return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
+  }
+  if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) {
+    return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
+  }
+  if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
+    return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
+  }
+  if (b.scoreData.stats.mmaudioJobs !== a.scoreData.stats.mmaudioJobs) {
+    return b.scoreData.stats.mmaudioJobs - a.scoreData.stats.mmaudioJobs;
+  }
+  if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
+    return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
+  }
+  if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) {
+    return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
+  }
+  if (b.scoreData.stats.audioSlices !== a.scoreData.stats.audioSlices) {
+    return b.scoreData.stats.audioSlices - a.scoreData.stats.audioSlices;
+  }
+  if (b.scoreData.stats.customRoutes !== a.scoreData.stats.customRoutes) {
+    return b.scoreData.stats.customRoutes - a.scoreData.stats.customRoutes;
+  }
+  return b.scoreData.score - a.scoreData.score;
+}
+
+function manualClipBoardNewerRevisionBeatsRicherSnapshot(winner, candidate) {
+  const winnerDeletion = winner?.scoreData?.deletionRevision || 0;
+  const candidateDeletion = candidate?.scoreData?.deletionRevision || 0;
+  const winnerRevision = winner?.scoreData?.revision || 0;
+  const candidateRevision = candidate?.scoreData?.revision || 0;
+  const winnerIsNewer = winnerDeletion > candidateDeletion
+    || (winnerDeletion === candidateDeletion && winnerRevision > candidateRevision);
+  if (!winnerIsNewer) return false;
+  return (candidate?.scoreData?.stats?.materialScore || 0) > (winner?.scoreData?.stats?.materialScore || 0)
+    || (candidate?.scoreData?.stats?.materialTotal || 0) > (winner?.scoreData?.stats?.materialTotal || 0);
+}
+
 export function pickBestManualClipBoardProject(candidates = []) {
   const valid = candidates.filter(hasMeaningfulManualProject);
   if (!valid.length) return null;
 
-  return valid
+  const anchor = valid[0];
+  const sameIdentity = valid.filter((project) => manualClipBoardProjectsShareIdentity(anchor, project));
+  if (!sameIdentity.length) return null;
+
+  const ranked = sameIdentity
     .map((project) => ({
       project,
       scoreData: scoreManualClipBoardProject(project),
     }))
-    .sort((a, b) => {
-      if (b.scoreData.score !== a.scoreData.score) {
-        return b.scoreData.score - a.scoreData.score;
-      }
-      if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) {
-        return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
-      }
-      if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) {
-        return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
-      }
-      if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
-        return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
-      }
-      if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) {
-        return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
-      }
-      if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
-        return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
-      }
-      if (b.scoreData.stats.mmaudioJobs !== a.scoreData.stats.mmaudioJobs) {
-        return b.scoreData.stats.mmaudioJobs - a.scoreData.stats.mmaudioJobs;
-      }
-      if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
-        return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
-      }
-      if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) {
-        return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
-      }
-      if (b.scoreData.stats.audioSlices !== a.scoreData.stats.audioSlices) {
-        return b.scoreData.stats.audioSlices - a.scoreData.stats.audioSlices;
-      }
-      if (b.scoreData.stats.customRoutes !== a.scoreData.stats.customRoutes) {
-        return b.scoreData.stats.customRoutes - a.scoreData.stats.customRoutes;
-      }
-      return b.scoreData.updatedAt - a.scoreData.updatedAt;
-    })[0].project;
+    .sort(manualClipBoardProjectSort);
+  const winner = ranked[0];
+  logManualClipBoardNewerRevisionPick(
+    winner,
+    ranked.slice(1).filter((candidate) => manualClipBoardNewerRevisionBeatsRicherSnapshot(winner, candidate)),
+  );
+  return winner.project;
 }
 
 export function hasMeaningfulManualProject(project = {}) {
