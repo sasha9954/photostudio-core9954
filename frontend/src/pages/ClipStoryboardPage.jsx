@@ -16,7 +16,7 @@ import "./ClipStoryboardPage.css";
 import { API_BASE, fetchJson } from "../services/api";
 import { getScenarioMusicApiConfig, requestScenarioBackgroundMusic } from "../services/scenarioMusicApi";
 import { useAuth } from "../app/AuthContext";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ComfyNarrativeNode,
   ComfyVideoPreviewNode,
@@ -11112,6 +11112,7 @@ function AssemblyNode({ id, data }) {
 export default function ClipStoryboardPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const accountKey = useMemo(() => getAccountKey(user) || "guest", [user]);
   const STORE_KEY = useMemo(() => `ps:clipStoryboard:v1:${accountKey}`, [accountKey]);
   const WORKSPACE_STORE_KEY = useMemo(() => `ps:clipStoryboard:workspace:v2:${accountKey}`, [accountKey]);
@@ -11498,19 +11499,26 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
   useEffect(() => {
     if (manualDirectorOpenRestoreAttemptedRef.current) return;
     if (typeof window === "undefined" || window.location.pathname !== "/studio/storyboard") return;
+
+    const navigationState = location?.state || {};
+    const navigationProject = navigationState?.director_board || navigationState?.project || null;
+    const requestedFromNavigation = Boolean(navigationState?.openManualDirectorBoard);
     const openState = readManualClipBoardOpenState();
-    if (!openState?.isOpen || String(openState.routePath || "") !== "/studio/storyboard") {
+    const shouldOpenFromState = Boolean(openState?.isOpen && String(openState.routePath || "") === "/studio/storyboard");
+    if (!requestedFromNavigation && !shouldOpenFromState) {
       console.info("[MANUAL BOARD SKIP OPEN STATE]", { reason: "closed_or_wrong_route", openState });
       manualDirectorOpenRestoreAttemptedRef.current = true;
       return;
     }
-    const sourceNodeId = String(openState.sourceNodeId || "").trim();
+
+    const sourceNodeId = String(navigationState?.sourceNodeId || openState?.sourceNodeId || navigationProject?.sourceNodeId || navigationProject?.nodeId || "").trim();
     const sourceNode = nodes.find((node) => node.id === sourceNodeId && node.type === "manualTiming");
     const nodeBoard = sourceNode?.data?.director_board || null;
     const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
-    const board = pickBestManualClipBoardProject([nodeBoard, storedBoard]) || nodeBoard || storedBoard;
-    const stateProjectId = String(openState.project_id || openState.projectId || "").trim();
-    const stateSignature = String(openState.input_signature || openState.inputSignature || "").trim();
+    const activeBoard = readActiveManualClipBoardProject();
+    const board = pickBestManualClipBoardProject([navigationProject, nodeBoard, storedBoard, activeBoard]) || navigationProject || nodeBoard || storedBoard || activeBoard;
+    const stateProjectId = String(openState?.project_id || openState?.projectId || navigationProject?.project_id || navigationProject?.projectId || "").trim();
+    const stateSignature = String(openState?.input_signature || openState?.inputSignature || navigationProject?.input_signature || navigationProject?.inputSignature || "").trim();
     const boardProjectId = String(board?.project_id || board?.projectId || "").trim();
     const boardSignature = String(board?.input_signature || board?.inputSignature || "").trim();
     const identityMatches = (!stateProjectId || !boardProjectId || stateProjectId === boardProjectId)
@@ -11519,6 +11527,7 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     if (!sourceNodeId || !sourceNode || !hasMeaningfulManualProject(board) || !identityMatches) {
       console.info("[MANUAL BOARD SKIP OPEN STATE]", {
         reason: !sourceNodeId ? "missing_source" : (!sourceNode ? "source_node_missing" : (!hasMeaningfulManualProject(board) ? "board_missing" : "identity_mismatch")),
+        requestedFromNavigation,
         sourceNodeId,
         stateProjectId,
         boardProjectId,
@@ -11529,16 +11538,41 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
       return;
     }
 
-    manualDirectorOpenRestoreAttemptedRef.current = true;
-    console.info("[MANUAL BOARD RESTORE OPEN STATE]", {
+    const selectedSceneId = String(board?.selectedSceneId || openState?.selectedSceneId || board?.scenes?.[0]?.scene_id || "").trim();
+    const canonicalBoard = {
+      ...board,
+      source: board?.source || "manual_timing_node",
+      ownerNodeType: "manualTiming",
+      nodeId: sourceNodeId,
       sourceNodeId,
-      selectedSceneId: openState.selectedSceneId,
+      selectedSceneId,
+    };
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId,
+      selectedSceneId,
       project_id: boardProjectId,
       input_signature: boardSignature,
-      updatedAt: openState.updatedAt,
+      routePath: "/studio/storyboard",
+      updatedAt: Date.now(),
+    });
+    setActiveManualBoardProject(canonicalBoard);
+    setNodes((prev) => prev.map((nodeItem) => (
+      nodeItem.id === sourceNodeId && nodeItem.type === "manualTiming"
+        ? { ...nodeItem, data: { ...(nodeItem.data || {}), director_board: canonicalBoard, selectedSceneId } }
+        : nodeItem
+    )));
+
+    manualDirectorOpenRestoreAttemptedRef.current = true;
+    console.info(requestedFromNavigation ? "[MANUAL BOARD OPEN EMBEDDED FROM NEW PROJECT]" : "[MANUAL BOARD RESTORE OPEN STATE]", {
+      sourceNodeId,
+      selectedSceneId,
+      project_id: boardProjectId,
+      input_signature: boardSignature,
+      updatedAt: openState?.updatedAt,
     });
     setManualDirectorEditor({ open: true, sourceNodeId });
-  }, [nodes]);
+  }, [location?.state, nodes, setNodes]);
 
 const [edges, setEdges] = useEdgesState(defaultEdges);
 const updateAssemblyAudioMode = useCallback((mode) => {

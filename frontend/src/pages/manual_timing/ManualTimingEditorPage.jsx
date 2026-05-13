@@ -14,6 +14,7 @@ import {
   readLegacyManualClipBoardProject,
   readLegacyManualTimingProject,
   replaceManualClipBoardProjectForNode,
+  writeManualClipBoardOpenState,
   unwrapManualProjectBackupJson,
 } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualTimingEditorPage.css";
@@ -92,7 +93,7 @@ const STATUS_LABELS = {
 
 const NUDGE_STEPS = [-0.2, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.2];
 const SHOW_MISSING_PHRASE_TOOLS = false;
-const MANUAL_CLIP_BOARD_ROUTE = "/studio/manual-clip-board";
+const STORYBOARD_ROUTE = "/studio/storyboard";
 
 function formatManualBoardUpdatedAt(value) {
   if (!value) return "неизвестно";
@@ -1800,8 +1801,17 @@ export default function ManualTimingEditorPage() {
         sourceNodeId: ownerNodeId,
       };
       setActiveBoardProject(safeBoard);
-      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
-        state: { director_board: safeBoard, project: safeBoard },
+      writeManualClipBoardOpenState({
+        isOpen: true,
+        sourceNodeId: ownerNodeId,
+        selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(),
+        project_id: String(safeBoard?.project_id || safeBoard?.projectId || "").trim(),
+        input_signature: String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim(),
+        routePath: STORYBOARD_ROUTE,
+        updatedAt: Date.now(),
+      });
+      navigate(STORYBOARD_ROUTE, {
+        state: { openManualDirectorBoard: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
       });
       return;
     }
@@ -1921,15 +1931,25 @@ export default function ManualTimingEditorPage() {
       explicitReset: true,
       allowMaterialLoss: true,
       reason: "manual_new_project_from_audio_split",
-      routePath: "/studio/storyboard",
+      routePath: STORYBOARD_ROUTE,
     }) || projectSnapshot;
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: ownerNodeId,
+      selectedSceneId: String(replacedProject?.selectedSceneId || replacedProject?.scenes?.[0]?.scene_id || "").trim(),
+      project_id: String(replacedProject?.project_id || replacedProject?.projectId || "").trim(),
+      input_signature: String(replacedProject?.input_signature || replacedProject?.inputSignature || "").trim(),
+      routePath: STORYBOARD_ROUTE,
+      updatedAt: Date.now(),
+    });
+    console.info('[MANUAL BOARD CANONICAL ROUTE] route="/studio/storyboard"', { sourceNodeId: ownerNodeId });
     dispatchManualTimingDirectorBoardUpdate(replacedProject);
     persistManualTimingProject(replacedProject);
     setActiveBoardProject(replacedProject);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
-    navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
-      state: { director_board: replacedProject, project: replacedProject },
+    navigate(STORYBOARD_ROUTE, {
+      state: { openManualDirectorBoard: true, sourceNodeId: ownerNodeId, director_board: replacedProject, project: replacedProject },
     });
   };
 
@@ -1983,8 +2003,17 @@ export default function ManualTimingEditorPage() {
         sourceNodeId: ownerNodeId,
       };
       setActiveBoardProject(safeBoard);
-      navigate(`${MANUAL_CLIP_BOARD_ROUTE}?sourceNodeId=${encodeURIComponent(ownerNodeId)}&mode=open_existing`, {
-        state: { director_board: safeBoard, project: safeBoard },
+      writeManualClipBoardOpenState({
+        isOpen: true,
+        sourceNodeId: ownerNodeId,
+        selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(),
+        project_id: String(safeBoard?.project_id || safeBoard?.projectId || "").trim(),
+        input_signature: String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim(),
+        routePath: STORYBOARD_ROUTE,
+        updatedAt: Date.now(),
+      });
+      navigate(STORYBOARD_ROUTE, {
+        state: { openManualDirectorBoard: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
       });
       return;
     }

@@ -1198,15 +1198,19 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
       localStorage.setItem(getManualClipBoardProjectStorageKey(safeNodeId), serialized);
     }
 
+    const openRoutePath = options?.routePath || "/studio/storyboard";
     writeManualClipBoardOpenState({
       isOpen: true,
       sourceNodeId: safeNodeId,
       selectedSceneId: storageProject.selectedSceneId || "",
       project_id: String(storageProject.project_id || storageProject.projectId || "").trim(),
       input_signature: String(storageProject.input_signature || storageProject.inputSignature || "").trim(),
-      routePath: options?.routePath || "/studio/storyboard",
+      routePath: openRoutePath,
       updatedAt: Date.now(),
     });
+    if (openRoutePath === "/studio/storyboard") {
+      console.info('[MANUAL BOARD CANONICAL ROUTE] route="/studio/storyboard"', { nodeId: safeNodeId, reason });
+    }
     rememberManualClipBoardStorageError(null);
     console.info("[MANUAL BOARD NEW PROJECT REPLACE]", {
       nodeId: safeNodeId,

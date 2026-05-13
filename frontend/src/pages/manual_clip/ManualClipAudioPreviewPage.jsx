@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { writeManualClipBoardOpenState } from "../clip_nodes/manualProjectBackup.js";
 import "./ManualClipAudioPreviewPage.css";
 
 const STORAGE_KEY = "manual_clip_board_active_project";
@@ -34,9 +35,25 @@ export default function ManualClipAudioPreviewPage() {
   }, []);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
 
+  const onBackToDirectorBoard = () => {
+    const sourceNodeId = String(project?.sourceNodeId || project?.nodeId || "").trim();
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId,
+      selectedSceneId: String(project?.selectedSceneId || project?.scenes?.[0]?.scene_id || "").trim(),
+      project_id: String(project?.project_id || project?.projectId || "").trim(),
+      input_signature: String(project?.input_signature || project?.inputSignature || "").trim(),
+      routePath: "/studio/storyboard",
+      updatedAt: Date.now(),
+    });
+    navigate("/studio/storyboard", {
+      state: { openManualDirectorBoard: true, sourceNodeId, director_board: project, project },
+    });
+  };
+
   return <div className="manualAudioPreviewPage">
     <div className="manualAudioPreviewTopbar">
-      <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-board")}>Назад в режиссёрскую доску</button>
+      <button className="clipSB_btn" onClick={onBackToDirectorBoard}>Назад в режиссёрскую доску</button>
     </div>
     <h2>Прослушать сцены</h2>
     {scenes.length === 0 ? <div className="manualAudioPreviewEmpty">Сцены не найдены. Сначала соберите сцены на Manual Clip Board.</div> : <div className="manualAudioPreviewList">
