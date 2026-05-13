@@ -168,7 +168,7 @@ export default function PodcastAudioComposerPage() {
   const sourceNodeId = String(location.state?.sourceNodeId || searchParams.get("sourceNodeId") || "").trim();
   const stateAudio = normalizeManualTimingAudio(location.state?.audio);
   const storedManualTimingProject = useMemo(() => readManualTimingProjectForNode(sourceNodeId), [sourceNodeId]);
-  const sourceProject = location.state?.project || storedManualTimingProject || {};
+  const sourceProject = storedManualTimingProject || {};
   const sourceAudio = stateAudio.url ? stateAudio : normalizeManualTimingAudio(sourceProject?.audio);
   const [project, setProject] = useState(() => normalizeComposerProject(readComposerProject(sourceNodeId), sourceNodeId, sourceAudio));
   const [message, setMessage] = useState("");
