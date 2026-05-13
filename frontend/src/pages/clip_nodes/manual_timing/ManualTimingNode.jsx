@@ -292,6 +292,7 @@ export default function ManualTimingNode({ id, data }) {
     const project = {
       ...model,
       nodeId: id,
+      sourceNodeId: id,
       audio: effectiveAudio,
       markers: Array.isArray(model.markers) ? model.markers : [],
       scenes: Array.isArray(model.scenes) ? model.scenes : [],
@@ -303,7 +304,12 @@ export default function ManualTimingNode({ id, data }) {
 
   const onOpenEditor = () => {
     persistProject();
-    navigate("/studio/manual-timing");
+    navigate(`/studio/manual-timing-editor?sourceNodeId=${encodeURIComponent(id)}`, {
+      state: {
+        sourceNodeId: id,
+        fromStoryboard: true,
+      },
+    });
   };
 
   const onReturnToActiveBoard = () => {
@@ -382,12 +388,18 @@ export default function ManualTimingNode({ id, data }) {
       ...model,
       ...resetPatch,
       nodeId: id,
+      sourceNodeId: id,
       audio_upload_status: "",
       audio_upload_error: "",
     };
     patch(nextProject);
     persistManualTimingProject(nextProject);
-    navigate("/studio/manual-timing");
+    navigate(`/studio/manual-timing-editor?sourceNodeId=${encodeURIComponent(id)}`, {
+      state: {
+        sourceNodeId: id,
+        fromStoryboard: true,
+      },
+    });
   };
 
   const onCopyTimingJson = async () => {
@@ -502,6 +514,7 @@ export default function ManualTimingNode({ id, data }) {
       ...model,
       ...resetPatch,
       nodeId: id,
+      sourceNodeId: id,
       audio_upload_status: "",
       audio_upload_error: "",
     };
@@ -516,6 +529,7 @@ export default function ManualTimingNode({ id, data }) {
       ...model,
       ...resetPatch,
       nodeId: id,
+      sourceNodeId: id,
       audio_upload_status: "",
       audio_upload_error: "",
     };
