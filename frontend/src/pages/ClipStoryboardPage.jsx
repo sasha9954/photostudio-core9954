@@ -11516,18 +11516,52 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const nodeBoard = sourceNode?.data?.director_board || null;
     const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
     const activeBoard = readActiveManualClipBoardProject();
-    const board = pickBestManualClipBoardProject([navigationProject, nodeBoard, storedBoard, activeBoard]) || navigationProject || nodeBoard || storedBoard || activeBoard;
-    const stateProjectId = String(openState?.project_id || openState?.projectId || navigationProject?.project_id || navigationProject?.projectId || "").trim();
-    const stateSignature = String(openState?.input_signature || openState?.inputSignature || navigationProject?.input_signature || navigationProject?.inputSignature || "").trim();
+    const explicitNewProjectFromNavigation = Boolean(
+      navigationState?.manualBoardExplicitNewProject === true
+      && hasMeaningfulManualProject(navigationProject)
+    );
+    const stateProjectId = String(
+      navigationState?.manualBoardForceProjectId
+      || openState?.forceProjectId
+      || openState?.project_id
+      || openState?.projectId
+      || navigationProject?.project_id
+      || navigationProject?.projectId
+      || ""
+    ).trim();
+    const stateSignature = String(
+      navigationState?.manualBoardForceInputSignature
+      || openState?.forceInputSignature
+      || openState?.input_signature
+      || openState?.inputSignature
+      || navigationProject?.input_signature
+      || navigationProject?.inputSignature
+      || ""
+    ).trim();
+    const normalPickCandidates = [navigationProject, nodeBoard, storedBoard, activeBoard];
+    const identityScopedCandidates = normalPickCandidates.filter((candidate) => {
+      if (!hasMeaningfulManualProject(candidate)) return false;
+      const candidateProjectId = String(candidate?.project_id || candidate?.projectId || "").trim();
+      const candidateSignature = String(candidate?.input_signature || candidate?.inputSignature || "").trim();
+      if (stateProjectId && candidateProjectId && stateProjectId !== candidateProjectId) return false;
+      if (stateSignature && candidateSignature && stateSignature !== candidateSignature) return false;
+      return Boolean(stateProjectId || stateSignature);
+    });
+    const board = explicitNewProjectFromNavigation
+      ? navigationProject
+      : (pickBestManualClipBoardProject(identityScopedCandidates.length ? identityScopedCandidates : normalPickCandidates) || navigationProject || nodeBoard || storedBoard || activeBoard);
     const boardProjectId = String(board?.project_id || board?.projectId || "").trim();
     const boardSignature = String(board?.input_signature || board?.inputSignature || "").trim();
-    const identityMatches = (!stateProjectId || !boardProjectId || stateProjectId === boardProjectId)
-      && (!stateSignature || !boardSignature || stateSignature === boardSignature);
+    const identityMatches = explicitNewProjectFromNavigation || (
+      (!stateProjectId || !boardProjectId || stateProjectId === boardProjectId)
+      && (!stateSignature || !boardSignature || stateSignature === boardSignature)
+    );
 
     if (!sourceNodeId || !sourceNode || !hasMeaningfulManualProject(board) || !identityMatches) {
       console.info("[MANUAL BOARD SKIP OPEN STATE]", {
         reason: !sourceNodeId ? "missing_source" : (!sourceNode ? "source_node_missing" : (!hasMeaningfulManualProject(board) ? "board_missing" : "identity_mismatch")),
         requestedFromNavigation,
+        explicitNewProjectFromNavigation,
         sourceNodeId,
         stateProjectId,
         boardProjectId,
@@ -11538,7 +11572,9 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
       return;
     }
 
-    const selectedSceneId = String(board?.selectedSceneId || openState?.selectedSceneId || board?.scenes?.[0]?.scene_id || "").trim();
+    const selectedSceneId = explicitNewProjectFromNavigation
+      ? String(board?.scenes?.[0]?.scene_id || "").trim()
+      : String(board?.selectedSceneId || openState?.selectedSceneId || board?.scenes?.[0]?.scene_id || "").trim();
     const canonicalBoard = {
       ...board,
       source: board?.source || "manual_timing_node",
@@ -11547,12 +11583,28 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
       sourceNodeId,
       selectedSceneId,
     };
+    const canonicalProjectId = String(canonicalBoard?.project_id || canonicalBoard?.projectId || "").trim();
+    const canonicalInputSignature = String(canonicalBoard?.input_signature || canonicalBoard?.inputSignature || "").trim();
+
+    if (explicitNewProjectFromNavigation) {
+      persistManualClipBoardProject(canonicalBoard, {
+        forceReplace: true,
+        explicitReset: true,
+        allowMaterialLoss: true,
+        reason: "manual_new_project_from_audio_split_open_embedded",
+        embedded: true,
+      });
+    }
+
     writeManualClipBoardOpenState({
       isOpen: true,
       sourceNodeId,
       selectedSceneId,
-      project_id: boardProjectId,
-      input_signature: boardSignature,
+      project_id: canonicalProjectId,
+      input_signature: canonicalInputSignature,
+      manualBoardExplicitNewProject: explicitNewProjectFromNavigation,
+      forceProjectId: explicitNewProjectFromNavigation ? canonicalProjectId : "",
+      forceInputSignature: explicitNewProjectFromNavigation ? canonicalInputSignature : "",
       routePath: "/studio/storyboard",
       updatedAt: Date.now(),
     });
@@ -11564,13 +11616,24 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     )));
 
     manualDirectorOpenRestoreAttemptedRef.current = true;
-    console.info(requestedFromNavigation ? "[MANUAL BOARD OPEN EMBEDDED FROM NEW PROJECT]" : "[MANUAL BOARD RESTORE OPEN STATE]", {
-      sourceNodeId,
-      selectedSceneId,
-      project_id: boardProjectId,
-      input_signature: boardSignature,
-      updatedAt: openState?.updatedAt,
-    });
+    if (explicitNewProjectFromNavigation) {
+      console.info("[MANUAL BOARD FORCE NEW PROJECT FROM NAVIGATION]", {
+        sourceNodeId,
+        project_id: canonicalProjectId,
+        input_signature: canonicalInputSignature,
+        selectedSceneId,
+        stats: getManualClipBoardMaterialStats(canonicalBoard),
+      });
+    } else {
+      console.info("[MANUAL BOARD NORMAL PICK]", {
+        sourceNodeId,
+        selectedSceneId,
+        project_id: canonicalProjectId,
+        input_signature: canonicalInputSignature,
+        updatedAt: openState?.updatedAt,
+        stats: getManualClipBoardMaterialStats(canonicalBoard),
+      });
+    }
     setManualDirectorEditor({ open: true, sourceNodeId });
   }, [location?.state, nodes, setNodes]);
 
