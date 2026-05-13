@@ -1,6 +1,6 @@
 .podcastComposerPage {
   min-height: 100vh;
-  padding: 28px;
+  padding: 24px;
   color: #e5eefc;
   background: radial-gradient(circle at top left, rgba(168, 85, 247, 0.18), transparent 34%), #08111f;
 }
@@ -8,7 +8,7 @@
 .podcastComposerHeader,
 .podcastComposerCard {
   border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 22px;
+  border-radius: 20px;
   background: rgba(15, 23, 42, 0.78);
   box-shadow: 0 20px 80px rgba(0, 0, 0, 0.28);
 }
@@ -16,9 +16,9 @@
 .podcastComposerHeader {
   display: flex;
   justify-content: space-between;
-  gap: 20px;
-  padding: 22px;
-  margin-bottom: 18px;
+  gap: 18px;
+  padding: 20px;
+  margin-bottom: 16px;
 }
 
 .podcastComposerHeader h1,
@@ -42,25 +42,33 @@
 
 .podcastComposerHeaderActions,
 .podcastComposerOperationButtons,
-.podcastComposerMicroButtons {
+.podcastComposerNudgeBar,
+.podcastComposerTrackActions,
+.audioEditTimelineActions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
 .podcastComposerPage button,
 .podcastComposerUpload {
-  border: 1px solid rgba(148, 163, 184, 0.32);
-  border-radius: 12px;
-  padding: 10px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  padding: 7px 10px;
   color: #e5eefc;
   background: rgba(30, 41, 59, 0.82);
+  font-size: 12px;
   font-weight: 800;
   cursor: pointer;
 }
 
-.podcastComposerPage button:hover,
+.podcastComposerPage button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.podcastComposerPage button:hover:not(:disabled),
 .podcastComposerUpload:hover {
   border-color: rgba(125, 211, 252, 0.7);
 }
@@ -70,125 +78,304 @@
   background: linear-gradient(135deg, rgba(34, 197, 94, 0.28), rgba(14, 165, 233, 0.2));
 }
 
+.podcastComposerPage button.addAudio {
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
 .podcastComposerMessage {
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   border: 1px solid rgba(251, 191, 36, 0.42);
-  border-radius: 16px;
-  padding: 14px 16px;
+  border-radius: 14px;
+  padding: 12px 14px;
   color: #fde68a;
   background: rgba(120, 53, 15, 0.28);
 }
 
 .podcastComposerCard {
-  padding: 20px;
-  margin-bottom: 18px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+
+.podcastComposerCard.mainEditor {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(2, 6, 23, 0.62));
+}
+
+.podcastComposerSectionHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 12px;
 }
 
 .podcastComposerMetaGrid,
 .podcastComposerFields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 12px;
-  margin: 14px 0;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
 }
 
-.podcastComposerFields.small {
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+.podcastComposerMetaGrid.compact {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin: 0;
+  color: #9fb0ca;
+  font-size: 13px;
+}
+
+.podcastComposerFields.small,
+.podcastComposerFields.compactFields {
+  grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
 }
 
 .podcastComposerFields label {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   color: #9fb0ca;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 800;
+  text-transform: uppercase;
 }
 
 .podcastComposerFields input {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(148, 163, 184, 0.28);
-  border-radius: 10px;
-  padding: 9px 10px;
+  border-radius: 9px;
+  padding: 7px 8px;
   color: #e5eefc;
   background: rgba(2, 6, 23, 0.55);
 }
 
 .podcastComposerPage audio {
   width: 100%;
-  margin-top: 10px;
+  height: 36px;
+  margin-top: 8px;
+  opacity: 0.86;
 }
 
 .podcastComposerEmpty {
   border: 1px dashed rgba(148, 163, 184, 0.28);
-  border-radius: 14px;
-  padding: 14px;
+  border-radius: 12px;
+  padding: 12px;
   color: #94a3b8;
   background: rgba(2, 6, 23, 0.35);
 }
 
+.audioEditTimeline {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.audioEditTimelineBar {
+  position: relative;
+  min-height: 76px;
+  overflow: hidden;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.42), rgba(15, 23, 42, 0.18)), rgba(96, 165, 250, 0.12);
+  cursor: crosshair;
+}
+
+.audioEditTimeline.compact .audioEditTimelineBar {
+  min-height: 54px;
+  border-radius: 11px;
+}
+
+.audioEditSelection {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid rgba(250, 204, 21, 0.9);
+  border-right: 1px solid rgba(250, 204, 21, 0.9);
+  background: rgba(250, 204, 21, 0.2);
+  box-shadow: inset 0 0 18px rgba(250, 204, 21, 0.12);
+  z-index: 2;
+}
+
+.audioEditTick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.audioEditTick i {
+  display: block;
+  width: 1px;
+  height: 100%;
+  background: rgba(226, 232, 240, 0.24);
+}
+
+.audioEditTick span {
+  position: absolute;
+  top: 8px;
+  left: 4px;
+  color: rgba(219, 234, 254, 0.76);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.audioEditTimeline.compact .audioEditTick span {
+  top: 6px;
+  font-size: 9px;
+}
+
+.audioEditPlayhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 6;
+  background: #38bdf8;
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.8);
+  pointer-events: none;
+}
+
+.audioEditPlayhead b {
+  position: absolute;
+  right: 4px;
+  bottom: 8px;
+  border-radius: 999px;
+  padding: 3px 6px;
+  color: #082f49;
+  background: #7dd3fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+}
+
+.audioEditOperation {
+  position: absolute;
+  top: 20px;
+  bottom: 14px;
+  min-width: 3px;
+  border-radius: 7px;
+  z-index: 3;
+}
+
+.audioEditOperation.insert_silence,
+.audioEditOperation.replace_with_silence {
+  background: rgba(148, 163, 184, 0.44);
+}
+
+.audioEditOperation.cut_region,
+.audioEditOperation.cut_point {
+  background: rgba(248, 113, 113, 0.72);
+}
+
+.audioEditOperation.insert_from_track,
+.audioEditOperation.replace_with_track_fragment {
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.74), rgba(59, 130, 246, 0.62));
+}
+
+.audioEditTimelineActions {
+  justify-content: flex-end;
+}
+
+.podcastComposerEditorGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.podcastComposerSelectionInfo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  color: #bfdbfe;
+  font-size: 12px;
+}
+
+.podcastComposerSelectionInfo span,
+.podcastComposerNudgeBar span {
+  border-radius: 999px;
+  padding: 6px 9px;
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.podcastComposerNudgeBar {
+  margin: 8px 0 10px;
+}
+
+.compactToolbar {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
 .podcastComposerTracks {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-  margin-top: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .podcastComposerTrack {
   border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 18px;
-  padding: 14px;
+  border-radius: 16px;
+  padding: 12px;
   background: rgba(2, 6, 23, 0.34);
+}
+
+.podcastComposerTrack.selected {
+  border-color: rgba(34, 197, 94, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.12);
 }
 
 .podcastComposerTrackHeader {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  margin-bottom: 12px;
-}
-
-.podcastComposerTrackHeader label {
-  color: #a7f3d0;
-  font-size: 12px;
-  font-weight: 800;
+  margin-bottom: 10px;
 }
 
 .podcastComposerUpload {
   display: inline-block;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .podcastComposerTrackFile {
+  margin-top: 4px;
   color: #9fb0ca;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .podcastComposerOperationsList {
   display: grid;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .podcastComposerOperation {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px;
   align-items: center;
   border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 14px;
-  padding: 10px;
+  border-radius: 12px;
+  padding: 8px;
   background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 12px;
 }
 
 .podcastComposerCard.preview textarea {
   width: 100%;
-  min-height: 360px;
+  min-height: 320px;
   box-sizing: border-box;
   border: 1px solid rgba(148, 163, 184, 0.24);
-  border-radius: 16px;
-  padding: 14px;
+  border-radius: 14px;
+  padding: 12px;
   color: #dbeafe;
   background: rgba(2, 6, 23, 0.74);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -203,9 +390,10 @@
 
 .podcastComposerTimeline span {
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 5px 9px;
   color: #bfdbfe;
   background: rgba(37, 99, 235, 0.18);
+  font-size: 12px;
 }
 
 @media (max-width: 760px) {
@@ -214,9 +402,17 @@
   }
 
   .podcastComposerHeader,
+  .podcastComposerSectionHeader,
+  .podcastComposerEditorGrid,
   .podcastComposerOperation {
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .podcastComposerMetaGrid.compact,
+  .podcastComposerSelectionInfo,
+  .audioEditTimelineActions {
+    justify-content: flex-start;
   }
 }
