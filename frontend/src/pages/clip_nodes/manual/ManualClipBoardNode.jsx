@@ -13,6 +13,7 @@ import {
   pickBestManualClipBoardProject,
   readManualClipBoardProjectForNode,
   readActiveManualClipBoardProject,
+  writeManualClipBoardOpenState,
 } from "../manualProjectBackup.js";
 
 
@@ -659,8 +660,17 @@ export default function ManualClipBoardNode({ id, data }) {
       selectedSceneId: nextScenes[0]?.scene_id || model.selectedSceneId || "",
       step: scenes.length ? "scene_plan_ready" : model.step,
     });
-    navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`, {
-      state: { director_board: protectedPayload },
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: id,
+      selectedSceneId: String(protectedPayload?.selectedSceneId || protectedPayload?.scenes?.[0]?.scene_id || "").trim(),
+      project_id: String(protectedPayload?.project_id || protectedPayload?.projectId || "").trim(),
+      input_signature: String(protectedPayload?.input_signature || protectedPayload?.inputSignature || "").trim(),
+      routePath: "/studio/storyboard",
+      updatedAt: Date.now(),
+    });
+    navigate("/studio/storyboard", {
+      state: { openManualDirectorBoard: true, sourceNodeId: id, director_board: protectedPayload, project: protectedPayload },
     });
   };
 

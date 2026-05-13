@@ -12,6 +12,7 @@ import {
   pickBestManualClipBoardProject,
   persistManualClipBoardProject,
   getManualClipBoardMaterialStats,
+  writeManualClipBoardOpenState,
 } from "../manualProjectBackup.js";
 import "./ManualTimingNode.css";
 import {
@@ -340,8 +341,17 @@ export default function ManualTimingNode({ id, data }) {
         nodeId: id,
         sourceNodeId: id,
       };
-      navigate(`/studio/manual-clip-board?sourceNodeId=${encodeURIComponent(id)}&mode=open_existing`, {
-        state: { director_board: safeProject, project: safeProject },
+      writeManualClipBoardOpenState({
+        isOpen: true,
+        sourceNodeId: id,
+        selectedSceneId: String(safeProject?.selectedSceneId || safeProject?.scenes?.[0]?.scene_id || "").trim(),
+        project_id: String(safeProject?.project_id || safeProject?.projectId || "").trim(),
+        input_signature: String(safeProject?.input_signature || safeProject?.inputSignature || "").trim(),
+        routePath: "/studio/storyboard",
+        updatedAt: Date.now(),
+      });
+      navigate("/studio/storyboard", {
+        state: { openManualDirectorBoard: true, sourceNodeId: id, director_board: safeProject, project: safeProject },
       });
     }
   };
