@@ -11604,6 +11604,20 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const canonicalInputSignature = String(canonicalBoard?.input_signature || canonicalBoard?.inputSignature || "").trim();
 
     if (explicitNewProjectFromNavigation) {
+      console.info("[MANUAL BOARD FORCE CLEAN PROJECT INTO NODE]", {
+        sourceNodeId,
+        project_id: canonicalProjectId,
+        input_signature: canonicalInputSignature,
+        selectedSceneId,
+        before: {
+          nodeBoard: getManualClipBoardMaterialStats(nodeBoard),
+          storedBoard: getManualClipBoardMaterialStats(storedBoard),
+          activeBoard: getManualClipBoardMaterialStats(activeBoard),
+        },
+        after: getManualClipBoardMaterialStats(canonicalBoard),
+        sceneCountBefore: Array.isArray(nodeBoard?.scenes) ? nodeBoard.scenes.length : 0,
+        sceneCountAfter: Array.isArray(canonicalBoard?.scenes) ? canonicalBoard.scenes.length : 0,
+      });
       persistManualClipBoardProject(canonicalBoard, {
         forceReplace: true,
         explicitReset: true,

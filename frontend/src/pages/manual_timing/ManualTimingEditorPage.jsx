@@ -124,6 +124,222 @@ const SEGMENT_COLORS = [
   "#d3e85a",
 ];
 
+
+const MANUAL_NEW_BOARD_IMAGE_FIELDS = [
+  "image_url",
+  "imageUrl",
+  "image_preview_url",
+  "imagePreviewUrl",
+  "generated_image_url",
+  "generatedImageUrl",
+  "start_image_url",
+  "startImageUrl",
+  "start_image_preview_url",
+  "startImagePreviewUrl",
+  "end_image_url",
+  "endImageUrl",
+  "end_image_preview_url",
+  "endImagePreviewUrl",
+];
+
+const MANUAL_NEW_BOARD_VIDEO_FIELDS = [
+  "video_url",
+  "videoUrl",
+  "generated_video_url",
+  "generatedVideoUrl",
+  "final_video_url",
+  "finalVideoUrl",
+  "result_video_url",
+  "resultVideoUrl",
+  "video_asset_url",
+  "videoAssetUrl",
+  "video_preview_url",
+  "videoPreviewUrl",
+  "video_job_id",
+  "videoJobId",
+  "video_has_audio",
+  "hasAudio",
+  "videoHasAudio",
+  "video_request_payload_preview",
+  "videoRequestPayloadPreview",
+];
+
+const MANUAL_NEW_BOARD_MMAUDIO_FIELDS = [
+  "mmaudio_video_url",
+  "mmaudioVideoUrl",
+  "mmaudio_raw_video_url",
+  "mmaudioRawVideoUrl",
+  "mmaudio_source_video_url",
+  "mmaudioSourceVideoUrl",
+  "original_video_before_mmaudio_url",
+  "originalVideoBeforeMMAudioUrl",
+  "mmaudio_job_id",
+  "mmaudioJobId",
+  "mmaudio_status",
+  "mmaudio_error",
+  "mmaudio_gain_status",
+  "mmaudio_gain_error",
+];
+
+const MANUAL_NEW_BOARD_PROMPT_FIELDS = [
+  "photo_prompt",
+  "photoPrompt",
+  "image_prompt",
+  "imagePrompt",
+  "video_prompt",
+  "videoPrompt",
+  "negative_prompt",
+  "negativePrompt",
+  "sound_prompt",
+  "soundPrompt",
+  "mmaudio_prompt",
+  "mmaudioPrompt",
+  "mmaudio_negative_prompt",
+  "mmaudioNegativePrompt",
+  "negative_audio_prompt",
+  "negativeAudioPrompt",
+  "speech_text",
+  "speechText",
+  "voice_profile",
+  "voiceProfile",
+  "delivery_style",
+  "deliveryStyle",
+  "ambient_sound_prompt",
+  "ambientSoundPrompt",
+  "source_image_prompt_en",
+  "source_image_prompt_ru",
+  "source_image_negative_prompt_en",
+  "i2v_prompt_en",
+  "i2v_negative_prompt_en",
+  "composition_ru",
+  "camera_angle_ru",
+  "subject_lock_ru",
+  "background_lock_ru",
+  "scene_global_context_ru",
+  "continuity_anchor_ru",
+  "storyboard_frame_role_ru",
+];
+
+const MANUAL_NEW_BOARD_CLEARED_SCENE_FIELDS = [
+  ...MANUAL_NEW_BOARD_IMAGE_FIELDS,
+  ...MANUAL_NEW_BOARD_VIDEO_FIELDS,
+  ...MANUAL_NEW_BOARD_MMAUDIO_FIELDS,
+  ...MANUAL_NEW_BOARD_PROMPT_FIELDS,
+];
+
+const MANUAL_NEW_BOARD_TIMING_STORY_FIELDS = [
+  "scene_id",
+  "id",
+  "index",
+  "start_sec",
+  "end_sec",
+  "duration_sec",
+  "speech_start_sec",
+  "speech_end_sec",
+  "route",
+  "section",
+  "energy",
+  "contains_vocal",
+  "source_phrase_ids",
+  "story_block_id",
+  "story_block_title_ru",
+  "story_block_position_ru",
+  "story_block_index",
+  "story_block_order",
+  "story_block_range_ru",
+  "story_block_summary_ru",
+  "song_block_id",
+  "topic_block_id",
+  "scene_type",
+  "speaker_id",
+  "speaker_name",
+  "text",
+  "source_text",
+  "source_text_ru",
+  "source_text_en",
+  "translated_text_ru",
+  "translation_ru",
+  "meaning_hint_ru",
+  "meaning_ru",
+  "semantic_summary_ru",
+  "scene_goal_ru",
+  "scene_role_in_block_ru",
+  "block_progress_ru",
+  "photo_prompt_hint_ru",
+  "prompt_hint_ru",
+  "format",
+  "aspect_ratio",
+  "format_locked",
+  "audio_slice_url",
+  "audio_slice_duration_sec",
+];
+
+const MANUAL_NEW_BOARD_TIMING_STORY_FIELD_SET = new Set(MANUAL_NEW_BOARD_TIMING_STORY_FIELDS);
+
+function hasManualNewBoardFieldValue(scene = {}, field = "") {
+  if (!scene || !Object.prototype.hasOwnProperty.call(scene, field)) return false;
+  const value = scene[field];
+  if (value === null || value === undefined) return false;
+  if (typeof value === "boolean") return value === true;
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+function sceneHasAnyManualNewBoardField(scene = {}, fields = []) {
+  return fields.some((field) => hasManualNewBoardFieldValue(scene, field));
+}
+
+function getManualNewBoardCleanSceneStats(scenes = []) {
+  const safeScenes = Array.isArray(scenes) ? scenes : [];
+  return {
+    sceneCount: safeScenes.length,
+    clearedImageCount: safeScenes.filter((scene) => sceneHasAnyManualNewBoardField(scene, MANUAL_NEW_BOARD_IMAGE_FIELDS)).length,
+    clearedVideoCount: safeScenes.filter((scene) => sceneHasAnyManualNewBoardField(scene, MANUAL_NEW_BOARD_VIDEO_FIELDS)).length,
+    clearedMMAudioCount: safeScenes.filter((scene) => sceneHasAnyManualNewBoardField(scene, MANUAL_NEW_BOARD_MMAUDIO_FIELDS)).length,
+    clearedPromptCount: safeScenes.filter((scene) => sceneHasAnyManualNewBoardField(scene, MANUAL_NEW_BOARD_PROMPT_FIELDS)).length,
+  };
+}
+
+function sanitizeManualTimingSceneForNewBoard(scene = {}, projectFormat = "9:16") {
+  const sourceScene = scene && typeof scene === "object" ? scene : {};
+  const cleanScene = {};
+  Object.entries(sourceScene).forEach(([key, value]) => {
+    if (MANUAL_NEW_BOARD_CLEARED_SCENE_FIELDS.includes(key)) return;
+    if (MANUAL_NEW_BOARD_TIMING_STORY_FIELD_SET.has(key) || /(^|_)(text|translation|meaning|summary)($|_)/i.test(key)) {
+      cleanScene[key] = value;
+    }
+  });
+
+  const safeFormat = String(projectFormat || sourceScene.format || sourceScene.aspect_ratio || "9:16");
+  cleanScene.scene_id = String(cleanScene.scene_id || sourceScene.scene_id || sourceScene.id || "");
+  cleanScene.index = Number.isFinite(Number(cleanScene.index ?? sourceScene.index)) ? Number(cleanScene.index ?? sourceScene.index) : 0;
+  cleanScene.start_sec = Number(cleanScene.start_sec ?? sourceScene.start_sec ?? 0) || 0;
+  cleanScene.end_sec = Number(cleanScene.end_sec ?? sourceScene.end_sec ?? cleanScene.start_sec ?? 0) || 0;
+  cleanScene.duration_sec = Number(cleanScene.duration_sec ?? sourceScene.duration_sec ?? Math.max(0, cleanScene.end_sec - cleanScene.start_sec)) || 0;
+  cleanScene.route = String(cleanScene.route || sourceScene.route || "i2v");
+  cleanScene.source_phrase_ids = normalizeManualTimingSourcePhraseIds(cleanScene.source_phrase_ids || sourceScene.source_phrase_ids || sourceScene.sourcePhraseIds);
+  cleanScene.format = safeFormat;
+  cleanScene.aspect_ratio = safeFormat;
+  cleanScene.format_locked = true;
+  cleanScene.status = "draft";
+  cleanScene.image_upload_status = "";
+  cleanScene.image_upload_error = "";
+  cleanScene.video_error = "";
+  cleanScene.error = "";
+
+  MANUAL_NEW_BOARD_CLEARED_SCENE_FIELDS.forEach((field) => {
+    cleanScene[field] = "";
+  });
+  cleanScene.video_has_audio = false;
+  cleanScene.hasAudio = false;
+  cleanScene.videoHasAudio = false;
+
+  return cleanScene;
+}
+
 function readActiveProject() {
   try {
     const raw = localStorage.getItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
@@ -1772,6 +1988,9 @@ export default function ManualTimingEditorPage() {
   const buildDirectorProjectSnapshot = () => {
     const sourceNodeId = getManualTimingOwnerNodeId(project);
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
+    const sceneCleanStats = getManualNewBoardCleanSceneStats(scenes);
+    const cleanScenes = scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat));
+    console.info("[MANUAL BOARD NEW PROJECT CLEAN SCENES]", sceneCleanStats);
     return {
       ...project,
       project_mode: modeConfig.mode || project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
@@ -1787,15 +2006,8 @@ export default function ManualTimingEditorPage() {
       audio,
       audio_phrases: audioPhrases,
       story_blocks: storyBlocks,
-      scenes: scenes.map((scene) => ({
-        ...scene,
-        format: projectFormat,
-        aspect_ratio: projectFormat,
-        video_prompt: "",
-        negative_prompt: "",
-        sound_prompt: "",
-      })),
-      selectedSceneId: selectedScene?.scene_id || project.selectedSceneId || scenes[0]?.scene_id || "",
+      scenes: cleanScenes,
+      selectedSceneId: cleanScenes[0]?.scene_id || selectedScene?.scene_id || scenes[0]?.scene_id || "",
       timing_status: project.timing_status || "confirmed",
     };
   };
@@ -1938,11 +2150,7 @@ export default function ManualTimingEditorPage() {
       format: String(projectSnapshot.format || projectSnapshot.aspect_ratio || "9:16"),
       aspect_ratio: String(projectSnapshot.aspect_ratio || projectSnapshot.format || "9:16"),
       format_locked: true,
-      scenes: Array.isArray(projectSnapshot.scenes) ? projectSnapshot.scenes.map((scene) => ({
-        ...scene,
-        format: projectSnapshot.format || "9:16",
-        aspect_ratio: projectSnapshot.format || "9:16",
-      })) : [],
+      scenes: Array.isArray(projectSnapshot.scenes) ? projectSnapshot.scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectSnapshot.format || "9:16")) : [],
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       ownerNodeType: "manualTiming",
