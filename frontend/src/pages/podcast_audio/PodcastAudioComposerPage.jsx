@@ -32,7 +32,9 @@ function SimpleAudioTimeline({ durationSec = 0, currentTimeSec = 0, onSeek }) {
   const safeDuration = Math.max(0, normalizeNumber(durationSec, 0));
   const timelineDuration = Math.max(1, safeDuration);
   const safeCurrent = Math.min(timelineDuration, roundSeconds(currentTimeSec));
-  const leftPercent = `${Math.min(100, Math.max(0, (safeCurrent / timelineDuration) * 100))}%`;
+  const leftPercentValue = Math.min(100, Math.max(0, (safeCurrent / timelineDuration) * 100));
+  const leftPercent = `${leftPercentValue}%`;
+  const playheadClassName = `simpleAudioPlayhead${leftPercentValue > 82 ? " labelLeft" : ""}`;
 
   const seekTo = (timeSec) => {
     if (!onSeek || safeDuration <= 0) return;
@@ -76,7 +78,7 @@ function SimpleAudioTimeline({ durationSec = 0, currentTimeSec = 0, onSeek }) {
         tabIndex={0}
       >
         <div className="simpleAudioTimelineFill" style={{ width: leftPercent }} />
-        <div className="simpleAudioPlayhead" style={{ left: leftPercent }}>
+        <div className={playheadClassName} style={{ left: leftPercent }}>
           <span>{formatTimer(safeCurrent)}</span>
         </div>
       </div>
@@ -132,6 +134,11 @@ export default function PodcastAudioComposerPage() {
       element.pause();
       setIsPlaying(false);
       return;
+    }
+
+    if (element.ended || (element.duration && element.currentTime >= element.duration - 0.05)) {
+      element.currentTime = 0;
+      setCurrentTimeSec(0);
     }
 
     try {
