@@ -8,6 +8,7 @@ import {
   clearManualClipBoardProjectForNode,
   getAccountScopedStorageKey,
   getManualClipBoardMaterialStats,
+  logManualBoardMediaRefs,
   hasManualBoardMaterials,
   hasMeaningfulManualProject,
   readActiveManualClipBoardProject,
@@ -338,6 +339,72 @@ function sanitizeManualTimingSceneForNewBoard(scene = {}, projectFormat = "9:16"
   cleanScene.videoHasAudio = false;
 
   return cleanScene;
+}
+
+
+const MANUAL_NEW_BOARD_ROOT_DROP_KEY_RE = /(selectedscene|selected_scene|image|photo|preview|video|media|mmaudio|generated|asset|dataurl|data_url)/i;
+const MANUAL_NEW_BOARD_FORBIDDEN_MEDIA_VALUE_RE = /^(data:image|data:video|blob:)|\/static\/assets|\.(png|jpe?g|webp|gif|mp4|mov|webm)(?:[?#]|$)/i;
+
+function isManualNewBoardAllowedAudioPath(path = "", key = "", value = "") {
+  const safePath = String(path || "");
+  const safeKey = String(key || "");
+  const text = String(value || "").trim();
+  if (/^(data:image|data:video|blob:)/i.test(text)) return false;
+  if (safePath === "project.audio.url" || safePath === "project.audio_metadata.url") return true;
+  if (/\.audio_phrases\[\d+\]/.test(safePath)) return true;
+  if (safeKey === "audio_slice_url" && /\.(mp3|wav|m4a|aac|ogg)(?:[?#]|$)/i.test(text)) return true;
+  return false;
+}
+
+function deepSanitizeManualNewBoardValue(value, path = "project", depth = 0) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    return MANUAL_NEW_BOARD_FORBIDDEN_MEDIA_VALUE_RE.test(value) ? "" : value;
+  }
+  if (typeof value !== "object") return value;
+  if (depth > 8) return undefined;
+  if (Array.isArray(value)) {
+    return value
+      .map((item, index) => deepSanitizeManualNewBoardValue(item, `${path}[${index}]`, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+  const clean = {};
+  Object.entries(value).forEach(([key, child]) => {
+    const childPath = `${path}.${key}`;
+    const keyMatchesDrop = MANUAL_NEW_BOARD_ROOT_DROP_KEY_RE.test(String(key || ""));
+    if (keyMatchesDrop && !isManualNewBoardAllowedAudioPath(childPath, key, child)) return;
+    const sanitized = deepSanitizeManualNewBoardValue(child, childPath, depth + 1);
+    if (sanitized === undefined) return;
+    if (typeof sanitized === "string" && keyMatchesDrop && sanitized.trim()) return;
+    clean[key] = sanitized;
+  });
+  return clean;
+}
+
+function sanitizeManualNewBoardStoryBlock(block = {}, index = 0) {
+  return deepSanitizeManualNewBoardValue(block && typeof block === "object" ? block : {}, `project.story_blocks[${index}]`, 0) || {};
+}
+
+function sanitizeManualNewBoardProject(projectSnapshot = {}) {
+  const sourceProject = projectSnapshot && typeof projectSnapshot === "object" ? projectSnapshot : {};
+  const projectFormat = String(sourceProject.format || sourceProject.aspect_ratio || "9:16");
+  const cleanRoot = deepSanitizeManualNewBoardValue(sourceProject, "project", 0) || {};
+  const cleanScenes = Array.isArray(sourceProject.scenes)
+    ? sourceProject.scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat))
+    : [];
+  const cleanStoryBlocks = Array.isArray(sourceProject.story_blocks)
+    ? sourceProject.story_blocks.map((block, index) => sanitizeManualNewBoardStoryBlock(block, index))
+    : [];
+  return {
+    ...cleanRoot,
+    format: projectFormat,
+    aspect_ratio: projectFormat,
+    format_locked: true,
+    story_blocks: cleanStoryBlocks,
+    scenes: cleanScenes,
+    selectedScene: null,
+    selectedSceneId: cleanScenes[0]?.scene_id || "",
+  };
 }
 
 function readActiveProject() {
@@ -2144,6 +2211,7 @@ export default function ManualTimingEditorPage() {
       storySignature,
     };
 
+    logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS BEFORE CLEAN]", projectSnapshot, { sourceNodeId: ownerNodeId });
     console.info("[MANUAL BOARD NEW PROJECT REQUEST]", {
       sourceNodeId: ownerNodeId,
       oldIdentity: getManualBoardIdentityParts(existingBoard),
@@ -2200,20 +2268,27 @@ export default function ManualTimingEditorPage() {
       }
     }
 
+    projectSnapshot = sanitizeManualNewBoardProject({
+      ...projectSnapshot,
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      ownerNodeType: "manualTiming",
+      source: "manual_timing_node",
+      updatedAt: Date.now(),
+      lastPersistReason: "manual_new_project_from_audio_split",
+    });
     projectSnapshot = {
       ...projectSnapshot,
-      format: String(projectSnapshot.format || projectSnapshot.aspect_ratio || "9:16"),
-      aspect_ratio: String(projectSnapshot.aspect_ratio || projectSnapshot.format || "9:16"),
-      format_locked: true,
-      scenes: Array.isArray(projectSnapshot.scenes) ? projectSnapshot.scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectSnapshot.format || "9:16")) : [],
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       ownerNodeType: "manualTiming",
       source: "manual_timing_node",
       selectedSceneId: projectSnapshot.scenes?.[0]?.scene_id || "",
+      selectedScene: null,
       updatedAt: Date.now(),
       lastPersistReason: "manual_new_project_from_audio_split",
     };
+    logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS AFTER CLEAN]", projectSnapshot, { sourceNodeId: ownerNodeId });
 
     const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectSnapshot, {
       forceReplace: true,

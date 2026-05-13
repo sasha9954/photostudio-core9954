@@ -42,6 +42,7 @@ import {
   readManualClipBoardProjectForNode,
   scoreManualClipBoardProject,
   getManualClipBoardMaterialStats,
+  logManualBoardMediaRefs,
   readManualClipBoardOpenState,
   writeManualClipBoardOpenState,
   clearManualClipBoardOpenState,
@@ -11543,6 +11544,10 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const storedBoard = readManualClipBoardProjectForNode(sourceNodeId);
     const activeBoard = readActiveManualClipBoardProject();
     if (explicitNewProjectFromNavigation) {
+      logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId });
+      logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NODEBOARD]", nodeBoard, { sourceNodeId });
+      logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS STORED]", storedBoard, { sourceNodeId });
+      logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS ACTIVE]", activeBoard, { sourceNodeId });
       console.info("[MANUAL BOARD EMBEDDED SOURCE NODE FOUND]", {
         sourceNodeId,
         nodeExists: Boolean(sourceNode),
@@ -11605,7 +11610,17 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const selectedSceneId = explicitNewProjectFromNavigation
       ? String(board?.scenes?.[0]?.scene_id || "").trim()
       : String(board?.selectedSceneId || openState?.selectedSceneId || board?.scenes?.[0]?.scene_id || "").trim();
-    const canonicalBoard = {
+    const canonicalBoard = explicitNewProjectFromNavigation
+      ? {
+        ...(navigationProject || {}),
+        source: navigationProject?.source || "manual_timing_node",
+        ownerNodeType: "manualTiming",
+        nodeId: sourceNodeId,
+        sourceNodeId,
+        selectedSceneId,
+        selectedScene: null,
+      }
+      : {
       ...board,
       source: board?.source || "manual_timing_node",
       ownerNodeType: "manualTiming",
@@ -11617,6 +11632,11 @@ const [nodes, setNodes, onNodesChange] = useNodesState(defaultNodes);
     const canonicalInputSignature = String(canonicalBoard?.input_signature || canonicalBoard?.inputSignature || "").trim();
 
     if (explicitNewProjectFromNavigation) {
+      console.info("[MANUAL BOARD NODE OVERWRITE EXACT]", {
+        sourceNodeId,
+        beforeRefs: logManualBoardMediaRefs("[MANUAL BOARD NODE OVERWRITE EXACT BEFORE]", nodeBoard, { sourceNodeId }),
+        afterRefs: logManualBoardMediaRefs("[MANUAL BOARD NODE OVERWRITE EXACT AFTER]", canonicalBoard, { sourceNodeId }),
+      });
       console.info("[MANUAL BOARD FORCE CLEAN PROJECT INTO NODE]", {
         sourceNodeId,
         project_id: canonicalProjectId,
@@ -27587,6 +27607,7 @@ const hydrate = useCallback((source = "unknown") => {
             embedded
             sourceNodeId={manualDirectorEditor.sourceNodeId}
             project={manualDirectorBoardProject}
+            manualBoardExplicitNewProject={manualDirectorBoardProject?.lastPersistReason === "manual_new_project_from_audio_split" || manualDirectorBoardProject?.lastPersistReason === "manual_new_project_from_audio_split_open_embedded"}
             onProjectChange={(nextProject, reason, persistOptions) => patchManualTimingDirectorBoard(manualDirectorEditor.sourceNodeId, nextProject, reason, persistOptions)}
             onMMAudioGenerate={handleManualMMAudioGenerate}
             onClose={closeManualTimingDirectorBoard}

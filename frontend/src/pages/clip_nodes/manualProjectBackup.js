@@ -120,6 +120,99 @@ const MANUAL_STORAGE_TOP_LEVEL_DROP_KEYS = new Set([
   "largePayload",
 ]);
 
+
+const MANUAL_BOARD_MEDIA_REF_KEY_RE = /(image|photo|preview|video|media|mmaudio|dataurl|data_url|asset|url)/i;
+const MANUAL_BOARD_MEDIA_REF_VALUE_RE = /(data:image|data:video|blob:|\/static\/assets|\.(png|jpe?g|webp|gif|mp4|mov|webm)(?:[?#]|$))/i;
+const MANUAL_BOARD_ALLOWED_AUDIO_PATH_RE = /(^|\.)(audio|audio_metadata)\.url$|(^|\.)audio_slice_url$/i;
+const MANUAL_BOARD_AUDIO_VALUE_RE = /\.(mp3|wav|m4a|aac|ogg)(?:[?#]|$)/i;
+
+function previewManualBoardMediaValue(value) {
+  if (typeof value === "string") return value.length > 180 ? `${value.slice(0, 180)}…` : value;
+  if (value === null || value === undefined) return "";
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length > 180 ? `${serialized.slice(0, 180)}…` : serialized;
+  } catch {
+    return String(value).slice(0, 180);
+  }
+}
+
+function hasNonEmptyManualBoardMediaValue(value) {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0;
+  if (typeof value === "boolean") return value === true;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(value);
+}
+
+function isAllowedManualBoardAudioMediaRef(path = "", key = "", value = "") {
+  const safePath = String(path || "");
+  const safeKey = String(key || "");
+  const text = String(value || "").trim();
+  if (!MANUAL_BOARD_ALLOWED_AUDIO_PATH_RE.test(safePath) && !/^(audio_slice_url|url)$/i.test(safeKey)) return false;
+  if (/^(data:image|data:video|blob:)/i.test(text)) return false;
+  if (MANUAL_BOARD_MEDIA_REF_VALUE_RE.test(text) && !MANUAL_BOARD_AUDIO_VALUE_RE.test(text)) return false;
+  return true;
+}
+
+export function findManualBoardMediaRefs(project = {}, options = {}) {
+  const maxDepth = Number(options?.maxDepth || 8) || 8;
+  const refs = [];
+  const seen = new WeakSet();
+  const visit = (value, path = "project", depth = 0, key = "") => {
+    if (depth > maxDepth) return;
+    if (value && typeof value === "object") {
+      if (seen.has(value)) return;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => visit(item, `${path}[${index}]`, depth + 1, String(index)));
+        return;
+      }
+      Object.entries(value).forEach(([childKey, childValue]) => {
+        const childPath = path ? `${path}.${childKey}` : childKey;
+        const keyMatches = MANUAL_BOARD_MEDIA_REF_KEY_RE.test(String(childKey || ""));
+        if (keyMatches && hasNonEmptyManualBoardMediaValue(childValue)) {
+          const childIsScalar = childValue === null || typeof childValue !== "object";
+          const text = typeof childValue === "string" ? childValue.trim() : previewManualBoardMediaValue(childValue);
+          const suspiciousString = typeof childValue === "string" && MANUAL_BOARD_MEDIA_REF_VALUE_RE.test(text);
+          const includeAll = options?.includeAllMediaKeys === true;
+          if ((childIsScalar || includeAll) && !isAllowedManualBoardAudioMediaRef(childPath, childKey, text) && (includeAll || suspiciousString || keyMatches)) {
+            refs.push({
+              path: childPath,
+              key: childKey,
+              valuePreview: previewManualBoardMediaValue(childValue),
+            });
+          }
+        }
+        visit(childValue, childPath, depth + 1, childKey);
+      });
+    }
+  };
+  visit(project, "project", 0, "project");
+  return refs;
+}
+
+export function logManualBoardMediaRefs(label = "[MANUAL BOARD MEDIA REFS]", project = {}, extra = {}) {
+  try {
+    const refs = findManualBoardMediaRefs(project, extra?.findOptions || {});
+    console.info(label, {
+      sourceNodeId: String(extra?.sourceNodeId || project?.sourceNodeId || project?.nodeId || "").trim(),
+      project_id: String(project?.project_id || project?.projectId || "").trim(),
+      input_signature: String(project?.input_signature || project?.inputSignature || "").trim(),
+      sceneCount: Array.isArray(project?.scenes) ? project.scenes.length : 0,
+      refsCount: refs.length,
+      refs: refs.slice(0, 20),
+      ...extra,
+    });
+    return refs;
+  } catch (error) {
+    console.warn(`${label} failed`, { error: error?.message || String(error || "unknown") });
+    return [];
+  }
+}
+
 let lastManualClipBoardStorageError = null;
 
 export function getLastManualClipBoardStorageError() {
