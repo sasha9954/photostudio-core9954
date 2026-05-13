@@ -178,6 +178,11 @@
   white-space: nowrap;
 }
 
+.simpleAudioPlayhead.labelLeft span {
+  right: 12px;
+  left: auto;
+}
+
 .podcastComposerControls {
   display: flex;
   align-items: center;
