@@ -1,0 +1,222 @@
+.podcastComposerPage {
+  min-height: 100vh;
+  padding: 28px;
+  color: #e5eefc;
+  background: radial-gradient(circle at top left, rgba(168, 85, 247, 0.18), transparent 34%), #08111f;
+}
+
+.podcastComposerHeader,
+.podcastComposerCard {
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 22px;
+  background: rgba(15, 23, 42, 0.78);
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.28);
+}
+
+.podcastComposerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+.podcastComposerHeader h1,
+.podcastComposerCard h2,
+.podcastComposerTrack h3 {
+  margin: 0;
+}
+
+.podcastComposerHeader p {
+  margin: 8px 0 0;
+  color: #9fb0ca;
+}
+
+.podcastComposerEyebrow {
+  color: #a78bfa !important;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.podcastComposerHeaderActions,
+.podcastComposerOperationButtons,
+.podcastComposerMicroButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.podcastComposerPage button,
+.podcastComposerUpload {
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 12px;
+  padding: 10px 14px;
+  color: #e5eefc;
+  background: rgba(30, 41, 59, 0.82);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.podcastComposerPage button:hover,
+.podcastComposerUpload:hover {
+  border-color: rgba(125, 211, 252, 0.7);
+}
+
+.podcastComposerPage button.primary {
+  border-color: rgba(34, 197, 94, 0.55);
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.28), rgba(14, 165, 233, 0.2));
+}
+
+.podcastComposerMessage {
+  margin-bottom: 18px;
+  border: 1px solid rgba(251, 191, 36, 0.42);
+  border-radius: 16px;
+  padding: 14px 16px;
+  color: #fde68a;
+  background: rgba(120, 53, 15, 0.28);
+}
+
+.podcastComposerCard {
+  padding: 20px;
+  margin-bottom: 18px;
+}
+
+.podcastComposerMetaGrid,
+.podcastComposerFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.podcastComposerFields.small {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.podcastComposerFields label {
+  display: grid;
+  gap: 6px;
+  color: #9fb0ca;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.podcastComposerFields input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 10px;
+  padding: 9px 10px;
+  color: #e5eefc;
+  background: rgba(2, 6, 23, 0.55);
+}
+
+.podcastComposerPage audio {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.podcastComposerEmpty {
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  padding: 14px;
+  color: #94a3b8;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.podcastComposerTracks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.podcastComposerTrack {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  padding: 14px;
+  background: rgba(2, 6, 23, 0.34);
+}
+
+.podcastComposerTrackHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.podcastComposerTrackHeader label {
+  color: #a7f3d0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.podcastComposerUpload {
+  display: inline-block;
+  margin-bottom: 10px;
+}
+
+.podcastComposerTrackFile {
+  color: #9fb0ca;
+  font-size: 13px;
+}
+
+.podcastComposerOperationsList {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.podcastComposerOperation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  padding: 10px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.podcastComposerCard.preview textarea {
+  width: 100%;
+  min-height: 360px;
+  box-sizing: border-box;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 16px;
+  padding: 14px;
+  color: #dbeafe;
+  background: rgba(2, 6, 23, 0.74);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.podcastComposerTimeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.podcastComposerTimeline span {
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #bfdbfe;
+  background: rgba(37, 99, 235, 0.18);
+}
+
+@media (max-width: 760px) {
+  .podcastComposerPage {
+    padding: 14px;
+  }
+
+  .podcastComposerHeader,
+  .podcastComposerOperation {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

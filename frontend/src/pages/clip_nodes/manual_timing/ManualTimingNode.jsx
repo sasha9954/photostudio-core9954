@@ -311,6 +311,18 @@ export default function ManualTimingNode({ id, data }) {
     });
   };
 
+  const onOpenPodcastComposer = () => {
+    const project = persistProject();
+    navigate(`/studio/podcast-audio-composer?sourceNodeId=${encodeURIComponent(id)}`, {
+      state: {
+        sourceNodeId: id,
+        fromStoryboard: true,
+        audio: effectiveAudio,
+        project,
+      },
+    });
+  };
+
   const onReturnToActiveBoard = () => {
     const nodeScopedProject = readManualClipBoardProjectForNode(id);
     const activeStoredProject = readActiveManualClipBoardProject();
@@ -582,6 +594,7 @@ export default function ManualTimingNode({ id, data }) {
 
         <div className="manualTimingNodeActions manualTimingNode_actions">
           <button className="clipSB_btn" onClick={onOpenEditor} disabled={!isProjectModeSelected}>Открыть редактор тайминга</button>
+          <button className="clipSB_btn clipSB_btnSecondary manualTimingNode_podcastBtn" type="button" onClick={onOpenPodcastComposer}>Подкаст</button>
           <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={!isProjectModeSelected || !isModeReadyForJson} title={copyJsonTitle}>{copyJsonLabel}</button>
           <label className={`clipSB_btn clipSB_btnSecondary manualTimingNode_upload ${isAudioUploading ? "isDisabled" : ""}`}>
             {isAudioUploading ? "Загрузка…" : (effectiveAudio.url ? "Заменить аудио" : "Загрузить аудио")}
