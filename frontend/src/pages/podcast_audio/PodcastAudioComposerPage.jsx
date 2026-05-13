@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { getAccountScopedStorageKey } from "../clip_nodes/manualProjectBackup.js";
 import {
@@ -9,10 +9,10 @@ import {
 } from "../clip_nodes/manual_timing/manualTimingDomain.js";
 import "./PodcastAudioComposerPage.css";
 
-const TRACK_COUNT = 4;
-const MICRO_STEPS = [-0.20, -0.10, -0.05, -0.02, 0.02, 0.05, 0.10, 0.20];
+const MAX_TRACK_COUNT = 4;
 
 const OPERATION_LABELS = {
+  cut_point: "Разрез",
   insert_silence: "Вставить тишину",
   replace_with_silence: "Заменить тишиной",
   cut_region: "Вырезать участок",
@@ -75,13 +75,15 @@ function createDefaultProject(sourceNodeId = "", mainAudio = {}) {
       filename: safeAudio.filename,
       duration_sec: Number(safeAudio.duration_sec || 0),
     },
-    tracks: Array.from({ length: TRACK_COUNT }, (_, index) => createTrack(index + 1)),
+    tracks: [],
     selection: {
       target_start_sec: 0,
       target_end_sec: 0,
-      source_track_id: "podcast_1",
+      source_track_id: "",
       source_start_sec: 0,
       source_end_sec: 0,
+      nudge_step_sec: 0.05,
+      silence_duration_sec: 2.0,
     },
     operations: [],
     final_audio_url: "",
@@ -108,7 +110,10 @@ function normalizeComposerProject(raw = {}, sourceNodeId = "", mainAudio = {}) {
       ...defaults.main_audio,
       ...(raw?.main_audio || {}),
     },
-    tracks: Array.from({ length: TRACK_COUNT }, (_, index) => createTrack(index + 1, rawTracks[index] || {})),
+    tracks: rawTracks
+      .map((track, index) => createTrack(getTrackNumber(track?.id) || index + 1, track || {}))
+      .filter((track) => !isEmptyTrack(track))
+      .slice(0, MAX_TRACK_COUNT),
     selection: {
       ...defaults.selection,
       ...selection,
@@ -116,7 +121,9 @@ function normalizeComposerProject(raw = {}, sourceNodeId = "", mainAudio = {}) {
       target_end_sec: normalizeNumber(selection.target_end_sec, 0),
       source_start_sec: normalizeNumber(selection.source_start_sec, 0),
       source_end_sec: normalizeNumber(selection.source_end_sec, 0),
-      source_track_id: String(selection.source_track_id || defaults.selection.source_track_id),
+      source_track_id: String(selection.source_track_id || ""),
+      nudge_step_sec: normalizeNumber(selection.nudge_step_sec, defaults.selection.nudge_step_sec),
+      silence_duration_sec: normalizeNumber(selection.silence_duration_sec, defaults.selection.silence_duration_sec),
     },
     operations: Array.isArray(raw?.operations) ? raw.operations : [],
     final_audio_url: String(raw?.final_audio_url || ""),
@@ -156,9 +163,99 @@ function downloadJson(project = {}) {
   URL.revokeObjectURL(url);
 }
 
+function clampSeconds(value, fallback = 0) {
+  return Math.max(0, normalizeNumber(value, fallback));
+}
+
+function roundSeconds(value, digits = 3) {
+  return Number(clampSeconds(value).toFixed(digits));
+}
+
+function normalizeRange(start, end) {
+  const safeStart = roundSeconds(start);
+  const safeEnd = roundSeconds(end);
+  return safeEnd >= safeStart
+    ? { start: safeStart, end: safeEnd }
+    : { start: safeEnd, end: safeStart };
+}
+
 function formatDuration(value) {
   const sec = Number(value || 0);
   return Number.isFinite(sec) && sec > 0 ? `${sec.toFixed(2)} с` : "0.00 с";
+}
+
+function formatTimestamp(value) {
+  return roundSeconds(value).toFixed(3);
+}
+
+function getTrackNumber(trackId = "") {
+  const match = String(trackId).match(/podcast_(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function isEmptyTrack(track = {}) {
+  return !track?.url && !track?.filename;
+}
+
+function AudioEditTimeline({
+  durationSec = 0,
+  currentTimeSec = 0,
+  selectionStartSec = 0,
+  selectionEndSec = 0,
+  operations = [],
+  compact = false,
+  onSeek,
+  onSetSelectionStart,
+  onSetSelectionEnd,
+}) {
+  const safeDuration = Math.max(1, normalizeNumber(durationSec, 0));
+  const safeCurrent = Math.min(safeDuration, roundSeconds(currentTimeSec));
+  const range = normalizeRange(selectionStartSec, selectionEndSec);
+  const tickStep = safeDuration > 180 ? 30 : safeDuration > 90 ? 15 : safeDuration > 30 ? 5 : 1;
+  const ticks = [];
+  for (let second = 0; second <= Math.ceil(safeDuration); second += tickStep) {
+    ticks.push(Math.min(second, safeDuration));
+  }
+  if (!ticks.includes(safeDuration)) ticks.push(safeDuration);
+
+  const toPercent = (value) => `${Math.min(100, Math.max(0, (normalizeNumber(value, 0) / safeDuration) * 100))}%`;
+  const seekFromEvent = (event) => {
+    if (!onSeek) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+    onSeek(roundSeconds(Math.min(safeDuration, Math.max(0, ratio * safeDuration))));
+  };
+
+  return (
+    <div className={`audioEditTimeline ${compact ? "compact" : ""}`}>
+      <div className="audioEditTimelineBar" role="button" tabIndex={0} onClick={seekFromEvent} onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") seekFromEvent(event);
+      }}>
+        {range.end > range.start ? (
+          <div className="audioEditSelection" style={{ left: toPercent(range.start), width: toPercent(range.end - range.start) }} />
+        ) : null}
+        {operations.map((operation) => {
+          const start = normalizeNumber(operation.target_start_sec, 0);
+          const duration = operation.type === "cut_point" ? 0 : Math.max(0.04, normalizeNumber(operation.duration_sec, 0) || (normalizeNumber(operation.target_end_sec, start) - start));
+          const className = `audioEditOperation ${operation.type || "unknown"}`;
+          return <div key={operation.id} className={className} style={{ left: toPercent(start), width: operation.type === "cut_point" ? "2px" : toPercent(duration) }} title={OPERATION_LABELS[operation.type] || operation.type} />;
+        })}
+        {ticks.map((tick) => (
+          <div key={tick} className="audioEditTick" style={{ left: toPercent(tick) }}>
+            <i />
+            <span>{formatTimestamp(tick)}</span>
+          </div>
+        ))}
+        <div className="audioEditPlayhead" style={{ left: toPercent(safeCurrent) }}>
+          <b>{formatTimestamp(safeCurrent)}</b>
+        </div>
+      </div>
+      <div className="audioEditTimelineActions">
+        <button type="button" onClick={() => onSetSelectionStart?.(safeCurrent)}>Поставить start по курсору</button>
+        <button type="button" onClick={() => onSetSelectionEnd?.(safeCurrent)}>Поставить end по курсору</button>
+      </div>
+    </div>
+  );
 }
 
 export default function PodcastAudioComposerPage() {
@@ -170,14 +267,20 @@ export default function PodcastAudioComposerPage() {
   const storedManualTimingProject = useMemo(() => readManualTimingProjectForNode(sourceNodeId), [sourceNodeId]);
   const sourceProject = storedManualTimingProject || {};
   const sourceAudio = stateAudio.url ? stateAudio : normalizeManualTimingAudio(sourceProject?.audio);
+  const mainAudioRef = useRef(null);
+  const sourceAudioRefs = useRef({});
   const [project, setProject] = useState(() => normalizeComposerProject(readComposerProject(sourceNodeId), sourceNodeId, sourceAudio));
   const [message, setMessage] = useState("");
+  const [mainCurrentTimeSec, setMainCurrentTimeSec] = useState(0);
+  const [trackCurrentTimes, setTrackCurrentTimes] = useState({});
 
   useEffect(() => {
     persistComposerProject(project);
   }, [project]);
 
-  const selectedTrack = project.tracks.find((track) => track.id === project.selection.source_track_id) || project.tracks[0];
+  const selectedTrack = project.tracks.find((track) => track.id === project.selection.source_track_id) || null;
+  const targetRange = normalizeRange(project.selection.target_start_sec, project.selection.target_end_sec);
+  const sourceRange = normalizeRange(project.selection.source_start_sec, project.selection.source_end_sec);
   const editJson = JSON.stringify(project, null, 2);
 
   const updateProject = (updater) => {
@@ -191,6 +294,28 @@ export default function PodcastAudioComposerPage() {
     ...current,
     selection: { ...current.selection, ...patch },
   }));
+
+  const setTargetStart = (value) => updateSelection({
+    target_start_sec: roundSeconds(value),
+    target_end_sec: Math.max(roundSeconds(value), roundSeconds(project.selection.target_end_sec)),
+  });
+
+  const setTargetEnd = (value) => updateSelection({
+    target_start_sec: Math.min(roundSeconds(value), roundSeconds(project.selection.target_start_sec)),
+    target_end_sec: roundSeconds(value),
+  });
+
+  const seekMainAudio = (timeSec) => {
+    const nextTime = roundSeconds(timeSec);
+    setMainCurrentTimeSec(nextTime);
+    if (mainAudioRef.current) mainAudioRef.current.currentTime = nextTime;
+  };
+
+  const seekTrackAudio = (trackId, timeSec) => {
+    const nextTime = roundSeconds(timeSec);
+    setTrackCurrentTimes((current) => ({ ...current, [trackId]: nextTime }));
+    if (sourceAudioRefs.current[trackId]) sourceAudioRefs.current[trackId].currentTime = nextTime;
+  };
 
   const onBackToNode = () => {
     navigate("/studio/storyboard", {
@@ -244,48 +369,80 @@ export default function PodcastAudioComposerPage() {
     });
   };
 
+  const updateTrack = (trackId, patch) => updateProject((current) => ({
+    ...current,
+    tracks: current.tracks.map((track) => track.id === trackId ? { ...track, ...patch } : track),
+  }));
+
   const onTrackUpload = async (trackId, file) => {
     if (!file) return;
     const metadata = await readAudioFileMetadata(file);
     const url = URL.createObjectURL(file);
-    updateProject((current) => ({
-      ...current,
-      tracks: current.tracks.map((track) => track.id === trackId ? {
-        ...track,
-        url,
-        filename: file.name || track.filename,
-        duration_sec: Number(metadata.duration_sec || 0),
-      } : track),
-    }));
+    updateTrack(trackId, {
+      url,
+      filename: file.name || "audio",
+      duration_sec: Number(metadata.duration_sec || 0),
+    });
   };
 
-  const updateTrack = (trackId, patch) => updateProject((current) => ({
-    ...current,
-    tracks: current.tracks.map((track) => track.id === trackId ? { ...track, ...patch } : track),
-    selection: current.selection.source_track_id === trackId ? { ...current.selection, ...patch.selection } : current.selection,
-  }));
-
-  const shiftBoundary = (delta) => {
-    updateSelection({
-      target_start_sec: Math.max(0, Number((project.selection.target_start_sec + delta).toFixed(2))),
-      target_end_sec: Math.max(0, Number((project.selection.target_end_sec + delta).toFixed(2))),
+  const addTrack = () => {
+    updateProject((current) => {
+      if (current.tracks.length >= MAX_TRACK_COUNT) return current;
+      const used = new Set(current.tracks.map((track) => getTrackNumber(track.id)));
+      let nextIndex = 1;
+      while (used.has(nextIndex) && nextIndex <= MAX_TRACK_COUNT) nextIndex += 1;
+      const nextTrack = createTrack(nextIndex);
+      return {
+        ...current,
+        tracks: [...current.tracks, nextTrack],
+        selection: current.tracks.some((track) => track.id === current.selection.source_track_id) ? current.selection : { ...current.selection, source_track_id: nextTrack.id },
+      };
     });
+  };
+
+  const deleteTrack = (trackId) => {
+    updateProject((current) => {
+      const tracks = current.tracks.filter((track) => track.id !== trackId);
+      return {
+        ...current,
+        tracks,
+        selection: current.selection.source_track_id === trackId
+          ? { ...current.selection, source_track_id: tracks[0]?.id || "", source_start_sec: 0, source_end_sec: 0 }
+          : current.selection,
+      };
+    });
+  };
+
+  const nudgeTarget = (kind, direction) => {
+    const step = Math.max(0, normalizeNumber(project.selection.nudge_step_sec, 0.05)) * direction;
+    const start = roundSeconds(project.selection.target_start_sec + (kind === "end" ? 0 : step));
+    const end = roundSeconds(project.selection.target_end_sec + (kind === "start" ? 0 : step));
+    const fixed = kind === "start" && start > end
+      ? { start, end: start }
+      : kind === "end" && end < start
+        ? { start: end, end }
+        : { start, end };
+    updateSelection({ target_start_sec: fixed.start, target_end_sec: fixed.end });
   };
 
   const addOperation = (type) => {
     const selection = project.selection;
-    const durationSec = Math.max(0, normalizeNumber(selection.target_end_sec, 0) - normalizeNumber(selection.target_start_sec, 0));
-    const sourceDurationSec = Math.max(0, normalizeNumber(selection.source_end_sec, 0) - normalizeNumber(selection.source_start_sec, 0));
+    const normalizedTarget = normalizeRange(selection.target_start_sec, selection.target_end_sec);
+    const normalizedSource = normalizeRange(selection.source_start_sec, selection.source_end_sec);
+    const sourceDurationSec = Math.max(0, normalizedSource.end - normalizedSource.start);
+    const targetDurationSec = Math.max(0, normalizedTarget.end - normalizedTarget.start);
+    const isTrackOperation = type === "insert_from_track" || type === "replace_with_track_fragment";
+    const isPointOperation = type === "cut_point" || type === "insert_silence" || type === "insert_from_track";
     const operation = {
       id: `op_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       type,
-      target_start_sec: normalizeNumber(selection.target_start_sec, 0),
-      target_end_sec: normalizeNumber(selection.target_end_sec, 0),
-      duration_sec: type === "insert_silence" ? durationSec : (sourceDurationSec || durationSec),
-      source_track_id: type.includes("track") ? selection.source_track_id : "",
-      source_start_sec: type.includes("track") ? normalizeNumber(selection.source_start_sec, 0) : 0,
-      source_end_sec: type.includes("track") ? normalizeNumber(selection.source_end_sec, 0) : 0,
-      gain_db: type.includes("track") ? normalizeNumber(selectedTrack?.gain_db, 0) : 0,
+      target_start_sec: type === "cut_point" || type === "insert_silence" || type === "insert_from_track" ? roundSeconds(mainCurrentTimeSec) : normalizedTarget.start,
+      target_end_sec: isPointOperation ? roundSeconds(mainCurrentTimeSec) : normalizedTarget.end,
+      duration_sec: type === "insert_silence" ? Math.max(0, normalizeNumber(selection.silence_duration_sec, 2)) : (sourceDurationSec || targetDurationSec),
+      source_track_id: isTrackOperation ? selection.source_track_id : "",
+      source_start_sec: isTrackOperation ? normalizedSource.start : 0,
+      source_end_sec: isTrackOperation ? normalizedSource.end : 0,
+      gain_db: isTrackOperation ? normalizeNumber(selectedTrack?.gain_db, 0) : 0,
     };
     updateProject((current) => ({ ...current, operations: [...current.operations, operation] }));
   };
@@ -312,58 +469,140 @@ export default function PodcastAudioComposerPage() {
 
       {message ? <div className="podcastComposerMessage">{message}</div> : null}
 
-      <section className="podcastComposerCard">
-        <h2>Основная дорожка</h2>
-        <div className="podcastComposerMetaGrid">
-          <span>Файл: <b>{project.main_audio.filename || "аудио не выбрано"}</b></span>
-          <span>Длительность: <b>{formatDuration(project.main_audio.duration_sec)}</b></span>
+      <section className="podcastComposerCard mainEditor">
+        <div className="podcastComposerSectionHeader">
+          <h2>Основная дорожка</h2>
+          <div className="podcastComposerMetaGrid compact">
+            <span>Файл: <b>{project.main_audio.filename || "аудио не выбрано"}</b></span>
+            <span>Длительность: <b>{formatDuration(project.main_audio.duration_sec)}</b></span>
+          </div>
         </div>
-        {project.main_audio.url ? <audio controls src={project.main_audio.url} /> : <div className="podcastComposerEmpty">Нет main narrator audio.</div>}
-        <div className="podcastComposerFields">
-          <label>start_sec<input type="number" step="0.01" value={project.selection.target_start_sec} onChange={(e) => updateSelection({ target_start_sec: normalizeNumber(e.target.value, 0) })} /></label>
-          <label>end_sec<input type="number" step="0.01" value={project.selection.target_end_sec} onChange={(e) => updateSelection({ target_end_sec: normalizeNumber(e.target.value, 0) })} /></label>
-        </div>
-        <div className="podcastComposerMicroButtons">
-          {MICRO_STEPS.map((step) => <button key={step} type="button" onClick={() => shiftBoundary(step)}>{step > 0 ? "+" : ""}{step.toFixed(2)}</button>)}
-        </div>
-      </section>
 
-      <section className="podcastComposerCard">
-        <h2>Дополнительные дорожки</h2>
-        <div className="podcastComposerTracks">
-          {project.tracks.map((track) => (
-            <article className="podcastComposerTrack" key={track.id}>
-              <div className="podcastComposerTrackHeader">
-                <h3>{track.label}</h3>
-                <label><input type="radio" name="sourceTrack" checked={project.selection.source_track_id === track.id} onChange={() => updateSelection({ source_track_id: track.id })} /> выбрать</label>
-              </div>
-              <label className="podcastComposerUpload">Загрузить аудио<input type="file" accept="audio/*" onChange={(e) => onTrackUpload(track.id, e.target.files?.[0])} hidden /></label>
-              <div className="podcastComposerTrackFile">{track.filename || "файл не выбран"} · {formatDuration(track.duration_sec)}</div>
-              {track.url ? <audio controls src={track.url} /> : null}
-              <div className="podcastComposerFields small">
-                <label>source_start_sec<input type="number" step="0.01" value={project.selection.source_track_id === track.id ? project.selection.source_start_sec : 0} onChange={(e) => updateSelection({ source_track_id: track.id, source_start_sec: normalizeNumber(e.target.value, 0) })} /></label>
-                <label>source_end_sec<input type="number" step="0.01" value={project.selection.source_track_id === track.id ? project.selection.source_end_sec : 0} onChange={(e) => updateSelection({ source_track_id: track.id, source_end_sec: normalizeNumber(e.target.value, 0) })} /></label>
-                <label>gain_db<input type="number" step="0.5" value={track.gain_db} onChange={(e) => updateTrack(track.id, { gain_db: normalizeNumber(e.target.value, 0) })} /></label>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+        {project.main_audio.url ? (
+          <>
+            <AudioEditTimeline
+              durationSec={project.main_audio.duration_sec}
+              currentTimeSec={mainCurrentTimeSec}
+              selectionStartSec={targetRange.start}
+              selectionEndSec={targetRange.end}
+              operations={project.operations}
+              onSeek={seekMainAudio}
+              onSetSelectionStart={setTargetStart}
+              onSetSelectionEnd={setTargetEnd}
+            />
+            <audio
+              ref={mainAudioRef}
+              controls
+              src={project.main_audio.url}
+              onTimeUpdate={(event) => setMainCurrentTimeSec(roundSeconds(event.currentTarget.currentTime))}
+              onLoadedMetadata={(event) => setMainCurrentTimeSec(roundSeconds(event.currentTarget.currentTime))}
+            />
+          </>
+        ) : <div className="podcastComposerEmpty">Нет main narrator audio.</div>}
 
-      <section className="podcastComposerCard">
-        <h2>Операции</h2>
-        <div className="podcastComposerOperationButtons">
-          {Object.entries(OPERATION_LABELS).map(([type, label]) => <button key={type} type="button" onClick={() => addOperation(type)}>{label}</button>)}
+        <div className="podcastComposerEditorGrid">
+          <div className="podcastComposerFields compactFields">
+            <label>start<input type="number" step="0.001" value={project.selection.target_start_sec} onChange={(e) => setTargetStart(e.target.value)} /></label>
+            <label>end<input type="number" step="0.001" value={project.selection.target_end_sec} onChange={(e) => setTargetEnd(e.target.value)} /></label>
+            <label>Пауза<input type="number" step="0.1" min="0" value={project.selection.silence_duration_sec} onChange={(e) => updateSelection({ silence_duration_sec: clampSeconds(e.target.value, 2) })} /></label>
+            <label>Шаг<input type="number" step="0.01" min="0" value={project.selection.nudge_step_sec} onChange={(e) => updateSelection({ nudge_step_sec: clampSeconds(e.target.value, 0.05) })} /></label>
+          </div>
+          <div className="podcastComposerSelectionInfo">
+            <span>start: <b>{formatTimestamp(targetRange.start)}</b></span>
+            <span>end: <b>{formatTimestamp(targetRange.end)}</b></span>
+            <span>длина: <b>{formatTimestamp(targetRange.end - targetRange.start)} c</b></span>
+          </div>
         </div>
-        <div className="podcastComposerOperationsList">
+
+        <div className="podcastComposerNudgeBar" aria-label="Точная подгонка границ">
+          <span>Шаг: {formatTimestamp(project.selection.nudge_step_sec)} сек</span>
+          <button type="button" onClick={() => nudgeTarget("start", -1)}>← start</button>
+          <button type="button" onClick={() => nudgeTarget("start", 1)}>start →</button>
+          <button type="button" onClick={() => nudgeTarget("end", -1)}>← end</button>
+          <button type="button" onClick={() => nudgeTarget("end", 1)}>end →</button>
+          <button type="button" onClick={() => nudgeTarget("zone", -1)}>← зона</button>
+          <button type="button" onClick={() => nudgeTarget("zone", 1)}>зона →</button>
+        </div>
+
+        <div className="podcastComposerOperationButtons compactToolbar">
+          <button type="button" onClick={() => addOperation("cut_point")}>Разрез</button>
+          <button type="button" onClick={() => setTargetStart(mainCurrentTimeSec)}>Выделить start</button>
+          <button type="button" onClick={() => setTargetEnd(mainCurrentTimeSec)}>Выделить end</button>
+          <button type="button" onClick={() => addOperation("insert_silence")}>Тишина +</button>
+          <button type="button" onClick={() => addOperation("replace_with_silence")}>Заменить тишиной</button>
+          <button type="button" onClick={() => addOperation("cut_region")}>Вырезать</button>
+          <button type="button" onClick={() => addOperation("insert_from_track")}>Вставить из дорожки</button>
+          <button type="button" onClick={() => addOperation("replace_with_track_fragment")}>Заменить фрагментом</button>
+        </div>
+
+        <div className="podcastComposerOperationsList compactList">
           {project.operations.length ? project.operations.map((operation, index) => (
             <div className="podcastComposerOperation" key={operation.id}>
-              <span>#{index + 1} {OPERATION_LABELS[operation.type] || operation.type}: {operation.target_start_sec}–{operation.target_end_sec} c</span>
-              {operation.source_track_id ? <span>источник: {operation.source_track_id} {operation.source_start_sec}–{operation.source_end_sec} c</span> : null}
+              <span>#{index + 1} {OPERATION_LABELS[operation.type] || operation.type}: {formatTimestamp(operation.target_start_sec)}–{formatTimestamp(operation.target_end_sec)} c</span>
+              {operation.duration_sec ? <span>{formatTimestamp(operation.duration_sec)} c</span> : <span>точка</span>}
+              {operation.source_track_id ? <span>источник: {operation.source_track_id} {formatTimestamp(operation.source_start_sec)}–{formatTimestamp(operation.source_end_sec)} c</span> : null}
               <button type="button" onClick={() => deleteOperation(operation.id)}>Удалить</button>
             </div>
           )) : <div className="podcastComposerEmpty">Операции ещё не добавлены.</div>}
         </div>
+      </section>
+
+      <section className="podcastComposerCard">
+        <div className="podcastComposerSectionHeader">
+          <h2>Дополнительные дорожки</h2>
+          <button type="button" className="primary addAudio" onClick={addTrack} disabled={project.tracks.length >= MAX_TRACK_COUNT}>+ Добавить аудио</button>
+        </div>
+        {project.tracks.length ? (
+          <div className="podcastComposerTracks">
+            {project.tracks.map((track) => {
+              const trackTime = trackCurrentTimes[track.id] || 0;
+              const isSelectedSource = project.selection.source_track_id === track.id;
+              return (
+                <article className={`podcastComposerTrack ${isSelectedSource ? "selected" : ""}`} key={track.id}>
+                  <div className="podcastComposerTrackHeader">
+                    <div>
+                      <h3>{track.label}</h3>
+                      <div className="podcastComposerTrackFile">{track.filename || "файл не выбран"} · {formatDuration(track.duration_sec)}</div>
+                    </div>
+                    <button type="button" onClick={() => deleteTrack(track.id)}>Удалить дорожку</button>
+                  </div>
+                  <label className="podcastComposerUpload">Загрузить аудио<input type="file" accept="audio/*" onChange={(e) => onTrackUpload(track.id, e.target.files?.[0])} hidden /></label>
+                  {track.url ? (
+                    <>
+                      <AudioEditTimeline
+                        compact
+                        durationSec={track.duration_sec}
+                        currentTimeSec={trackTime}
+                        selectionStartSec={isSelectedSource ? sourceRange.start : 0}
+                        selectionEndSec={isSelectedSource ? sourceRange.end : 0}
+                        operations={[]}
+                        onSeek={(timeSec) => seekTrackAudio(track.id, timeSec)}
+                        onSetSelectionStart={(timeSec) => updateSelection({ source_track_id: track.id, source_start_sec: roundSeconds(timeSec), source_end_sec: Math.max(roundSeconds(timeSec), roundSeconds(project.selection.source_end_sec)) })}
+                        onSetSelectionEnd={(timeSec) => updateSelection({ source_track_id: track.id, source_start_sec: Math.min(roundSeconds(timeSec), roundSeconds(project.selection.source_start_sec)), source_end_sec: roundSeconds(timeSec) })}
+                      />
+                      <audio
+                        ref={(element) => { sourceAudioRefs.current[track.id] = element; }}
+                        controls
+                        src={track.url}
+                        onTimeUpdate={(event) => setTrackCurrentTimes((current) => ({ ...current, [track.id]: roundSeconds(event.currentTarget.currentTime) }))}
+                      />
+                    </>
+                  ) : <div className="podcastComposerEmpty">Загрузите файл, чтобы использовать дорожку как source clip.</div>}
+                  <div className="podcastComposerFields small compactFields">
+                    <label>source start<input type="number" step="0.001" value={isSelectedSource ? project.selection.source_start_sec : 0} onChange={(e) => updateSelection({ source_track_id: track.id, source_start_sec: roundSeconds(e.target.value) })} /></label>
+                    <label>source end<input type="number" step="0.001" value={isSelectedSource ? project.selection.source_end_sec : 0} onChange={(e) => updateSelection({ source_track_id: track.id, source_end_sec: roundSeconds(e.target.value) })} /></label>
+                    <label>gain_db<input type="number" step="0.5" value={track.gain_db} onChange={(e) => updateTrack(track.id, { gain_db: normalizeNumber(e.target.value, 0) })} /></label>
+                  </div>
+                  <div className="podcastComposerTrackActions">
+                    <button type="button" onClick={() => updateSelection({ source_track_id: track.id, source_start_sec: roundSeconds(trackTime), source_end_sec: Math.max(roundSeconds(trackTime), roundSeconds(project.selection.source_end_sec)) })}>source start по курсору</button>
+                    <button type="button" onClick={() => updateSelection({ source_track_id: track.id, source_start_sec: Math.min(roundSeconds(trackTime), roundSeconds(project.selection.source_start_sec)), source_end_sec: roundSeconds(trackTime) })}>source end по курсору</button>
+                    <button type="button" onClick={() => updateSelection({ source_track_id: track.id })}>выбрать как источник</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : <div className="podcastComposerEmpty">Дополнительные дорожки скрыты. Нажмите “+ Добавить аудио”, чтобы создать Подкаст 1.</div>}
       </section>
 
       <section className="podcastComposerCard preview">
