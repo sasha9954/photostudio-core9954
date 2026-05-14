@@ -282,6 +282,11 @@ export function writeManualClipBoardOpenState(state = {}) {
       selectedSceneId: String(state?.selectedSceneId || "").trim(),
       project_id: String(state?.project_id || state?.projectId || "").trim(),
       input_signature: String(state?.input_signature || state?.inputSignature || "").trim(),
+      audio_signature: String(state?.audio_signature || state?.audioSignature || state?.forceAudioSignature || "").trim(),
+      forceProjectId: String(state?.forceProjectId || state?.project_id || state?.projectId || "").trim(),
+      forceInputSignature: String(state?.forceInputSignature || state?.input_signature || state?.inputSignature || "").trim(),
+      forceAudioSignature: String(state?.forceAudioSignature || state?.audio_signature || state?.audioSignature || "").trim(),
+      manualBoardExplicitNewProject: Boolean(state?.manualBoardExplicitNewProject),
       routePath: String(state?.routePath || "").trim(),
       updatedAt: Number(state?.updatedAt || Date.now()),
     };
@@ -439,13 +444,25 @@ export function sanitizeManualClipBoardProjectForStorage(project = {}) {
 function normalizeAudioMetadata(project = {}) {
   const audio = project?.audio && typeof project.audio === "object" ? project.audio : {};
   const meta = project?.audio_metadata && typeof project.audio_metadata === "object" ? project.audio_metadata : {};
+  const url = String(audio.url || meta.url || project.audio_url || project.audioUrl || "").trim();
+  const filename = String(
+    audio.filename
+    || audio.name
+    || meta.filename
+    || meta.name
+    || project.audio_name
+    || project.audioName
+    || ""
+  ).trim();
+  const durationSec = Number(audio.duration_sec ?? meta.duration_sec ?? project.audio_duration_sec ?? project.audioDurationSec ?? 0) || 0;
   return {
     ...meta,
     ...audio,
-    url: String(audio.url || meta.url || ""),
-    filename: String(audio.filename || meta.filename || ""),
-    duration_sec: Number(audio.duration_sec ?? meta.duration_sec ?? project.audio_duration_sec ?? 0) || 0,
-    duration_ms: Number(audio.duration_ms ?? meta.duration_ms ?? 0) || Math.round((Number(audio.duration_sec ?? meta.duration_sec ?? project.audio_duration_sec ?? 0) || 0) * 1000),
+    url,
+    name: String(audio.name || meta.name || filename || "").trim(),
+    filename,
+    duration_sec: durationSec,
+    duration_ms: Number(audio.duration_ms ?? meta.duration_ms ?? project.audio_duration_ms ?? project.audioDurationMs ?? 0) || Math.round(durationSec * 1000),
   };
 }
 
@@ -1298,6 +1315,11 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
       selectedSceneId: storageProject.selectedSceneId || "",
       project_id: String(storageProject.project_id || storageProject.projectId || "").trim(),
       input_signature: String(storageProject.input_signature || storageProject.inputSignature || "").trim(),
+      audio_signature: String(storageProject.audio_signature || storageProject.audioSignature || "").trim(),
+      manualBoardExplicitNewProject: true,
+      forceProjectId: String(storageProject.project_id || storageProject.projectId || "").trim(),
+      forceInputSignature: String(storageProject.input_signature || storageProject.inputSignature || "").trim(),
+      forceAudioSignature: String(storageProject.audio_signature || storageProject.audioSignature || "").trim(),
       routePath: openRoutePath,
       updatedAt: Date.now(),
     });
@@ -1318,6 +1340,11 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
       revision: storageProject.revision || 0,
       deletionRevision: storageProject.deletionRevision || storageProject.deletion_revision || storageProject.deleted_media_revision || 0,
       selectedSceneId: storageProject.selectedSceneId || "",
+      audio: {
+        url: String(storageProject.audio?.url || storageProject.audio_url || storageProject.audioUrl || "").trim(),
+        name: String(storageProject.audio?.name || storageProject.audio?.filename || storageProject.audio_name || "").trim(),
+        duration_sec: Number(storageProject.audio?.duration_sec || storageProject.audio_duration_sec || 0) || 0,
+      },
       stats: getManualClipBoardMaterialStats(storageProject),
     });
     return storageProject;

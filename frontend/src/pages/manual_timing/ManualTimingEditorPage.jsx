@@ -420,7 +420,73 @@ function readActiveProject() {
 }
 
 function getEmptyManualTimingAudio() {
-  return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
+  return { url: "", filename: "", name: "", duration_sec: 0, duration_ms: 0 };
+}
+
+function normalizeManualTimingProjectAudioForHandoff(project = {}, stateAudio = null) {
+  const candidates = [
+    stateAudio,
+    project?.audio,
+    project?.uploadedAudio,
+    project?.uploaded_audio,
+    project?.sourceAudio,
+    project?.source_audio,
+    project?.sourceNodeAudio,
+    project?.source_node_audio,
+    {
+      url: project?.audio_url || project?.audioUrl || project?.source_audio_url || project?.sourceAudioUrl,
+      filename: project?.audio_name || project?.audioName || project?.audio_filename || project?.audioFilename,
+      name: project?.audio_name || project?.audioName || project?.audio_filename || project?.audioFilename,
+      duration_sec: project?.audio_duration_sec || project?.audioDurationSec || project?.duration_sec || project?.durationSec,
+      duration_ms: project?.audio_duration_ms || project?.audioDurationMs,
+    },
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeManualTimingAudio(candidate);
+    if (!normalized.url) continue;
+    const name = String(
+      candidate?.name
+      || candidate?.filename
+      || candidate?.fileName
+      || candidate?.original_filename
+      || candidate?.originalFilename
+      || normalized.filename
+      || ""
+    ).trim();
+    return {
+      url: normalized.url,
+      name,
+      filename: normalized.filename || name,
+      duration_sec: Number(normalized.duration_sec || 0) || 0,
+      duration_ms: Number(normalized.duration_ms || 0) || Math.round((Number(normalized.duration_sec || 0) || 0) * 1000),
+    };
+  }
+
+  return getEmptyManualTimingAudio();
+}
+
+function applyManualTimingProjectAudioCompat(projectSnapshot = {}, handoffAudio = getEmptyManualTimingAudio()) {
+  const audio = normalizeManualTimingProjectAudioForHandoff(projectSnapshot, handoffAudio);
+  const audioName = String(audio.name || audio.filename || "").trim();
+  return {
+    ...(projectSnapshot || {}),
+    audio: {
+      ...audio,
+      name: audioName,
+      filename: audio.filename || audioName,
+    },
+    audio_metadata: {
+      ...((projectSnapshot || {}).audio_metadata || {}),
+      ...audio,
+      name: audioName,
+      filename: audio.filename || audioName,
+    },
+    audio_url: audio.url,
+    audioUrl: audio.url,
+    audio_name: audioName,
+    audio_duration_sec: Number(audio.duration_sec || 0) || 0,
+  };
 }
 
 async function uploadManualTimingAudioAsset(file) {
@@ -520,7 +586,7 @@ function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = ge
 function buildInitialProject() {
   const raw = readActiveProject();
   const project = { ...getDefaultManualTimingNodeData(), ...(raw || {}) };
-  const audio = normalizeManualTimingAudio(project.audio);
+  const audio = normalizeManualTimingProjectAudioForHandoff(project);
   const duration = Number(audio.duration_sec || 0);
   const markers = duration > 0
     ? normalizeManualTimingMarkers(project.markers?.length ? project.markers : [0, duration], duration)
@@ -2874,7 +2940,8 @@ export default function ManualTimingEditorPage() {
     const sceneCleanStats = getManualNewBoardCleanSceneStats(scenes);
     const cleanScenes = scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat));
     console.info("[MANUAL BOARD NEW PROJECT CLEAN SCENES]", sceneCleanStats);
-    return {
+    const handoffAudio = normalizeManualTimingProjectAudioForHandoff(project, audio);
+    return applyManualTimingProjectAudioCompat({
       ...project,
       project_mode: modeConfig.mode || project.project_mode || MANUAL_TIMING_STORY_VOICEOVER_MODE,
       project_kind: project.project_kind || (modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE ? "clip" : (modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" : MANUAL_TIMING_STORY_PROJECT_KIND)),
@@ -2892,7 +2959,7 @@ export default function ManualTimingEditorPage() {
       scenes: cleanScenes,
       selectedSceneId: cleanScenes[0]?.scene_id || selectedScene?.scene_id || scenes[0]?.scene_id || "",
       timing_status: project.timing_status || "confirmed",
-    };
+    }, handoffAudio);
   };
 
 
@@ -2956,7 +3023,7 @@ export default function ManualTimingEditorPage() {
     const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
     if (hasMeaningfulManualProject(existingBoard)) setActiveBoardProject(existingBoard);
 
-    let projectSnapshot = {
+    let projectSnapshot = applyManualTimingProjectAudioCompat({
       ...buildDirectorProjectSnapshot(),
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
@@ -2965,7 +3032,7 @@ export default function ManualTimingEditorPage() {
       selectedSceneId: scenes[0]?.scene_id || "",
       updatedAt: Date.now(),
       lastPersistReason: "manual_new_project_from_audio_split",
-    };
+    }, normalizeManualTimingProjectAudioForHandoff(project, audio));
     const inputSignature = computeManualProjectInputSignature(projectSnapshot);
     const audioSignature = computeManualProjectInputSignature(projectSnapshot, { audioOnly: true });
     const storySignature = computeManualProjectInputSignature(projectSnapshot, { storyOnly: true });
@@ -3039,7 +3106,7 @@ export default function ManualTimingEditorPage() {
       }
     }
 
-    projectSnapshot = sanitizeManualNewBoardProject({
+    projectSnapshot = sanitizeManualNewBoardProject(applyManualTimingProjectAudioCompat({
       ...projectSnapshot,
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
@@ -3047,8 +3114,8 @@ export default function ManualTimingEditorPage() {
       source: "manual_timing_node",
       updatedAt: Date.now(),
       lastPersistReason: "manual_new_project_from_audio_split",
-    });
-    projectSnapshot = {
+    }, normalizeManualTimingProjectAudioForHandoff(project, audio)));
+    projectSnapshot = applyManualTimingProjectAudioCompat({
       ...projectSnapshot,
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
@@ -3058,7 +3125,7 @@ export default function ManualTimingEditorPage() {
       selectedScene: null,
       updatedAt: Date.now(),
       lastPersistReason: "manual_new_project_from_audio_split",
-    };
+    }, normalizeManualTimingProjectAudioForHandoff(project, audio));
     logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS AFTER CLEAN]", projectSnapshot, { sourceNodeId: ownerNodeId });
 
     const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectSnapshot, {
@@ -3091,6 +3158,17 @@ export default function ManualTimingEditorPage() {
     setActiveBoardProject(replacedProject);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
+    console.info("[MANUAL TIMING BOARD AUDIO HANDOFF]", {
+      sourceNodeId: ownerNodeId,
+      project_id: replacedProjectId,
+      audio: {
+        url: String(replacedProject?.audio?.url || replacedProject?.audio_url || replacedProject?.audioUrl || "").trim(),
+        name: String(replacedProject?.audio?.name || replacedProject?.audio?.filename || replacedProject?.audio_name || "").trim(),
+        duration_sec: Number(replacedProject?.audio?.duration_sec || replacedProject?.audio_duration_sec || 0) || 0,
+      },
+      audio_url: String(replacedProject?.audio_url || replacedProject?.audioUrl || replacedProject?.audio?.url || "").trim(),
+      audioSignature: replacedAudioSignature,
+    });
     navigate(STORYBOARD_ROUTE, {
       state: {
         openManualDirectorBoard: true,

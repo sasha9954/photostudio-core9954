@@ -176,12 +176,40 @@ function projectBelongsToSource(project = {}, sourceNodeId = "") {
   return getManualProjectOwnerId(project) === source;
 }
 
+function getManualBoardAudioInfo(project = {}) {
+  return {
+    url: String(project?.audio?.url || project?.audio_url || project?.audioUrl || "").trim(),
+    name: String(project?.audio?.name || project?.audio?.filename || project?.audio_name || "").trim(),
+    duration_sec: Number(project?.audio?.duration_sec || project?.audio_duration_sec || 0) || 0,
+  };
+}
+
+function normalizeManualBoardProjectAudioCompat(project = {}) {
+  const audioInfo = getManualBoardAudioInfo(project);
+  if (!audioInfo.url) return project;
+  return {
+    ...(project || {}),
+    audio: {
+      ...((project || {}).audio || {}),
+      url: audioInfo.url,
+      name: audioInfo.name,
+      filename: String(project?.audio?.filename || audioInfo.name || "").trim(),
+      duration_sec: audioInfo.duration_sec,
+    },
+    audio_url: audioInfo.url,
+    audioUrl: audioInfo.url,
+    audio_name: audioInfo.name,
+    audio_duration_sec: audioInfo.duration_sec,
+  };
+}
+
 function logManualBoardHydratePick(source, project = {}, extra = {}) {
   console.info("[MANUAL BOARD HYDRATE PICK]", {
     source,
     owner: getManualProjectOwnerId(project),
     project_id: project?.project_id || project?.projectId || "",
     input_signature: project?.input_signature || project?.inputSignature || computeManualProjectInputSignature(project),
+    audio: getManualBoardAudioInfo(project),
     stats: getManualClipBoardMaterialStats(project),
     ...extra,
   });
@@ -1176,7 +1204,7 @@ export default function ManualClipDirectorBoardEditor({
       const parsedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
       const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId) ? parsedSelectedSceneId : String(scenes[0]?.scene_id || "");
       const hydratedProject = normalizeDirectorProjectOwner({
-        ...parsed,
+        ...normalizeManualBoardProjectAudioCompat(parsed),
         ...(forcedProjectId ? { project_id: forcedProjectId, projectId: forcedProjectId } : {}),
         ...(forcedInputSignature ? { input_signature: forcedInputSignature, inputSignature: forcedInputSignature } : {}),
         ...(forcedAudioSignature ? { audio_signature: forcedAudioSignature, audioSignature: forcedAudioSignature } : {}),
@@ -1185,6 +1213,11 @@ export default function ManualClipDirectorBoardEditor({
         story_blocks: storyBlocks,
         scenes,
         selectedSceneId: selectedSceneIdForHydrate,
+      });
+      console.info("[MANUAL BOARD AUDIO HYDRATE]", {
+        project_id: hydratedProject.project_id || hydratedProject.projectId || "",
+        audio: getManualBoardAudioInfo(hydratedProject),
+        audioUrlResolved: String(hydratedProject.audio?.url || hydratedProject.audio_url || hydratedProject.audioUrl || "").trim(),
       });
       projectRef.current = hydratedProject;
       selectedSceneIdRef.current = selectedSceneIdForHydrate;
@@ -1230,11 +1263,7 @@ export default function ManualClipDirectorBoardEditor({
           project_id: projectToPersist.project_id || projectToPersist.projectId || "",
           input_signature: projectToPersist.input_signature || projectToPersist.inputSignature || "",
           audio_signature: projectToPersist.audio_signature || projectToPersist.audioSignature || "",
-          audio: {
-            url: String(projectToPersist.audio?.url || projectToPersist.audio_url || projectToPersist.audioUrl || "").trim(),
-            name: String(projectToPersist.audio?.name || projectToPersist.audio?.filename || projectToPersist.audio_name || "").trim(),
-            duration_sec: Number(projectToPersist.audio?.duration_sec || projectToPersist.audio_duration_sec || 0) || 0,
-          },
+          audio: getManualBoardAudioInfo(projectToPersist),
           persisted,
           readbackOk,
           readbackOwner: getManualProjectOwnerId(readback),
