@@ -93,6 +93,9 @@ const STATUS_LABELS = {
 };
 
 const NUDGE_STEPS = [-0.2, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.2];
+const MANUAL_TIMING_NUDGE_DEFAULT_STEP_SEC = 0.5;
+const MANUAL_TIMING_INSERT_SILENCE_SEC = 0.5;
+const MANUAL_TIMING_MAX_SILENCE_SEC = 30;
 const SHOW_MISSING_PHRASE_TOOLS = false;
 const STORYBOARD_ROUTE = "/studio/storyboard";
 
@@ -634,6 +637,284 @@ function clampTime(value, duration) {
   return Math.max(0, Math.min(Number(duration || 0), n));
 }
 
+
+function clampManualTimingStep(value, fallback = MANUAL_TIMING_NUDGE_DEFAULT_STEP_SEC) {
+  const number = Number(String(value ?? "").replace(/,/g, "."));
+  if (!Number.isFinite(number)) return fallback;
+  return roundTimingSec(Math.max(0.01, Math.min(30, Math.abs(number))));
+}
+
+function normalizeMarkersForExactDuration(rawMarkers = [], durationSec = 0) {
+  const duration = Math.max(0, Number(durationSec || 0));
+  if (!(duration > 0)) return [];
+  const values = (Array.isArray(rawMarkers) ? rawMarkers : [])
+    .map((marker) => roundTimingSec(clampTime(marker, duration)))
+    .filter((marker) => Number.isFinite(Number(marker)))
+    .sort((a, b) => a - b);
+  const unique = [];
+  values.forEach((marker) => {
+    if (!unique.length || Math.abs(marker - unique[unique.length - 1]) > 0.001) unique.push(marker);
+  });
+  if (!unique.length || unique[0] > 0.001) unique.unshift(0);
+  else unique[0] = 0;
+  if (Math.abs(unique[unique.length - 1] - duration) > 0.001) unique.push(roundTimingSec(duration));
+  else unique[unique.length - 1] = roundTimingSec(duration);
+  return unique;
+}
+
+function isManualTimingSilenceScene(scene = {}) {
+  return Boolean(scene?.is_silence || scene?.is_virtual_silence || scene?.scene_type === "manual_silence" || scene?.source_kind === "silence");
+}
+
+function decorateManualTimingSilenceScene(scene = {}) {
+  const start = roundTimingSec(scene?.start_sec);
+  const end = roundTimingSec(scene?.end_sec);
+  const duration = roundTimingSec(Math.max(0.01, end - start));
+  return {
+    ...scene,
+    scene_type: "manual_silence",
+    source_kind: "silence",
+    is_silence: true,
+    is_virtual_silence: true,
+    duration_sec: duration,
+    speech_start_sec: start,
+    speech_end_sec: end,
+    pre_silence_sec: 0,
+    post_silence_sec: 0,
+    section: "instrumental",
+    route: "i2v_sound",
+    contains_vocal: false,
+    contains_vocal_assumption: false,
+    contains_instrumental_assumption: false,
+    use_sound_suggestion: true,
+    energy: "soft",
+    original_text: "[тишина]",
+    translated_text_ru: "[тишина]",
+    meaning_hint_ru: "Пауза / вставленная тишина.",
+    scene_goal_ru: "Техническая пауза тишины.",
+    user_note_ru: "Вставленная тишина. Можно выбрать блок и менять его длительность микродоводчиком.",
+  };
+}
+
+function buildManualTimingSilenceBlocksFromScenes(scenes = []) {
+  return (Array.isArray(scenes) ? scenes : [])
+    .filter((scene) => isManualTimingSilenceScene(scene))
+    .map((scene, index) => ({
+      id: String(scene.silence_block_id || `silence_${index + 1}_${roundTimingSec(scene.start_sec).toFixed(3)}`),
+      start_sec: roundTimingSec(scene.start_sec),
+      end_sec: roundTimingSec(scene.end_sec),
+      duration_sec: roundTimingSec(Math.max(0.01, Number(scene.end_sec || 0) - Number(scene.start_sec || 0))),
+    }));
+}
+
+
+function retimeManualTimingScene(scene = {}, startSec = 0, endSec = 0, extraPatch = {}) {
+  const start = roundTimingSec(startSec);
+  const end = roundTimingSec(Math.max(start + 0.01, Number(endSec || 0)));
+  const oldStart = roundTimingSec(scene?.start_sec);
+  const oldEnd = roundTimingSec(scene?.end_sec);
+  const safeSpeechStart = Number.isFinite(Number(scene?.speech_start_sec)) ? roundTimingSec(scene.speech_start_sec) : oldStart;
+  const safeSpeechEnd = Number.isFinite(Number(scene?.speech_end_sec)) ? roundTimingSec(scene.speech_end_sec) : oldEnd;
+  const speechStart = roundTimingSec(Math.max(start, Math.min(end, safeSpeechStart)));
+  const speechEnd = roundTimingSec(Math.max(speechStart, Math.min(end, safeSpeechEnd)));
+  return {
+    ...scene,
+    ...extraPatch,
+    start_sec: start,
+    end_sec: end,
+    duration_sec: roundTimingSec(end - start),
+    speech_start_sec: speechStart,
+    speech_end_sec: speechEnd,
+    pre_silence_sec: roundTimingSec(Math.max(0, speechStart - start)),
+    post_silence_sec: roundTimingSec(Math.max(0, end - speechEnd)),
+  };
+}
+
+function shiftManualTimingScene(scene = {}, deltaSec = 0) {
+  const delta = roundTimingSec(deltaSec);
+  const start = roundTimingSec(Number(scene?.start_sec || 0) + delta);
+  const end = roundTimingSec(Number(scene?.end_sec || 0) + delta);
+  const speechStart = Number.isFinite(Number(scene?.speech_start_sec)) ? roundTimingSec(Number(scene.speech_start_sec) + delta) : start;
+  const speechEnd = Number.isFinite(Number(scene?.speech_end_sec)) ? roundTimingSec(Number(scene.speech_end_sec) + delta) : end;
+  return {
+    ...scene,
+    start_sec: start,
+    end_sec: end,
+    duration_sec: roundTimingSec(Math.max(0.01, end - start)),
+    speech_start_sec: speechStart,
+    speech_end_sec: speechEnd,
+    pre_silence_sec: roundTimingSec(Math.max(0, speechStart - start)),
+    post_silence_sec: roundTimingSec(Math.max(0, end - speechEnd)),
+  };
+}
+
+function reindexManualTimingTimelineScenes(scenes = []) {
+  return (Array.isArray(scenes) ? scenes : [])
+    .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001)
+    .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0))
+    .map((scene, index) => ({
+      ...scene,
+      scene_id: `seg_${String(index + 1).padStart(2, "0")}`,
+      index: index + 1,
+      duration_sec: roundTimingSec(Math.max(0.01, Number(scene.end_sec || 0) - Number(scene.start_sec || 0))),
+    }));
+}
+
+function buildManualTimingMarkersFromScenesList(scenes = [], durationSec = 0) {
+  const values = [0, roundTimingSec(durationSec)];
+  (Array.isArray(scenes) ? scenes : []).forEach((scene) => {
+    values.push(roundTimingSec(scene?.start_sec));
+    values.push(roundTimingSec(scene?.end_sec));
+  });
+  return normalizeMarkersForExactDuration(values, durationSec);
+}
+
+
+function rebuildManualTimingScenesWithVirtualSilence(rawScenes = [], originalDurationSec = 0) {
+  const sourceDuration = roundTimingSec(Math.max(0, Number(originalDurationSec || 0)));
+  const safeScenes = (Array.isArray(rawScenes) ? rawScenes : [])
+    .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001)
+    .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0));
+  if (!safeScenes.length) return { scenes: [], durationSec: sourceDuration, changed: false };
+
+  const silenceTotal = safeScenes.reduce((sum, scene) => (
+    isManualTimingSilenceScene(scene) ? sum + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)) : sum
+  ), 0);
+  const hasSilence = silenceTotal > 0.001;
+  if (!hasSilence) {
+    const maxEnd = safeScenes.reduce((max, scene) => Math.max(max, Number(scene?.end_sec || 0)), 0);
+    return { scenes: reindexManualTimingTimelineScenes(safeScenes), durationSec: roundTimingSec(Math.max(sourceDuration, maxEnd)), changed: false };
+  }
+
+  const explicitSourceCount = safeScenes.filter((scene) => (
+    !isManualTimingSilenceScene(scene)
+    && Number.isFinite(Number(scene?.source_start_sec))
+    && Number.isFinite(Number(scene?.source_end_sec))
+  )).length;
+  const audioSceneIndexes = safeScenes
+    .map((scene, index) => (isManualTimingSilenceScene(scene) ? -1 : index))
+    .filter((index) => index >= 0);
+  const lastAudioIndex = audioSceneIndexes[audioSceneIndexes.length - 1];
+
+  let timelineCursor = 0;
+  let sourceCursor = 0;
+  let changed = false;
+  const rebuilt = safeScenes.map((scene, index) => {
+    const oldStart = roundTimingSec(scene.start_sec);
+    const oldEnd = roundTimingSec(scene.end_sec);
+    const oldDuration = roundTimingSec(Math.max(0.01, oldEnd - oldStart));
+
+    if (isManualTimingSilenceScene(scene)) {
+      const start = roundTimingSec(timelineCursor);
+      const end = roundTimingSec(start + oldDuration);
+      timelineCursor = end;
+      if (Math.abs(start - oldStart) > 0.001 || Math.abs(end - oldEnd) > 0.001) changed = true;
+      return decorateManualTimingSilenceScene(retimeManualTimingScene(scene, start, end, {
+        source_kind: "silence",
+        source_start_sec: null,
+        source_end_sec: null,
+      }));
+    }
+
+    const explicitSourceStart = Number(scene.source_start_sec);
+    const explicitSourceEnd = Number(scene.source_end_sec);
+    let sourceStart = Number.isFinite(explicitSourceStart) ? roundTimingSec(explicitSourceStart) : roundTimingSec(sourceCursor);
+    let sourceEnd = Number.isFinite(explicitSourceEnd) ? roundTimingSec(explicitSourceEnd) : null;
+
+    if (sourceEnd === null) {
+      const remainingSource = roundTimingSec(Math.max(0.01, sourceDuration - sourceStart));
+      const shouldAbsorbLegacyGap = explicitSourceCount === 0 && index === lastAudioIndex && sourceDuration > 0;
+      const sourceDurationForScene = shouldAbsorbLegacyGap ? remainingSource : Math.min(oldDuration, remainingSource);
+      sourceEnd = roundTimingSec(sourceStart + Math.max(0.01, sourceDurationForScene));
+    }
+
+    const start = roundTimingSec(timelineCursor);
+    const end = roundTimingSec(start + Math.max(0.01, sourceEnd - sourceStart));
+    timelineCursor = end;
+    sourceCursor = sourceEnd;
+    if (
+      Math.abs(start - oldStart) > 0.001
+      || Math.abs(end - oldEnd) > 0.001
+      || !Number.isFinite(Number(scene.source_start_sec))
+      || !Number.isFinite(Number(scene.source_end_sec))
+    ) changed = true;
+
+    return retimeManualTimingScene(scene, start, end, {
+      source_kind: "audio",
+      source_start_sec: sourceStart,
+      source_end_sec: sourceEnd,
+      is_silence: false,
+      is_virtual_silence: false,
+    });
+  });
+
+  return {
+    scenes: reindexManualTimingTimelineScenes(rebuilt),
+    durationSec: roundTimingSec(Math.max(timelineCursor, sourceDuration + silenceTotal)),
+    changed,
+  };
+}
+
+function repairManualTimingSilenceTimelineProject(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const safeAudio = safeProject.audio && typeof safeProject.audio === "object" ? safeProject.audio : {};
+  const rawScenes = Array.isArray(safeProject.scenes) ? safeProject.scenes : [];
+  if (!rawScenes.some((scene) => isManualTimingSilenceScene(scene))) return null;
+
+  const currentDuration = roundTimingSec(Number(safeAudio.duration_sec || safeAudio.durationSec || 0));
+  const sourceDuration = roundTimingSec(Number(
+    safeAudio.source_duration_sec
+    || safeAudio.original_duration_sec
+    || safeAudio.sourceDurationSec
+    || safeAudio.originalDurationSec
+    || currentDuration
+    || 0
+  ));
+  if (!(sourceDuration > 0)) return null;
+
+  const rebuilt = rebuildManualTimingScenesWithVirtualSilence(rawScenes, sourceDuration);
+  if (!rebuilt.scenes.length) return null;
+  const nextDuration = roundTimingSec(Math.max(rebuilt.durationSec, currentDuration));
+  const currentMaxEnd = rawScenes.reduce((max, scene) => Math.max(max, Number(scene?.end_sec || 0)), 0);
+  const needsRepair = rebuilt.changed
+    || Math.abs(nextDuration - currentDuration) > 0.001
+    || Math.abs(nextDuration - currentMaxEnd) > 0.001;
+  if (!needsRepair) return null;
+
+  return {
+    ...safeProject,
+    audio: {
+      ...safeAudio,
+      source_duration_sec: sourceDuration,
+      original_duration_sec: sourceDuration,
+      timeline_duration_sec: nextDuration,
+      duration_sec: nextDuration,
+      duration_ms: Math.round(nextDuration * 1000),
+    },
+    markers: buildManualTimingMarkersFromScenesList(rebuilt.scenes, nextDuration),
+    scenes: rebuilt.scenes,
+    virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(rebuilt.scenes),
+    timing_status: "draft",
+  };
+}
+
+function shiftManualTimingAudioPhrasesAfter(audioPhrases = [], cursorSec = 0, deltaSec = 0) {
+  const cursor = roundTimingSec(cursorSec);
+  const delta = roundTimingSec(deltaSec);
+  if (Math.abs(delta) < 0.0005) return normalizeManualTimingAudioPhrases(audioPhrases);
+  return normalizeManualTimingAudioPhrases(audioPhrases).map((phrase) => {
+    const start = roundTimingSec(phrase.start_sec);
+    const end = roundTimingSec(phrase.end_sec);
+    if (start >= cursor - 0.001) {
+      return { ...phrase, start_sec: roundTimingSec(start + delta), end_sec: roundTimingSec(end + delta) };
+    }
+    if (end > cursor + 0.001) {
+      return { ...phrase, end_sec: roundTimingSec(end + delta) };
+    }
+    return phrase;
+  });
+}
+
 function getSceneIdForIndex(index) {
   return `seg_${String(Number(index || 0) + 1).padStart(2, "0")}`;
 }
@@ -1051,6 +1332,24 @@ function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = [], allAud
   return [...new Set(warnings)];
 }
 
+
+function cloneManualTimingProjectForHistory(project) {
+  try {
+    return JSON.parse(JSON.stringify(project || {}));
+  } catch {
+    return { ...(project || {}) };
+  }
+}
+
+function createManualTimingHistorySnapshot(project, currentTimeSec = 0, label = "edit") {
+  return {
+    id: `history_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    label,
+    currentTimeSec: roundTimingSec(Number(currentTimeSec || 0)),
+    project: cloneManualTimingProjectForHistory(project),
+  };
+}
+
 export default function ManualTimingEditorPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -1060,6 +1359,7 @@ export default function ManualTimingEditorPage() {
   const timelineRef = useRef(null);
   const playUntilRef = useRef(null);
   const rafRef = useRef(null);
+  const silenceRafRef = useRef(null);
   const [project, setProject] = useState(() => initialProjectRef.current);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -1074,6 +1374,9 @@ export default function ManualTimingEditorPage() {
   const [asrStatus, setAsrStatus] = useState("");
   const [audioUploadStatus, setAudioUploadStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
+  const [trackNudgeStepSec, setTrackNudgeStepSec] = useState(MANUAL_TIMING_NUDGE_DEFAULT_STEP_SEC);
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
   const [activeBoardProject, setActiveBoardProject] = useState(() => {
     const { finalOwnerNodeId } = resolveManualTimingOwnerNode(location, initialProjectRef.current);
     return getManualTimingBoardForOwner(finalOwnerNodeId);
@@ -1081,6 +1384,7 @@ export default function ManualTimingEditorPage() {
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
   const newBoardConfirmResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
+  const silenceRepairSignatureRef = useRef("");
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
   const playStartGuardRef = useRef(null);
@@ -1188,6 +1492,8 @@ export default function ManualTimingEditorPage() {
   }, [selectedMissingPhrase, selectedSceneAudioPhrases]);
   const selectedBoundarySec = selectedSceneEndSec;
   const selectedBoundaryIsInternal = selectedSceneIndex >= 0 && selectedSceneIndex < scenes.length - 1;
+  const selectedSceneIsSilence = isManualTimingSilenceScene(selectedScene);
+  const canUseTrackNudge = Boolean(selectedScene && (selectedSceneIsSilence || selectedBoundaryIsInternal));
   const playheadPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(currentTime || 0) / durationSec) * 100)) : 0;
   const lastCutPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(lastCutSec || 0) / durationSec) * 100)) : 0;
   const candidateWidthPercent = durationSec > 0 ? Math.max(0, Math.min(100 - lastCutPercent, ((Number(currentTime || 0) - Number(lastCutSec || 0)) / durationSec) * 100)) : 0;
@@ -1285,6 +1591,112 @@ export default function ManualTimingEditorPage() {
     return safeProject;
   };
 
+  const persistRestoredProject = (snapshotProject) => {
+    const ownerNodeId = String(routeSourceNodeId || snapshotProject?.sourceNodeId || snapshotProject?.nodeId || getManualTimingOwnerNodeId(snapshotProject) || finalOwnerNodeId || "").trim();
+    const safeProject = {
+      ...(snapshotProject || {}),
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      updatedAt: Date.now(),
+    };
+    setProject(safeProject);
+    persistManualTimingProject(safeProject);
+    return safeProject;
+  };
+
+  const rememberManualTimingAction = (label = "действие") => {
+    setUndoStack((items) => [
+      ...items.slice(-39),
+      createManualTimingHistorySnapshot(project, currentTimeRef.current ?? currentTime, label),
+    ]);
+    setRedoStack([]);
+  };
+
+  const restoreManualTimingHistorySnapshot = (snapshot, message) => {
+    if (!snapshot?.project) return;
+    const restoredProject = persistRestoredProject(snapshot.project);
+    const restoredTime = roundTimingSec(Number(snapshot.currentTimeSec || 0));
+    durationSecRef.current = Number(restoredProject?.audio?.duration_sec || 0);
+    setAudioTime(restoredTime, { pause: true, clearBound: true });
+    setCopyStatus(message);
+    window.setTimeout(() => setCopyStatus(""), 1800);
+  };
+
+  const undoLastManualTimingAction = () => {
+    const last = undoStack[undoStack.length - 1];
+    if (!last) {
+      setCopyStatus("Нет действия для отмены");
+      window.setTimeout(() => setCopyStatus(""), 1400);
+      return;
+    }
+    setUndoStack((items) => items.slice(0, -1));
+    setRedoStack((items) => [
+      ...items.slice(-39),
+      createManualTimingHistorySnapshot(project, currentTimeRef.current ?? currentTime, "redo"),
+    ]);
+    restoreManualTimingHistorySnapshot(last, "Отменено последнее действие");
+  };
+
+  const redoLastManualTimingAction = () => {
+    const next = redoStack[redoStack.length - 1];
+    if (!next) {
+      setCopyStatus("Нет действия для повтора");
+      window.setTimeout(() => setCopyStatus(""), 1400);
+      return;
+    }
+    setRedoStack((items) => items.slice(0, -1));
+    setUndoStack((items) => [
+      ...items.slice(-39),
+      createManualTimingHistorySnapshot(project, currentTimeRef.current ?? currentTime, "undo"),
+    ]);
+    restoreManualTimingHistorySnapshot(next, "Действие возвращено");
+  };
+
+
+  useEffect(() => {
+    const rawScenes = Array.isArray(project?.scenes) ? project.scenes : [];
+    const currentSignature = JSON.stringify({
+      audioDuration: roundTimingSec(Number(project?.audio?.duration_sec || 0)),
+      scenes: rawScenes.map((scene) => ({
+        id: scene?.scene_id,
+        start: roundTimingSec(scene?.start_sec),
+        end: roundTimingSec(scene?.end_sec),
+        sourceKind: scene?.source_kind,
+        sourceStart: Number.isFinite(Number(scene?.source_start_sec)) ? roundTimingSec(scene?.source_start_sec) : null,
+        sourceEnd: Number.isFinite(Number(scene?.source_end_sec)) ? roundTimingSec(scene?.source_end_sec) : null,
+        isSilence: Boolean(scene?.is_silence || scene?.scene_type === "manual_silence"),
+      })),
+    });
+
+    if (silenceRepairSignatureRef.current === currentSignature) return;
+
+    const repairedProject = repairManualTimingSilenceTimelineProject(project);
+    if (!repairedProject) {
+      silenceRepairSignatureRef.current = currentSignature;
+      return;
+    }
+
+    const repairedScenes = Array.isArray(repairedProject?.scenes) ? repairedProject.scenes : [];
+    silenceRepairSignatureRef.current = JSON.stringify({
+      audioDuration: roundTimingSec(Number(repairedProject?.audio?.duration_sec || 0)),
+      scenes: repairedScenes.map((scene) => ({
+        id: scene?.scene_id,
+        start: roundTimingSec(scene?.start_sec),
+        end: roundTimingSec(scene?.end_sec),
+        sourceKind: scene?.source_kind,
+        sourceStart: Number.isFinite(Number(scene?.source_start_sec)) ? roundTimingSec(scene?.source_start_sec) : null,
+        sourceEnd: Number.isFinite(Number(scene?.source_end_sec)) ? roundTimingSec(scene?.source_end_sec) : null,
+        isSilence: Boolean(scene?.is_silence || scene?.scene_type === "manual_silence"),
+      })),
+    });
+
+    persist(repairedProject);
+    durationSecRef.current = Number(repairedProject.audio?.duration_sec || 0);
+    setCopyStatus("Таймлайн тишины пересобран: длительность аудио расширена, source-поля восстановлены.");
+    window.setTimeout(() => setCopyStatus(""), 2200);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.scenes, project?.audio?.duration_sec]);
+
   const setPlayingState = (value) => {
     const next = Boolean(value);
     isPlayingRef.current = next;
@@ -1306,13 +1718,53 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const findSceneIndexForTimelineTime = (timeValue = 0) => {
+    if (!scenes.length) return -1;
+    const time = roundTimingSec(clampTime(timeValue, durationSecRef.current || durationSec));
+    const epsilon = 0.001;
+    const index = scenes.findIndex((scene, idx) => {
+      const start = roundTimingSec(scene.start_sec);
+      const end = roundTimingSec(scene.end_sec);
+      const isLast = idx === scenes.length - 1;
+      return time >= start - epsilon && (time < end - epsilon || (isLast && time <= end + epsilon));
+    });
+    return index;
+  };
+
+  const getSceneSourceStartSec = (scene = {}) => {
+    if (isManualTimingSilenceScene(scene)) return null;
+    const explicit = Number(scene.source_start_sec ?? scene.sourceStartSec);
+    if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+    return roundTimingSec(scene.start_sec);
+  };
+
+  const getSceneSourceEndSec = (scene = {}) => {
+    if (isManualTimingSilenceScene(scene)) return null;
+    const explicit = Number(scene.source_end_sec ?? scene.sourceEndSec);
+    if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+    const sourceStart = getSceneSourceStartSec(scene);
+    return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
+  };
+
+  const getSourceTimeForTimelineTime = (timeValue = 0) => {
+    const index = findSceneIndexForTimelineTime(timeValue);
+    const scene = index >= 0 ? scenes[index] : null;
+    if (!scene || isManualTimingSilenceScene(scene)) return null;
+    const timelineStart = roundTimingSec(scene.start_sec);
+    const timelineEnd = roundTimingSec(scene.end_sec);
+    const sourceStart = getSceneSourceStartSec(scene);
+    const sourceEnd = getSceneSourceEndSec(scene);
+    const offset = roundTimingSec(clampTime(timeValue, timelineEnd) - timelineStart);
+    return roundTimingSec(Math.max(sourceStart, Math.min(sourceEnd, sourceStart + offset)));
+  };
+
   const setAudioElementTime = (timeValue) => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
-    const activeDuration = durationSecRef.current || durationSec;
-    const time = roundTimingSec(clampTime(timeValue, activeDuration));
+    const sourceTime = getSourceTimeForTimelineTime(timeValue);
+    if (sourceTime === null) return;
     try {
-      audioEl.currentTime = time;
+      audioEl.currentTime = sourceTime;
     } catch {}
   };
 
@@ -1324,8 +1776,14 @@ export default function ManualTimingEditorPage() {
     // не имеют права двигать UI-курсор. Ручной переход уже сам обновляет курсор.
     if (!force && audioEl.paused) return currentTimeRef.current;
 
-    const activeDuration = durationSecRef.current || durationSec;
-    const nextTime = roundTimingSec(clampTime(Number(audioEl.currentTime || 0), activeDuration));
+    const sceneIndex = findSceneIndexForTimelineTime(currentTimeRef.current);
+    const scene = sceneIndex >= 0 ? scenes[sceneIndex] : null;
+    if (!scene || isManualTimingSilenceScene(scene)) return currentTimeRef.current;
+
+    const sourceStart = getSceneSourceStartSec(scene);
+    const sourceEnd = getSceneSourceEndSec(scene);
+    const sourceTime = roundTimingSec(Math.max(sourceStart, Math.min(sourceEnd, Number(audioEl.currentTime || 0))));
+    const nextTime = roundTimingSec(Number(scene.start_sec || 0) + Math.max(0, sourceTime - sourceStart));
     const guard = playStartGuardRef.current;
 
     // После ручного seek браузер иногда на первые тики отдаёт 0.000.
@@ -1352,6 +1810,7 @@ export default function ManualTimingEditorPage() {
 
     playUntilRef.current = null;
     playStartGuardRef.current = null;
+    stopSilencePlayback();
     audioEl.pause();
     setAudioElementTime(safeEnd);
     setPlayingState(false);
@@ -1373,6 +1832,21 @@ export default function ManualTimingEditorPage() {
       if (stopAtBoundedEndIfNeeded(nextTime)) {
         rafRef.current = null;
         return;
+      }
+      const sceneIndex = findSceneIndexForTimelineTime(nextTime);
+      const scene = sceneIndex >= 0 ? scenes[sceneIndex] : null;
+      if (scene && !isManualTimingSilenceScene(scene)) {
+        const sourceEnd = getSceneSourceEndSec(scene);
+        if (Number(audioEl.currentTime || 0) >= sourceEnd - 0.018) {
+          const nextTimelineTime = roundTimingSec(scene.end_sec);
+          if (stopAtBoundedEndIfNeeded(nextTimelineTime)) {
+            rafRef.current = null;
+            return;
+          }
+          rafRef.current = null;
+          continuePlaybackFromTimeline(nextTimelineTime, playUntilRef.current);
+          return;
+        }
       }
       rafRef.current = window.requestAnimationFrame(tick);
     };
@@ -1400,6 +1874,81 @@ export default function ManualTimingEditorPage() {
     return time;
   };
 
+  const stopSilencePlayback = () => {
+    if (silenceRafRef.current) {
+      window.cancelAnimationFrame(silenceRafRef.current);
+      silenceRafRef.current = null;
+    }
+  };
+
+  const continuePlaybackFromTimeline = (timelineTimeValue, endValue = null) => {
+    const audioEl = audioRef.current;
+    if (!audioEl) return;
+
+    const activeDuration = durationSecRef.current || durationSec;
+    const timelineTime = roundTimingSec(clampTime(timelineTimeValue, activeDuration));
+    const boundedEnd = Number(endValue);
+    const end = Number.isFinite(boundedEnd) ? roundTimingSec(clampTime(boundedEnd, activeDuration)) : null;
+    if (end !== null && timelineTime >= end - 0.012) {
+      playUntilRef.current = null;
+      setPlayingState(false);
+      setDisplayTime(end);
+      return;
+    }
+
+    const sceneIndex = findSceneIndexForTimelineTime(timelineTime);
+    const scene = sceneIndex >= 0 ? scenes[sceneIndex] : null;
+    if (!scene) return;
+
+    if (isManualTimingSilenceScene(scene)) {
+      const silenceStart = timelineTime;
+      const silenceEnd = Math.min(Number(scene.end_sec || 0), end ?? activeDuration);
+      const startedAt = performance.now();
+      try { audioEl.pause(); } catch {}
+      stopRafLoop();
+      stopSilencePlayback();
+      setDisplayTime(silenceStart);
+      setPlayingState(true);
+
+      const tick = () => {
+        const elapsed = (performance.now() - startedAt) / 1000;
+        const nextTime = roundTimingSec(Math.min(silenceEnd, silenceStart + elapsed));
+        setDisplayTime(nextTime);
+        if (nextTime >= silenceEnd - 0.012) {
+          silenceRafRef.current = null;
+          if (end !== null && nextTime >= end - 0.012) {
+            playUntilRef.current = null;
+            setPlayingState(false);
+            return;
+          }
+          continuePlaybackFromTimeline(silenceEnd, end);
+          return;
+        }
+        silenceRafRef.current = window.requestAnimationFrame(tick);
+      };
+      silenceRafRef.current = window.requestAnimationFrame(tick);
+      return;
+    }
+
+    stopSilencePlayback();
+    playStartGuardRef.current = { start: timelineTime, until: Date.now() + 700 };
+    setAudioElementTime(timelineTime);
+    setDisplayTime(timelineTime);
+    window.setTimeout(() => {
+      const activeAudio = audioRef.current;
+      if (!activeAudio) return;
+      playStartGuardRef.current = { start: timelineTime, until: Date.now() + 700 };
+      setAudioElementTime(timelineTime);
+      setDisplayTime(timelineTime);
+      activeAudio.play().then(() => {
+        setPlayingState(true);
+        startRafLoop();
+      }).catch(() => {
+        setPlayingState(false);
+      });
+    }, 30);
+  };
+
   const playRange = (startValue, endValue = null) => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
@@ -1412,30 +1961,41 @@ export default function ManualTimingEditorPage() {
     if (end !== null && end <= start + 0.02) return;
 
     stopRafLoop();
+    stopSilencePlayback();
     playUntilRef.current = end;
-    playStartGuardRef.current = { start, until: Date.now() + 700 };
 
     try {
       audioEl.pause();
     } catch {}
     setPlayingState(false);
-    setAudioElementTime(start);
     setDisplayTime(start);
+    continuePlaybackFromTimeline(start, end);
+  };
 
-    window.setTimeout(() => {
-      const activeAudio = audioRef.current;
-      if (!activeAudio) return;
-      playUntilRef.current = end;
-      playStartGuardRef.current = { start, until: Date.now() + 700 };
-      setAudioElementTime(start);
-      setDisplayTime(start);
-      activeAudio.play().then(() => {
-        setPlayingState(true);
-        startRafLoop();
-      }).catch(() => {
-        setPlayingState(false);
-      });
-    }, 30);
+  const buildHydratedScenesForDuration = (nextMarkers, existingScenes = scenes, nextDurationSec = durationSec, silenceRanges = [], options = {}) => {
+    const safeMarkers = normalizeManualTimingMarkers(nextMarkers, nextDurationSec);
+    const nextRawScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, {
+      durationSec: nextDurationSec,
+      allowIdFallback: Boolean(options.allowIdFallback),
+    });
+    const hydratedScenes = hydrateManualTimingScenesWithStoryBlocks(nextRawScenes, project.story_blocks);
+    const safeExistingScenes = Array.isArray(existingScenes) ? existingScenes : [];
+    const safeSilenceRanges = (Array.isArray(silenceRanges) ? silenceRanges : [])
+      .map((range) => ({
+        start_sec: roundTimingSec(range?.start_sec),
+        end_sec: roundTimingSec(range?.end_sec),
+      }))
+      .filter((range) => range.end_sec > range.start_sec);
+
+    return hydratedScenes.map((scene) => {
+      const oldById = safeExistingScenes.find((item) => String(item?.scene_id || "") === String(scene?.scene_id || ""));
+      const oldByExactRange = safeExistingScenes.find((item) => Math.abs(roundTimingSec(item?.start_sec) - roundTimingSec(scene.start_sec)) < 0.001
+        && Math.abs(roundTimingSec(item?.end_sec) - roundTimingSec(scene.end_sec)) < 0.001);
+      const shouldKeepSilence = isManualTimingSilenceScene(oldById) || isManualTimingSilenceScene(oldByExactRange)
+        || safeSilenceRanges.some((range) => Math.abs(roundTimingSec(scene.start_sec) - range.start_sec) < 0.001
+          && Math.abs(roundTimingSec(scene.end_sec) - range.end_sec) < 0.001);
+      return shouldKeepSilence ? decorateManualTimingSilenceScene(scene) : scene;
+    });
   };
 
   const rebuildFromMarkers = (nextMarkers, existingScenes = scenes, extraPatch = {}, options = {}) => {
@@ -1493,7 +2053,10 @@ export default function ManualTimingEditorPage() {
     });
   };
 
-  useEffect(() => () => stopRafLoop(), []);
+  useEffect(() => () => {
+    stopRafLoop();
+    stopSilencePlayback();
+  }, []);
 
   useEffect(() => {
     if (!selectedScene && scenes[0]) {
@@ -1543,6 +2106,7 @@ export default function ManualTimingEditorPage() {
 
     if (!audioEl.paused || isPlayingRef.current) {
       playUntilRef.current = null;
+      stopSilencePlayback();
       const rawTime = Number(audioEl.currentTime);
       const trustedTime = Number.isFinite(rawTime) && rawTime > 0.03
         ? rawTime
@@ -1660,6 +2224,7 @@ export default function ManualTimingEditorPage() {
 
     // Если ставим разрез внутри уже размеченного участка, просто добавляем новую границу.
     // Следующие сцены не удаляются: они остаются на своих местах.
+    rememberManualTimingAction("разрез");
     const nextMarkers = [...safeMarkers, time];
     const normalized = normalizeManualTimingMarkers(nextMarkers, durationSec);
     const boundaryIndex = normalized.findIndex((marker) => Math.abs(Number(marker) - time) < 0.001);
@@ -1807,7 +2372,71 @@ export default function ManualTimingEditorPage() {
     setAudioTime(getLastInternalMarker(nextMarkers), { pause: true, clearBound: true });
   };
 
+  const nudgeSelectedSilenceDuration = (delta) => {
+    if (!selectedScene || !selectedSceneIsSilence || selectedSceneIndex < 0) {
+      setCopyStatus("Выберите блок тишины");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+      return;
+    }
+
+    const activeDuration = durationSecRef.current || durationSec;
+    if (!(activeDuration > 0)) return;
+
+    const safeDelta = roundTimingSec(Number(delta || 0));
+    const start = roundTimingSec(Number(selectedScene.start_sec || 0));
+    const end = roundTimingSec(Number(selectedScene.end_sec || 0));
+    const currentDurationValue = roundTimingSec(Math.max(0.01, end - start));
+    const nextSilenceDuration = roundTimingSec(Math.max(0.01, Math.min(MANUAL_TIMING_MAX_SILENCE_SEC, currentDurationValue + safeDelta)));
+    const appliedDelta = roundTimingSec(nextSilenceDuration - currentDurationValue);
+
+    if (Math.abs(appliedDelta) < 0.001) {
+      setCopyStatus(safeDelta < 0 ? "Тишина уже почти нулевая" : "Максимум тишины 30 сек");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+      return;
+    }
+
+    const oldEnd = end;
+    const nextEnd = roundTimingSec(start + nextSilenceDuration);
+    const nextDuration = roundTimingSec(Math.max(0.01, activeDuration + appliedDelta));
+    rememberManualTimingAction("доводчик тишины");
+    const nextScenes = reindexManualTimingTimelineScenes(scenes.map((scene, index) => {
+      if (index < selectedSceneIndex) return scene;
+      if (index === selectedSceneIndex) {
+        return decorateManualTimingSilenceScene(retimeManualTimingScene(scene, start, nextEnd));
+      }
+      return shiftManualTimingScene(scene, appliedDelta);
+    }));
+    const nextSelectedScene = nextScenes[selectedSceneIndex] || nextScenes.find((scene) => isManualTimingSilenceScene(scene)) || nextScenes[0];
+    const nextMarkers = buildManualTimingMarkersFromScenesList(nextScenes, nextDuration);
+
+    persist({
+      ...project,
+      audio: {
+        ...audio,
+        source_duration_sec: Number(audio.source_duration_sec || audio.original_duration_sec || audio.duration_sec || activeDuration),
+        original_duration_sec: Number(audio.original_duration_sec || audio.source_duration_sec || audio.duration_sec || activeDuration),
+        timeline_duration_sec: nextDuration,
+        duration_sec: nextDuration,
+        duration_ms: Math.round(nextDuration * 1000),
+      },
+      markers: nextMarkers,
+      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
+      audio_phrases: shiftManualTimingAudioPhrasesAfter(project.audio_phrases, oldEnd, appliedDelta),
+      virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
+      scenes: nextScenes,
+      selectedSceneId: nextSelectedScene?.scene_id || selectedScene.scene_id,
+      timing_status: "draft",
+    });
+    setAudioTime(start, { pause: true, clearBound: true });
+    setCopyStatus(`Тишина: ${formatTimingSec(nextSilenceDuration)} (${appliedDelta > 0 ? "+" : ""}${appliedDelta.toFixed(3)} сек). Правая часть таймлайна пересчитана.`);
+    window.setTimeout(() => setCopyStatus(""), 1800);
+  };
+
   const nudgeSelectedBoundary = (delta) => {
+    if (selectedSceneIsSilence) {
+      nudgeSelectedSilenceDuration(delta);
+      return;
+    }
     if (!selectedScene || !selectedBoundaryIsInternal) {
       setCopyStatus("Выберите сцену с внутренней конечной границей");
       window.setTimeout(() => setCopyStatus(""), 1600);
@@ -1816,15 +2445,124 @@ export default function ManualTimingEditorPage() {
     const markerIndex = selectedSceneIndex + 1;
     const prevMarker = Number(markers[markerIndex - 1] || 0);
     const currentMarker = Number(markers[markerIndex] || 0);
-    const minTime = prevMarker + 0.25;
-    const maxTime = durationSec - 0.25;
-    const nextTime = roundTimingSec(clampTime(currentMarker + Number(delta || 0), maxTime));
-    if (nextTime <= minTime || nextTime >= durationSec - 0.001) return;
+    const minSceneDuration = selectedSceneIsSilence ? 0.01 : 0.25;
+    const minTime = prevMarker + minSceneDuration;
+    const maxTime = selectedSceneIsSilence
+      ? Math.min(prevMarker + MANUAL_TIMING_MAX_SILENCE_SEC, durationSec - 0.01)
+      : durationSec - 0.25;
+    const nextTime = roundTimingSec(Math.max(minTime, Math.min(maxTime, currentMarker + Number(delta || 0))));
+    if (Math.abs(nextTime - currentMarker) < 0.001) return;
 
     const nextMarkers = shiftMarkersFromBoundary(markers, markerIndex, nextTime);
     const actualTime = Number(nextMarkers[markerIndex] || currentMarker);
+    rememberManualTimingAction("микродоводчик");
     rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: selectedScene.scene_id, timing_status: "draft" }, { allowIdFallback: true });
     setAudioTime(actualTime, { pause: true, clearBound: true });
+  };
+
+  const insertSilenceAtCursor = () => {
+    const activeDuration = durationSecRef.current || durationSec;
+    if (!(activeDuration > 0)) return;
+
+    const silenceDuration = MANUAL_TIMING_INSERT_SILENCE_SEC;
+    const cursor = roundTimingSec(clampTime(currentTimeRef.current ?? currentTime, activeDuration));
+    const nextDuration = roundTimingSec(activeDuration + silenceDuration);
+    const safeScenes = Array.isArray(scenes) && scenes.length
+      ? scenes
+      : hydrateManualTimingScenesWithStoryBlocks(
+        buildManualTimingScenesFromMarkers(project.markers?.length ? project.markers : [0, activeDuration], [], { durationSec: activeDuration }),
+        project.story_blocks
+      );
+    const epsilon = 0.001;
+    const sourceIndex = safeScenes.findIndex((scene, index) => {
+      const start = roundTimingSec(scene.start_sec);
+      const end = roundTimingSec(scene.end_sec);
+      const isLast = index === safeScenes.length - 1;
+      return cursor >= start - epsilon && (cursor < end - epsilon || (isLast && cursor <= end + epsilon));
+    });
+    const insertAtIndex = sourceIndex >= 0 ? sourceIndex : safeScenes.length - 1;
+    const nextSceneDrafts = [];
+    let selectedSilenceOrderIndex = 0;
+
+    safeScenes.forEach((scene, index) => {
+      if (index < insertAtIndex) {
+        nextSceneDrafts.push(scene);
+        return;
+      }
+
+      if (index > insertAtIndex) {
+        nextSceneDrafts.push(shiftManualTimingScene(scene, silenceDuration));
+        return;
+      }
+
+      const sceneStart = roundTimingSec(scene.start_sec);
+      const sceneEnd = roundTimingSec(scene.end_sec);
+      const sceneAfterEnd = roundTimingSec(sceneEnd + silenceDuration);
+      const sourceStart = Number.isFinite(Number(scene.source_start_sec)) ? roundTimingSec(scene.source_start_sec) : sceneStart;
+      const sourceEnd = Number.isFinite(Number(scene.source_end_sec)) ? roundTimingSec(scene.source_end_sec) : roundTimingSec(sourceStart + Math.max(0, sceneEnd - sceneStart));
+      const leftSourceEnd = roundTimingSec(sourceStart + Math.max(0, cursor - sceneStart));
+
+      if (cursor > sceneStart + epsilon) {
+        nextSceneDrafts.push(retimeManualTimingScene(scene, sceneStart, cursor, {
+          source_kind: "audio",
+          source_start_sec: sourceStart,
+          source_end_sec: leftSourceEnd,
+          user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || "") || "Часть сцены до вставленной тишины.",
+        }));
+      }
+
+      const silenceScene = decorateManualTimingSilenceScene({
+        ...scene,
+        scene_id: `silence_${Date.now()}`,
+        index: nextSceneDrafts.length + 1,
+        start_sec: cursor,
+        end_sec: roundTimingSec(cursor + silenceDuration),
+        source_start_sec: null,
+        source_end_sec: null,
+        silence_block_id: `silence_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      });
+      selectedSilenceOrderIndex = nextSceneDrafts.length;
+      nextSceneDrafts.push(silenceScene);
+
+      if (cursor < sceneEnd - epsilon) {
+        const shiftedRight = shiftManualTimingScene(scene, silenceDuration);
+        nextSceneDrafts.push(retimeManualTimingScene(shiftedRight, roundTimingSec(cursor + silenceDuration), sceneAfterEnd, {
+          source_kind: "audio",
+          source_start_sec: leftSourceEnd,
+          source_end_sec: sourceEnd,
+          user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || "") || "Часть сцены после вставленной тишины.",
+        }));
+      }
+    });
+
+    if (!nextSceneDrafts.some((scene) => isManualTimingSilenceScene(scene))) return;
+
+    const nextScenes = reindexManualTimingTimelineScenes(nextSceneDrafts);
+    const nextSelectedScene = nextScenes[selectedSilenceOrderIndex] || nextScenes.find((scene) => isManualTimingSilenceScene(scene));
+    const nextMarkers = buildManualTimingMarkersFromScenesList(nextScenes, nextDuration);
+
+    rememberManualTimingAction("вставка тишины");
+    persist({
+      ...project,
+      audio: {
+        ...audio,
+        source_duration_sec: Number(audio.source_duration_sec || audio.original_duration_sec || audio.duration_sec || activeDuration),
+        original_duration_sec: Number(audio.original_duration_sec || audio.source_duration_sec || audio.duration_sec || activeDuration),
+        timeline_duration_sec: nextDuration,
+        duration_sec: nextDuration,
+        duration_ms: Math.round(nextDuration * 1000),
+      },
+      markers: nextMarkers,
+      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
+      audio_phrases: shiftManualTimingAudioPhrasesAfter(project.audio_phrases, cursor, silenceDuration),
+      virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
+      scenes: nextScenes,
+      selectedSceneId: nextSelectedScene?.scene_id || nextScenes[0]?.scene_id || "",
+      timing_status: "draft",
+    });
+    setAudioTime(cursor, { pause: true, clearBound: true });
+    setCopyStatus(`Вставлена тишина ${formatTimingSec(silenceDuration)} в ${formatTimingSec(cursor)}. Аудио разрезано, правая часть сдвинута.`);
+    window.setTimeout(() => setCopyStatus(""), 2200);
   };
 
   const playSegment = (scene) => {
@@ -2645,6 +3383,7 @@ export default function ManualTimingEditorPage() {
     const nextMarkers = durationSec > 0 ? [0, durationSec] : [];
     const nextStoryBlocks = [MANUAL_TIMING_UNKNOWN_STORY_BLOCK];
     const nextScenes = nextMarkers.length ? hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, [], { durationSec }), nextStoryBlocks) : [];
+    rememberManualTimingAction("сброс");
     persist({
       ...project,
       markers: nextMarkers,
@@ -2660,9 +3399,12 @@ export default function ManualTimingEditorPage() {
   const onAudioLoadedMetadata = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
+    if (Array.isArray(project.virtual_silence_blocks) && project.virtual_silence_blocks.length) return;
     const nextDuration = Number(audioEl.duration || 0);
     if (!(nextDuration > 0)) return;
     const currentDuration = Number(project?.audio?.duration_sec || 0);
+    if (Array.isArray(project.virtual_silence_blocks) && project.virtual_silence_blocks.length) return;
+    if (currentDuration > nextDuration + 0.05) return;
     if (Math.abs(nextDuration - currentDuration) < 0.05) return;
     const nextAudio = {
       ...audio,
@@ -2745,7 +3487,7 @@ export default function ManualTimingEditorPage() {
 
   return (
     <>
-    <div className={`manualTimingPage pageCard ${modeConfig.className}`}>
+    <div className={`manualTimingPage pageCard ${modeConfig.className}`} data-build="manual-timing-stable-v18">
       <div className="manualTimingModeHeader">
         <div className="manualTimingModeTitleBlock">
           <h1 className="pageTitle">{modeConfig.title}</h1>
@@ -2760,12 +3502,11 @@ export default function ManualTimingEditorPage() {
       {!isProjectModeSelected ? <div className="manualTimingModeMissing">Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.</div> : null}
       {hasActiveBoardProject ? <div className="manualTimingActiveBoardWarning">
         <div>
-          <b>🎬 Активная режиссёрская доска</b>
-          <span>Уже есть активная режиссёрская доска. Можно вернуться без пересоздания.</span>
+          <b>🎬 Активная доска</b>
+          <span>Есть сохранённая доска. Можно скачать backup или начать новый разбор.</span>
           <span>Сцен: {activeBoardScenes.length} · Блоков: {activeBoardBlocks.length} · Обновлено: {formatManualBoardUpdatedAt(activeBoardProject.updatedAt || activeBoardProject.updated_at)}</span>
         </div>
         <div className="manualTimingActiveBoardActions">
-          <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onReturnToActiveBoard}>Вернуться в доску</button>
           <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadActiveBoardBackup}>Скачать backup</button>
           <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onStartNewAnalysisWithConfirm}>Начать новый разбор</button>
         </div>
@@ -2798,7 +3539,7 @@ export default function ManualTimingEditorPage() {
           <input type="file" accept="audio/*" onChange={onReplaceTimingAudio} disabled={isTimingAudioUploading || mainActionsDisabled} hidden />
         </label>
         <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onDeleteTimingAudio} disabled={isTimingAudioUploading || mainActionsDisabled || (!audio.url && !scenes.length && !audioPhrases.length)}>Удалить аудио</button>
-        <span className="manualTimingWorkflowStatus">Замена аудио очищает ASR phrase map, сцены и Story Pass, чтобы старый разбор не смешивался с новым.</span>
+        <span className="manualTimingWorkflowStatus">Замена аудио очистит старый разбор.</span>
       </div>
 
       <section className="manualTimingTransport">
@@ -2863,15 +3604,19 @@ export default function ManualTimingEditorPage() {
               const isOpenTail = scene.scene_id === openTailSceneId;
               const isActive = selectedScene?.scene_id === scene.scene_id;
               const durationWarning = getManualTimingSceneDurationWarning(scene);
+              const isSilence = isManualTimingSilenceScene(scene);
               return <button
                 key={`player-${scene.scene_id}`}
-                className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isActive ? "isActive" : ""}`}
+                className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isSilence ? "isSilence" : ""} ${isActive ? "isActive" : ""}`}
                 style={getSegmentStyle(scene, idx)}
                 onClick={(event) => onTimelineSegmentClick(event, scene)}
                 onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
-                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
+                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${isSilence ? " · тишина" : ""}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
               >
-                <span>{scene.scene_id}</span>
+                <span>
+                  {isSilence ? "тишина" : scene.scene_id}
+                  {isActive ? <small>{formatTimingSec(Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)))}</small> : null}
+                </span>
               </button>;
             })}
             {candidateWidthPercent > 0.1 ? <div
@@ -2893,28 +3638,92 @@ export default function ManualTimingEditorPage() {
             {audioPhrases.length ? <span><i className="legendAsrPhrase" /> ASR phrase map</span> : null}
             {SHOW_MISSING_PHRASE_TOOLS && audioPhrases.length ? <span><i className="legendMissingPhrase" /> пропущенная фраза</span> : null}
           </div>
-          <div className="manualTimingInlinePlayback">
+          <div className="manualTimingTrackToolbox">
             <button
-              className="clipSB_btn clipSB_btnSecondary"
+              className="clipSB_btn clipSB_btnSecondary manualTimingMiniPlayButton"
               onClick={onPlayPause}
               disabled={!audio.url}
+              title={isPlaying ? "Пауза" : "Слушать с текущего места"}
             >
-              {isPlaying ? "⏸ пауза" : "▶ слушать"}
+              {isPlaying ? "⏸" : "▶"}
             </button>
-          </div>
 
-          <div className="manualTimingNudgePanel manualTimingTrackNudgePanel">
-            <div className="manualTimingNudgeTitle">Микро-доводчик выбранной границы — рядом с аудио-дорожкой</div>
-            <div className="manualTimingNudgeGuidance">Если в конце сцены слышно начало следующей фразы — выбери сцену прямо на шкале и двигай её конечную границу назад. Это меняет границу между текущей и следующей сценой.</div>
-            <div className="manualTimingNudgeButtons">
-              {NUDGE_STEPS.map((step) => <button
-                key={step}
-                className="clipSB_btn clipSB_btnSecondary"
-                disabled={!selectedBoundaryIsInternal}
-                onClick={() => nudgeSelectedBoundary(step)}
-              >{step > 0 ? `+${step.toFixed(2)}` : step.toFixed(2)} c</button>)}
+            <div className="manualTimingTrackNudgeBox" aria-label="Микро-доводчик конца выбранной сцены">
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingNudgeArrow"
+                disabled={!canUseTrackNudge}
+                onClick={() => nudgeSelectedBoundary(-clampManualTimingStep(trackNudgeStepSec))}
+                title="Уменьшить выбранный отрезок"
+              >←</button>
+              <label className="manualTimingStepControl">
+                <span>шаг</span>
+                <input
+                  type="number"
+                  min="0.01"
+                  max="30"
+                  step="0.01"
+                  value={trackNudgeStepSec}
+                  onChange={(event) => setTrackNudgeStepSec(clampManualTimingStep(event.target.value))}
+                />
+              </label>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingNudgeArrow"
+                disabled={!canUseTrackNudge}
+                onClick={() => nudgeSelectedBoundary(clampManualTimingStep(trackNudgeStepSec))}
+                title="Увеличить выбранный отрезок"
+              >→</button>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
+                onClick={insertSilenceAtCursor}
+                disabled={!audio.url || !(durationSec > 0)}
+                title="Вставить 0.5 сек тишины по текущему курсору"
+              >тишина</button>
+              <button
+                className="clipSB_btn clipSB_btnDanger manualTimingResetMiniButton"
+                onClick={onReset}
+                disabled={mainActionsDisabled}
+                title="Сбросить текущий тайминг и разбор"
+              >сброс</button>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingUndoButton"
+                onClick={undoLastManualTimingAction}
+                disabled={!undoStack.length}
+                title="Отменить последнее действие"
+              >↶ назад</button>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingUndoButton"
+                onClick={redoLastManualTimingAction}
+                disabled={!redoStack.length}
+                title="Вернуть отменённое действие"
+              >↷ вернуть</button>
             </div>
-            <div className="manualTimingNudgeHint">− сдвигает конец выбранной сцены раньше, + сдвигает конец выбранной сцены позже. Начало следующей сцены становится этой же новой границей; текст, перевод и meaning выбранной сцены сохраняются.</div>
+
+        <details className="manualTimingJsonPanel manualTimingJsonPanelCompact manualTimingJsonPanelTrack">
+          <summary className="manualTimingJsonSummary">
+            <strong>JSON / экспорт</strong>
+            <span>{workflowLabels.panelTitle}</span>
+          </summary>
+          <div className="manualTimingJsonHeader">
+            <strong>{workflowLabels.panelTitle}</strong>
+            <span>{workflowLabels.panelHint}</span>
+          </div>
+          <div className="manualTimingJsonActions">
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)} disabled={!isProjectModeSelected}>
+              {isJsonImportOpen ? "Скрыть поле JSON" : workflowLabels.insertPass}
+            </button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Story Bible JSON</button> : null}
+            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Block Storyboard JSON</button> : null}
+          </div>
+          {isJsonImportOpen ? <textarea
+            className="manualTimingJsonTextarea"
+            value={jsonImportText}
+            placeholder={workflowLabels.placeholder}
+            onChange={(e) => setJsonImportText(e.target.value)}
+          /> : null}
+        </details>
+
           </div>
         </div>
 
@@ -2928,111 +3737,30 @@ export default function ManualTimingEditorPage() {
           </details> : null}
         </div>
 
-        <div className="manualTimingWorkflowActions" aria-label={`Основной workflow ${workflowLabels.pass}`}>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>{workflowLabels.phraseMap}</button>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>{workflowLabels.buildScenes}</button>
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
-          {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Скопировать JSON для Story Bible Pass</button> : null}
-          {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Скопировать JSON для Block Storyboard Pass</button> : null}
-          <button className="clipSB_btn clipSB_btnPrimary" onClick={() => { setIsJsonImportOpen(true); onImportTimingJson(); }} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenDirectorBoard} disabled={mainActionsDisabled || Boolean(handoffStatus)} title="Открыть существующую активную режиссёрскую доску без пересоздания">Открыть режиссёрскую доску</button>
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Создать новую доску из тайминга"}</button>
-          {!storyPassReadyForDirector ? <span className="manualTimingWorkflowStatus">Сначала примените {workflowLabels.pass} JSON и подтвердите тайминг</span> : null}
+        <div className="manualTimingWorkflowPanel" aria-label={`Основной workflow ${workflowLabels.pass}`}>
+          <div className="manualTimingWorkflowActions manualTimingWorkflowActionsPrimary">
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>1 · Audio Phrase Map</button>
+            <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>2 · Собрать сцены</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>3 · Подтвердить</button>
+            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Создать доску"}</button>
+          </div>
+          <div className="manualTimingWorkflowStatusLine">
+            <span>{storyPassReadyForDirector ? "Статус: можно создать режиссёрскую доску" : `Следующий шаг: применить ${workflowLabels.pass} JSON и подтвердить тайминг`}</span>
+          </div>
         </div>
 
         {asrStatus ? <div className="manualTimingAsrStatus">{asrStatus}</div> : null}
         {audioPhrases.length ? <div className="manualTimingAsrNotice">ASR phrase map: audio_phrases покрывают только речь по word timestamps. Для storyboard используй “Собрать story scenes из ASR”: сцены станут gap-aware, покроют всю audio_duration_sec, а ChatGPT/Gemini затем заполнит перевод, story_blocks и смысловые поля без video_prompt/negative_prompt/sound_prompt.</div> : null}
 
-        {!isProjectModeSelected ? <div className="manualTimingAdvancedDisabled">Ручные advanced-инструменты отключены: вернитесь в ноду и выберите тип проекта.</div> : null}
+        {/* Старый расширенный блок убран: основные действия перенесены к плееру и JSON-панели. */}
 
-        {isProjectModeSelected ? <details className="manualTimingAdvancedPanel">
-          <summary>Дополнительно / ручная правка</summary>
-          <div className="manualTimingCompactActions">
-            <button className="clipSB_btn" onClick={() => navigate(-1)}>Назад</button>
-            <button className="clipSB_btn" onClick={onPlayPause} disabled={!audio.url}>{isPlaying ? "Пауза" : "▶ играть"}</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => playSegment(selectedScene)} disabled={!audio.url || !selectedScene}>▶ выбранный отрезок</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onStartOver} disabled={!audio.url}>В начало</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onPlayFromLastCut} disabled={!audio.url}>С последнего разреза</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onPlayAroundCursor} disabled={!audio.url}>±1 сек</button>
-            <div className="manualTimingJumpBox">
-              <span>Перейти к:</span>
-              <div className="manualTimingTimecodeInput" aria-label="Точный переход по времени">
-                <input
-                  value={jumpTimeParts.min}
-                  inputMode="numeric"
-                  title="Минуты"
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => updateJumpPart("min", e.target.value)}
-                  onBlur={() => normalizeJumpPartOnBlur("min")}
-                  onKeyDown={onJumpKeyDown}
-                  disabled={!audio.url || !(durationSec > 0)}
-                />
-                <span>:</span>
-                <input
-                  value={jumpTimeParts.sec}
-                  inputMode="numeric"
-                  title="Секунды"
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => updateJumpPart("sec", e.target.value)}
-                  onBlur={() => normalizeJumpPartOnBlur("sec")}
-                  onKeyDown={onJumpKeyDown}
-                  disabled={!audio.url || !(durationSec > 0)}
-                />
-                <span>.</span>
-                <input
-                  value={jumpTimeParts.ms}
-                  inputMode="numeric"
-                  title="Миллисекунды"
-                  onFocus={(e) => e.target.select()}
-                  onChange={(e) => updateJumpPart("ms", e.target.value)}
-                  onBlur={() => normalizeJumpPartOnBlur("ms")}
-                  onKeyDown={onJumpKeyDown}
-                  disabled={!audio.url || !(durationSec > 0)}
-                />
-              </div>
-              <button className="clipSB_btn clipSB_btnSecondary" onClick={onJumpToTime} disabled={!audio.url || !(durationSec > 0)}>ОК</button>
-              <button className="clipSB_btn clipSB_btnSecondary" onClick={useCurrentTimeForJump} disabled={!audio.url || !(durationSec > 0)}>из курсора</button>
-            </div>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onAddMarker} disabled={!audio.url || !(durationSec > 0)}>Поставить разрез</button>
-            <span className="manualTimingCutHint">Для исправления захвата следующей фразы не ставь новый разрез — используй микро-доводчик выбранной границы.</span>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDeleteLastCut} disabled={markers.length <= 2}>Удалить последний</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onOpenAsrVerificationScenes} disabled={!audioPhrases.length}>Открыть ASR как проверочные сцены</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyTimingJson} disabled={mainActionsDisabled}>Скопировать JSON</button>
-            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
-              Импорт backup / JSON
-              <input type="file" accept=".json,application/json" onChange={onImportJsonFile} />
-            </label>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup} disabled={mainActionsDisabled}>Скачать backup проекта</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadTimingJson} disabled={mainActionsDisabled}>Скачать текущий JSON</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadSampleJson} disabled={mainActionsDisabled}>Скачать JSON образец</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onDownloadAiSplitRequestJson} disabled={mainActionsDisabled}>Скачать JSON для AI-разбивки</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCopyAiSplitRequestJson} disabled={mainActionsDisabled}>Скопировать JSON для AI</button>
-            <button className="clipSB_btn clipSB_btnDanger" onClick={onReset}>Сбросить</button>
-          </div>
-
-          {SHOW_MISSING_PHRASE_TOOLS ? <div className="manualTimingMissingPhraseDraftPanel">
-            <div className="manualTimingMissingPhraseDraftHeader">
-              <strong>Разметка пропущенной фразы</strong>
-              <span>отдельная audio_phrase, не разрезает сцены</span>
-            </div>
-            <div className="manualTimingMissingPhraseDraftHint">
-              Для пропущенной фразы НЕ нажимай “Поставить разрез”. Используй метку пропущенной фразы — она не меняет сцены.
-            </div>
-            <div className="manualTimingMissingPhraseDraftValues">
-              <span>Начало: <b>{hasTimingDraftValue(missingPhraseDraft.start_sec) ? formatTimingSec(missingPhraseDraft.start_sec) : "—"}</b></span>
-              <span>Конец: <b>{hasTimingDraftValue(missingPhraseDraft.end_sec) ? formatTimingSec(missingPhraseDraft.end_sec) : "—"}</b></span>
-            </div>
-            <div className="manualTimingMissingPhraseDraftActions">
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("start_sec")} disabled={!audio.url || !(durationSec > 0)}>Начало из курсора</button>
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setMissingPhraseDraftBoundary("end_sec")} disabled={!audio.url || !(durationSec > 0)}>Конец из курсора</button>
-              <button className="clipSB_btn clipSB_btnSecondary manualTimingMissingPhraseButton" type="button" onClick={onAddMissingPhrase} disabled={!audio.url || !(durationSec > 0)}>Создать метку</button>
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={resetMissingPhraseDraft} disabled={!hasTimingDraftValue(missingPhraseDraft.start_sec) && !hasTimingDraftValue(missingPhraseDraft.end_sec)}>Сбросить диапазон</button>
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDeleteLastMissingPhrase} disabled={!audioPhrases.length}>Удалить последнюю пропущенную</button>
-            </div>
-          </div> : null}
-        </details> : null}
-
+        <details className="manualTimingSceneDetailsDrawer">
+          <summary className="manualTimingSceneDetailsSummary">
+            <span>Детали выбранной сцены</span>
+            <b>{selectedScene ? `${selectedScene.scene_id} · ${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)} · ${formatTimingSec(selectedSceneDurationSec)}` : "сцена не выбрана"}</b>
+            <em>раскрыть</em>
+          </summary>
+          <div className="manualTimingSceneDetailsBody">
         {selectedScene ? <div className="manualTimingSceneTextPanel">
           <div className="manualTimingSceneTextHeader">
             <strong>Текст и смысл сцены</strong>
@@ -3105,31 +3833,7 @@ export default function ManualTimingEditorPage() {
             </div> : <div className="manualTimingAudioPhrasesEmpty">В диапазоне выбранной сцены нет audio_phrases.</div>}
           </details> : null}
         </div> : null}
-
-        <div className="manualTimingJsonPanel">
-          <div className="manualTimingJsonHeader">
-            <strong>{workflowLabels.panelTitle}</strong>
-            <span>{workflowLabels.panelHint}</span>
-          </div>
-          <div className="manualTimingJsonActions">
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)} disabled={!isProjectModeSelected}>
-              {isJsonImportOpen ? "Скрыть поле JSON" : workflowLabels.insertPass}
-            </button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
-            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Скопировать JSON для Story Bible Pass</button> : null}
-            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Скопировать JSON для Block Storyboard Pass</button> : null}
-          </div>
-          {isJsonImportOpen ? <textarea
-            className="manualTimingJsonTextarea"
-            value={jsonImportText}
-            placeholder={workflowLabels.placeholder}
-            onChange={(e) => setJsonImportText(e.target.value)}
-          /> : null}
-        </div>
-
-        {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}
-
+            {!selectedScene ? <div className="manualTimingSceneDetailsEmpty">Выбери сцену на шкале, чтобы посмотреть текст, смысл, ASR-фразы и технические данные.</div> : null}
         <div className="manualTimingWorkInfo">
           <div className="manualTimingSelectedSceneSummary">
             {selectedScene ? <>
@@ -3151,6 +3855,10 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingStatusItem"><span>source_phrase_ids</span><strong className="manualTimingStatusValue">{selectedSceneSourcePhraseIds.length ? selectedSceneSourcePhraseIds.join(", ") : "—"}</strong></div>
           </div>
         </div>
+          </div>
+        </details>
+
+        {copyStatus ? <div className="manualTimingCopyStatus">{copyStatus}</div> : null}
       </section>
 
       {storyBlockSummaries.length ? <section className="manualTimingStoryBlocks" aria-label="смысловые блоки">
@@ -3167,36 +3875,7 @@ export default function ManualTimingEditorPage() {
         </button>)}
       </section> : null}
 
-      <section className="manualTimingTimeline" aria-label="шкала таймингов">
-        <div className="manualTimingTimelineTrack">
-          {timelineBlockRanges.length ? <div className="manualTimingBlockTrack" aria-label="смысловые блоки на шкале сцен">
-            {timelineBlockRanges.map((blockRange) => <button
-              key={`timeline-block-${blockRange.block_id}`}
-              type="button"
-              className="manualTimingBlockRange"
-              style={getStoryBlockRangeStyle(blockRange)}
-              onClick={(event) => { event.stopPropagation(); onStoryBlockClick(blockRange); }}
-              title={`${blockRange.title}: ${formatTimingSec(blockRange.start_sec)} – ${formatTimingSec(blockRange.end_sec)}`}
-            >
-              <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
-            </button>)}
-          </div> : null}
-          {scenes.map((scene, idx) => {
-            const isOpenTail = scene.scene_id === openTailSceneId;
-            return <button
-              key={scene.scene_id}
-              className={`manualTimingSegment ${isOpenTail ? "isOpenTail" : ""} ${selectedScene?.scene_id === scene.scene_id ? "isActive" : ""}`}
-              style={getSegmentStyle(scene, idx)}
-              onClick={() => selectSceneAndSeekStart(scene, { pause: true })}
-              onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
-              title={`${scene.scene_id} ${formatTimingSec(scene.start_sec)}–${formatTimingSec(scene.end_sec)}. Двойной клик — быстрая правка`}
-            >{scene.scene_id}<span>{SECTION_LABELS[scene.section] || scene.section}/{scene.route}</span></button>;
-          })}
-          {markerPercents.map((marker) => <div key={marker.value} className="manualTimingMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
-        </div>
-      </section>
-
-
+      {/* Нижняя дублирующая шкала удалена: основной плеер сверху остаётся единственной рабочей шкалой. */}
       <section className="manualTimingRows">
         {scenes.map((scene, idx) => {
           const isSelected = selectedScene?.scene_id === scene.scene_id;

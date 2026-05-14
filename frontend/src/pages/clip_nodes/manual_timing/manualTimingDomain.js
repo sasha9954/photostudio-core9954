@@ -677,6 +677,21 @@ export function buildManualTimingScenesFromMarkers(markers = [], existingScenes 
       start_sec: start,
       end_sec: end,
       duration_sec: roundTimingSec(end - start),
+      source_kind: String(old.source_kind || old.sourceKind || "audio"),
+      source_start_sec: old.source_start_sec ?? old.sourceStartSec ?? null,
+      source_end_sec: old.source_end_sec ?? old.sourceEndSec ?? null,
+      is_silence: Boolean(old.is_silence || old.isSilence || old.scene_type === "manual_silence"),
+      composer_source_kind: String(old.composer_source_kind || old.composerSourceKind || ""),
+      composer_source_audio_id: String(old.composer_source_audio_id || old.composerSourceAudioId || ""),
+      composer_source_audio_name: String(old.composer_source_audio_name || old.composerSourceAudioName || ""),
+      composer_source_start_sec: old.composer_source_start_sec ?? old.composerSourceStartSec ?? null,
+      composer_source_end_sec: old.composer_source_end_sec ?? old.composerSourceEndSec ?? null,
+      composer_block_id: String(old.composer_block_id || old.composerBlockId || ""),
+      composer_block_type: String(old.composer_block_type || old.composerBlockType || ""),
+      composer_block_label: String(old.composer_block_label || old.composerBlockLabel || ""),
+      composer_role_label: String(old.composer_role_label || old.composerRoleLabel || ""),
+      composer_saved_clip_id: String(old.composer_saved_clip_id || old.composerSavedClipId || ""),
+      composer_saved_clip_label: String(old.composer_saved_clip_label || old.composerSavedClipLabel || ""),
       speech_start_sec: speechStart,
       speech_end_sec: speechEnd,
       pre_silence_sec: preSilence,
@@ -1022,6 +1037,21 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
     start_sec: start,
     end_sec: end,
     duration_sec: roundTimingSec(scene?.duration_sec ?? scene?.durationSec ?? (end - start)),
+    source_kind: String(scene?.source_kind ?? scene?.sourceKind ?? "audio"),
+    source_start_sec: scene?.source_start_sec ?? scene?.sourceStartSec ?? null,
+    source_end_sec: scene?.source_end_sec ?? scene?.sourceEndSec ?? null,
+    is_silence: Boolean(scene?.is_silence || scene?.isSilence || scene?.scene_type === "manual_silence"),
+    composer_source_kind: String(scene?.composer_source_kind || scene?.composerSourceKind || ""),
+    composer_source_audio_id: String(scene?.composer_source_audio_id || scene?.composerSourceAudioId || ""),
+    composer_source_audio_name: String(scene?.composer_source_audio_name || scene?.composerSourceAudioName || ""),
+    composer_source_start_sec: scene?.composer_source_start_sec ?? scene?.composerSourceStartSec ?? null,
+    composer_source_end_sec: scene?.composer_source_end_sec ?? scene?.composerSourceEndSec ?? null,
+    composer_block_id: String(scene?.composer_block_id || scene?.composerBlockId || ""),
+    composer_block_type: String(scene?.composer_block_type || scene?.composerBlockType || ""),
+    composer_block_label: String(scene?.composer_block_label || scene?.composerBlockLabel || ""),
+    composer_role_label: String(scene?.composer_role_label || scene?.composerRoleLabel || ""),
+    composer_saved_clip_id: String(scene?.composer_saved_clip_id || scene?.composerSavedClipId || ""),
+    composer_saved_clip_label: String(scene?.composer_saved_clip_label || scene?.composerSavedClipLabel || ""),
     speech_start_sec: roundTimingSec(scene?.speech_start_sec ?? scene?.speechStartSec ?? scene?.speech_start ?? start),
     speech_end_sec: roundTimingSec(scene?.speech_end_sec ?? scene?.speechEndSec ?? scene?.speech_end ?? end),
     pre_silence_sec: roundTimingSec(scene?.pre_silence_sec ?? scene?.preSilenceSec ?? Math.max(0, (scene?.speech_start_sec ?? scene?.speechStartSec ?? start) - start)),
@@ -1105,6 +1135,7 @@ function normalizeManualTimingSceneForImport(scene = {}, idx = 0) {
 export function buildManualTimingAiSplitRequestJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
+
 
   return {
     chatgpt_task: buildManualTimingChatGptTask(
@@ -2408,6 +2439,21 @@ export function buildManualTimingExportJson(project = {}) {
     start_sec: roundTimingSec(scene?.start_sec),
     end_sec: roundTimingSec(scene?.end_sec),
     duration_sec: roundTimingSec(scene?.duration_sec || (Number(scene?.end_sec || 0) - Number(scene?.start_sec || 0))),
+    source_kind: String(scene?.source_kind ?? scene?.sourceKind ?? (scene?.scene_type === "manual_silence" ? "silence" : "audio")),
+    source_start_sec: scene?.source_start_sec ?? scene?.sourceStartSec ?? null,
+    source_end_sec: scene?.source_end_sec ?? scene?.sourceEndSec ?? null,
+    is_silence: Boolean(scene?.is_silence || scene?.isSilence || scene?.scene_type === "manual_silence"),
+    composer_source_kind: String(scene?.composer_source_kind || scene?.composerSourceKind || ""),
+    composer_source_audio_id: String(scene?.composer_source_audio_id || scene?.composerSourceAudioId || ""),
+    composer_source_audio_name: String(scene?.composer_source_audio_name || scene?.composerSourceAudioName || ""),
+    composer_source_start_sec: scene?.composer_source_start_sec ?? scene?.composerSourceStartSec ?? null,
+    composer_source_end_sec: scene?.composer_source_end_sec ?? scene?.composerSourceEndSec ?? null,
+    composer_block_id: String(scene?.composer_block_id || scene?.composerBlockId || ""),
+    composer_block_type: String(scene?.composer_block_type || scene?.composerBlockType || ""),
+    composer_block_label: String(scene?.composer_block_label || scene?.composerBlockLabel || ""),
+    composer_role_label: String(scene?.composer_role_label || scene?.composerRoleLabel || ""),
+    composer_saved_clip_id: String(scene?.composer_saved_clip_id || scene?.composerSavedClipId || ""),
+    composer_saved_clip_label: String(scene?.composer_saved_clip_label || scene?.composerSavedClipLabel || ""),
     speech_start_sec: roundTimingSec(scene?.speech_start_sec ?? scene?.speechStartSec ?? scene?.start_sec),
     speech_end_sec: roundTimingSec(scene?.speech_end_sec ?? scene?.speechEndSec ?? scene?.end_sec),
     pre_silence_sec: roundTimingSec(scene?.pre_silence_sec ?? scene?.preSilenceSec ?? Math.max(0, Number(scene?.speech_start_sec ?? scene?.start_sec ?? 0) - Number(scene?.start_sec ?? 0))),
@@ -2494,6 +2540,9 @@ export function buildManualTimingExportJson(project = {}) {
     String(phrase.status || "") === "needs_transcription"
     || String(phrase.assignment_status || "") === "unassigned"
   ));
+  const maxSceneEndSec = scenes.reduce((max, scene) => Math.max(max, Number(scene?.end_sec || 0)), 0);
+  const exportAudioDurationSec = Math.max(Number(audio.duration_sec || 0), roundTimingSec(maxSceneEndSec));
+  const podcastEditManifest = safeProject.podcast_edit_manifest || safeProject.composer_edit_manifest || null;
 
   return {
     chatgpt_task: buildManualTimingChatGptTask(
@@ -2509,7 +2558,11 @@ export function buildManualTimingExportJson(project = {}) {
     format_locked: Boolean(safeProject.format_locked),
     ...pickManualTimingProjectStoryBibleFields(safeProject),
     split_type: safeProject.timing_status === "confirmed" ? "manual_timing_confirmed" : "manual_timing_draft",
-    audio_duration_sec: Number(audio.duration_sec || 0),
+    audio_duration_sec: exportAudioDurationSec,
+    source_audio_duration_sec: Number(audio.duration_sec || 0),
+    timeline_duration_sec: exportAudioDurationSec,
+    podcast_edit_manifest: podcastEditManifest,
+    composer_edit_manifest: podcastEditManifest,
     global_hint: safeProject.timing_status === "confirmed" ? "Manual timing confirmed by user" : "Manual timing draft",
     story_blocks,
     song_blocks: Array.isArray(safeProject.song_blocks) ? safeProject.song_blocks : [],

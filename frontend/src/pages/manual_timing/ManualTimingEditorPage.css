@@ -1775,3 +1775,1516 @@
   gap: 10px;
   justify-content: flex-end;
 }
+
+/* Podcast-style compact controls for the main timing track */
+.manualTimingTrackToolbox {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(120, 255, 220, 0.18);
+  background:
+    radial-gradient(circle at top left, rgba(45, 212, 191, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(8, 18, 28, 0.92), rgba(15, 23, 42, 0.86));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 14px 32px rgba(0, 0, 0, 0.18);
+}
+
+.manualTimingMiniPlayButton {
+  flex: 0 0 auto;
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 38px;
+  padding: 0 !important;
+  border-color: rgba(125, 211, 252, 0.42) !important;
+  color: #e0f2fe !important;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.32), rgba(34, 197, 94, 0.18)) !important;
+  font-size: 16px !important;
+  line-height: 1;
+}
+
+.manualTimingTrackNudgeBox {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 5px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 191, 36, 0.24);
+  background: rgba(2, 6, 23, 0.38);
+}
+
+.manualTimingTrackNudgeBox .manualTimingSilenceButton {
+  margin-left: 3px;
+}
+
+.manualTimingNudgeArrow {
+  width: 42px !important;
+  min-width: 42px !important;
+  height: 32px;
+  padding: 0 !important;
+  border-color: rgba(251, 191, 36, 0.34) !important;
+  color: #ffedd5 !important;
+  background: rgba(251, 146, 60, 0.18) !important;
+  font-size: 18px !important;
+  line-height: 1;
+}
+
+.manualTimingStepControl {
+  display: inline-grid;
+  grid-template-columns: auto 76px;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 999px;
+  color: #fef3c7;
+  background: rgba(15, 23, 42, 0.78);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.manualTimingStepControl input {
+  width: 76px;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 999px;
+  padding: 6px 8px;
+  color: #111827;
+  background: #fed7aa;
+  font-size: 15px;
+  font-weight: 950;
+  text-align: center;
+  outline: none;
+}
+
+.manualTimingSilenceButton {
+  flex: 0 0 auto !important;
+  width: 74px !important;
+  min-width: 74px !important;
+  max-width: 74px !important;
+  height: 32px;
+  padding: 0 8px !important;
+  border-color: rgba(196, 181, 253, 0.48) !important;
+  color: #f5f3ff !important;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.32), rgba(14, 165, 233, 0.14)) !important;
+  font-size: 12px !important;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.manualTimingPlayerSegment.isSilence {
+  border-color: rgba(196, 181, 253, 0.72);
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(196, 181, 253, 0.84),
+    rgba(196, 181, 253, 0.84) 7px,
+    rgba(76, 29, 149, 0.78) 7px,
+    rgba(76, 29, 149, 0.78) 14px
+  );
+  color: #ffffff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+
+.manualTimingPlayerSegment.isSilence.isActive {
+  outline-color: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 0 0 1px rgba(196, 181, 253, 0.42), 0 0 20px rgba(196, 181, 253, 0.42);
+}
+
+@media (max-width: 720px) {
+  .manualTimingTrackToolbox {
+    align-items: stretch;
+  }
+
+  .manualTimingTrackNudgeBox {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+
+  .manualTimingStepControl {
+    grid-template-columns: auto minmax(64px, 1fr);
+  }
+
+  .manualTimingSilenceButton {
+    flex: 0 0 74px !important;
+    width: 74px !important;
+    min-width: 74px !important;
+    max-width: 74px !important;
+  }
+}
+
+
+/* v3: compact top area and cleaner action rows */
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] {
+  gap: 11px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeHeader {
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 16px;
+  gap: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeHeader .pageTitle {
+  margin: 0 0 4px;
+  font-size: clamp(30px, 3.15vw, 40px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeSubtitle {
+  font-size: 12px;
+  line-height: 1.25;
+  color: rgba(218, 231, 255, 0.82);
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeHeaderActions {
+  align-items: center;
+  gap: 8px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingBackButton {
+  min-width: 170px;
+  padding: 8px 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeBadge {
+  padding: 6px 11px;
+  font-size: 11px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeHint {
+  margin-top: 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(224, 236, 255, 0.9);
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardWarning {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 14px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardWarning > div:first-child {
+  min-width: 0;
+  gap: 3px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardWarning b {
+  font-size: 14px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardWarning span {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardActions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  max-width: 560px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardActions .clipSB_btn {
+  width: auto;
+  min-width: 148px;
+  max-width: none;
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  min-height: 34px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingMetaGrid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 0 2px;
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingMetaGrid > div,
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingFormatControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 150, 220, 0.14);
+  background: rgba(9, 15, 27, 0.48);
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingFormatControl select {
+  height: 24px;
+  border-radius: 7px;
+  padding: 2px 5px;
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingFormatLockHint {
+  margin: 2px 0 6px;
+  padding: 7px 10px;
+  border-radius: 11px;
+  border: 1px solid rgba(250, 204, 21, 0.16);
+  background: rgba(120, 83, 11, 0.14);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingAudioReplaceActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(9, 15, 27, 0.42);
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingAudioReplaceActions .clipSB_btn {
+  width: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  min-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingWorkflowStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  background: rgba(120, 83, 11, 0.16);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingTransport {
+  padding: 10px;
+  border-radius: 14px;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingPlayerShell {
+  padding: 9px;
+  gap: 7px;
+}
+
+@media (max-width: 980px) {
+  .manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardWarning {
+    grid-template-columns: 1fr;
+  }
+
+  .manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardActions {
+    justify-content: flex-start;
+    max-width: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingModeHeader {
+    align-items: stretch;
+  }
+
+  .manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingBackButton,
+  .manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingActiveBoardActions .clipSB_btn,
+  .manualTimingPage[data-build="manual-timing-top-compact-v3"] .manualTimingAudioReplaceActions .clipSB_btn {
+    width: auto;
+    flex: 1 1 auto;
+  }
+}
+
+
+/* v4 workflow cleanup */
+.manualTimingWorkflowPanel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(20, 33, 52, 0.78), rgba(9, 15, 28, 0.78));
+  border: 1px solid rgba(120, 255, 220, 0.16);
+}
+
+.manualTimingWorkflowActionsPrimary {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.manualTimingWorkflowActionsPrimary .clipSB_btn {
+  padding: 8px 11px;
+  min-height: 34px;
+}
+
+.manualTimingWorkflowStatusLine {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(250, 204, 21, 0.09);
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.manualTimingJsonPanelCompact {
+  padding: 0;
+  overflow: hidden;
+}
+
+.manualTimingJsonPanelCompact:not([open]) {
+  gap: 0;
+}
+
+.manualTimingJsonSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  color: #e7eeff;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.manualTimingJsonSummary::-webkit-details-marker {
+  display: none;
+}
+
+.manualTimingJsonSummary::before {
+  content: "▸";
+  color: rgba(120, 255, 220, 0.9);
+  font-weight: 900;
+}
+
+.manualTimingJsonPanelCompact[open] .manualTimingJsonSummary::before {
+  content: "▾";
+}
+
+.manualTimingJsonSummary strong {
+  margin-right: auto;
+  font-size: 13px;
+}
+
+.manualTimingJsonSummary span {
+  color: rgba(215, 226, 255, 0.62);
+  font-size: 12px;
+}
+
+.manualTimingJsonPanelCompact > .manualTimingJsonHeader,
+.manualTimingJsonPanelCompact > .manualTimingJsonActions,
+.manualTimingJsonPanelCompact > .manualTimingJsonTextarea {
+  margin: 0 10px;
+}
+
+.manualTimingJsonPanelCompact > .manualTimingJsonHeader {
+  margin-top: 10px;
+}
+
+.manualTimingJsonPanelCompact > .manualTimingJsonTextarea {
+  width: calc(100% - 20px);
+  margin-bottom: 10px;
+}
+
+
+/* v5: keep JSON/export next to player controls */
+.manualTimingPage[data-build="manual-timing-json-near-player-v5"] .manualTimingTrackToolbox {
+  align-items: flex-start;
+}
+
+.manualTimingJsonPanelTrack {
+  flex: 1 1 320px;
+  min-width: 260px;
+  align-self: stretch;
+  border: 1px solid rgba(125, 211, 252, 0.18);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.28);
+}
+
+.manualTimingJsonPanelTrack .manualTimingJsonSummary {
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.76));
+}
+
+.manualTimingJsonPanelTrack[open] .manualTimingJsonSummary {
+  border-bottom: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 15px 15px 0 0;
+}
+
+.manualTimingJsonPanelTrack .manualTimingJsonSummary strong {
+  color: #e0f2fe;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.manualTimingJsonPanelTrack .manualTimingJsonSummary span {
+  overflow: hidden;
+  max-width: 240px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manualTimingJsonPanelTrack .manualTimingJsonActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.manualTimingJsonPanelTrack .manualTimingJsonActions .clipSB_btn {
+  width: auto;
+  min-width: 0;
+  padding: 7px 10px;
+  min-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-json-near-player-v5"] .manualTimingWorkflowPanel {
+  margin-top: 0;
+}
+
+@media (max-width: 720px) {
+  .manualTimingJsonPanelTrack {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .manualTimingJsonPanelTrack .manualTimingJsonSummary span {
+    max-width: 160px;
+  }
+}
+
+
+/* v6: compact top layout + aligned JSON button near player */
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] {
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeHeader {
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 16px;
+  gap: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeHeader .pageTitle {
+  margin: 0 0 3px;
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeSubtitle {
+  font-size: 12px;
+  line-height: 1.25;
+  color: rgba(218, 231, 255, 0.82);
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeHeaderActions {
+  align-items: center;
+  gap: 8px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingBackButton {
+  width: auto;
+  min-width: 170px;
+  padding: 8px 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeBadge {
+  padding: 6px 11px;
+  font-size: 11px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeHint {
+  margin-top: 0;
+  padding: 8px 11px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: rgba(224, 236, 255, 0.9);
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardWarning {
+  display: grid;
+  grid-template-columns: minmax(250px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardWarning > div:first-child {
+  min-width: 0;
+  gap: 3px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardWarning b {
+  font-size: 14px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardWarning span {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardActions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  width: auto;
+  max-width: none;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardActions .clipSB_btn {
+  width: auto !important;
+  min-width: 138px;
+  max-width: none;
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  min-height: 34px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingMetaGrid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 0 1px;
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingMetaGrid > div,
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingFormatControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 150, 220, 0.14);
+  background: rgba(9, 15, 27, 0.48);
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingFormatControl select {
+  height: 24px;
+  border-radius: 7px;
+  padding: 2px 5px;
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingFormatLockHint {
+  margin: 2px 0 6px;
+  padding: 7px 10px;
+  border-radius: 11px;
+  border: 1px solid rgba(250, 204, 21, 0.16);
+  background: rgba(120, 83, 11, 0.14);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingAudioReplaceActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(9, 15, 27, 0.42);
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingAudioReplaceActions .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  min-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingWorkflowStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  background: rgba(120, 83, 11, 0.16);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingTransport {
+  padding: 10px;
+  border-radius: 14px;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingPlayerShell {
+  padding: 9px;
+  gap: 7px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingTrackToolbox {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack {
+  flex: 1 1 360px;
+  min-width: 280px;
+  align-self: center;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(2, 6, 23, 0.32));
+  overflow: hidden;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack .manualTimingJsonSummary {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.76));
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack[open] .manualTimingJsonSummary {
+  border-bottom: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 15px 15px 0 0;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack .manualTimingJsonSummary strong {
+  color: #e0f2fe;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack .manualTimingJsonSummary span {
+  overflow: hidden;
+  max-width: 260px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack .manualTimingJsonActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack .manualTimingJsonActions .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  padding: 7px 10px;
+  min-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingWorkflowPanel {
+  margin-top: 0;
+}
+
+@media (max-width: 1040px) {
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardWarning {
+    grid-template-columns: 1fr;
+  }
+
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardActions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 720px) {
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingModeHeader {
+    align-items: stretch;
+  }
+
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingBackButton,
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingActiveBoardActions .clipSB_btn,
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingAudioReplaceActions .clipSB_btn {
+    width: auto !important;
+    flex: 1 1 auto;
+  }
+
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack .manualTimingJsonSummary span {
+    max-width: 160px;
+  }
+}
+
+
+/* v7: clean manual timing advanced panel and keep reset near the player */
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingAdvancedPanel,
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingAdvancedDisabled {
+  display: none !important;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingTrackToolbox {
+  align-items: center;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingResetMiniButton {
+  min-width: 0;
+  padding: 9px 12px;
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.26);
+  color: #fecaca;
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingResetMiniButton:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.74);
+  background: rgba(153, 27, 27, 0.38);
+}
+
+.manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack {
+  min-width: 320px;
+  margin: 0;
+}
+
+@media (max-width: 860px) {
+  .manualTimingPage[data-build="manual-timing-advanced-clean-v7"] .manualTimingJsonPanelTrack {
+    min-width: 100%;
+  }
+}
+
+
+/* v8: скрываем перегруженный блок деталей под раскрывающуюся панель */
+.manualTimingSceneDetailsDrawer {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(120, 150, 220, 0.18);
+  border-radius: 16px;
+  background: rgba(8, 12, 22, 0.62);
+  overflow: hidden;
+}
+
+.manualTimingSceneDetailsSummary {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: #eaf2ff;
+  list-style: none;
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.1), rgba(15, 23, 42, 0.42));
+}
+
+.manualTimingSceneDetailsSummary::-webkit-details-marker {
+  display: none;
+}
+
+.manualTimingSceneDetailsSummary::before {
+  content: "▸";
+  color: #76ffe0;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.manualTimingSceneDetailsDrawer[open] .manualTimingSceneDetailsSummary::before {
+  content: "▾";
+}
+
+.manualTimingSceneDetailsSummary span {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+}
+
+.manualTimingSceneDetailsSummary b {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(225, 235, 255, 0.82);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manualTimingSceneDetailsSummary em {
+  justify-self: end;
+  border: 1px solid rgba(118, 255, 224, 0.22);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #bfffee;
+  background: rgba(45, 212, 191, 0.08);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.manualTimingSceneDetailsBody {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+
+.manualTimingSceneDetailsEmpty {
+  padding: 10px 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  color: rgba(225, 235, 255, 0.72);
+  background: rgba(15, 23, 42, 0.36);
+  font-size: 12px;
+}
+
+.manualTimingSceneDetailsDrawer .manualTimingSceneTextPanel,
+.manualTimingSceneDetailsDrawer .manualTimingWorkInfo {
+  margin: 0;
+}
+
+.manualTimingSceneDetailsDrawer .manualTimingSceneTextPanel {
+  padding: 10px;
+  border-radius: 14px;
+}
+
+.manualTimingSceneDetailsDrawer .manualTimingSceneTextHint,
+.manualTimingSceneDetailsDrawer .manualTimingSelectedSceneSummary {
+  display: none;
+}
+
+.manualTimingSceneDetailsDrawer .manualTimingSceneTextGrid,
+.manualTimingSceneDetailsDrawer .manualTimingBlockMeaningGrid,
+.manualTimingSceneDetailsDrawer .manualTimingStatusGrid {
+  gap: 7px;
+}
+
+.manualTimingSceneDetailsDrawer .manualTimingSceneTextGrid div,
+.manualTimingSceneDetailsDrawer .manualTimingBlockMeaningGrid div,
+.manualTimingSceneDetailsDrawer .manualTimingStatusItem {
+  padding: 7px 8px;
+  border-radius: 9px;
+}
+
+.manualTimingSceneDetailsDrawer .manualTimingWorkInfo {
+  padding: 8px;
+  background: rgba(10, 15, 28, 0.54);
+}
+
+@media (max-width: 720px) {
+  .manualTimingSceneDetailsSummary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .manualTimingSceneDetailsSummary em {
+    display: none;
+  }
+}
+
+
+/* v9: final clean layout — no lower duplicate timeline, no board-return shortcuts */
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] {
+  gap: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingModeHeader {
+  padding: 12px 14px;
+  border-radius: 17px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingModeHeader .pageTitle {
+  font-size: clamp(30px, 4vw, 46px);
+  line-height: 1;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingModeHint {
+  margin-top: 0;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardWarning {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardWarning > div:first-child {
+  min-width: 0;
+  gap: 3px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardWarning b {
+  font-size: 14px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardWarning span {
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardActions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardActions .clipSB_btn {
+  width: auto !important;
+  min-width: 150px;
+  max-width: none;
+  padding: 8px 12px;
+  min-height: 34px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingMetaGrid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingMetaGrid > div,
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingMetaGrid > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingAudioReplaceActions {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingAudioReplaceActions .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  padding: 8px 11px;
+  min-height: 34px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingWorkflowStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  background: rgba(120, 83, 11, 0.16);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingTransport {
+  padding: 10px;
+  border-radius: 14px;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingPlayerShell {
+  padding: 9px;
+  gap: 7px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingTrackToolbox {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack {
+  flex: 1 1 360px;
+  min-width: 280px;
+  align-self: center;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(2, 6, 23, 0.32));
+  overflow: hidden;
+  margin: 0;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack .manualTimingJsonSummary {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.76));
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack[open] .manualTimingJsonSummary {
+  border-bottom: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 15px 15px 0 0;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack .manualTimingJsonSummary strong {
+  color: #e0f2fe;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack .manualTimingJsonActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack .manualTimingJsonActions .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  padding: 7px 10px;
+  min-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingAdvancedPanel,
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingAdvancedDisabled,
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingTimeline {
+  display: none !important;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingResetMiniButton {
+  min-width: 0;
+  padding: 9px 12px;
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.26);
+  color: #fecaca;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingResetMiniButton:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.74);
+  background: rgba(153, 27, 27, 0.38);
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingWorkflowPanel {
+  margin-top: 0;
+}
+
+.manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingWorkflowActionsPrimary .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  padding: 8px 11px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1040px) {
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardWarning {
+    grid-template-columns: 1fr;
+  }
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardActions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingModeHeader {
+    align-items: stretch;
+  }
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingBackButton,
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingActiveBoardActions .clipSB_btn,
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingAudioReplaceActions .clipSB_btn {
+    width: auto !important;
+    flex: 1 1 auto;
+  }
+  .manualTimingPage[data-build="manual-timing-final-clean-v9"] .manualTimingJsonPanelTrack {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+/* v10: selected scene duration + real silence block tuning */
+.manualTimingPlayerSegment.isActive span {
+  display: inline-grid;
+  gap: 2px;
+  align-items: center;
+  justify-items: center;
+  width: 100%;
+  line-height: 1.05;
+}
+
+.manualTimingPlayerSegment span small {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+}
+
+.manualTimingPlayerSegment.isSilence {
+  border-color: rgba(216, 180, 254, 0.9);
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(139, 92, 246, 0.94),
+    rgba(139, 92, 246, 0.94) 7px,
+    rgba(49, 46, 129, 0.92) 7px,
+    rgba(49, 46, 129, 0.92) 14px
+  );
+}
+
+.manualTimingPlayerSegment.isSilence.isActive {
+  outline: 2px solid rgba(255, 255, 255, 0.98);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 1px rgba(216, 180, 254, 0.52), 0 0 24px rgba(168, 85, 247, 0.42);
+}
+
+
+/* v11: direct silence split/shift refinements */
+.manualTimingPage[data-build="manual-timing-silence-realtime-v12"] .manualTimingPlayerSegment.isSilence {
+  min-width: 12px;
+  border-color: rgba(216, 180, 254, 0.96);
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.22), inset 0 0 0 1px rgba(255,255,255,0.16);
+}
+
+.manualTimingPage[data-build="manual-timing-silence-realtime-v12"] .manualTimingPlayerSegment.isActive span small {
+  display: block;
+  margin-top: 2px;
+}
+
+
+/* v14: undo/redo controls near player */
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingJsonPanelTrack,
+.manualTimingPage[data-build="manual-timing-silence-timeline-repair-v13"] .manualTimingJsonPanelTrack {
+  flex: 1 1 360px;
+  min-width: 280px;
+  align-self: center;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(2, 6, 23, 0.32));
+  overflow: hidden;
+  margin: 0;
+}
+
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingUndoButton {
+  min-width: 0;
+  padding: 9px 11px;
+  border-color: rgba(167, 139, 250, 0.42) !important;
+  color: #ede9fe !important;
+  background: rgba(76, 29, 149, 0.24) !important;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingUndoButton:hover:not(:disabled) {
+  border-color: rgba(196, 181, 253, 0.72) !important;
+  background: rgba(91, 33, 182, 0.34) !important;
+}
+
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingAdvancedPanel,
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingAdvancedDisabled,
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingTimeline {
+  display: none !important;
+}
+
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingPlayerSegment.isSilence {
+  min-width: 12px;
+  border-color: rgba(216, 180, 254, 0.96);
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.22), inset 0 0 0 1px rgba(255,255,255,0.16);
+}
+
+.manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingPlayerSegment.isActive span small {
+  display: block;
+  margin-top: 2px;
+}
+
+@media (max-width: 720px) {
+  .manualTimingPage[data-build="manual-timing-undo-redo-v14"] .manualTimingJsonPanelTrack {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}
+
+
+/* v18 stable layout: apply compact Manual Timing layout regardless of previous build-specific selectors */
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingModeHeader .pageTitle {
+  font-size: clamp(28px, 3.4vw, 42px);
+  line-height: 1;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingModeHint {
+  margin-top: 0;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardWarning {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardWarning > div:first-child {
+  min-width: 0;
+  gap: 3px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardWarning b {
+  font-size: 14px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardWarning span {
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardActions {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardActions .clipSB_btn {
+  width: auto !important;
+  min-width: 150px;
+  max-width: none;
+  padding: 8px 12px;
+  min-height: 34px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingMetaGrid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 12px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingMetaGrid > div,
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingMetaGrid > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 5px 9px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.38);
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingAudioReplaceActions {
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 0;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingAudioReplaceActions .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  padding: 8px 11px;
+  min-height: 34px;
+  font-size: 12px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingWorkflowStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  background: rgba(120, 83, 11, 0.16);
+  color: #fde68a;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingTransport {
+  padding: 10px;
+  border-radius: 14px;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingPlayerShell {
+  padding: 9px;
+  gap: 7px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingTrackToolbox {
+  display: flex !important;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingTrackNudgeBox {
+  flex: 0 0 auto;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack {
+  flex: 1 1 360px;
+  min-width: 280px;
+  align-self: center;
+  border: 1px solid rgba(125, 211, 252, 0.22);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(2, 6, 23, 0.32));
+  overflow: hidden;
+  margin: 0;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack .manualTimingJsonSummary {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.76));
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack[open] .manualTimingJsonSummary {
+  border-bottom: 1px solid rgba(125, 211, 252, 0.14);
+  border-radius: 15px 15px 0 0;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack .manualTimingJsonSummary strong {
+  color: #e0f2fe;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack .manualTimingJsonActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack .manualTimingJsonActions .clipSB_btn {
+  width: auto !important;
+  min-width: 0;
+  padding: 7px 10px;
+  min-height: 32px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingAdvancedPanel,
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingAdvancedDisabled,
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingTimeline {
+  display: none !important;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingResetMiniButton {
+  min-width: 0;
+  padding: 9px 12px;
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.26);
+  color: #fecaca;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingRows {
+  contain: layout paint;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingRow {
+  transform: translateZ(0);
+  will-change: auto;
+}
+
+@media (max-width: 1040px) {
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardWarning {
+    grid-template-columns: 1fr;
+  }
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardActions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingModeHeader {
+    align-items: stretch;
+  }
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingBackButton,
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingActiveBoardActions .clipSB_btn,
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingAudioReplaceActions .clipSB_btn {
+    width: auto !important;
+    flex: 1 1 auto;
+  }
+  .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}

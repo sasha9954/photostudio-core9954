@@ -10,7 +10,7 @@ import {
 } from "../clip_nodes/manual_timing/manualTimingDomain.js";
 import "./PodcastAudioComposerPage.css";
 
-const BUILD_ID = "blocks-v43-persistent-composer-state";
+const BUILD_ID = "blocks-v44-timing-manifest-handoff";
 const COMPOSER_STORAGE_VERSION = 43;
 const RESTORABLE_STORAGE_VERSIONS = new Set([30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]);
 const ACTOR_AUDIO_DB_NAME = "podcast_audio_composer_assets_v1";
@@ -42,7 +42,7 @@ const COLOR_SWATCHES = [
 
 const GUIDE_JSON_SAMPLE = {
   schema: "podcast_composer_guide_v1",
-  purpose: "Монтажная карта для Podcast Audio Composer. Это НЕ ASR-разбор и НЕ поиск реальных голосов в текущем аудио. Используется только внутри композера как визуальная подсказка: где оставить диктора и где позже вставить актёрские фразы. Тишину в JSON не размечать — пользователь расставляет паузы вручную кнопкой 'тишина'. В Manual Timing экспортируется только готовое собранное аудио, без JSON-разметки.",
+  purpose: "Монтажная карта для Podcast Audio Composer. Это НЕ ASR-разбор и НЕ поиск реальных голосов в текущем аудио. Используется только внутри композера как визуальная подсказка: где оставить диктора и где позже вставить актёрские фразы. Тишину в JSON не размечать — пользователь расставляет паузы вручную кнопкой 'тишина'. В Manual Timing экспортируется готовое собранное аудио вместе с podcast_edit_manifest, чтобы роли, тишина, вставки и source-map были видны в JSON после ASR.",
   rules: {
     do_not_treat_as_asr: true,
     do_not_search_actor_voices_in_main_audio: true,
@@ -53,7 +53,7 @@ const GUIDE_JSON_SAMPLE = {
     do_not_generate_silence_blocks_from_json: true,
     timing_is_approximate: true,
     user_can_fix_boundaries_with_nudge: true,
-    export_to_timing: "audio_only",
+    export_to_timing: "audio_plus_podcast_edit_manifest",
     labels_on_blocks: "show 3-4 letters from role label",
     auto_fill_uncovered_tail_as_narrator: true,
     uncovered_tail_role: "narrator"
@@ -2317,6 +2317,174 @@ export default function PodcastAudioComposerPage() {
     return data || {};
   };
 
+
+  const buildPodcastEditManifestForTiming = ({ finalAudio = null, finalDurationSec = 0 } = {}) => {
+    const safeBlocks = Array.isArray(blocks) && blocks.length ? blocks : createInitialBlocks(durationSec || audio.duration_sec || totalDurationSec);
+    const timelineDurationSec = roundSeconds(finalDurationSec || getTimelineDuration(safeBlocks));
+    let cursor = 0;
+    const manifestBlocks = safeBlocks.map((block, index) => {
+      const duration = getBlockDuration(block);
+      const start = roundSeconds(cursor);
+      const end = roundSeconds(cursor + duration);
+      cursor = end;
+      const label = getBlockLabelText(block);
+      const isSilence = block?.type === "silence" || block?.source_audio_id === "silence";
+      const isPhrase = hasPhraseIdentity(block) || (block?.source_audio_id && block.source_audio_id !== "main" && block.source_audio_id !== "silence");
+      const sourceId = isSilence ? "silence" : String(block?.source_audio_id || "main");
+      return {
+        block_id: String(block?.id || `block_${index + 1}`),
+        index: index + 1,
+        timeline_start_sec: start,
+        timeline_end_sec: end,
+        duration_sec: duration,
+        type: isSilence ? "silence" : (isPhrase ? "phrase" : "audio"),
+        source_kind: isSilence ? "silence" : (isPhrase ? "inserted_audio" : "main_audio"),
+        is_silence: isSilence,
+        is_phrase: isPhrase,
+        role_label: label,
+        speaker_label: isPhrase ? label : "",
+        source_audio_id: sourceId,
+        source_audio_name: isSilence ? "Тишина" : getAudioNameForSourceId(sourceId, audio, actorAudios),
+        source_start_sec: isSilence ? null : roundSeconds(block?.source_start_sec),
+        source_end_sec: isSilence ? null : roundSeconds(block?.source_end_sec),
+        saved_clip_id: block?.saved_clip_id || block?.inserted_phrase_id || "",
+        saved_clip_label: block?.saved_clip_label || block?.inserted_phrase_label || block?.phrase_label || "",
+        label,
+        badge: getBlockInitialText(block),
+        color: getBlockRenderColor(block),
+        note: String(block?.guide_note || block?.user_note || "").trim(),
+        phrase_hint: String(block?.guide_phrase_hint || "").trim(),
+      };
+    });
+
+    return {
+      schema: "podcast_edit_manifest_v1",
+      version: 1,
+      source: "podcast_audio_composer",
+      created_at: new Date().toISOString(),
+      source_node_id: sourceNodeId,
+      timeline_duration_sec: timelineDurationSec,
+      final_audio: finalAudio ? {
+        url: finalAudio.url || "",
+        filename: finalAudio.filename || "",
+        duration_sec: roundSeconds(finalAudio.duration_sec || timelineDurationSec),
+      } : null,
+      original_main_audio: {
+        url: audio.url || "",
+        filename: audio.filename || "",
+        duration_sec: roundSeconds(audio.duration_sec || durationSec),
+      },
+      actor_audios: (Array.isArray(actorAudios) ? actorAudios : []).map((actor) => ({
+        id: actor.id || "",
+        label: actor.label || actor.name || actor.filename || "",
+        name: actor.name || actor.filename || actor.id || "",
+        duration_sec: roundSeconds(actor.duration_sec || actor.durationSec || 0),
+      })),
+      saved_clips: (Array.isArray(savedClips) ? savedClips : []).map((clip) => ({
+        id: clip.id || "",
+        label: clip.label || clip.saved_clip_label || "",
+        source_audio_id: clip.source_audio_id || "main",
+        source_start_sec: roundSeconds(clip.source_start_sec),
+        source_end_sec: roundSeconds(clip.source_end_sec),
+        duration_sec: getBlockDuration(clip),
+      })),
+      deletion_markers: (Array.isArray(deletionMarkers) ? deletionMarkers : []).map((marker) => ({
+        id: marker.id || "",
+        at_sec: roundSeconds(marker.at_sec),
+        removed_duration_sec: roundSeconds(marker.removed_duration_sec),
+      })),
+      blocks: manifestBlocks,
+      rules: {
+        manual_timing_receives_final_audio: true,
+        manifest_preserves_roles_silence_replacements: true,
+        asr_should_run_on_final_audio: true,
+        semantic_pass_should_keep_podcast_edit_manifest: true,
+      },
+    };
+  };
+
+  const buildManualTimingScenesFromPodcastManifest = (manifest, finalDurationSec = 0) => {
+    const sourceBlocks = Array.isArray(manifest?.blocks) ? manifest.blocks : [];
+    const safeDuration = roundSeconds(finalDurationSec || manifest?.timeline_duration_sec || 0);
+    const scenesFromBlocks = sourceBlocks
+      .map((block, index) => {
+        const start = roundSeconds(block?.timeline_start_sec);
+        const end = roundSeconds(block?.timeline_end_sec);
+        if (!(end > start)) return null;
+        const isSilence = Boolean(block?.is_silence || block?.source_kind === "silence" || block?.type === "silence");
+        const isPhrase = Boolean(block?.is_phrase || block?.source_kind === "inserted_audio" || block?.type === "phrase");
+        const label = String(block?.label || block?.role_label || block?.speaker_label || (isSilence ? "Тишина" : isPhrase ? "Фраза" : "Диктор")).trim();
+        return {
+          scene_id: `seg_${String(index + 1).padStart(2, "0")}`,
+          index: index + 1,
+          start_sec: start,
+          end_sec: end,
+          duration_sec: roundSeconds(end - start),
+          source_kind: isSilence ? "silence" : "audio",
+          source_start_sec: isSilence ? null : start,
+          source_end_sec: isSilence ? null : end,
+          is_silence: isSilence,
+          composer_source_kind: String(block?.source_kind || ""),
+          composer_source_audio_id: String(block?.source_audio_id || ""),
+          composer_source_audio_name: String(block?.source_audio_name || ""),
+          composer_source_start_sec: block?.source_start_sec ?? null,
+          composer_source_end_sec: block?.source_end_sec ?? null,
+          composer_block_id: String(block?.block_id || ""),
+          composer_block_type: String(block?.type || ""),
+          composer_block_label: label,
+          composer_role_label: String(block?.role_label || label),
+          composer_saved_clip_id: String(block?.saved_clip_id || ""),
+          composer_saved_clip_label: String(block?.saved_clip_label || ""),
+          section: isSilence ? "instrumental" : "intro",
+          route: isSilence ? "i2v_sound" : "i2v",
+          contains_vocal: false,
+          contains_vocal_assumption: false,
+          contains_instrumental_assumption: !isSilence,
+          use_sound_suggestion: isSilence,
+          energy: isSilence ? "soft" : "mid",
+          quality: "podcast_composer_handoff",
+          boundary_reason: "podcast_composer_manifest",
+          transition_out: "manual_cut",
+          scene_type: isSilence ? "manual_silence" : (isPhrase ? "podcast_inserted_phrase" : "podcast_narrator_audio"),
+          original_text: isSilence ? "[тишина]" : label,
+          translated_text_ru: isSilence ? "[тишина]" : label,
+          meaning_hint_ru: isSilence ? "Вставленная пользователем тишина из Podcast Composer." : (isPhrase ? `Вставленная/сохранённая фраза: ${label}.` : "Фрагмент основного дикторского аудио."),
+          scene_goal_ru: isSilence ? "Техническая пауза в собранном подкасте." : "Фрагмент собранного подкаст-аудио для дальнейшей ASR/нарезки.",
+          user_note_ru: isSilence
+            ? "Podcast Composer: вставленная тишина. При смысловой нарезке учитывать как паузу."
+            : `Podcast Composer: ${label}. Source: ${block?.source_audio_name || block?.source_audio_id || "main"}.`,
+          speaker_id: isPhrase ? String(block?.source_audio_id || block?.speaker_label || "") : "",
+          speaker_name: isPhrase ? label : "",
+          source_phrase_ids: [],
+          story_block_id: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id,
+          story_block_title_ru: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.title_ru,
+          story_block_color: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color,
+        };
+      })
+      .filter(Boolean);
+
+    if (scenesFromBlocks.length) return scenesFromBlocks;
+    return safeDuration > 0 ? [{
+      scene_id: "seg_01",
+      index: 1,
+      start_sec: 0,
+      end_sec: safeDuration,
+      duration_sec: safeDuration,
+      source_kind: "audio",
+      source_start_sec: 0,
+      source_end_sec: safeDuration,
+      is_silence: false,
+      section: "intro",
+      route: "i2v",
+      quality: "podcast_composer_handoff",
+      boundary_reason: "podcast_composer_manifest",
+      story_block_id: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id,
+      story_block_title_ru: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.title_ru,
+      story_block_color: MANUAL_TIMING_UNKNOWN_STORY_BLOCK.color,
+    }] : [];
+  };
+
+
   const downloadComposedAudio = async () => {
     if (finalAudioBusy) return;
     setFinalAudioBusy("download");
@@ -2355,6 +2523,17 @@ export default function PodcastAudioComposerPage() {
         duration_sec: finalDurationSec,
         duration_ms: Math.round(finalDurationSec * 1000),
       };
+      const editManifest = buildPodcastEditManifestForTiming({ finalAudio, finalDurationSec });
+      const handoffScenes = buildManualTimingScenesFromPodcastManifest(editManifest, finalDurationSec);
+      const handoffMarkers = handoffScenes.length
+        ? [...handoffScenes.map((scene) => roundSeconds(scene.start_sec)), roundSeconds(handoffScenes[handoffScenes.length - 1].end_sec)]
+        : [0, finalDurationSec];
+      const handoffStoryBlock = {
+        ...MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
+        scene_ids: handoffScenes.map((scene) => scene.scene_id),
+        start_sec: 0,
+        end_sec: finalDurationSec,
+      };
       const baseProject = storedManualTimingProject && typeof storedManualTimingProject === "object" ? storedManualTimingProject : {};
       const nextProject = {
         ...baseProject,
@@ -2362,23 +2541,29 @@ export default function PodcastAudioComposerPage() {
         sourceNodeId,
         audio: finalAudio,
         audio_source: "podcast_audio_composer",
+        project_mode: baseProject.project_mode || "podcast_dialogue",
+        project_kind: baseProject.project_kind || "podcast",
         timing_status: "draft",
-        markers: [],
-        scenes: [],
+        markers: handoffMarkers,
+        scenes: handoffScenes,
         audio_phrases: [],
-        selectedSceneId: "",
-        story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
+        selectedSceneId: handoffScenes[0]?.scene_id || "",
+        story_blocks: [handoffStoryBlock],
+        podcast_edit_manifest: editManifest,
+        composer_edit_manifest: editManifest,
+        edit_manifest_source: "podcast_audio_composer",
         composer_audio_applied_at: Date.now(),
         updatedAt: Date.now(),
       };
       persistManualTimingProject(nextProject);
-      setMessage("Готовое аудио загружено. Открываю Manual Timing...");
+      setMessage("Готовое аудио и podcast_edit_manifest загружены. Открываю Manual Timing...");
       navigate(`/studio/manual-timing-editor?sourceNodeId=${encodeURIComponent(sourceNodeId)}`, {
         state: {
           sourceNodeId,
           fromPodcastComposer: true,
           replaceAudio: true,
           audio: finalAudio,
+          podcast_edit_manifest: editManifest,
         },
       });
     } catch (error) {
