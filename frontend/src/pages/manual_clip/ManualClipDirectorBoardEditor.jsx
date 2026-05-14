@@ -262,7 +262,17 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId: safeSourceNodeId });
     console.info("[MANUAL BOARD EMBEDDED PICK]", {
       sourceNodeId: safeSourceNodeId,
-      picked: "explicit_navigation_project",
+      ownerNodeId: getManualProjectOwnerId(navigationProject),
+      picked: "navigationProject",
+      project_id: manualBoardProjectId(navigationProject),
+      input_signature: manualBoardInputSignature(navigationProject),
+      audio_signature: String(navigationProject?.audio_signature || navigationProject?.audioSignature || "").trim(),
+      audio: {
+        url: String(navigationProject?.audio?.url || navigationProject?.audio_url || navigationProject?.audioUrl || "").trim(),
+        name: String(navigationProject?.audio?.name || navigationProject?.audio?.filename || navigationProject?.audio_name || "").trim(),
+        duration_sec: Number(navigationProject?.audio?.duration_sec || navigationProject?.audio_duration_sec || 0) || 0,
+      },
+      explicitNewProject: true,
       stats: getManualClipBoardMaterialStats(navigationProject),
     });
     return navigationProject;
@@ -963,8 +973,10 @@ export default function ManualClipDirectorBoardEditor({
   const navigate = useNavigate();
   const location = useLocation();
   const sourceNodeIdFromRoute = useMemo(() => (
-    embedded ? String(sourceNodeId || "") : new URLSearchParams(location.search).get("sourceNodeId") || ""
-  ), [embedded, sourceNodeId, location.search]);
+    embedded
+      ? String(sourceNodeId || "")
+      : String(location.state?.sourceNodeId || location.state?.ownerNodeId || new URLSearchParams(location.search).get("sourceNodeId") || "")
+  ), [embedded, sourceNodeId, location.search, location.state]);
   const videoStartInFlightRef = useRef(new Set());
   const videoPollErrorCountRef = useRef(new Map());
   const resumedVideoJobsRef = useRef(new Set());
@@ -1147,6 +1159,9 @@ export default function ManualClipDirectorBoardEditor({
     }
     try {
       const parsed = unwrapManualProjectBackupJson(parsedProject);
+      const forcedProjectId = String(location.state?.manualBoardForceProjectId || location.state?.forceProjectId || openState?.forceProjectId || "").trim();
+      const forcedInputSignature = String(location.state?.manualBoardForceInputSignature || location.state?.forceInputSignature || openState?.forceInputSignature || "").trim();
+      const forcedAudioSignature = String(location.state?.manualBoardForceAudioSignature || location.state?.forceAudioSignature || openState?.forceAudioSignature || "").trim();
       const projectFormat = resolveProjectAspectFormat(parsed);
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
@@ -1162,6 +1177,9 @@ export default function ManualClipDirectorBoardEditor({
       const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId) ? parsedSelectedSceneId : String(scenes[0]?.scene_id || "");
       const hydratedProject = normalizeDirectorProjectOwner({
         ...parsed,
+        ...(forcedProjectId ? { project_id: forcedProjectId, projectId: forcedProjectId } : {}),
+        ...(forcedInputSignature ? { input_signature: forcedInputSignature, inputSignature: forcedInputSignature } : {}),
+        ...(forcedAudioSignature ? { audio_signature: forcedAudioSignature, audioSignature: forcedAudioSignature } : {}),
         format: projectFormat,
         aspect_ratio: normalizeProjectAspectFormat(parsed?.aspect_ratio) || projectFormat,
         story_blocks: storyBlocks,
@@ -1174,7 +1192,7 @@ export default function ManualClipDirectorBoardEditor({
       setSelectedSceneId(selectedSceneIdForHydrate);
 
       if (!embedded && hasMeaningfulManualProject(hydratedProject)) {
-        const reason = navigationProject ? "hydrate_from_navigation_project" : "hydrate_source_bound_project";
+        const reason = explicitNewProject && navigationProject ? "hydrate_explicit_new_navigation_project" : (navigationProject ? "hydrate_from_navigation_project" : "hydrate_source_bound_project");
         const projectToPersist = {
           ...hydratedProject,
           selectedSceneId: selectedSceneIdForHydrate,
@@ -1186,7 +1204,9 @@ export default function ManualClipDirectorBoardEditor({
         const ownerNodeId = sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId;
         let persisted = persistManualProject(projectToPersist, {
           reason,
-          forceReplace: Boolean(navigationProject),
+          forceReplace: Boolean(navigationProject || explicitNewProject),
+          explicitReset: Boolean(explicitNewProject),
+          allowMaterialLoss: Boolean(explicitNewProject),
         });
         let readback = ownerNodeId ? readManualClipBoardProjectForNode(ownerNodeId) : null;
         let readbackOk = hasMeaningfulManualProject(readback)
@@ -1204,6 +1224,17 @@ export default function ManualClipDirectorBoardEditor({
         dispatchManualDirectorBoardUpdate(ownerNodeId, projectToPersist);
         console.info("[MANUAL BOARD HYDRATE] persisted navigation project for reload", {
           sourceNodeId: ownerNodeId,
+          ownerNodeId,
+          projectSource: explicitNewProject && navigationProject ? "navigationProject" : (navigationProject ? "navigation" : "canonical/node-scoped/active"),
+          explicitNewProject,
+          project_id: projectToPersist.project_id || projectToPersist.projectId || "",
+          input_signature: projectToPersist.input_signature || projectToPersist.inputSignature || "",
+          audio_signature: projectToPersist.audio_signature || projectToPersist.audioSignature || "",
+          audio: {
+            url: String(projectToPersist.audio?.url || projectToPersist.audio_url || projectToPersist.audioUrl || "").trim(),
+            name: String(projectToPersist.audio?.name || projectToPersist.audio?.filename || projectToPersist.audio_name || "").trim(),
+            duration_sec: Number(projectToPersist.audio?.duration_sec || projectToPersist.audio_duration_sec || 0) || 0,
+          },
           persisted,
           readbackOk,
           readbackOwner: getManualProjectOwnerId(readback),
@@ -1665,7 +1696,16 @@ export default function ManualClipDirectorBoardEditor({
 
   const playQuickListenRange = (mode, startValue = 0, endValue = null) => {
     const audioEl = quickListenAudioRef.current;
-    if (!audioEl || !audioUrl) return;
+    if (!audioUrl) {
+      setBackupStatus("В текущей доске нет аудио для прослушивания");
+      window.setTimeout(() => setBackupStatus(""), 2200);
+      console.warn("[MANUAL BOARD AUDIO] quick listen blocked: current board has no audio", {
+        sourceNodeId: getProjectOwnerNodeId(projectRef.current || project),
+        project_id: project?.project_id || project?.projectId || "",
+      });
+      return;
+    }
+    if (!audioEl) return;
 
     if (isAudioPlaying && playbackMode === mode) {
       stopOrPauseCurrentPlayback();
@@ -2710,7 +2750,54 @@ export default function ManualClipDirectorBoardEditor({
       >
         Назад к AI-разбивке
       </button>
-      <button className="clipSB_btn" onClick={() => navigate("/studio/manual-clip-audio-preview")}>Прослушать сцены</button>
+      <button className="clipSB_btn" onClick={() => {
+        const currentProject = { ...(projectRef.current || project || {}), selectedSceneId };
+        const ownerNodeId = getProjectOwnerNodeId(currentProject);
+        const forceProjectId = String(currentProject.project_id || currentProject.projectId || "").trim();
+        const forceInputSignature = String(currentProject.input_signature || currentProject.inputSignature || "").trim();
+        const forceAudioSignature = String(currentProject.audio_signature || currentProject.audioSignature || "").trim();
+        persistAndBroadcastDirectorProject(currentProject, { reason: "open_manual_audio_preview", forceReplace: true });
+        writeManualClipBoardOpenState({
+          isOpen: true,
+          sourceNodeId: ownerNodeId,
+          selectedSceneId: String(currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "").trim(),
+          project_id: forceProjectId,
+          input_signature: forceInputSignature,
+          audio_signature: forceAudioSignature,
+          manualBoardExplicitNewProject: true,
+          forceProjectId,
+          forceInputSignature,
+          forceAudioSignature,
+          routePath: "/studio/storyboard",
+          updatedAt: Date.now(),
+        });
+        console.info("[MANUAL BOARD AUDIO PREVIEW OPEN]", {
+          sourceNodeId: ownerNodeId,
+          ownerNodeId,
+          project_id: forceProjectId,
+          input_signature: forceInputSignature,
+          audio_signature: forceAudioSignature,
+          audio: {
+            url: String(currentProject.audio?.url || currentProject.audio_url || currentProject.audioUrl || "").trim(),
+            name: String(currentProject.audio?.name || currentProject.audio?.filename || currentProject.audio_name || "").trim(),
+            duration_sec: Number(currentProject.audio?.duration_sec || currentProject.audio_duration_sec || 0) || 0,
+          },
+          explicitNewProject: true,
+        });
+        navigate("/studio/manual-clip-audio-preview", {
+          state: {
+            manualBoardExplicitNewProject: true,
+            forceProjectId,
+            forceInputSignature,
+            forceAudioSignature,
+            sourceNodeId: ownerNodeId,
+            ownerNodeId,
+            navigationProject: currentProject,
+            director_board: currentProject,
+            project: currentProject,
+          },
+        });
+      }}>Прослушать сцены</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
@@ -2831,6 +2918,7 @@ export default function ManualClipDirectorBoardEditor({
           {blockCopyStatus ? <span className="manualBlockCopyStatus">{blockCopyStatus}</span> : null}
         </div>
         <div className="manualDirectorQuickListenBar" aria-label="Быстрое прослушивание аудио" title={`Диапазон прослушивания: ${formatDirectorSec(playbackRange.startSec)} → ${playbackRange.endSec === null ? "конец" : formatDirectorSec(playbackRange.endSec)} c`}>
+          {!audioUrl ? <div className="manualAudioPending">В текущей доске нет аудио для быстрого прослушивания.</div> : null}
           {audioUrl ? <audio
             ref={quickListenAudioRef}
             className="manualDirectorQuickListenAudio"
