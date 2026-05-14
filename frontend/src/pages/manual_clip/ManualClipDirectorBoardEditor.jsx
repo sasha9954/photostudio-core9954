@@ -638,17 +638,59 @@ function resolveVideoStartJobId(out = {}) {
   return String(out.jobId || out.job_id || out.id || "").trim();
 }
 
+function readManualNestedValue(source = {}, path = "") {
+  return String(path || "")
+    .split(".")
+    .filter(Boolean)
+    .reduce((value, key) => (value && typeof value === "object" ? value[key] : undefined), source);
+}
+
+const MANUAL_STATUS_VIDEO_URL_PATHS = [
+  "video_url",
+  "videoUrl",
+  "final_video_url",
+  "finalVideoUrl",
+  "result_video_url",
+  "resultVideoUrl",
+  "generated_video_url",
+  "generatedVideoUrl",
+  "output_url",
+  "outputUrl",
+  "asset_url",
+  "assetUrl",
+  "result.video_url",
+  "result.videoUrl",
+  "result.final_video_url",
+  "result.finalVideoUrl",
+  "result.result_video_url",
+  "result.generated_video_url",
+  "data.video_url",
+  "data.final_video_url",
+  "url",
+];
+
 function resolveManualStatusVideoUrl(out = {}) {
-  return String(
-    out?.videoUrl ||
-    out?.video_url ||
-    out?.url ||
-    out?.finalVideoUrl ||
-    out?.final_video_url ||
-    out?.result?.videoUrl ||
-    out?.result?.video_url ||
-    ""
-  ).trim();
+  for (const path of MANUAL_STATUS_VIDEO_URL_PATHS) {
+    const value = String(readManualNestedValue(out, path) || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function resolveManualVideoJobStatus(out = {}) {
+  return String(out?.status || out?.state || out?.result?.status || out?.result?.state || out?.data?.status || out?.data?.state || "").trim().toLowerCase();
+}
+
+function collectManualResponseKeys(out = {}, prefix = "", depth = 0) {
+  if (!out || typeof out !== "object" || depth > 1) return [];
+  return Object.keys(out).flatMap((key) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    const value = out[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return [path, ...collectManualResponseKeys(value, path, depth + 1)];
+    }
+    return [path];
+  });
 }
 
 
@@ -667,6 +709,10 @@ const MANUAL_VIDEO_RESULT_FIELDS = [
   "videoPreviewUrl",
   "mmaudio_video_url",
   "mmaudioVideoUrl",
+  "output_url",
+  "outputUrl",
+  "asset_url",
+  "assetUrl",
 ];
 
 const MANUAL_VIDEO_CLEAR_FIELD_VALUES = {
@@ -880,6 +926,8 @@ function withManualSceneMediaAliases(scene = {}) {
     resultVideoUrl: hasExplicitVideoClear ? "" : String(scene?.resultVideoUrl || scene?.result_video_url || videoUrl || "").trim(),
     generated_video_url: hasExplicitVideoClear ? "" : String(scene?.generated_video_url || scene?.generatedVideoUrl || videoUrl || "").trim(),
     generatedVideoUrl: hasExplicitVideoClear ? "" : String(scene?.generatedVideoUrl || scene?.generated_video_url || videoUrl || "").trim(),
+    final_video_url: hasExplicitVideoClear ? "" : String(scene?.final_video_url || scene?.finalVideoUrl || videoUrl || "").trim(),
+    finalVideoUrl: hasExplicitVideoClear ? "" : String(scene?.finalVideoUrl || scene?.final_video_url || videoUrl || "").trim(),
     video_job_id: videoJobId,
     videoJobId: videoJobId,
     video_has_audio: Boolean(scene?.video_has_audio ?? scene?.videoHasAudio ?? scene?.hasAudio ?? false),
@@ -2783,24 +2831,57 @@ export default function ManualClipDirectorBoardEditor({
     const maxAttempts = 180;
     const delayMs = 5000;
     const pollKey = `${sceneId}:${jobId}`;
-    const currentSceneBeforePoll = (Array.isArray(projectRef.current?.scenes) ? projectRef.current.scenes : []).find((scene) => scene.scene_id === sceneId);
+    const safeJobId = String(jobId || "").trim();
+    const findSceneByJob = () => {
+      const scenes = Array.isArray(projectRef.current?.scenes) ? projectRef.current.scenes : [];
+      return scenes.find((scene) => safeJobId && String(scene?.video_job_id || scene?.videoJobId || "").trim() === safeJobId)
+        || scenes.find((scene) => String(scene?.scene_id || scene?.id || "").trim() === String(sceneId || "").trim());
+    };
+    const currentSceneBeforePoll = findSceneByJob();
     const currentJobId = String(currentSceneBeforePoll?.video_job_id || currentSceneBeforePoll?.videoJobId || "").trim();
     const currentStatus = String(currentSceneBeforePoll?.status || "").toLowerCase();
-    if (!currentSceneBeforePoll || currentJobId !== String(jobId || "").trim() || !["video_queued", "video_running"].includes(currentStatus) || resolveManualSceneFinalVideoUrl(currentSceneBeforePoll) || terminalVideoJobsRef.current.has(pollKey)) {
+    const alreadyHasVideo = resolveManualSceneFinalVideoUrl(currentSceneBeforePoll);
+    if (!currentSceneBeforePoll || currentJobId !== safeJobId || !["video_queued", "video_running"].includes(currentStatus) || alreadyHasVideo) {
+      if (terminalVideoJobsRef.current.has(pollKey) && !alreadyHasVideo) {
+        terminalVideoJobsRef.current.delete(pollKey);
+      }
       return;
+    }
+    if (terminalVideoJobsRef.current.has(pollKey) && !alreadyHasVideo) {
+      terminalVideoJobsRef.current.delete(pollKey);
     }
     try {
       const statusOut = await getManualSceneVideoStatus(jobId);
-      const status = String(statusOut?.status || "").toLowerCase();
+      const rawStatus = String(statusOut?.status || statusOut?.state || statusOut?.result?.status || statusOut?.result?.state || statusOut?.data?.status || statusOut?.data?.state || "");
+      const status = resolveManualVideoJobStatus(statusOut);
       const doneVideoUrl = resolveManualStatusVideoUrl(statusOut);
+      const responseKeys = collectManualResponseKeys(statusOut);
+      console.info("[MANUAL BOARD VIDEO POLL STATUS]", {
+        sceneId,
+        jobId,
+        rawStatus,
+        resolvedStatus: status,
+        resolvedVideoUrl: doneVideoUrl,
+        responseKeys,
+      });
       const isDoneStatus = ["done", "ready", "success", "completed"].includes(status);
 
       if (isDoneStatus && doneVideoUrl) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
-        terminalVideoJobsRef.current.add(pollKey);
+        const targetScene = findSceneByJob();
+        const targetSceneId = String(targetScene?.scene_id || sceneId || "").trim();
+        if (!targetSceneId) {
+          console.warn("[MANUAL BOARD VIDEO RESULT APPLY FAILED]", {
+            sceneId,
+            jobId,
+            reason: "scene_not_found",
+            rawResponse: statusOut,
+          });
+          return;
+        }
         const videoHasAudio = resolveManualStatusVideoHasAudio(statusOut);
 
-        updateScene(sceneId, (currentScene = {}) => ({
+        updateScene(targetSceneId, (currentScene = {}) => ({
           status: "video_ready",
           video_url: doneVideoUrl,
           videoUrl: doneVideoUrl,
@@ -2808,6 +2889,8 @@ export default function ManualClipDirectorBoardEditor({
           resultVideoUrl: doneVideoUrl,
           generated_video_url: doneVideoUrl,
           generatedVideoUrl: doneVideoUrl,
+          final_video_url: doneVideoUrl,
+          finalVideoUrl: doneVideoUrl,
           video_job_id: jobId,
           videoJobId: jobId,
           video_error: "",
@@ -2817,8 +2900,11 @@ export default function ManualClipDirectorBoardEditor({
           videoHasAudio: videoHasAudio,
           hasAudio: videoHasAudio,
           keep_generated_audio: Boolean(statusOut?.keepGeneratedAudio ?? statusOut?.keep_generated_audio ?? currentScene?.keep_generated_audio ?? false),
+          keepGeneratedAudio: Boolean(statusOut?.keepGeneratedAudio ?? statusOut?.keep_generated_audio ?? currentScene?.keepGeneratedAudio ?? currentScene?.keep_generated_audio ?? false),
           generated_audio_policy: String(statusOut?.generatedAudioPolicy ?? statusOut?.generated_audio_policy ?? currentScene?.generated_audio_policy ?? ""),
+          generatedAudioPolicy: String(statusOut?.generatedAudioPolicy ?? statusOut?.generated_audio_policy ?? currentScene?.generatedAudioPolicy ?? currentScene?.generated_audio_policy ?? ""),
           generated_audio_gain_db: Number(statusOut?.generatedAudioGainDb ?? statusOut?.generated_audio_gain_db ?? currentScene?.generated_audio_gain_db ?? -16),
+          generatedAudioGainDb: Number(statusOut?.generatedAudioGainDb ?? statusOut?.generated_audio_gain_db ?? currentScene?.generatedAudioGainDb ?? currentScene?.generated_audio_gain_db ?? -16),
           video_request_payload_preview: {
             ...(currentScene?.video_request_payload_preview || {}),
             status: status || "done",
@@ -2831,40 +2917,61 @@ export default function ManualClipDirectorBoardEditor({
             generatedAudioGainDb: Number(statusOut?.generatedAudioGainDb ?? statusOut?.generated_audio_gain_db ?? currentScene?.generated_audio_gain_db ?? -16),
             soundPromptPreview: String(statusOut?.soundPromptPreview || currentScene?.video_request_payload_preview?.soundPromptPreview || "").slice(0, 180),
           },
-        }));
+          videoRequestPayloadPreview: {
+            ...(currentScene?.videoRequestPayloadPreview || currentScene?.video_request_payload_preview || {}),
+            status: status || "done",
+            videoUrl: doneVideoUrl,
+            videoHasAudio,
+          },
+        }), { reason: "video_done_apply_result" });
+        terminalVideoJobsRef.current.add(pollKey);
+        console.info("[MANUAL BOARD VIDEO RESULT APPLY]", {
+          sceneId: targetSceneId,
+          jobId,
+          videoUrl: doneVideoUrl,
+          status: "video_ready",
+          sceneUpdated: true,
+        });
         return;
       }
 
       if (isDoneStatus && !doneVideoUrl) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
-        terminalVideoJobsRef.current.add(pollKey);
+        console.warn("[MANUAL BOARD VIDEO RESULT APPLY FAILED]", {
+          sceneId,
+          jobId,
+          reason: "terminal_status_without_video_url",
+          rawResponse: statusOut,
+        });
         updateScene(sceneId, {
           status: "video_error",
           video_job_id: jobId,
+          videoJobId: jobId,
           video_error: "video_done_without_url",
+          videoError: "video_done_without_url",
           error: "Видео сгенерировано, но backend не вернул videoUrl",
-        });
+        }, { reason: "video_done_without_url" });
         return;
       }
 
       if (status === "error" || status === "stopped" || status === "not_found") {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
         terminalVideoJobsRef.current.add(pollKey);
-        updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: String(statusOut?.error || statusOut?.hint || "video_job_failed"), error: String(statusOut?.error || statusOut?.hint || "video_job_failed") });
+        updateScene(sceneId, { status: "video_error", video_job_id: jobId, videoJobId: jobId, video_error: String(statusOut?.error || statusOut?.hint || "video_job_failed"), videoError: String(statusOut?.error || statusOut?.hint || "video_job_failed"), error: String(statusOut?.error || statusOut?.hint || "video_job_failed") }, { reason: "video_poll_terminal_error" });
         return;
       }
       if (status === "queued" || status === "running") {
-        updateScene(sceneId, { status: status === "queued" ? "video_queued" : "video_running", video_job_id: jobId, video_error: "", error: "" });
+        updateScene(sceneId, { status: status === "queued" ? "video_queued" : "video_running", video_job_id: jobId, videoJobId: jobId, video_error: "", videoError: "", error: "" }, { reason: status === "queued" ? "video_poll_queued" : "video_poll_running" });
         setTimeout(() => pollManualSceneVideo(sceneId, jobId, attempt + 1), delayMs);
         return;
       }
       if (attempt >= maxAttempts) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
         terminalVideoJobsRef.current.add(pollKey);
-        updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: "video_poll_timeout", error: "video_poll_timeout" });
+        updateScene(sceneId, { status: "video_error", video_job_id: jobId, videoJobId: jobId, video_error: "video_poll_timeout", videoError: "video_poll_timeout", error: "video_poll_timeout" }, { reason: "video_poll_timeout" });
         return;
       }
-      updateScene(sceneId, { status: "video_running", video_job_id: jobId, video_error: "" });
+      updateScene(sceneId, { status: "video_running", video_job_id: jobId, videoJobId: jobId, video_error: "", videoError: "" }, { reason: "video_poll_unknown_status" });
       setTimeout(() => pollManualSceneVideo(sceneId, jobId, attempt + 1), delayMs);
     } catch (err) {
       const currentScene = (Array.isArray(projectRef.current?.scenes) ? projectRef.current.scenes : []).find((scene) => scene.scene_id === sceneId);
@@ -2879,9 +2986,11 @@ export default function ManualClipDirectorBoardEditor({
           updateScene(sceneId, {
             status: "video_running",
             video_job_id: jobId,
+            videoJobId: jobId,
             video_error: `status polling retry ${count}/6`,
+            videoError: `status polling retry ${count}/6`,
             error: "",
-          });
+          }, { reason: "video_poll_retry" });
           setTimeout(() => pollManualSceneVideo(sceneId, jobId, attempt + 1), 10000);
           return;
         }
@@ -2890,7 +2999,7 @@ export default function ManualClipDirectorBoardEditor({
       }
 
       terminalVideoJobsRef.current.add(pollKey);
-      updateScene(sceneId, { status: "video_error", video_job_id: jobId, video_error: String(err?.message || "video_poll_failed"), error: String(err?.message || "video_poll_failed") });
+      updateScene(sceneId, { status: "video_error", video_job_id: jobId, videoJobId: jobId, video_error: String(err?.message || "video_poll_failed"), videoError: String(err?.message || "video_poll_failed"), error: String(err?.message || "video_poll_failed") }, { reason: "video_poll_failed" });
     }
   }
 
