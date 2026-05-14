@@ -37,10 +37,29 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "image_url",
   "imageUrl",
   "image_preview_url",
+  "imagePreviewUrl",
   "start_image_url",
+  "startImageUrl",
   "end_image_url",
+  "endImageUrl",
   "start_image_preview_url",
+  "startImagePreviewUrl",
   "end_image_preview_url",
+  "endImagePreviewUrl",
+  "generated_image_url",
+  "generatedImageUrl",
+  "image_width",
+  "imageWidth",
+  "image_height",
+  "imageHeight",
+  "image_aspect_ratio",
+  "imageAspectRatio",
+  "image_aspect_label",
+  "imageAspectLabel",
+  "image_upload_status",
+  "imageUploadStatus",
+  "image_upload_error",
+  "imageUploadError",
   "video_url",
   "videoUrl",
   "generated_video_url",
@@ -81,6 +100,8 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "video_has_audio",
   "videoHasAudio",
   "hasAudio",
+  "video_request_payload_preview",
+  "videoRequestPayloadPreview",
   "deleted_media_revision",
   "deletedMediaRevision",
   "video_deleted_at",
@@ -600,11 +621,19 @@ export function getManualClipBoardMaterialStats(project = {}) {
   const hasTruthyMaterial = (value) => value === true || hasText(value);
   const sceneHasImage = (scene = {}) => Boolean(
     hasText(scene?.image_url)
+    || hasText(scene?.imageUrl)
     || hasText(scene?.image_preview_url)
+    || hasText(scene?.imagePreviewUrl)
     || hasText(scene?.start_image_url)
+    || hasText(scene?.startImageUrl)
     || hasText(scene?.end_image_url)
+    || hasText(scene?.endImageUrl)
     || hasText(scene?.start_image_preview_url)
+    || hasText(scene?.startImagePreviewUrl)
     || hasText(scene?.end_image_preview_url)
+    || hasText(scene?.endImagePreviewUrl)
+    || hasText(scene?.generated_image_url)
+    || hasText(scene?.generatedImageUrl)
   );
   const sceneHasVideo = (scene = {}) => Boolean(
     hasText(scene?.video_url)

@@ -705,6 +705,91 @@ function resolveManualStatusVideoHasAudio(out = {}) {
   return Boolean(out?.videoHasAudio ?? out?.hasAudio ?? out?.video_has_audio ?? false);
 }
 
+
+function resolveManualSceneImageUrl(scene = {}) {
+  return String(
+    scene?.image_url
+    || scene?.imageUrl
+    || scene?.start_image_url
+    || scene?.startImageUrl
+    || scene?.generated_image_url
+    || scene?.generatedImageUrl
+    || ""
+  ).trim();
+}
+
+function resolveManualSceneImagePreviewUrl(scene = {}) {
+  return String(
+    scene?.image_preview_url
+    || scene?.imagePreviewUrl
+    || scene?.start_image_preview_url
+    || scene?.startImagePreviewUrl
+    || resolveManualSceneImageUrl(scene)
+    || ""
+  ).trim();
+}
+
+function withManualSceneMediaAliases(scene = {}) {
+  const imageUrl = resolveManualSceneImageUrl(scene);
+  const imagePreviewUrl = resolveManualSceneImagePreviewUrl(scene);
+  const startImageUrl = String(scene?.start_image_url || scene?.startImageUrl || imageUrl || "").trim();
+  const startImagePreviewUrl = String(scene?.start_image_preview_url || scene?.startImagePreviewUrl || imagePreviewUrl || "").trim();
+  const endImageUrl = String(scene?.end_image_url || scene?.endImageUrl || "").trim();
+  const endImagePreviewUrl = String(scene?.end_image_preview_url || scene?.endImagePreviewUrl || endImageUrl || "").trim();
+  const generatedImageUrl = String(scene?.generated_image_url || scene?.generatedImageUrl || imageUrl || "").trim();
+  const videoUrl = resolveManualSceneFinalVideoUrl(scene);
+  const videoJobId = String(scene?.video_job_id || scene?.videoJobId || "").trim();
+  const videoRequestPayloadPreview = scene?.video_request_payload_preview ?? scene?.videoRequestPayloadPreview ?? null;
+  return {
+    ...(scene || {}),
+    image_url: imageUrl,
+    imageUrl,
+    image_preview_url: imagePreviewUrl,
+    imagePreviewUrl: imagePreviewUrl,
+    start_image_url: startImageUrl,
+    startImageUrl,
+    start_image_preview_url: startImagePreviewUrl,
+    startImagePreviewUrl,
+    end_image_url: endImageUrl,
+    endImageUrl,
+    end_image_preview_url: endImagePreviewUrl,
+    endImagePreviewUrl,
+    generated_image_url: generatedImageUrl,
+    generatedImageUrl: generatedImageUrl,
+    image_upload_status: String(scene?.image_upload_status || scene?.imageUploadStatus || ""),
+    imageUploadStatus: String(scene?.imageUploadStatus || scene?.image_upload_status || ""),
+    image_upload_error: String(scene?.image_upload_error || scene?.imageUploadError || ""),
+    imageUploadError: String(scene?.imageUploadError || scene?.image_upload_error || ""),
+    video_url: videoUrl,
+    videoUrl,
+    result_video_url: String(scene?.result_video_url || scene?.resultVideoUrl || videoUrl || "").trim(),
+    resultVideoUrl: String(scene?.resultVideoUrl || scene?.result_video_url || videoUrl || "").trim(),
+    generated_video_url: String(scene?.generated_video_url || scene?.generatedVideoUrl || videoUrl || "").trim(),
+    generatedVideoUrl: String(scene?.generatedVideoUrl || scene?.generated_video_url || videoUrl || "").trim(),
+    video_job_id: videoJobId,
+    videoJobId: videoJobId,
+    video_has_audio: Boolean(scene?.video_has_audio ?? scene?.videoHasAudio ?? scene?.hasAudio ?? false),
+    videoHasAudio: Boolean(scene?.videoHasAudio ?? scene?.video_has_audio ?? scene?.hasAudio ?? false),
+    hasAudio: Boolean(scene?.hasAudio ?? scene?.video_has_audio ?? scene?.videoHasAudio ?? false),
+    video_request_payload_preview: videoRequestPayloadPreview,
+    videoRequestPayloadPreview: videoRequestPayloadPreview,
+  };
+}
+
+function getManualBoardMediaDiagnostics(project = {}, selectedSceneId = "") {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const safeSelectedSceneId = String(selectedSceneId || project?.selectedSceneId || "").trim();
+  const selectedScene = scenes.find((scene) => String(scene?.scene_id || scene?.id || "") === safeSelectedSceneId) || scenes[0] || {};
+  return {
+    selectedSceneId: String(selectedScene?.scene_id || safeSelectedSceneId || ""),
+    selectedSceneImageUrl: resolveManualSceneImageUrl(selectedScene),
+    selectedScenePreviewUrl: resolveManualSceneImagePreviewUrl(selectedScene),
+    selectedSceneVideoUrl: resolveManualSceneFinalVideoUrl(selectedScene),
+    scenesWithImage: scenes.filter((scene) => resolveManualSceneImageUrl(scene) || resolveManualSceneImagePreviewUrl(scene)).length,
+    scenesWithVideo: scenes.filter((scene) => resolveManualSceneFinalVideoUrl(scene)).length,
+  };
+}
+
 function resolveManualSceneStatus(scene = {}) {
   if (scene.video_url) return STATUS_VIDEO_READY;
   if (isFirstLastRoute(scene.route)) {
@@ -780,7 +865,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
   const end = Number(cleanInputScene.end_sec || start);
   const blockId = String(cleanInputScene.story_block_id || "").trim();
   const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
-  return {
+  const normalizedScene = {
     scene_id: String(cleanInputScene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(cleanInputScene.index || idx + 1),
     route: ROUTES.includes(cleanInputScene.route) ? cleanInputScene.route : "i2v",
@@ -876,49 +961,94 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     aspect_ratio: normalizeProjectAspectFormat(cleanInputScene.aspect_ratio || cleanInputScene.format),
     image_width: Number(cleanInputScene.image_width || 0),
     image_height: Number(cleanInputScene.image_height || 0),
-    image_aspect_ratio: Number(cleanInputScene.image_aspect_ratio || 0),
-    image_aspect_label: String(cleanInputScene.image_aspect_label || ""),
-    image_url: String(cleanInputScene.image_url || cleanInputScene.start_image_url || ""),
-    start_image_url: String(cleanInputScene.start_image_url || cleanInputScene.image_url || ""),
-    end_image_url: String(cleanInputScene.end_image_url || ""),
-    image_preview_url: String(cleanInputScene.image_preview_url || cleanInputScene.start_image_preview_url || ""),
-    start_image_preview_url: String(cleanInputScene.start_image_preview_url || cleanInputScene.image_preview_url || ""),
-    end_image_preview_url: String(cleanInputScene.end_image_preview_url || ""),
-    image_upload_status: String(cleanInputScene.image_upload_status || ""),
-    image_upload_error: String(cleanInputScene.image_upload_error || ""),
-    video_url: String(cleanInputScene.video_url || cleanInputScene.videoUrl || ""),
+    image_aspect_ratio: Number(cleanInputScene.image_aspect_ratio || cleanInputScene.imageAspectRatio || 0),
+    image_aspect_label: String(cleanInputScene.image_aspect_label || cleanInputScene.imageAspectLabel || ""),
+    image_url: String(cleanInputScene.image_url || cleanInputScene.imageUrl || cleanInputScene.start_image_url || cleanInputScene.startImageUrl || ""),
+    imageUrl: String(cleanInputScene.imageUrl || cleanInputScene.image_url || cleanInputScene.startImageUrl || cleanInputScene.start_image_url || ""),
+    start_image_url: String(cleanInputScene.start_image_url || cleanInputScene.startImageUrl || cleanInputScene.image_url || cleanInputScene.imageUrl || ""),
+    startImageUrl: String(cleanInputScene.startImageUrl || cleanInputScene.start_image_url || cleanInputScene.imageUrl || cleanInputScene.image_url || ""),
+    end_image_url: String(cleanInputScene.end_image_url || cleanInputScene.endImageUrl || ""),
+    endImageUrl: String(cleanInputScene.endImageUrl || cleanInputScene.end_image_url || ""),
+    image_preview_url: String(cleanInputScene.image_preview_url || cleanInputScene.imagePreviewUrl || cleanInputScene.start_image_preview_url || cleanInputScene.startImagePreviewUrl || ""),
+    imagePreviewUrl: String(cleanInputScene.imagePreviewUrl || cleanInputScene.image_preview_url || cleanInputScene.startImagePreviewUrl || cleanInputScene.start_image_preview_url || ""),
+    start_image_preview_url: String(cleanInputScene.start_image_preview_url || cleanInputScene.startImagePreviewUrl || cleanInputScene.image_preview_url || cleanInputScene.imagePreviewUrl || ""),
+    startImagePreviewUrl: String(cleanInputScene.startImagePreviewUrl || cleanInputScene.start_image_preview_url || cleanInputScene.imagePreviewUrl || cleanInputScene.image_preview_url || ""),
+    end_image_preview_url: String(cleanInputScene.end_image_preview_url || cleanInputScene.endImagePreviewUrl || ""),
+    endImagePreviewUrl: String(cleanInputScene.endImagePreviewUrl || cleanInputScene.end_image_preview_url || ""),
+    generated_image_url: String(cleanInputScene.generated_image_url || cleanInputScene.generatedImageUrl || cleanInputScene.image_url || cleanInputScene.imageUrl || ""),
+    generatedImageUrl: String(cleanInputScene.generatedImageUrl || cleanInputScene.generated_image_url || cleanInputScene.imageUrl || cleanInputScene.image_url || ""),
+    image_upload_status: String(cleanInputScene.image_upload_status || cleanInputScene.imageUploadStatus || ""),
+    imageUploadStatus: String(cleanInputScene.imageUploadStatus || cleanInputScene.image_upload_status || ""),
+    image_upload_error: String(cleanInputScene.image_upload_error || cleanInputScene.imageUploadError || ""),
+    imageUploadError: String(cleanInputScene.imageUploadError || cleanInputScene.image_upload_error || ""),
+    video_url: String(cleanInputScene.video_url || cleanInputScene.videoUrl || cleanInputScene.result_video_url || cleanInputScene.resultVideoUrl || cleanInputScene.generated_video_url || cleanInputScene.generatedVideoUrl || ""),
+    videoUrl: String(cleanInputScene.videoUrl || cleanInputScene.video_url || cleanInputScene.resultVideoUrl || cleanInputScene.result_video_url || cleanInputScene.generatedVideoUrl || cleanInputScene.generated_video_url || ""),
+    result_video_url: String(cleanInputScene.result_video_url || cleanInputScene.resultVideoUrl || cleanInputScene.video_url || cleanInputScene.videoUrl || ""),
+    resultVideoUrl: String(cleanInputScene.resultVideoUrl || cleanInputScene.result_video_url || cleanInputScene.videoUrl || cleanInputScene.video_url || ""),
+    generated_video_url: String(cleanInputScene.generated_video_url || cleanInputScene.generatedVideoUrl || cleanInputScene.video_url || cleanInputScene.videoUrl || ""),
+    generatedVideoUrl: String(cleanInputScene.generatedVideoUrl || cleanInputScene.generated_video_url || cleanInputScene.videoUrl || cleanInputScene.video_url || ""),
     audio_slice_url: String(cleanInputScene.audio_slice_url || ""),
     audio_slice_duration_sec: Number(cleanInputScene.audio_slice_duration_sec || 0),
     status: String(cleanInputScene.status || "draft"),
     error: String(cleanInputScene.error || ""),
     audio_extracted: Boolean(cleanInputScene.audio_extracted),
-    video_job_id: String(cleanInputScene.video_job_id || ""),
-    video_error: String(cleanInputScene.video_error || ""),
-    video_has_audio: Boolean(cleanInputScene.video_has_audio),
+    video_job_id: String(cleanInputScene.video_job_id || cleanInputScene.videoJobId || ""),
+    videoJobId: String(cleanInputScene.videoJobId || cleanInputScene.video_job_id || ""),
+    video_error: String(cleanInputScene.video_error || cleanInputScene.videoError || ""),
+    videoError: String(cleanInputScene.videoError || cleanInputScene.video_error || ""),
+    video_has_audio: Boolean(cleanInputScene.video_has_audio ?? cleanInputScene.videoHasAudio ?? cleanInputScene.hasAudio),
+    videoHasAudio: Boolean(cleanInputScene.videoHasAudio ?? cleanInputScene.video_has_audio ?? cleanInputScene.hasAudio),
+    hasAudio: Boolean(cleanInputScene.hasAudio ?? cleanInputScene.video_has_audio ?? cleanInputScene.videoHasAudio),
     generated_audio_policy: String(cleanInputScene.generated_audio_policy || ""),
     generated_audio_gain_db: Number(cleanInputScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
     keep_generated_audio: Boolean(cleanInputScene.keep_generated_audio),
-    video_request_payload_preview: cleanInputScene.video_request_payload_preview || null,
+    video_request_payload_preview: cleanInputScene.video_request_payload_preview || cleanInputScene.videoRequestPayloadPreview || null,
+    videoRequestPayloadPreview: cleanInputScene.videoRequestPayloadPreview || cleanInputScene.video_request_payload_preview || null,
   };
+  return withManualSceneMediaAliases(normalizedScene);
 }
 
 const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "image_url",
+  "imageUrl",
   "image_preview_url",
+  "imagePreviewUrl",
   "start_image_url",
+  "startImageUrl",
   "end_image_url",
+  "endImageUrl",
   "start_image_preview_url",
+  "startImagePreviewUrl",
   "end_image_preview_url",
+  "endImagePreviewUrl",
+  "generated_image_url",
+  "generatedImageUrl",
+  "image_width",
+  "image_height",
+  "image_aspect_ratio",
+  "image_aspect_label",
+  "image_upload_status",
+  "imageUploadStatus",
+  "image_upload_error",
+  "imageUploadError",
   "video_url",
   "videoUrl",
+  "result_video_url",
+  "resultVideoUrl",
+  "generated_video_url",
+  "generatedVideoUrl",
   "video_job_id",
+  "videoJobId",
   "video_has_audio",
+  "videoHasAudio",
+  "hasAudio",
   "status",
   "audio_slice_url",
   "audio_slice_duration_sec",
   "audio_extracted",
   "video_error",
   "video_request_payload_preview",
+  "videoRequestPayloadPreview",
   "generated_audio_policy",
   "generated_audio_gain_db",
   "keep_generated_audio",
@@ -1087,7 +1217,7 @@ export default function ManualClipDirectorBoardEditor({
       aspect_ratio: projectFormat,
       format_locked: true,
       scenes: Array.isArray(candidateProject?.scenes)
-        ? candidateProject.scenes.map((scene) => ({ ...scene, format: projectFormat, aspect_ratio: projectFormat }))
+        ? candidateProject.scenes.map((scene) => withManualSceneMediaAliases({ ...scene, format: projectFormat, aspect_ratio: projectFormat }))
         : [],
       source: candidateProject?.source || "manual_timing_node",
       ownerNodeType: candidateProject?.ownerNodeType || "manualTiming",
@@ -1231,6 +1361,12 @@ export default function ManualClipDirectorBoardEditor({
         audio: getManualBoardAudioInfo(hydratedProject),
         audioUrlResolved: String(hydratedProject.audio?.url || hydratedProject.audio_url || hydratedProject.audioUrl || "").trim(),
       });
+      const hydrateMediaDiagnostics = getManualBoardMediaDiagnostics(hydratedProject, selectedSceneIdForHydrate);
+      console.info("[MANUAL BOARD HYDRATE MEDIA FIELDS]", {
+        selectedSceneId: hydrateMediaDiagnostics.selectedSceneId,
+        scenesWithImage: hydrateMediaDiagnostics.scenesWithImage,
+        scenesWithVideo: hydrateMediaDiagnostics.scenesWithVideo,
+      });
       projectRef.current = hydratedProject;
       selectedSceneIdRef.current = selectedSceneIdForHydrate;
       setProject(hydratedProject);
@@ -1336,6 +1472,7 @@ export default function ManualClipDirectorBoardEditor({
     });
     projectRef.current = safeProject;
     setProject(safeProject);
+    console.info("[MANUAL BOARD SAVE MEDIA FIELDS]", getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId));
     const wrote = forceWriteManualClipBoardProjectForNode(safeProject, { reason: "manual_force_save_button" });
     const storageError = wrote ? null : getLastManualClipBoardStorageError();
     if (!wrote) {
@@ -1479,7 +1616,9 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const onDownloadProjectBackup = () => {
-    downloadJsonPayload(buildManualProjectBackupJson({ ...(project || {}), selectedSceneId }, { source: "manual_director_board" }));
+    const currentProject = projectRef.current || project || {};
+    const currentSelectedSceneId = selectedSceneIdRef.current || currentProject.selectedSceneId || selectedSceneId || "";
+    downloadJsonPayload(buildManualProjectBackupJson({ ...currentProject, selectedSceneId: currentSelectedSceneId }, { source: "manual_director_board" }));
   };
 
   const restoreManualProjectObject = (rawProject, successPrefix = "Backup восстановлен") => {
@@ -1945,7 +2084,7 @@ export default function ManualClipDirectorBoardEditor({
     const nextScenes = prevScenes.map((scene) => {
       if (scene.scene_id !== sceneId) return scene;
       const patch = typeof patchOrFactory === "function" ? patchOrFactory(scene) : patchOrFactory;
-      return { ...scene, ...(patch || {}) };
+      return withManualSceneMediaAliases({ ...scene, ...(patch || {}) });
     });
     const persistReason = options?.reason || "update_scene";
     const isDeletionUpdate = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/i.test(persistReason);
@@ -2245,9 +2384,13 @@ export default function ManualClipDirectorBoardEditor({
     }
 
     updateScene(sceneId, {
-      ...(isEndSlot ? { end_image_preview_url: previewUrl } : { image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
+      ...(isEndSlot
+        ? { end_image_preview_url: previewUrl, endImagePreviewUrl: previewUrl }
+        : { image_preview_url: previewUrl, imagePreviewUrl: previewUrl, start_image_preview_url: previewUrl, startImagePreviewUrl: previewUrl }),
       image_upload_status: "uploading",
+      imageUploadStatus: "uploading",
       image_upload_error: "",
+      imageUploadError: "",
     });
 
     try {
@@ -2264,18 +2407,20 @@ export default function ManualClipDirectorBoardEditor({
           ...currentScene,
           ...aspectFields,
           ...(isEndSlot
-            ? { end_image_url: imageUrl, end_image_preview_url: previewUrl }
-            : { image_url: imageUrl, start_image_url: imageUrl, image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
+            ? { end_image_url: imageUrl, endImageUrl: imageUrl, end_image_preview_url: imageUrl, endImagePreviewUrl: imageUrl }
+            : { image_url: imageUrl, imageUrl, start_image_url: imageUrl, startImageUrl: imageUrl, image_preview_url: imageUrl, imagePreviewUrl: imageUrl, start_image_preview_url: imageUrl, startImagePreviewUrl: imageUrl, generated_image_url: imageUrl, generatedImageUrl: imageUrl }),
         };
         return {
           ...(isEndSlot
-            ? { end_image_url: imageUrl, end_image_preview_url: previewUrl }
-            : { image_url: imageUrl, start_image_url: imageUrl, image_preview_url: previewUrl, start_image_preview_url: previewUrl }),
+            ? { end_image_url: imageUrl, endImageUrl: imageUrl, end_image_preview_url: imageUrl, endImagePreviewUrl: imageUrl }
+            : { image_url: imageUrl, imageUrl, start_image_url: imageUrl, startImageUrl: imageUrl, image_preview_url: imageUrl, imagePreviewUrl: imageUrl, start_image_preview_url: imageUrl, startImagePreviewUrl: imageUrl, generated_image_url: imageUrl, generatedImageUrl: imageUrl }),
           ...aspectFields,
           ...clearManualStalePromptFields(),
           ...(shouldClearVideoAfterUpload ? clearVideoPatch(nextScene) : {}),
           image_upload_status: "done",
+          imageUploadStatus: "done",
           image_upload_error: "",
+          imageUploadError: "",
           status: resolveManualSceneStatus({ ...nextScene, ...(shouldClearVideoAfterUpload ? { video_url: "", videoUrl: "" } : {}) }),
           error: "",
         };
@@ -2283,7 +2428,9 @@ export default function ManualClipDirectorBoardEditor({
     } catch (err) {
       updateScene(sceneId, {
         image_upload_status: "error",
+        imageUploadStatus: "error",
         image_upload_error: String(err?.message || "image_upload_failed"),
+        imageUploadError: String(err?.message || "image_upload_failed"),
         error: String(err?.message || "image_upload_failed"),
       });
     }
@@ -2331,11 +2478,19 @@ export default function ManualClipDirectorBoardEditor({
         const nextScene = { ...currentScene, image_url: imageUrl, start_image_url: imageUrl };
         return {
           image_url: imageUrl,
+          imageUrl,
           start_image_url: imageUrl,
-          start_image_preview_url: "",
-          image_preview_url: "",
+          startImageUrl: imageUrl,
+          start_image_preview_url: imageUrl,
+          startImagePreviewUrl: imageUrl,
+          image_preview_url: imageUrl,
+          imagePreviewUrl: imageUrl,
+          generated_image_url: imageUrl,
+          generatedImageUrl: imageUrl,
           image_upload_status: "done",
+          imageUploadStatus: "done",
           image_upload_error: "",
+          imageUploadError: "",
           error: "",
           status: resolveManualSceneStatus(nextScene),
         };
@@ -2440,6 +2595,10 @@ export default function ManualClipDirectorBoardEditor({
       updateScene(sceneId, {
         video_url: resultVideoUrl,
         videoUrl: resultVideoUrl,
+        result_video_url: resultVideoUrl,
+        resultVideoUrl: resultVideoUrl,
+        generated_video_url: resultVideoUrl,
+        generatedVideoUrl: resultVideoUrl,
         mmaudio_video_url: resultVideoUrl,
         mmaudioVideoUrl: resultVideoUrl,
         mmaudio_raw_video_url: selectedScene?.mmaudio_raw_video_url || selectedScene?.mmaudioRawVideoUrl || mmaudioVideoUrl,
@@ -2492,10 +2651,19 @@ export default function ManualClipDirectorBoardEditor({
         updateScene(sceneId, (currentScene = {}) => ({
           status: "video_ready",
           video_url: doneVideoUrl,
+          videoUrl: doneVideoUrl,
+          result_video_url: doneVideoUrl,
+          resultVideoUrl: doneVideoUrl,
+          generated_video_url: doneVideoUrl,
+          generatedVideoUrl: doneVideoUrl,
           video_job_id: jobId,
+          videoJobId: jobId,
           video_error: "",
+          videoError: "",
           error: "",
           video_has_audio: videoHasAudio,
+          videoHasAudio: videoHasAudio,
+          hasAudio: videoHasAudio,
           keep_generated_audio: Boolean(statusOut?.keepGeneratedAudio ?? statusOut?.keep_generated_audio ?? currentScene?.keep_generated_audio ?? false),
           generated_audio_policy: String(statusOut?.generatedAudioPolicy ?? statusOut?.generated_audio_policy ?? currentScene?.generated_audio_policy ?? ""),
           generated_audio_gain_db: Number(statusOut?.generatedAudioGainDb ?? statusOut?.generated_audio_gain_db ?? currentScene?.generated_audio_gain_db ?? -16),
@@ -2702,12 +2870,36 @@ export default function ManualClipDirectorBoardEditor({
       updateScene(scene.scene_id, {
         status: String(out?.status || "").toLowerCase() === "queued" ? "video_queued" : "video_running",
         video_job_id: jobId,
+        videoJobId: jobId,
         video_error: "",
+        videoError: "",
         error: "",
         keep_generated_audio: Boolean(payload.keepGeneratedAudio),
         generated_audio_policy: String(payload.generatedAudioPolicy || ""),
         generated_audio_gain_db: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
         video_request_payload_preview: {
+          sceneId: scene.scene_id,
+          route: scene.route,
+          resolvedWorkflowKey: payload.resolvedWorkflowKey,
+          renderMode: payload.renderMode,
+          lipSync: payload.lipSync,
+          hasAudioSliceUrl: Boolean(payload.audioSliceUrl),
+          hasStartImageUrl: Boolean(payload.startImageUrl),
+          hasEndImageUrl: Boolean(payload.endImageUrl),
+          keepGeneratedAudio: Boolean(payload.keepGeneratedAudio),
+          generatedAudioPolicy: payload.generatedAudioPolicy,
+          generatedAudioGainDb: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
+          jobId,
+          requestSignature: String(out?.requestSignature || ""),
+          deduplicated: Boolean(out?.deduplicated),
+          queueStatus: String(out?.queueStatus || out?.status || ""),
+          soundPromptPreview: String(out?.payloadSoundPromptPreview || payload.soundPrompt || "").slice(0, 180),
+          negativeAudioPromptPreview: String(out?.payloadNegativeAudioPromptPreview || payload.negativeAudioPrompt || payload.negative_audio_prompt || "").slice(0, 180),
+          sceneTextPreview: String(sceneTextPreview || "").slice(0, 180),
+          narratorTextPreview: String(payload.narratorText || "").slice(0, 180),
+          speakerTextPreview: String(payload.speakerText || "").slice(0, 180),
+        },
+        videoRequestPayloadPreview: {
           sceneId: scene.scene_id,
           route: scene.route,
           resolvedWorkflowKey: payload.resolvedWorkflowKey,
