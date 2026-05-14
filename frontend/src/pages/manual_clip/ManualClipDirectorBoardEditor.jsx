@@ -669,7 +669,119 @@ const MANUAL_VIDEO_RESULT_FIELDS = [
   "mmaudioVideoUrl",
 ];
 
+const MANUAL_VIDEO_CLEAR_FIELD_VALUES = {
+  video_url: "",
+  videoUrl: "",
+  result_video_url: "",
+  resultVideoUrl: "",
+  generated_video_url: "",
+  generatedVideoUrl: "",
+  final_video_url: "",
+  finalVideoUrl: "",
+  video_asset_url: "",
+  videoAssetUrl: "",
+  video_preview_url: "",
+  videoPreviewUrl: "",
+  mmaudio_video_url: "",
+  mmaudioVideoUrl: "",
+  mmaudio_raw_video_url: "",
+  mmaudioRawVideoUrl: "",
+  mmaudio_source_video_url: "",
+  mmaudioSourceVideoUrl: "",
+  original_video_before_mmaudio_url: "",
+  originalVideoBeforeMMAudioUrl: "",
+  video_job_id: "",
+  videoJobId: "",
+  video_status: "",
+  videoStatus: "",
+  video_error: "",
+  videoError: "",
+  video_has_audio: false,
+  videoHasAudio: false,
+  hasAudio: false,
+  video_request_payload_preview: null,
+  videoRequestPayloadPreview: null,
+  mmaudio_status: "",
+  mmaudioStatus: "",
+  mmaudio_job_id: "",
+  mmaudioJobId: "",
+  mmaudio_error: "",
+  mmaudioError: "",
+  mmaudio_gain_status: "",
+  mmaudioGainStatus: "",
+  mmaudio_gain_error: "",
+  mmaudioGainError: "",
+  mmaudio_prompt: "",
+  mmaudioPrompt: "",
+  mmaudio_negative_prompt: "",
+  mmaudioNegativePrompt: "",
+  generated_audio_policy: "",
+  generatedAudioPolicy: "",
+  generated_audio_gain_db: I2V_SOUND_GAIN_DEFAULT_DB,
+  generatedAudioGainDb: I2V_SOUND_GAIN_DEFAULT_DB,
+  keep_generated_audio: false,
+  keepGeneratedAudio: false,
+};
+
+const MANUAL_IMAGE_CLEAR_FIELD_VALUES = {
+  image_url: "",
+  imageUrl: "",
+  image_preview_url: "",
+  imagePreviewUrl: "",
+  start_image_url: "",
+  startImageUrl: "",
+  start_image_preview_url: "",
+  startImagePreviewUrl: "",
+  end_image_url: "",
+  endImageUrl: "",
+  end_image_preview_url: "",
+  endImagePreviewUrl: "",
+  generated_image_url: "",
+  generatedImageUrl: "",
+  image_upload_status: "",
+  imageUploadStatus: "",
+  image_upload_error: "",
+  imageUploadError: "",
+  image_width: 0,
+  image_height: 0,
+  image_aspect_ratio: 0,
+  image_aspect_label: "",
+};
+
+function hasExplicitEmptyManualMediaPair(scene = {}, canonicalField = "", aliasField = "") {
+  return Object.prototype.hasOwnProperty.call(scene || {}, canonicalField)
+    && Object.prototype.hasOwnProperty.call(scene || {}, aliasField)
+    && String(scene?.[canonicalField] || "").trim() === ""
+    && String(scene?.[aliasField] || "").trim() === "";
+}
+
+function clearManualSceneVideoMediaPatch(extra = {}) {
+  const now = Date.now();
+  return {
+    ...MANUAL_VIDEO_CLEAR_FIELD_VALUES,
+    video_deleted_at: now,
+    videoDeletedAt: now,
+    deleted_media_revision: now,
+    deletedMediaRevision: now,
+    error: "",
+    ...extra,
+  };
+}
+
+function clearManualSceneImageMediaPatch(extra = {}) {
+  const now = Date.now();
+  return {
+    ...MANUAL_IMAGE_CLEAR_FIELD_VALUES,
+    photo_deleted_at: now,
+    photoDeletedAt: now,
+    deleted_media_revision: now,
+    deletedMediaRevision: now,
+    ...extra,
+  };
+}
+
 function resolveManualSceneFinalVideoUrl(scene = {}) {
+  if (hasExplicitEmptyManualMediaPair(scene, "video_url", "videoUrl")) return "";
   for (const field of MANUAL_VIDEO_RESULT_FIELDS) {
     const value = String(scene?.[field] || "").trim();
     if (value && !value.startsWith("mock://")) return value;
@@ -707,6 +819,7 @@ function resolveManualStatusVideoHasAudio(out = {}) {
 
 
 function resolveManualSceneImageUrl(scene = {}) {
+  if (hasExplicitEmptyManualMediaPair(scene, "image_url", "imageUrl")) return "";
   return String(
     scene?.image_url
     || scene?.imageUrl
@@ -738,8 +851,9 @@ function withManualSceneMediaAliases(scene = {}) {
   const endImagePreviewUrl = String(scene?.end_image_preview_url || scene?.endImagePreviewUrl || endImageUrl || "").trim();
   const generatedImageUrl = String(scene?.generated_image_url || scene?.generatedImageUrl || imageUrl || "").trim();
   const videoUrl = resolveManualSceneFinalVideoUrl(scene);
-  const videoJobId = String(scene?.video_job_id || scene?.videoJobId || "").trim();
-  const videoRequestPayloadPreview = scene?.video_request_payload_preview ?? scene?.videoRequestPayloadPreview ?? null;
+  const hasExplicitVideoClear = hasExplicitEmptyManualMediaPair(scene, "video_url", "videoUrl");
+  const videoJobId = hasExplicitVideoClear ? "" : String(scene?.video_job_id || scene?.videoJobId || "").trim();
+  const videoRequestPayloadPreview = hasExplicitVideoClear ? null : (scene?.video_request_payload_preview ?? scene?.videoRequestPayloadPreview ?? null);
   return {
     ...(scene || {}),
     image_url: imageUrl,
@@ -762,10 +876,10 @@ function withManualSceneMediaAliases(scene = {}) {
     imageUploadError: String(scene?.imageUploadError || scene?.image_upload_error || ""),
     video_url: videoUrl,
     videoUrl,
-    result_video_url: String(scene?.result_video_url || scene?.resultVideoUrl || videoUrl || "").trim(),
-    resultVideoUrl: String(scene?.resultVideoUrl || scene?.result_video_url || videoUrl || "").trim(),
-    generated_video_url: String(scene?.generated_video_url || scene?.generatedVideoUrl || videoUrl || "").trim(),
-    generatedVideoUrl: String(scene?.generatedVideoUrl || scene?.generated_video_url || videoUrl || "").trim(),
+    result_video_url: hasExplicitVideoClear ? "" : String(scene?.result_video_url || scene?.resultVideoUrl || videoUrl || "").trim(),
+    resultVideoUrl: hasExplicitVideoClear ? "" : String(scene?.resultVideoUrl || scene?.result_video_url || videoUrl || "").trim(),
+    generated_video_url: hasExplicitVideoClear ? "" : String(scene?.generated_video_url || scene?.generatedVideoUrl || videoUrl || "").trim(),
+    generatedVideoUrl: hasExplicitVideoClear ? "" : String(scene?.generatedVideoUrl || scene?.generated_video_url || videoUrl || "").trim(),
     video_job_id: videoJobId,
     videoJobId: videoJobId,
     video_has_audio: Boolean(scene?.video_has_audio ?? scene?.videoHasAudio ?? scene?.hasAudio ?? false),
@@ -2147,122 +2261,11 @@ export default function ManualClipDirectorBoardEditor({
   const clearVideoPatch = (scene = {}) => {
     const sceneWithoutVideo = {
       ...scene,
-      video_url: "",
-      videoUrl: "",
-      generated_video_url: "",
-      generatedVideoUrl: "",
-      final_video_url: "",
-      finalVideoUrl: "",
-      result_video_url: "",
-      resultVideoUrl: "",
-      video_asset_url: "",
-      videoAssetUrl: "",
-      video_preview_url: "",
-      videoPreviewUrl: "",
-      mmaudio_video_url: "",
-      mmaudioVideoUrl: "",
-      mmaudio_raw_video_url: "",
-      mmaudioRawVideoUrl: "",
-      mmaudio_source_video_url: "",
-      mmaudioSourceVideoUrl: "",
-      original_video_before_mmaudio_url: "",
-      originalVideoBeforeMMAudioUrl: "",
-      mmaudio_status: "",
-      mmaudioStatus: "",
-      mmaudio_job_id: "",
-      mmaudioJobId: "",
-      mmaudio_error: "",
-      mmaudioError: "",
-      mmaudio_gain_status: "",
-      mmaudioGainStatus: "",
-      mmaudio_gain_error: "",
-      mmaudioGainError: "",
-      mmaudio_prompt: "",
-      mmaudioPrompt: "",
-      mmaudio_negative_prompt: "",
-      mmaudioNegativePrompt: "",
-      video_job_id: "",
-      videoJobId: "",
-      video_status: "",
-      videoStatus: "",
-      video_error: "",
-      videoError: "",
-      video_has_audio: false,
-      videoHasAudio: false,
-      hasAudio: false,
-      generated_audio_policy: "",
-      generatedAudioPolicy: "",
-      generated_audio_gain_db: I2V_SOUND_GAIN_DEFAULT_DB,
-      generatedAudioGainDb: I2V_SOUND_GAIN_DEFAULT_DB,
-      keep_generated_audio: false,
-      keepGeneratedAudio: false,
-      video_request_payload_preview: null,
-      videoRequestPayloadPreview: null,
-      video_deleted_at: Date.now(),
-      videoDeletedAt: Date.now(),
-      deleted_media_revision: Date.now(),
-      deletedMediaRevision: Date.now(),
-      error: "",
+      ...clearManualSceneVideoMediaPatch(),
     };
-    return {
-      video_url: "",
-      videoUrl: "",
-      generated_video_url: "",
-      generatedVideoUrl: "",
-      final_video_url: "",
-      finalVideoUrl: "",
-      result_video_url: "",
-      resultVideoUrl: "",
-      video_asset_url: "",
-      videoAssetUrl: "",
-      video_preview_url: "",
-      videoPreviewUrl: "",
-      mmaudio_video_url: "",
-      mmaudioVideoUrl: "",
-      mmaudio_raw_video_url: "",
-      mmaudioRawVideoUrl: "",
-      mmaudio_source_video_url: "",
-      mmaudioSourceVideoUrl: "",
-      original_video_before_mmaudio_url: "",
-      originalVideoBeforeMMAudioUrl: "",
-      mmaudio_status: "",
-      mmaudioStatus: "",
-      mmaudio_job_id: "",
-      mmaudioJobId: "",
-      mmaudio_error: "",
-      mmaudioError: "",
-      mmaudio_gain_status: "",
-      mmaudioGainStatus: "",
-      mmaudio_gain_error: "",
-      mmaudioGainError: "",
-      mmaudio_prompt: "",
-      mmaudioPrompt: "",
-      mmaudio_negative_prompt: "",
-      mmaudioNegativePrompt: "",
-      video_job_id: "",
-      videoJobId: "",
-      video_status: "",
-      videoStatus: "",
-      video_error: "",
-      videoError: "",
-      video_has_audio: false,
-      videoHasAudio: false,
-      hasAudio: false,
-      generated_audio_policy: "",
-      generatedAudioPolicy: "",
-      generated_audio_gain_db: I2V_SOUND_GAIN_DEFAULT_DB,
-      generatedAudioGainDb: I2V_SOUND_GAIN_DEFAULT_DB,
-      keep_generated_audio: false,
-      keepGeneratedAudio: false,
-      video_request_payload_preview: null,
-      videoRequestPayloadPreview: null,
-      video_deleted_at: Date.now(),
-      videoDeletedAt: Date.now(),
-      deleted_media_revision: Date.now(),
-      deletedMediaRevision: Date.now(),
-      error: "",
+    return clearManualSceneVideoMediaPatch({
       status: resolveManualSceneStatus(sceneWithoutVideo),
-    };
+    });
   };
 
   const onDeleteSceneVideo = (scene) => {
@@ -2295,7 +2298,9 @@ export default function ManualClipDirectorBoardEditor({
     image_aspect_ratio: 0,
     image_aspect_label: "",
     image_upload_status: "",
+    imageUploadStatus: "",
     image_upload_error: "",
+    imageUploadError: "",
     ...clearManualStalePromptFields(),
     photo_deleted_at: Date.now(),
     photoDeletedAt: Date.now(),
@@ -2311,7 +2316,9 @@ export default function ManualClipDirectorBoardEditor({
     end_image_preview_url: "",
     endImagePreviewUrl: "",
     image_upload_status: "",
+    imageUploadStatus: "",
     image_upload_error: "",
+    imageUploadError: "",
     photo_deleted_at: Date.now(),
     photoDeletedAt: Date.now(),
     deleted_media_revision: Date.now(),
@@ -2343,11 +2350,10 @@ export default function ManualClipDirectorBoardEditor({
     if (!scene?.scene_id) return;
     if (scene.video_url && !window.confirm("Удаление фото также удалит видео этой сцены. Продолжить?")) return;
     updateScene(scene.scene_id, (currentScene = {}) => ({
-      ...clearStartFramePatch(currentScene),
-      end_image_url: "",
-      endImageUrl: "",
-      end_image_preview_url: "",
-      endImagePreviewUrl: "",
+      ...clearVideoPatch(currentScene),
+      ...clearManualSceneImageMediaPatch(),
+      ...clearManualStalePromptFields(),
+      status: "draft",
     }), {
       reason: "delete_scene_photo_user",
       allowMaterialLoss: true,
@@ -2384,6 +2390,7 @@ export default function ManualClipDirectorBoardEditor({
     }
 
     updateScene(sceneId, {
+      ...(shouldClearVideoAfterUpload ? clearVideoPatch(selectedUploadScene) : {}),
       ...(isEndSlot
         ? { end_image_preview_url: previewUrl, endImagePreviewUrl: previewUrl }
         : { image_preview_url: previewUrl, imagePreviewUrl: previewUrl, start_image_preview_url: previewUrl, startImagePreviewUrl: previewUrl }),
@@ -2805,14 +2812,12 @@ export default function ManualClipDirectorBoardEditor({
     const sceneTextPreview = scene.route === "i2v_text" ? resolveI2vTextSceneText(scene) : "";
     const requestedDurationSec = Number(scene.duration_sec || scene.audio_slice_duration_sec || 5);
     updateScene(scene.scene_id, {
+      ...clearManualSceneVideoMediaPatch(),
       status: "video_queued",
       video_error: "",
+      videoError: "",
       error: "",
-      video_job_id: "",
-      video_url: "",
-      video_has_audio: false,
-      video_request_payload_preview: null,
-    });
+    }, { reason: "video_queued_clear_old_media", explicitReset: true });
     try {
       const payload = {
         sceneId: scene.scene_id,
@@ -2875,8 +2880,11 @@ export default function ManualClipDirectorBoardEditor({
         videoError: "",
         error: "",
         keep_generated_audio: Boolean(payload.keepGeneratedAudio),
+        keepGeneratedAudio: Boolean(payload.keepGeneratedAudio),
         generated_audio_policy: String(payload.generatedAudioPolicy || ""),
+        generatedAudioPolicy: String(payload.generatedAudioPolicy || ""),
         generated_audio_gain_db: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
+        generatedAudioGainDb: Number(payload.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
         video_request_payload_preview: {
           sceneId: scene.scene_id,
           route: scene.route,
@@ -3261,14 +3269,28 @@ export default function ManualClipDirectorBoardEditor({
         <label>Route
           <select value={selectedScene.route} onChange={(e) => {
             const route = e.target.value;
-            updateScene(selectedScene.scene_id, {
-              route,
-              keep_generated_audio: (route === "i2v_sound" || route === "i2v_text" || route === "first_last_sound") ? true : false,
-              generated_audio_policy: (route === "i2v_sound" || route === "i2v_text" || route === "first_last_sound") ? "mix_generated_audio_under_master" : "",
-              generated_audio_gain_db: (route === "i2v_sound" || route === "i2v_text" || route === "first_last_sound") ? Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB) : Number(selectedScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
-              start_image_url: isFirstLastRoute(route) ? String(selectedScene.start_image_url || selectedScene.image_url || "") : selectedScene.start_image_url,
-              image_url: isFirstLastRoute(route) ? String(selectedScene.start_image_url || selectedScene.image_url || "") : selectedScene.image_url,
-            });
+            updateScene(selectedScene.scene_id, (currentScene = {}) => {
+              const generatedAudioEnabled = route === "i2v_sound" || route === "i2v_text" || route === "first_last_sound";
+              const routePatch = {
+                route,
+                keep_generated_audio: generatedAudioEnabled,
+                keepGeneratedAudio: generatedAudioEnabled,
+                generated_audio_policy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "",
+                generatedAudioPolicy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "",
+                generated_audio_gain_db: Number(currentScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
+                generatedAudioGainDb: Number(currentScene.generated_audio_gain_db ?? currentScene.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
+                start_image_url: isFirstLastRoute(route) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.start_image_url,
+                image_url: isFirstLastRoute(route) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.image_url,
+              };
+              if (route !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)) {
+                return {
+                  ...clearVideoPatch(currentScene),
+                  ...routePatch,
+                  status: resolveManualSceneStatus({ ...currentScene, ...clearManualSceneVideoMediaPatch(), ...routePatch }),
+                };
+              }
+              return routePatch;
+            }, { reason: route !== selectedScene.route ? "route_change_clear_video" : "route_change" });
           }}>{ROUTES.map((route) => <option key={route} value={route}>{route}</option>)}</select>
         </label>
 
