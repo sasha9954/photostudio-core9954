@@ -3070,6 +3070,7 @@ export default function ManualTimingEditorPage() {
     }) || projectSnapshot;
     const replacedProjectId = String(replacedProject?.project_id || replacedProject?.projectId || "").trim();
     const replacedInputSignature = String(replacedProject?.input_signature || replacedProject?.inputSignature || "").trim();
+    const replacedAudioSignature = String(replacedProject?.audio_signature || replacedProject?.audioSignature || "").trim();
     writeManualClipBoardOpenState({
       isOpen: true,
       sourceNodeId: ownerNodeId,
@@ -3079,6 +3080,8 @@ export default function ManualTimingEditorPage() {
       manualBoardExplicitNewProject: true,
       forceProjectId: replacedProjectId,
       forceInputSignature: replacedInputSignature,
+      forceAudioSignature: replacedAudioSignature,
+      audio_signature: replacedAudioSignature,
       routePath: STORYBOARD_ROUTE,
       updatedAt: Date.now(),
     });
@@ -3094,7 +3097,12 @@ export default function ManualTimingEditorPage() {
         manualBoardExplicitNewProject: true,
         manualBoardForceProjectId: replacedProjectId,
         manualBoardForceInputSignature: replacedInputSignature,
+        manualBoardForceAudioSignature: replacedAudioSignature,
+        forceProjectId: replacedProjectId,
+        forceInputSignature: replacedInputSignature,
+        forceAudioSignature: replacedAudioSignature,
         sourceNodeId: ownerNodeId,
+        ownerNodeId,
         director_board: replacedProject,
         project: replacedProject,
         closeLegacyScenarioEditors: true,
