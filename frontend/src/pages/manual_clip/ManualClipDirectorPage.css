@@ -37,6 +37,24 @@
   margin-left: 8px;
 }
 
+.manualDirectorAutosaveStatus {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(134, 150, 255, 0.12);
+  color: #cfd5ff;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.manualDirectorAutosaveStatus.isError {
+  background: rgba(255, 91, 91, 0.16);
+  color: #ffb4b4;
+}
+
 .manualDirectorGrid {
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr) minmax(420px, 560px);
