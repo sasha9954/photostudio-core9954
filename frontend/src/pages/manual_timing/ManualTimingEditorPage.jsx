@@ -1082,6 +1082,35 @@ function buildManualTimingModePassJson(project = {}) {
   return buildManualTimingStoryPassJson(project);
 }
 
+const MANUAL_STORY_BIBLE_PROJECT_KEYS = [
+  "project_story_summary_ru",
+  "project_core_theme_ru",
+  "project_drama_arc_ru",
+  "project_visual_bible_ru",
+  "project_style_lock_ru",
+  "project_world_lock_ru",
+  "project_character_identity_lock_ru",
+  "project_location_lock_ru",
+  "project_time_progression_ru",
+  "project_atmosphere_lock_ru",
+  "project_camera_language_ru",
+  "project_color_progression_ru",
+  "project_continuity_rules_ru",
+  "project_must_keep_same_ru",
+  "project_allowed_variation_ru",
+  "project_reference_prompt_en",
+];
+
+function getManualTimingJsonPassType(rawObject = {}) {
+  const object = unwrapManualProjectBackupJson(rawObject);
+  const splitType = String(object?.split_type || object?.splitType || "").trim();
+  if (splitType === "manual_story_bible_pass") return "story_bible";
+  if (splitType === "manual_block_storyboard_pass") return "block_storyboard";
+  if (splitType === "manual_timing_draft" || splitType === "semantic_story_cut_pass" || splitType === "manual_story_pass") return "story_cut";
+  if (String(object?.chatgpt_task || object?.chatgpt_task?.task_type || "").includes("GLOBAL STORY BIBLE")) return "story_bible";
+  return splitType || "unknown";
+}
+
 function getCompactWarningItems(project = {}, warnings = []) {
   const safeWarnings = Array.isArray(warnings) ? warnings : [];
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
@@ -3222,6 +3251,79 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+
+  const parseJsonImportText = () => JSON.parse(jsonImportText || "{}");
+
+  const applyImportedStoryBibleJson = (rawObject) => {
+    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
+    const importedObject = unwrapManualProjectBackupJson(rawObject);
+    const splitType = String(importedObject?.split_type || importedObject?.splitType || "").trim();
+    if (splitType !== "manual_story_bible_pass") {
+      setCopyStatus("Это не Story Bible JSON: нужен split_type = manual_story_bible_pass");
+      return;
+    }
+    const validation = validateManualTimingStoryBiblePassImport(importedObject, project);
+    if (!validation?.ok) {
+      const errors = Array.isArray(validation?.errors) ? validation.errors : [];
+      setCopyStatus(`Story Bible отклонён: ${errors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`);
+      return;
+    }
+    const nextProject = { ...project };
+    MANUAL_STORY_BIBLE_PROJECT_KEYS.forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(importedObject, key)) {
+        nextProject[key] = importedObject[key];
+      }
+    });
+    nextProject.story_bible_status = "applied";
+    nextProject.story_bible_applied_at = Date.now();
+    nextProject.story_bible_split_type = splitType;
+    const savedProject = persist(nextProject);
+    setJsonImportText(JSON.stringify(buildManualTimingExportJson(savedProject), null, 2));
+    setCopyStatus("Story Bible применён: обновлены только project_* поля, сцены и тайминги не тронуты");
+    window.setTimeout(() => setCopyStatus(""), 2400);
+  };
+
+  const onApplyStoryCutJson = () => {
+    try {
+      const raw = parseJsonImportText();
+      const passType = getManualTimingJsonPassType(raw);
+      if (passType === "story_bible") {
+        setCopyStatus("Это Story Bible JSON — нажмите “Применить Story Bible”");
+        return;
+      }
+      if (passType === "block_storyboard") {
+        setCopyStatus("Это Block Storyboard JSON — нажмите “Применить Block Storyboard”");
+        return;
+      }
+      applyImportedTimingJson(raw);
+    } catch (error) {
+      setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
+    }
+  };
+
+  const onApplyStoryBibleJson = () => {
+    try {
+      const raw = parseJsonImportText();
+      applyImportedStoryBibleJson(raw);
+    } catch (error) {
+      setCopyStatus(`Ошибка Story Bible JSON: ${error?.message || "неверный формат"}`);
+    }
+  };
+
+  const onApplyBlockStoryboardJson = () => {
+    try {
+      const raw = parseJsonImportText();
+      const passType = getManualTimingJsonPassType(raw);
+      if (passType !== "block_storyboard") {
+        setCopyStatus("Это не Block Storyboard JSON: нужен split_type = manual_block_storyboard_pass");
+        return;
+      }
+      applyImportedTimingJson(raw);
+    } catch (error) {
+      setCopyStatus(`Ошибка Block Storyboard JSON: ${error?.message || "неверный формат"}`);
+    }
+  };
+
   const applyImportedTimingJson = (rawObject) => {
     const isBackupImport = rawObject?.backup_type === "photostudio_manual_project_backup";
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
@@ -3266,14 +3368,7 @@ export default function ManualTimingEditorPage() {
     setAudioTime(0, { pause: true, clearBound: true });
   };
 
-  const onImportTimingJson = () => {
-    try {
-      const raw = JSON.parse(jsonImportText || "{}");
-      applyImportedTimingJson(raw);
-    } catch (error) {
-      setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
-    }
-  };
+  const onImportTimingJson = onApplyStoryCutJson;
 
   const onImportJsonFile = async (event) => {
     const file = event.target.files?.[0];
@@ -3281,8 +3376,12 @@ export default function ManualTimingEditorPage() {
     if (!file) return;
     try {
       const text = await file.text();
+      const raw = JSON.parse(text);
+      const passType = getManualTimingJsonPassType(raw);
+      const passLabel = passType === "story_bible" ? "Story Bible" : passType === "block_storyboard" ? "Block Storyboard" : passType === "story_cut" ? workflowLabels.pass : "неизвестный JSON";
       setJsonImportText(text);
-      applyImportedTimingJson(JSON.parse(text));
+      setIsJsonImportOpen(true);
+      setCopyStatus(`JSON-файл вставлен в поле: ${passLabel}. Нажмите нужную кнопку применения.`);
     } catch (error) {
       setCopyStatus(`Ошибка файла JSON: ${error?.message || "неверный формат"}`);
     }
@@ -3487,7 +3586,7 @@ export default function ManualTimingEditorPage() {
 
   return (
     <>
-    <div className={`manualTimingPage pageCard ${modeConfig.className}`} data-build="manual-timing-stable-v18">
+    <div className={`manualTimingPage pageCard ${modeConfig.className}`} data-build="manual-timing-stable-v18" data-story-bible-build="manual-timing-story-bible-v21" data-json-help-build="manual-timing-json-help-v22">
       <div className="manualTimingModeHeader">
         <div className="manualTimingModeTitleBlock">
           <h1 className="pageTitle">{modeConfig.title}</h1>
@@ -3707,14 +3806,61 @@ export default function ManualTimingEditorPage() {
             <strong>{workflowLabels.panelTitle}</strong>
             <span>{workflowLabels.panelHint}</span>
           </div>
-          <div className="manualTimingJsonActions">
+          <details className="manualTimingJsonHelpBox">
+            <summary>Как пользоваться JSON-проходами по порядку</summary>
+            <div className="manualTimingJsonHelpGrid">
+              <div className="manualTimingJsonHelpStep">
+                <b>1 · Audio Phrase Map</b>
+                <span>Запусти ASR. Он создаёт audio_phrases с таймкодами речи. Это техническая карта речи, её не отправляем в доску.</span>
+              </div>
+              <div className="manualTimingJsonHelpStep">
+                <b>2 · Собрать сцены</b>
+                <span>Локально собираются черновые scenes из ASR с паузами. После этого копируй Semantic Story Cut JSON и скидывай мне/Gemini.</span>
+              </div>
+              <div className="manualTimingJsonHelpStep">
+                <b>3 · Semantic Story Cut</b>
+                <span>Я/Gemini заполняю смысл сцен и story_blocks. Вставь ответ в это же поле и нажми “Применить Semantic Story Cut”.</span>
+              </div>
+              <div className="manualTimingJsonHelpStep">
+                <b>4 · Story Bible</b>
+                <span>После Story Cut копируй Story Bible JSON и скидывай мне/Gemini. Вставь готовый паспорт и нажми “Применить Story Bible”. Он обновляет только project_* поля.</span>
+              </div>
+              <div className="manualTimingJsonHelpStep">
+                <b>5 · Подтвердить</b>
+                <span>Когда Story Cut и Story Bible применены, нажми “Подтвердить”. Так ты фиксируешь тайминг перед созданием доски.</span>
+              </div>
+              <div className="manualTimingJsonHelpStep">
+                <b>6 · Создать доску</b>
+                <span>Нажми “Создать доску”. В доску уходят готовые смысловые сцены, блоки, общий стиль и world/continuity-паспорт.</span>
+              </div>
+            </div>
+            <div className="manualTimingJsonHelpNote">
+              <b>Важно:</b> Semantic Story Cut меняет сцены и story_blocks. Story Bible не трогает сцены, тайминги, audio_phrases и story_blocks — только верхние project_* поля. Block Storyboard — следующий отдельный проход для подготовки доски.
+            </div>
+          </details>
+          <div className="manualTimingJsonActions manualTimingJsonActionsV21">
             <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)} disabled={!isProjectModeSelected}>
-              {isJsonImportOpen ? "Скрыть поле JSON" : workflowLabels.insertPass}
+              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить / показать JSON"}
             </button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onImportTimingJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
-            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Story Bible JSON</button> : null}
-            {isStoryVoiceoverProject(project) ? <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Block Storyboard JSON</button> : null}
+            <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!isProjectModeSelected ? "isDisabled" : ""}`}>
+              Импорт файла JSON
+              <input type="file" accept="application/json,.json,text/plain" onChange={onImportJsonFile} disabled={!isProjectModeSelected} />
+            </label>
+            <div className="manualTimingJsonPassGroup">
+              <span>1 · Semantic Story Cut</span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
+            </div>
+            {isStoryVoiceoverProject(project) ? <div className="manualTimingJsonPassGroup">
+              <span>2 · Story Bible</span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Скопировать Story Bible</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Bible</button>
+            </div> : null}
+            {isStoryVoiceoverProject(project) ? <div className="manualTimingJsonPassGroup">
+              <span>3 · Block Storyboard</span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Скопировать Block Storyboard</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Block Storyboard</button>
+            </div> : null}
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
