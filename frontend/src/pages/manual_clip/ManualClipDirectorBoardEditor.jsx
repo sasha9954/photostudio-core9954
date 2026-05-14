@@ -1034,6 +1034,18 @@ export default function ManualClipDirectorBoardEditor({
   const [mmaudioGainDraftDb, setMMAudioGainDraftDb] = useState(-6);
   const [mmaudioModalError, setMMAudioModalError] = useState("");
 
+  const isManualTimingProjectSource = (candidateProject = projectRef.current || project || {}) => {
+    const ownerNodeType = String(candidateProject?.ownerNodeType || location.state?.ownerNodeType || "").trim().toLowerCase();
+    const source = String(candidateProject?.source || location.state?.source || "").trim().toLowerCase();
+    return ownerNodeType === "manualtiming" || source === "manual_timing_node";
+  };
+
+  const getManualBoardForceState = (candidateProject = projectRef.current || project || {}) => ({
+    manualBoardForceProjectId: String(candidateProject?.project_id || candidateProject?.projectId || "").trim(),
+    manualBoardForceInputSignature: String(candidateProject?.input_signature || candidateProject?.inputSignature || "").trim(),
+    manualBoardForceAudioSignature: String(candidateProject?.audio_signature || candidateProject?.audioSignature || "").trim(),
+  });
+
   const getProjectOwnerNodeId = (candidateProject = {}) => String(
     sourceNodeIdFromRoute
     || candidateProject?.sourceNodeId
@@ -2762,23 +2774,99 @@ export default function ManualClipDirectorBoardEditor({
   const selectedImageAspectMeta = selectedScene ? getSceneImageAspectMeta(selectedScene) : { width: 0, height: 0, label: "unknown", ratio: 0 };
   const selectedImageAspectMismatch = Boolean(selectedScene && isSceneImageAspectMismatch(selectedScene, selectedProjectFormat));
 
+  const handleBackToManualTiming = () => {
+    const currentProject = { ...(projectRef.current || project || {}), selectedSceneId };
+    const ownerNodeId = getProjectOwnerNodeId(currentProject);
+    const forceState = getManualBoardForceState(currentProject);
+    const saved = safePersistCurrentProject("back_to_manual_timing");
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: ownerNodeId,
+      selectedSceneId: String(currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "").trim(),
+      project_id: forceState.manualBoardForceProjectId,
+      input_signature: forceState.manualBoardForceInputSignature,
+      audio_signature: forceState.manualBoardForceAudioSignature,
+      forceProjectId: forceState.manualBoardForceProjectId,
+      forceInputSignature: forceState.manualBoardForceInputSignature,
+      forceAudioSignature: forceState.manualBoardForceAudioSignature,
+      routePath: "/studio/storyboard",
+      reason: "back_to_manual_timing",
+      updatedAt: Date.now(),
+    });
+    console.info("[MANUAL BOARD BACK TO TIMING]", {
+      sourceNodeId: ownerNodeId,
+      ownerNodeId,
+      saved,
+      ...forceState,
+    });
+    navigate("/studio/manual-timing", {
+      state: {
+        sourceNodeId: ownerNodeId,
+        ownerNodeId,
+        returnFromStoryboard: true,
+        openManualTimingNode: true,
+        focusManualTimingNodeId: ownerNodeId,
+        ...forceState,
+        forceProjectId: forceState.manualBoardForceProjectId,
+        forceInputSignature: forceState.manualBoardForceInputSignature,
+        forceAudioSignature: forceState.manualBoardForceAudioSignature,
+      },
+    });
+  };
+
+  const handleBackToManualTimingNode = () => {
+    const currentProject = { ...(projectRef.current || project || {}), selectedSceneId };
+    const ownerNodeId = getProjectOwnerNodeId(currentProject);
+    const forceState = getManualBoardForceState(currentProject);
+    safePersistCurrentProject("back_to_manual_timing_node");
+    writeManualClipBoardOpenState({
+      isOpen: false,
+      sourceNodeId: ownerNodeId,
+      selectedSceneId: String(currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "").trim(),
+      project_id: forceState.manualBoardForceProjectId,
+      input_signature: forceState.manualBoardForceInputSignature,
+      audio_signature: forceState.manualBoardForceAudioSignature,
+      forceProjectId: forceState.manualBoardForceProjectId,
+      forceInputSignature: forceState.manualBoardForceInputSignature,
+      forceAudioSignature: forceState.manualBoardForceAudioSignature,
+      routePath: "/studio/storyboard",
+      reason: "back_to_manual_timing_node",
+      updatedAt: Date.now(),
+    });
+    navigate("/studio/storyboard", {
+      state: {
+        focusManualTimingNodeId: ownerNodeId,
+        sourceNodeId: ownerNodeId,
+        ownerNodeId,
+        closeManualDirectorBoard: true,
+        closeLegacyScenarioEditors: true,
+        manualBoardSkipOpenStateReason: "back_to_manual_timing_node",
+        ...forceState,
+      },
+    });
+    if (embedded && typeof onClose === "function") onClose();
+  };
+
+  const handleLegacyBackToAiSplit = () => {
+    safePersistCurrentProject(embedded ? "close_embedded_director_board" : "back_to_ai_split");
+    if (embedded && typeof onClose === "function") {
+      onClose();
+      return;
+    }
+    navigate("/studio/storyboard");
+  };
+
   if (!project) return <div className="manualDirectorPage"><div className="manualDirectorEmpty"><h2>Проект режиссёрской доски не найден</h2><p>Сначала откройте AI-разбивку и нажмите «Перейти в режиссёрскую доску» или восстановите backup JSON.</p><div className="manualDirectorEmptyActions"><button className="clipSB_btn" onClick={() => (typeof onClose === "function" ? onClose() : navigate("/studio/storyboard"))}>Вернуться в студию</button><label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label><button className="clipSB_btn clipSB_btnSecondary" onClick={onRestoreLegacyManualProject}>Восстановить старый проект</button></div>{backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}</div></div>;
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">
       <button
         className="clipSB_btn"
-        onClick={() => {
-          safePersistCurrentProject(embedded ? "close_embedded_director_board" : "back_to_ai_split");
-          if (embedded && typeof onClose === "function") {
-            onClose();
-            return;
-          }
-          navigate("/studio/storyboard");
-        }}
+        onClick={isManualTimingProjectSource(project) ? handleBackToManualTiming : handleLegacyBackToAiSplit}
       >
-        Назад к AI-разбивке
+        {isManualTimingProjectSource(project) ? "← Назад в тайминг" : "Назад к AI-разбивке"}
       </button>
+      {isManualTimingProjectSource(project) ? <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={handleBackToManualTimingNode}>← К ноде</button> : null}
       <button className="clipSB_btn" onClick={() => {
         const currentProject = { ...(projectRef.current || project || {}), selectedSceneId };
         const ownerNodeId = getProjectOwnerNodeId(currentProject);

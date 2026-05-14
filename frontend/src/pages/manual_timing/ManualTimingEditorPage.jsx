@@ -52,6 +52,7 @@ import {
   normalizeManualTimingMarkers,
   normalizeManualTimingProjectFromJson,
   normalizeManualTimingSourcePhraseIds,
+  readManualTimingProjectForNode,
   normalizeManualTimingStoryBlocks,
   persistManualTimingProject,
   roundTimingSec,
@@ -583,8 +584,7 @@ function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = ge
   };
 }
 
-function buildInitialProject() {
-  const raw = readActiveProject();
+function normalizeStoredManualTimingProject(raw = null, ownerNodeId = "") {
   const project = { ...getDefaultManualTimingNodeData(), ...(raw || {}) };
   const audio = normalizeManualTimingProjectAudioForHandoff(project);
   const duration = Number(audio.duration_sec || 0);
@@ -597,8 +597,10 @@ function buildInitialProject() {
     ? buildManualTimingScenesFromMarkers(markers, project.scenes || [], { durationSec: duration })
     : (Array.isArray(project.scenes) ? project.scenes : []);
   const scenes = hydrateManualTimingScenesWithStoryBlocks(rawScenes, story_blocks);
+  const safeOwnerNodeId = String(ownerNodeId || project.sourceNodeId || project.nodeId || "").trim();
   return {
     ...project,
+    ...(safeOwnerNodeId ? { nodeId: safeOwnerNodeId, sourceNodeId: safeOwnerNodeId } : {}),
     project_mode: project.project_mode || "",
     project_kind: project.project_kind || "",
     format: String(project.format || project.aspect_ratio || "9:16"),
@@ -612,6 +614,10 @@ function buildInitialProject() {
     selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
     timing_status: project.timing_status || (scenes.length ? "draft" : "empty"),
   };
+}
+
+function buildInitialProject() {
+  return normalizeStoredManualTimingProject(readActiveProject());
 }
 
 function getManualTimingOwnerNodeId(project = {}) {
@@ -1480,6 +1486,7 @@ export default function ManualTimingEditorPage() {
   const newBoardConfirmResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
   const silenceRepairSignatureRef = useRef("");
+  const storyboardReturnHydrateKeyRef = useRef("");
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
   const playStartGuardRef = useRef(null);
@@ -1666,6 +1673,40 @@ export default function ManualTimingEditorPage() {
       finalOwnerNodeId,
     });
   }, [routeSourceNodeId, projectSourceNodeId, fallbackOwnerNodeId, finalOwnerNodeId]);
+
+  useEffect(() => {
+    const navState = location?.state || {};
+    const requestedOwnerNodeId = String(
+      navState.sourceNodeId
+      || navState.ownerNodeId
+      || navState.focusManualTimingNodeId
+      || ""
+    ).trim();
+    const shouldHydrateReturn = Boolean(
+      navState.returnFromStoryboard === true
+      || navState.openManualTimingNode === true
+      || requestedOwnerNodeId
+    );
+    const ownerNodeId = requestedOwnerNodeId || finalOwnerNodeId;
+    const hydrateKey = `${location?.key || "manual-timing"}:${ownerNodeId}`;
+    if (!shouldHydrateReturn || !ownerNodeId || storyboardReturnHydrateKeyRef.current === hydrateKey) return;
+
+    const storedProject = readManualTimingProjectForNode(ownerNodeId);
+    if (!storedProject) return;
+
+    storyboardReturnHydrateKeyRef.current = hydrateKey;
+    const restoredProject = normalizeStoredManualTimingProject(storedProject, ownerNodeId);
+    setProject(restoredProject);
+    persistManualTimingProject(restoredProject);
+    setActiveBoardProject(getManualTimingBoardForOwner(ownerNodeId));
+    console.info("[MANUAL TIMING RETURN FROM STORYBOARD]", {
+      sourceNodeId: ownerNodeId,
+      returnFromStoryboard: navState.returnFromStoryboard === true,
+      manualBoardForceProjectId: String(navState.manualBoardForceProjectId || navState.forceProjectId || "").trim(),
+      manualBoardForceInputSignature: String(navState.manualBoardForceInputSignature || navState.forceInputSignature || "").trim(),
+      manualBoardForceAudioSignature: String(navState.manualBoardForceAudioSignature || navState.forceAudioSignature || "").trim(),
+    });
+  }, [location?.key, location?.state, finalOwnerNodeId]);
 
   useEffect(() => {
     setActiveBoardProject(getManualTimingBoardForOwner(finalOwnerNodeId));
@@ -2994,17 +3035,37 @@ export default function ManualTimingEditorPage() {
         sourceNodeId: ownerNodeId,
       };
       setActiveBoardProject(safeBoard);
+      const forceProjectId = String(safeBoard?.project_id || safeBoard?.projectId || "").trim();
+      const forceInputSignature = String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim();
+      const forceAudioSignature = String(safeBoard?.audio_signature || safeBoard?.audioSignature || "").trim();
       writeManualClipBoardOpenState({
         isOpen: true,
         sourceNodeId: ownerNodeId,
         selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(),
-        project_id: String(safeBoard?.project_id || safeBoard?.projectId || "").trim(),
-        input_signature: String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim(),
+        project_id: forceProjectId,
+        input_signature: forceInputSignature,
+        audio_signature: forceAudioSignature,
+        forceProjectId,
+        forceInputSignature,
+        forceAudioSignature,
         routePath: STORYBOARD_ROUTE,
         updatedAt: Date.now(),
       });
       navigate(STORYBOARD_ROUTE, {
-        state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: ownerNodeId, director_board: safeBoard, project: safeBoard },
+        state: {
+          openManualDirectorBoard: true,
+          closeLegacyScenarioEditors: true,
+          sourceNodeId: ownerNodeId,
+          ownerNodeId,
+          manualBoardForceProjectId: forceProjectId,
+          manualBoardForceInputSignature: forceInputSignature,
+          manualBoardForceAudioSignature: forceAudioSignature,
+          forceProjectId,
+          forceInputSignature,
+          forceAudioSignature,
+          director_board: safeBoard,
+          project: safeBoard,
+        },
       });
       return;
     }
@@ -3974,7 +4035,13 @@ export default function ManualTimingEditorPage() {
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>1 · Audio Phrase Map</button>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>2 · Собрать сцены</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>3 · Подтвердить</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title={openDirectorBoardTitle}>{handoffStatus || "Создать доску"}</button>
+            <button
+              className="clipSB_btn clipSB_btnSecondary"
+              onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming}
+              disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)}
+              title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}
+            >{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
+            {hasActiveBoardProject ? <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Создать новую доску</button> : null}
           </div>
           <div className="manualTimingWorkflowStatusLine">
             <span>{storyPassReadyForDirector ? "Статус: можно создать режиссёрскую доску" : `Следующий шаг: применить ${workflowLabels.pass} JSON и подтвердить тайминг`}</span>
