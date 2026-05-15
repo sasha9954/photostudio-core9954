@@ -617,6 +617,9 @@ class ClipVideoMMAudioStartIn(BaseModel):
     videoUrl: str | None = None
     soundPrompt: str | None = None
     negativeAudioPrompt: str | None = None
+    targetDurationSec: int | float | None = None
+    sceneDurationSec: int | float | None = None
+    requestedDurationSec: int | float | None = None
     generatedAudioGainDb: int | float | None = -6
     replaceSceneVideo: bool | None = True
     projectKind: str | None = None
@@ -2084,6 +2087,196 @@ def _trim_scene_video_to_target_duration(
             except Exception:
                 pass
 
+
+
+def _normalize_duration_float(value: Any) -> float | None:
+    parsed = _safe_positive_float(value)
+    if parsed is None or not math.isfinite(float(parsed)):
+        return None
+    return float(parsed)
+
+
+def normalize_video_duration_to_target(
+    input_path: str,
+    target_duration_sec: float,
+    output_prefix: str,
+    scene_id: str,
+    reason: str,
+    *,
+    tolerance_sec: float = 0.07,
+    ensure_audio: bool = False,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Normalize a local mp4 duration using ffprobe truth, trimming or last-frame padding."""
+    safe_scene_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(scene_id or "scene")).strip("_") or "scene"
+    safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(output_prefix or "duration_norm")).strip("_") or "duration_norm"
+    target = _normalize_duration_float(target_duration_sec)
+    diag: dict[str, Any] = {
+        "sceneId": scene_id,
+        "targetDurationSec": round(float(target), 3) if target else None,
+        "rawDurationSec": None,
+        "action": "none",
+        "missingSec": 0.0,
+        "finalDurationSec": None,
+        "outputUrl": None,
+        "outputPath": input_path,
+        "reason": reason,
+        "toleranceSec": float(tolerance_sec),
+        "hasAudio": False,
+        "hasVideo": False,
+        "warning": None,
+    }
+    if not input_path or not os.path.isfile(input_path):
+        diag["warning"] = "input_path_missing"
+        return input_path, None, diag
+    if not target or target <= 0:
+        diag["warning"] = "invalid_target_duration"
+        return input_path, None, diag
+
+    stream_info = _ffprobe_stream_info(input_path)
+    diag["hasAudio"] = bool(stream_info.get("hasAudio"))
+    diag["hasVideo"] = bool(stream_info.get("hasVideo"))
+    if stream_info.get("warning"):
+        diag["warning"] = f"ffprobe_stream_info_failed:{stream_info.get('warning')}"
+        return input_path, None, diag
+
+    raw_duration = _normalize_duration_float(stream_info.get("durationSec"))
+    if raw_duration is None:
+        raw_duration, probe_err = _ffprobe_duration(input_path)
+        if probe_err:
+            diag["warning"] = f"ffprobe_duration_failed:{probe_err}"
+            return input_path, None, diag
+    if raw_duration is None or raw_duration <= 0:
+        diag["warning"] = "raw_duration_missing"
+        return input_path, None, diag
+
+    diag["rawDurationSec"] = round(float(raw_duration), 3)
+    delta = float(raw_duration) - float(target)
+    if abs(delta) <= float(tolerance_sec):
+        diag["finalDurationSec"] = round(float(raw_duration), 3)
+        diag["outputPath"] = input_path
+        return input_path, None, diag
+
+    _ensure_assets_dir()
+    action = "trim" if delta > 0 else "pad"
+    missing = max(0.0, -float(delta))
+    diag["action"] = action
+    diag["missingSec"] = round(float(missing), 3)
+    out_name = f"{safe_prefix}_{safe_scene_id}_{uuid4().hex}.mp4"
+    out_path = os.path.join(str(ASSETS_DIR), out_name)
+    has_audio = bool(stream_info.get("hasAudio"))
+
+    if action == "trim":
+        cmd = ["ffmpeg", "-y", "-i", input_path]
+        if ensure_audio and not has_audio:
+            cmd += ["-f", "lavfi", "-t", f"{float(target):.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
+        cmd += ["-t", f"{float(target):.3f}", "-map", "0:v:0"]
+        if has_audio:
+            cmd += ["-map", "0:a:0", "-c:a", "aac"]
+        elif ensure_audio:
+            cmd += ["-map", "1:a:0", "-c:a", "aac"]
+        else:
+            cmd += ["-an"]
+        cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", out_path]
+    elif has_audio:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-map", "0:v:0", "-map", "0:a:0",
+            "-vf", f"tpad=stop_mode=clone:stop_duration={float(missing):.3f}",
+            "-af", "apad",
+            "-t", f"{float(target):.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+    elif ensure_audio:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-f", "lavfi", "-t", f"{float(target):.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-vf", f"tpad=stop_mode=clone:stop_duration={float(missing):.3f}",
+            "-t", f"{float(target):.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+    else:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-vf", f"tpad=stop_mode=clone:stop_duration={float(missing):.3f}",
+            "-t", f"{float(target):.3f}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-an",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+
+    ok, err = _run_ffmpeg(cmd)
+    if not ok:
+        diag["warning"] = f"ffmpeg_{action}_failed:{err}"
+        diag["action"] = "none"
+        diag["outputPath"] = input_path
+        return input_path, None, diag
+
+    final_duration, final_probe_err = _ffprobe_duration(out_path)
+    if final_probe_err:
+        diag["warning"] = f"ffprobe_output_failed:{final_probe_err}"
+    diag["finalDurationSec"] = round(float(final_duration), 3) if final_duration else None
+    diag["outputPath"] = out_path
+    diag["outputUrl"] = _build_public_static_url(out_name)
+    return out_path, diag["outputUrl"], diag
+
+
+def _normalize_video_url_duration_to_target(
+    *,
+    video_url: str,
+    target_duration_sec: float,
+    output_prefix: str,
+    scene_id: str,
+    reason: str,
+    log_label: str,
+    tolerance_sec: float = 0.07,
+    ensure_audio: bool = False,
+) -> tuple[str, float | None, dict[str, Any]]:
+    temp_files: list[str] = []
+    diag: dict[str, Any] = {
+        "sceneId": scene_id,
+        "targetDurationSec": round(float(target_duration_sec), 3) if _normalize_duration_float(target_duration_sec) else None,
+        "rawDurationSec": None,
+        "action": "none",
+        "missingSec": 0.0,
+        "finalDurationSec": None,
+        "outputUrl": video_url,
+        "reason": reason,
+    }
+    try:
+        source_path, resolve_err = _resolve_media_input(video_url, temp_files)
+        if resolve_err or not source_path:
+            diag["warning"] = f"source_unavailable:{resolve_err or 'empty'}"
+            print(f"[{log_label}] " + json.dumps(diag, ensure_ascii=False))
+            return video_url, None, diag
+        normalized_path, normalized_url, diag = normalize_video_duration_to_target(
+            source_path,
+            target_duration_sec,
+            output_prefix,
+            scene_id,
+            reason,
+            tolerance_sec=tolerance_sec,
+            ensure_audio=ensure_audio,
+        )
+        final_url = normalized_url or video_url
+        diag["outputUrl"] = final_url
+        print(f"[{log_label}] " + json.dumps({k: v for k, v in diag.items() if k != "outputPath"}, ensure_ascii=False))
+        final_duration = _normalize_duration_float(diag.get("finalDurationSec") or diag.get("rawDurationSec"))
+        return final_url, final_duration, diag
+    finally:
+        for temp_file in temp_files:
+            try:
+                if os.path.isfile(temp_file):
+                    os.remove(temp_file)
+            except Exception:
+                pass
 
 def _derive_direct_scene_contract_fields(source_route: str) -> dict[str, Any]:
     normalized_route = str(source_route or "").strip().lower()
@@ -17703,7 +17896,28 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
         source_path, resolve_err = _resolve_media_input(video_url, temp_files)
         if resolve_err or not source_path or not os.path.isfile(source_path):
             raise RuntimeError(resolve_err or "source_video_not_found")
-        with open(source_path, "rb") as f:
+        source_probe_duration, source_probe_err = _ffprobe_duration(source_path)
+        target_duration_sec = (
+            _normalize_duration_float(getattr(payload, "targetDurationSec", None))
+            or _normalize_duration_float(getattr(payload, "sceneDurationSec", None))
+            or _normalize_duration_float(getattr(payload, "requestedDurationSec", None))
+            or _normalize_duration_float(source_probe_duration)
+        )
+        if not target_duration_sec:
+            raise RuntimeError(source_probe_err or "mmaudio_target_duration_unavailable")
+        normalized_source_path, normalized_source_url, source_normalize_diag = normalize_video_duration_to_target(
+            source_path,
+            target_duration_sec,
+            "mmaudio_source_duration_normalized",
+            scene_id,
+            "mmaudio_source_before_comfy_upload",
+            tolerance_sec=0.07,
+            ensure_audio=False,
+        )
+        print("[MMAUDIO SOURCE DURATION NORMALIZE] " + json.dumps({k: v for k, v in source_normalize_diag.items() if k != "outputPath"}, ensure_ascii=False))
+        source_path_for_mmaudio = normalized_source_path if normalized_source_path and os.path.isfile(normalized_source_path) else source_path
+        source_url_for_debug = normalized_source_url or video_url
+        with open(source_path_for_mmaudio, "rb") as f:
             video_bytes = f.read()
         comfy_video_name, upload_err = upload_video_to_comfy(
             video_bytes,
@@ -17749,17 +17963,30 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
         )
         if save_err or not mmaudio_path:
             raise RuntimeError(save_err or "mmaudio_raw_save_failed")
-        final_video_url, ffmpeg_err = _replace_video_audio_with_gain(source_video_path=source_path, mmaudio_video_path=mmaudio_path, gain_db=gain_db)
+        final_video_url, ffmpeg_err = _replace_video_audio_with_gain(source_video_path=source_path_for_mmaudio, mmaudio_video_path=mmaudio_path, gain_db=gain_db)
         if ffmpeg_err or not final_video_url:
             raise RuntimeError(ffmpeg_err or "mmaudio_gain_apply_failed")
+        final_video_url, final_duration_sec, mmaudio_normalize_diag = _normalize_video_url_duration_to_target(
+            video_url=final_video_url,
+            target_duration_sec=target_duration_sec,
+            scene_id=scene_id,
+            output_prefix="mmaudio_duration_normalized",
+            reason="mmaudio_post_output_normalize",
+            log_label="MMAUDIO DURATION NORMALIZE",
+            tolerance_sec=0.07,
+            ensure_audio=True,
+        )
         with CLIP_VIDEO_JOBS_LOCK:
             job = CLIP_VIDEO_JOBS.get(job_id) or {}
             job.update({
+                **debug_base,
                 "ok": True,
                 "status": "done",
                 "queueStatus": "done",
                 "videoUrl": final_video_url,
                 "video_url": final_video_url,
+                "finalVideoUrl": final_video_url,
+                "final_video_url": final_video_url,
                 "mmaudioRawVideoUrl": asset_url(os.path.basename(mmaudio_path)),
                 "mmaudio_raw_video_url": asset_url(os.path.basename(mmaudio_path)),
                 "mmaudioVideoUrl": final_video_url,
@@ -17773,12 +18000,16 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
                 "providerJobId": prompt_id,
                 "generatedAudioGainDb": gain_db,
                 "generated_audio_gain_db": gain_db,
+                "targetDurationSec": round(float(target_duration_sec), 3),
+                "providerDurationSec": round(float(final_duration_sec), 3) if final_duration_sec else None,
+                "sourceVideoUrl": source_url_for_debug,
+                "mmaudioSourceNormalize": source_normalize_diag,
+                "mmaudioDurationNormalize": mmaudio_normalize_diag,
                 "error": "",
                 "completedAt": time.time(),
                 "updatedAt": time.time(),
                 "comfyOutputFileRef": file_ref,
                 "comfyOutputHandoffStrategy": handoff_strategy,
-                **debug_base,
             })
             CLIP_VIDEO_JOBS[job_id] = job
     except Exception as exc:
@@ -19592,16 +19823,19 @@ def clip_video(payload: ClipVideoIn):
             "trimReason": trim_plan_reason,
         }
         if video_url and target_duration_sec > 0:
-            trimmed_url, trimmed_duration_sec, trim_result_debug = _trim_scene_video_to_target_duration(
+            normalized_url, normalized_duration_sec, trim_result_debug = _normalize_video_url_duration_to_target(
                 video_url=video_url,
                 target_duration_sec=target_duration_sec,
                 scene_id=scene_id,
-                allow_last_frame_pad=final_workflow_key in (LTX_FIRST_LAST_WORKFLOW_KEYS | {"lip_sync", "lip_sync_music"}),
-                max_last_frame_pad_sec=0.40,
+                output_prefix="ltx_duration_normalized",
+                reason=f"{final_workflow_key}:post_comfy_output_normalize",
+                log_label="LTX VIDEO DURATION NORMALIZE",
+                tolerance_sec=0.07,
+                ensure_audio=bool(final_workflow_key in {"i2v_sound", "ltx23_i2v_sound_clean", "first_last_sound_clean"} and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
             )
-            video_url = trimmed_url
-            if trimmed_duration_sec and trimmed_duration_sec > 0:
-                source_video_duration_sec = trimmed_duration_sec
+            video_url = normalized_url
+            if normalized_duration_sec and normalized_duration_sec > 0:
+                source_video_duration_sec = normalized_duration_sec
         print("[SCENARIO VIDEO TRIM RESULT] " + json.dumps(trim_result_debug, ensure_ascii=False))
         print(
             "[SCENARIO VIDEO DURATION TRACE] "
@@ -19664,6 +19898,9 @@ def clip_video(payload: ClipVideoIn):
             "ok": True,
             "sceneId": scene_id,
             "videoUrl": video_url,
+            "video_url": video_url,
+            "final_video_url": video_url,
+            "finalVideoUrl": video_url,
             "provider": "comfy_remote",
             "model": resolved_model_key,
             "taskId": prompt_id,

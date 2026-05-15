@@ -26247,6 +26247,22 @@ return base;
     const safeVideoUrl = String(sourceVideoUrl || "").trim();
     const gainDb = Math.max(-24, Math.min(6, Number(generatedAudioGainDb)));
     if (!sourceNodeId || !safeSceneId || !safeVideoUrl) throw new Error("mmaudio_missing_scene_or_video");
+    const boardCandidates = [
+      readManualClipBoardProjectForNode(sourceNodeId),
+      readActiveManualClipBoardProject(),
+      manualDirectorBoardProject,
+    ].filter(Boolean);
+    const sourceScene = boardCandidates
+      .flatMap((board) => (Array.isArray(board?.scenes) ? board.scenes : []))
+      .find((scene) => String(scene?.scene_id || scene?.id || "").trim() === safeSceneId) || {};
+    const targetDurationSec = Number(
+      sourceScene?.targetDurationSec
+        || sourceScene?.sceneDurationSec
+        || sourceScene?.durationSec
+        || sourceScene?.duration_sec
+        || sourceScene?.duration
+        || 0
+    );
     const out = await fetchJson("/api/clip/video/mmaudio/start", {
       method: "POST",
       timeoutMs: 60000,
@@ -26256,6 +26272,9 @@ return base;
         soundPrompt,
         negativeAudioPrompt,
         generatedAudioGainDb: gainDb,
+        targetDurationSec: Number.isFinite(targetDurationSec) && targetDurationSec > 0 ? targetDurationSec : undefined,
+        sceneDurationSec: Number.isFinite(targetDurationSec) && targetDurationSec > 0 ? targetDurationSec : undefined,
+        requestedDurationSec: Number.isFinite(targetDurationSec) && targetDurationSec > 0 ? targetDurationSec : undefined,
         replaceSceneVideo: true,
         projectKind: "manual_clip",
       },
@@ -26277,7 +26296,7 @@ return base;
     }, "manual_mmaudio_queued");
     pollManualMMAudioJob(sourceNodeId, safeSceneId, jobId, safeVideoUrl, gainDb);
     return out;
-  }, [manualDirectorEditor.sourceNodeId, patchManualDirectorScene, pollManualMMAudioJob]);
+  }, [manualDirectorEditor.sourceNodeId, manualDirectorBoardProject, patchManualDirectorScene, pollManualMMAudioJob]);
 
   const bindHandlersRef = useRef(bindHandlers);
   const narrativeSourceRefreshSignatureRef = useRef("");
