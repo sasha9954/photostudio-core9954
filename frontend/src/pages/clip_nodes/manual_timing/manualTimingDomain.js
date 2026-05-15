@@ -276,6 +276,43 @@ export function normalizeManualTimingAudio(audio = null) {
   return { url, filename, duration_sec, duration_ms, mime_type, source };
 }
 
+export function getManualTimingAudioSignature(projectOrAudio = {}) {
+  const value = projectOrAudio && typeof projectOrAudio === "object" ? projectOrAudio : {};
+  const audioCandidate = value.audio || value.audio_metadata || value.audioMetadata || value;
+  const audio = normalizeManualTimingAudio({
+    ...audioCandidate,
+    url: audioCandidate?.url || value.audio_url || value.audioUrl || value.source_audio_url || value.sourceAudioUrl,
+    filename: audioCandidate?.filename || audioCandidate?.name || value.audio_filename || value.audioFilename || value.audio_name || value.audioName,
+    name: audioCandidate?.name || audioCandidate?.filename || value.audio_name || value.audioName || value.audio_filename || value.audioFilename,
+    duration_sec: audioCandidate?.duration_sec
+      ?? audioCandidate?.durationSec
+      ?? value.audio_duration_sec
+      ?? value.audioDurationSec
+      ?? value.duration_sec
+      ?? value.durationSec,
+  });
+  const audioName = String(
+    audioCandidate?.filename
+    || audioCandidate?.name
+    || value.audio_filename
+    || value.audioFilename
+    || value.audio_name
+    || value.audioName
+    || audio.filename
+    || ""
+  ).trim();
+  const signature = {
+    audio_url: String(audio.url || "").trim(),
+    audio_name: audioName,
+    audio_duration_sec: roundTimingSec(audio.duration_sec),
+    project_mode: String(value.project_mode || value.projectMode || "").trim(),
+    project_kind: String(value.project_kind || value.projectKind || "").trim(),
+    format: String(value.format || value.aspect_ratio || value.aspectRatio || "").trim(),
+    aspect_ratio: String(value.aspect_ratio || value.aspectRatio || value.format || "").trim(),
+  };
+  return JSON.stringify(signature);
+}
+
 export function roundTimingSec(value) {
   const n = Number(value || 0);
   if (!Number.isFinite(n)) return 0;
