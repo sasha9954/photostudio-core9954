@@ -18,10 +18,6 @@ const ACTOR_AUDIO_DB_STORE = "audio_files";
 const DEFAULT_MICRO_STEP_SEC = 0.5;
 const MIN_BLOCK_SEC = 0.001;
 const MAX_HISTORY_ITEMS = 50;
-const TIMELINE_MIN_WIDTH_PX = 1200;
-const TIMELINE_PIXELS_PER_SECOND = 18;
-const TIMELINE_PIXELS_PER_BLOCK = 56;
-
 const BLOCK_COLORS = [
   "var(--podcast-block-color-1)",
   "var(--podcast-block-color-2)",
@@ -1093,92 +1089,59 @@ function BlockTimeline({
   onSelectBlock,
   onBlockDoubleClick,
 }) {
-  const viewportRef = useRef(null);
   const safeDuration = Math.max(0, normalizeNumber(totalDurationSec, 0));
-  const timelineWidthPx = Math.ceil(Math.max(
-    TIMELINE_MIN_WIDTH_PX,
-    safeDuration * TIMELINE_PIXELS_PER_SECOND,
-    blocks.length * TIMELINE_PIXELS_PER_BLOCK
-  ));
   const playheadLeft = safeDuration > 0 ? `${Math.min(100, Math.max(0, (currentTimeSec / safeDuration) * 100))}%` : "0%";
-
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport || !safeDuration || timelineWidthPx <= viewport.clientWidth) return;
-
-    const selectedIndex = blocks.findIndex((block) => block.id === selectedBlockId);
-    const targetTimeSec = selectedIndex >= 0
-      ? getBlockVirtualStart(blocks, selectedIndex) + (getBlockDuration(blocks[selectedIndex]) / 2)
-      : currentTimeSec;
-    const targetX = clampSeconds(targetTimeSec, 0, safeDuration) / safeDuration * timelineWidthPx;
-    const padding = Math.min(96, Math.max(32, viewport.clientWidth * 0.12));
-    const visibleStart = viewport.scrollLeft + padding;
-    const visibleEnd = viewport.scrollLeft + viewport.clientWidth - padding;
-
-    if (targetX < visibleStart) {
-      viewport.scrollTo({ left: Math.max(0, targetX - padding), behavior: "smooth" });
-    } else if (targetX > visibleEnd) {
-      viewport.scrollTo({ left: Math.max(0, targetX - viewport.clientWidth + padding), behavior: "smooth" });
-    }
-  }, [blocks, currentTimeSec, safeDuration, selectedBlockId, timelineWidthPx]);
 
   return (
     <div className="podcastBlockTimelineWrap">
-      <div className="podcastTimelineViewport" ref={viewportRef}>
-        <div
-          className="podcastTimelineInner"
-          style={{ "--timeline-width": `${timelineWidthPx}px` }}
-        >
-          <div
-            className="podcastBlockTimeline"
-            role="button"
-            tabIndex={0}
-            aria-label="Блочная аудио-дорожка"
-            onClick={(event) => {
-              if (!safeDuration || !onSeek) return;
-              const rect = event.currentTarget.getBoundingClientRect();
-              const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
-              onSeek(clampSeconds(ratio * safeDuration, 0, safeDuration));
-            }}
-          >
-            {blocks.map((block, index) => {
-              const duration = getBlockDuration(block);
-              const startSec = getBlockVirtualStart(blocks, index);
-              const widthPercent = safeDuration > 0 ? `${(duration / safeDuration) * 100}%` : "0%";
-              const leftPercent = safeDuration > 0 ? `${(startSec / safeDuration) * 100}%` : "0%";
-              const isSelected = block.id === selectedBlockId;
-              const color = getBlockRenderColor(block);
-              const badgeText = getBlockInitialText(block);
-              const labelText = getBlockLabelText(block);
-              return (
-                <div
-                  key={block.id}
-                  className={`podcastAudioBlock${isSelected ? " selected" : ""}${block.type === "silence" ? " silence" : ""}${(block.source_audio_id || "main") === "main" && block.type !== "silence" && !hasPhraseIdentity(block) && !getStoredBlockLabel(block) ? " narrator" : ""}${hasPhraseIdentity(block) ? " phrase" : ""}${badgeText ? " labeled" : ""}`}
-                  style={{ left: leftPercent, width: widthPercent, "--block-color": color }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSelectBlock?.(block.id, startSec);
-                  }}
-                  onDoubleClick={(event) => {
-                    event.stopPropagation();
-                    onBlockDoubleClick?.(block.id, startSec, { x: event.clientX, y: event.clientY });
-                  }}
-                  title={`${labelText ? `${labelText} · ` : ""}${formatTimer(startSec)} → ${formatTimer(startSec + duration)} · двойной клик = меню`}
-                >
-                  {badgeText ? <span className="podcastBlockBadge" title={labelText}>{badgeText}</span> : null}
-                </div>
-              );
-            })}
-
-            {deletionMarkers.map((marker) => {
-              const left = safeDuration > 0 ? `${(roundSeconds(marker.at_sec) / safeDuration) * 100}%` : "0%";
-              return <div key={marker.id} className="podcastDeleteCutMark" style={{ left }} title={`Удалено ${formatTimer(marker.removed_duration_sec)}`} />;
-            })}
-
-            <div className="podcastPlayhead" style={{ left: playheadLeft }}>
-              <span>{formatTimer(currentTimeSec)}</span>
+      <div
+        className="podcastBlockTimeline"
+        role="button"
+        tabIndex={0}
+        aria-label="Блочная аудио-дорожка"
+        onClick={(event) => {
+          if (!safeDuration || !onSeek) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0;
+          onSeek(clampSeconds(ratio * safeDuration, 0, safeDuration));
+        }}
+      >
+        {blocks.map((block, index) => {
+          const duration = getBlockDuration(block);
+          const startSec = getBlockVirtualStart(blocks, index);
+          const widthPercent = safeDuration > 0 ? `${(duration / safeDuration) * 100}%` : "0%";
+          const leftPercent = safeDuration > 0 ? `${(startSec / safeDuration) * 100}%` : "0%";
+          const isSelected = block.id === selectedBlockId;
+          const color = getBlockRenderColor(block);
+          const badgeText = getBlockInitialText(block);
+          const labelText = getBlockLabelText(block);
+          return (
+            <div
+              key={block.id}
+              className={`podcastAudioBlock${isSelected ? " selected" : ""}${block.type === "silence" ? " silence" : ""}${(block.source_audio_id || "main") === "main" && block.type !== "silence" && !hasPhraseIdentity(block) && !getStoredBlockLabel(block) ? " narrator" : ""}${hasPhraseIdentity(block) ? " phrase" : ""}${badgeText ? " labeled" : ""}`}
+              style={{ left: leftPercent, width: widthPercent, "--block-color": color }}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectBlock?.(block.id, startSec);
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                onBlockDoubleClick?.(block.id, startSec, { x: event.clientX, y: event.clientY });
+              }}
+              title={`${labelText ? `${labelText} · ` : ""}${formatTimer(startSec)} → ${formatTimer(startSec + duration)} · двойной клик = меню`}
+            >
+              {badgeText ? <span className="podcastBlockBadge" title={labelText}>{badgeText}</span> : null}
             </div>
-          </div>
+          );
+        })}
+
+        {deletionMarkers.map((marker) => {
+          const left = safeDuration > 0 ? `${(roundSeconds(marker.at_sec) / safeDuration) * 100}%` : "0%";
+          return <div key={marker.id} className="podcastDeleteCutMark" style={{ left }} title={`Удалено ${formatTimer(marker.removed_duration_sec)}`} />;
+        })}
+
+        <div className="podcastPlayhead" style={{ left: playheadLeft }}>
+          <span>{formatTimer(currentTimeSec)}</span>
         </div>
       </div>
     </div>

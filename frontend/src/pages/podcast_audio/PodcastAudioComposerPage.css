@@ -38,24 +38,7 @@
 .podcastComposerAudioMeta span{ color:#8ea3bf; font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
 .podcastComposerAudioMeta strong{ overflow:hidden; color:#f8fafc; font-size:17px; text-overflow:ellipsis; white-space:nowrap; }
 
-.podcastBlockTimelineWrap{ max-width:100%; min-width:0; padding:18px 0 10px; }
-.podcastTimelineViewport{
-  width:100%;
-  max-width:100%;
-  overflow-x:auto;
-  overflow-y:hidden;
-  scrollbar-gutter:stable;
-  overscroll-behavior-x:contain;
-}
-.podcastTimelineViewport::-webkit-scrollbar{ height:10px; }
-.podcastTimelineViewport::-webkit-scrollbar-track{ border-radius:999px; background:rgba(15,23,42,.72); }
-.podcastTimelineViewport::-webkit-scrollbar-thumb{ border-radius:999px; background:rgba(125,211,252,.42); }
-.podcastTimelineInner{
-  position:relative;
-  width:100%;
-  min-width:max(100%, var(--timeline-width, 1200px));
-  padding-bottom:8px;
-}
+.podcastBlockTimelineWrap{ padding:18px 0 10px; }
 .podcastBlockTimeline{
   position:relative; height:120px; overflow:hidden; border:1px solid rgba(125,211,252,.26); border-radius:20px;
   background:linear-gradient(180deg, rgba(30,41,59,.72), rgba(15,23,42,.72)), linear-gradient(90deg, rgba(56,189,248,.18), rgba(59,130,246,.08));
