@@ -914,3 +914,23 @@
   .podcastComposerFinalActions { flex-direction: column; align-items: stretch; }
   .podcastComposerFinalActions button { width: 100%; }
 }
+
+/* v44: viewport-safe fixed block action menu positioning */
+.podcastBlockActionMenu {
+  position: fixed !important;
+  left: var(--menu-left, var(--menu-x, 16px)) !important;
+  top: var(--menu-top, var(--menu-y, 16px)) !important;
+  width: min(460px, calc(100vw - 32px)) !important;
+  max-height: calc(100vh - 32px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 520px) {
+  .podcastBlockActionMenu {
+    width: calc(100vw - 32px) !important;
+    max-height: calc(100vh - 32px) !important;
+    padding: 38px 16px 18px !important;
+  }
+}
