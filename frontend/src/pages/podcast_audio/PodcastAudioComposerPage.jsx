@@ -10,9 +10,9 @@ import {
 } from "../clip_nodes/manual_timing/manualTimingDomain.js";
 import "./PodcastAudioComposerPage.css";
 
-const BUILD_ID = "blocks-v44-timing-manifest-handoff";
-const COMPOSER_STORAGE_VERSION = 43;
-const RESTORABLE_STORAGE_VERSIONS = new Set([30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43]);
+const BUILD_ID = "blocks-v45-broken-phrase-repair";
+const COMPOSER_STORAGE_VERSION = 44;
+const RESTORABLE_STORAGE_VERSIONS = new Set([30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44]);
 const ACTOR_AUDIO_DB_NAME = "podcast_audio_composer_assets_v1";
 const ACTOR_AUDIO_DB_STORE = "audio_files";
 const DEFAULT_MICRO_STEP_SEC = 0.5;
@@ -1072,6 +1072,48 @@ function findTimelinePosition(blocks = [], virtualTimeSec = 0) {
   return null;
 }
 
+function getBrokenPhraseRepairKey(item = {}) {
+  return [item?.blockId, item?.savedClipId, item?.insertedPhraseId, item?.sourceAudioId]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean)
+    .join("::") || createId("broken_phrase");
+}
+
+function getBrokenPhraseLabel(item = {}) {
+  return String(
+    item?.label
+    || item?.savedClipLabel
+    || item?.insertedPhraseLabel
+    || item?.savedClipId
+    || item?.insertedPhraseId
+    || item?.blockId
+    || "Фраза"
+  ).trim() || "Фраза";
+}
+
+function buildActorPhraseRepairOptions(actorAudios = []) {
+  return (Array.isArray(actorAudios) ? actorAudios : []).flatMap((actor) => {
+    const actorId = String(actor?.id || "").trim();
+    if (!actorId) return [];
+    return (Array.isArray(actor?.blocks) ? actor.blocks : []).map((block, index) => {
+      const blockId = String(block?.id || "").trim();
+      if (!blockId) return null;
+      const duration = getBlockDuration(block);
+      if (duration <= 0) return null;
+      const actorLabel = String(actor?.label || actor?.name || actor?.filename || actorId).trim() || actorId;
+      return {
+        value: `${actorId}::${blockId}`,
+        actorId,
+        blockId,
+        actor,
+        block,
+        label: `${actorLabel} · блок ${index + 1} · ${formatTimer(duration)}`,
+        duration,
+      };
+    }).filter(Boolean);
+  });
+}
+
 function splitBlockAtTime(blocks = [], timeSec = 0, selectedBlockId = null) {
   const position = findTimelinePosition(blocks, timeSec);
   if (!position) return null;
@@ -1498,6 +1540,9 @@ export default function PodcastAudioComposerPage() {
   const [guideJsonDialog, setGuideJsonDialog] = useState(null);
   const [phrasePreview, setPhrasePreview] = useState({ clipId: "", positionSec: 0, isPlaying: false });
   const [message, setMessage] = useState("");
+  const [brokenPhrases, setBrokenPhrases] = useState([]);
+  const [repairSelections, setRepairSelections] = useState({});
+  const [repairBusyKey, setRepairBusyKey] = useState("");
   const [hasHydrated, setHasHydrated] = useState(false);
   const [finalAudioBusy, setFinalAudioBusy] = useState("");
 
@@ -1603,6 +1648,9 @@ export default function PodcastAudioComposerPage() {
     setSaveClipDialog(null);
     setGuideJsonDialog(null);
     setMessage("");
+    setBrokenPhrases([]);
+    setRepairSelections({});
+    setRepairBusyKey("");
     setHasHydrated(false);
     hydratedRef.current = false;
     currentBlockIndexRef.current = 0;
@@ -1867,6 +1915,156 @@ export default function PodcastAudioComposerPage() {
     seekOnTimeline(snapshot.startSec, nextBlocks);
     setBlockMenu(null);
     setMessage(`Выбранный блок заменён тишиной ${formatTimer(snapshot.durationSec)}. Дальше её длину можно подгонять доводчиком.`);
+  };
+
+  const repairOptions = useMemo(() => buildActorPhraseRepairOptions(actorAudios), [actorAudios]);
+
+  const removeBrokenPhraseFromPanel = (item = {}) => {
+    const key = getBrokenPhraseRepairKey(item);
+    setBrokenPhrases((rows) => rows.filter((row) => getBrokenPhraseRepairKey(row) !== key));
+    setRepairSelections((items) => {
+      const next = { ...(items || {}) };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const selectBrokenPhraseOnTimeline = (item = {}) => {
+    const blockId = String(item?.blockId || "").trim();
+    const index = blocks.findIndex((block) => String(block?.id || "").trim() === blockId);
+    if (index < 0) {
+      setMessage(`Не нашёл блок ${blockId || "фразы"} на таймлайне.`);
+      return;
+    }
+    const startSec = getBlockVirtualStart(blocks, index);
+    setSelectedBlockId(blocks[index].id);
+    seekOnTimeline(startSec, blocks);
+    setBlockMenu(null);
+    setMessage(`Найдена сломанная фраза “${getBrokenPhraseLabel(item)}” на ${formatTimer(startSec)}.`);
+  };
+
+  const deleteBrokenPhraseInsertion = (item = {}) => {
+    const blockId = String(item?.blockId || "").trim();
+    if (!blockId) return;
+    const result = deleteBlockAndMark(blocks, blockId, deletionMarkers);
+    if (!result) {
+      setMessage(`Не удалось удалить вставку “${getBrokenPhraseLabel(item)}”.`);
+      return;
+    }
+    pushHistory("delete_broken_phrase");
+    setBlocks(result.blocks);
+    setDeletionMarkers(result.deletionMarkers);
+    setSelectedBlockId(result.blocks[0]?.id || "");
+    seekOnTimeline(result.nextTimeSec, result.blocks);
+    removeBrokenPhraseFromPanel(item);
+    setMessage(`Удалена вставка сломанной фразы “${getBrokenPhraseLabel(item)}”.`);
+  };
+
+  const getSelectedRepairOptionValue = (item = {}) => {
+    const key = getBrokenPhraseRepairKey(item);
+    const explicit = String(repairSelections?.[key] || "").trim();
+    if (explicit) return explicit;
+    const selectedActor = (Array.isArray(actorAudios) ? actorAudios : []).find((actor) => String(actor?.selectedBlockId || "").trim());
+    if (selectedActor?.id && selectedActor?.selectedBlockId) return `${selectedActor.id}::${selectedActor.selectedBlockId}`;
+    return repairOptions[0]?.value || "";
+  };
+
+  const replaceBrokenPhraseWithActorBlock = async (item = {}) => {
+    const key = getBrokenPhraseRepairKey(item);
+    const optionValue = getSelectedRepairOptionValue(item);
+    const option = repairOptions.find((candidate) => candidate.value === optionValue);
+    if (!option?.actor || !option?.block) {
+      setMessage("Добавь аудио актёра, выбери в нём блок и затем замени сломанную фразу.");
+      return;
+    }
+
+    const blockId = String(item?.blockId || "").trim();
+    const blockIndex = blocks.findIndex((block) => String(block?.id || "").trim() === blockId);
+    if (blockIndex < 0) {
+      setMessage(`Не нашёл блок ${blockId || "фразы"} на таймлайне.`);
+      return;
+    }
+
+    const targetBlock = blocks[blockIndex];
+    const label = getBrokenPhraseLabel(item);
+    const duration = getBlockDuration(option.block);
+    if (duration <= 0) {
+      setMessage("Выбранный блок актёрского аудио пустой.");
+      return;
+    }
+
+    setRepairBusyKey(key);
+    setMessage(`Сохраняю новую независимую фразу “${label}”...`);
+    try {
+      const baseClip = {
+        id: String(item?.savedClipId || item?.insertedPhraseId || targetBlock?.saved_clip_id || targetBlock?.inserted_phrase_id || createId("saved_clip")).trim(),
+        label,
+        type: "audio",
+        source_audio_id: option.actorId,
+        source_url: option.actor.url,
+        source_name: option.actor.name || option.actor.filename || option.actorId,
+        source_start_sec: roundSeconds(option.block.source_start_sec),
+        source_end_sec: roundSeconds(option.block.source_end_sec),
+        duration_sec: duration,
+        color_index: Number.isInteger(targetBlock?.color_index) ? targetBlock.color_index : option.block.color_index,
+        color: targetBlock?.color || option.block.color || option.actor.color,
+        source_label: option.actor.label || option.actor.name || option.actorId,
+        repair_source_audio_id: String(item?.sourceAudioId || targetBlock?.source_audio_id || "").trim(),
+        created_at: Date.now(),
+      };
+      const converted = await makeIndependentSavedClip({ clip: baseClip, actor: option.actor, block: option.block, label });
+      const sourceUrl = converted.source_url || converted.asset_url || converted.assetUrl || converted.server_url || converted.publicUrl || "";
+      const newDuration = roundSeconds(converted.duration_sec || duration);
+
+      pushHistory("repair_broken_phrase");
+      setSavedClips((clips) => {
+        const ids = new Set([converted.id, item?.savedClipId, item?.insertedPhraseId].map((value) => String(value || "").trim()).filter(Boolean));
+        let replaced = false;
+        const next = (Array.isArray(clips) ? clips : []).map((clip) => {
+          const clipIds = [clip?.id, clip?.saved_clip_id, clip?.inserted_phrase_id].map((value) => String(value || "").trim());
+          if (!clipIds.some((id) => ids.has(id))) return clip;
+          replaced = true;
+          return { ...clip, ...converted };
+        });
+        return replaced ? next : [...next, converted];
+      });
+
+      const nextBlocks = blocks.map((block, index) => {
+        if (index !== blockIndex) return block;
+        return {
+          ...block,
+          type: "phrase",
+          block_kind: "phrase",
+          source_audio_id: converted.id,
+          source_url: sourceUrl,
+          asset_url: converted.asset_url || sourceUrl,
+          assetUrl: converted.assetUrl || sourceUrl,
+          server_url: converted.server_url || sourceUrl,
+          publicUrl: converted.publicUrl || sourceUrl,
+          source_name: converted.source_name || converted.filename || label,
+          source_start_sec: 0,
+          source_end_sec: newDuration,
+          duration_sec: newDuration,
+          saved_clip_id: converted.id,
+          inserted_phrase_id: converted.id,
+          saved_clip_label: converted.label || label,
+          inserted_phrase_label: converted.label || label,
+          phrase_label: converted.label || label,
+          block_label: converted.label || label,
+          original_source_audio_id: String(item?.sourceAudioId || block?.source_audio_id || "").trim(),
+        };
+      });
+      setBlocks(nextBlocks);
+      setSelectedBlockId(nextBlocks[blockIndex]?.id || "");
+      seekOnTimeline(getBlockVirtualStart(nextBlocks, blockIndex), nextBlocks);
+      removeBrokenPhraseFromPanel(item);
+      setMessage(`Фраза “${label}” заменена независимым asset ${formatTimer(newDuration)}.`);
+    } catch (error) {
+      console.error("[PODCAST BROKEN PHRASE REPAIR_FAILED]", error);
+      setMessage(`Не удалось заменить фразу “${label}”: ${error?.message || error}`);
+    } finally {
+      setRepairBusyKey("");
+    }
   };
 
   const replaceSelectedWithSavedClip = (clip) => {
@@ -3063,12 +3261,9 @@ export default function PodcastAudioComposerPage() {
           }
         }
 
-        const matchingActor = findActorAudioByLogicalLabel({ savedClip, block, actorAudios: nextActorAudios });
-        const matchingActorUrl = getActorServerSourceUrl(matchingActor || {});
-        if (matchingActorUrl) {
-          rememberRecoveredSource({ legacySourceAudioId, sourceUrl: matchingActorUrl, recoveredFrom: "actor_label_match", savedClip, block });
-          break;
-        }
+        // Do not silently bind a broken legacy phrase to a newly added actor track by label.
+        // The user must explicitly pick the replacement block so we can extract a new
+        // independent saved phrase asset instead of rendering from the old actor source.
       }
 
       registry = buildPodcastSourceRegistry({ actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks, legacySourceUrlByActorId });
@@ -3149,6 +3344,7 @@ export default function PodcastAudioComposerPage() {
         console.log("[PODCAST RENDER BLOCK SOURCE MAP]", sourceMap);
         if (!sourceUrl) {
           const missing = {
+            label: getBrokenPhraseLabel({ ...block, savedClipLabel: block?.saved_clip_label || resolved.savedClip?.label || "", insertedPhraseLabel: block?.inserted_phrase_label || "" }),
             blockId: sourceMap.blockId,
             sourceAudioId: sourceId,
             savedClipId: sourceMap.savedClipId,
@@ -3168,10 +3364,13 @@ export default function PodcastAudioComposerPage() {
     });
 
     if (missingSources.length) {
+      setBrokenPhrases(missingSources);
       const firstMissing = missingSources[0];
-      const label = String(firstMissing.savedClipLabel || firstMissing.insertedPhraseLabel || firstMissing.savedClipId || firstMissing.insertedPhraseId || firstMissing.blockId || "без id").trim();
-      throw new Error(`Не найден исходный файл для сохранённой фразы ${label}. Пересохрани эту фразу из аудио актёра. blockId=${firstMissing.blockId || ""} savedClipId=${firstMissing.savedClipId || ""}`);
+      const label = getBrokenPhraseLabel(firstMissing);
+      throw new Error(`Найдены сломанные фразы: ${missingSources.length}. Открой панель “Broken phrases”, заново добавь аудио актёра и явно замени каждую фразу. Первая: ${label}. blockId=${firstMissing.blockId || ""} savedClipId=${firstMissing.savedClipId || ""}`);
     }
+
+    setBrokenPhrases([]);
 
     console.log("[PODCAST TO TIMING RENDER_TO_ASSET_START]", {
       originalAudioUrl: String(audio.url || ""),
@@ -3715,6 +3914,61 @@ export default function PodcastAudioComposerPage() {
           </div>
 
           {message ? <div className="podcastComposerInlineMessage">{message}</div> : null}
+
+          {brokenPhrases.length ? (
+            <section className="podcastBrokenPhrasesPanel" aria-label="Broken phrases">
+              <div className="podcastBrokenPhrasesHeader">
+                <div>
+                  <p>Broken phrases</p>
+                  <h2>Нужно восстановить сохранённые фразы</h2>
+                </div>
+                <button type="button" onClick={() => actorAudioInputRef.current?.click()}>＋ заново добавить аудио актёра</button>
+              </div>
+              <p className="podcastBrokenPhrasesNote">
+                Эти блоки ссылаются на удалённое старое actor audio. Composer не будет подставлять исходное дикторское аудио и не удалит вставки автоматически: выбери блок в заново добавленном аудио актёра и создай новую независимую сохранённую фразу.
+              </p>
+              <div className="podcastBrokenPhrasesList">
+                {brokenPhrases.map((phrase) => {
+                  const key = getBrokenPhraseRepairKey(phrase);
+                  const selectedOption = getSelectedRepairOptionValue(phrase);
+                  const busy = repairBusyKey === key;
+                  return (
+                    <article className="podcastBrokenPhraseCard" key={key}>
+                      <div className="podcastBrokenPhraseMeta">
+                        <strong>{getBrokenPhraseLabel(phrase)}</strong>
+                        <dl>
+                          <div><dt>blockId</dt><dd>{phrase.blockId || "—"}</dd></div>
+                          <div><dt>savedClipId</dt><dd>{phrase.savedClipId || phrase.insertedPhraseId || "—"}</dd></div>
+                          <div><dt>old sourceAudioId</dt><dd>{phrase.sourceAudioId || "—"}</dd></div>
+                        </dl>
+                      </div>
+                      <div className="podcastBrokenPhraseRepairControls">
+                        <label>
+                          новый блок актёра
+                          <select
+                            value={selectedOption}
+                            onChange={(event) => setRepairSelections((items) => ({ ...(items || {}), [key]: event.target.value }))}
+                            disabled={!repairOptions.length || busy}
+                          >
+                            {repairOptions.length ? repairOptions.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            )) : <option value="">Добавь/нарежь аудио актёра</option>}
+                          </select>
+                        </label>
+                        <div className="podcastBrokenPhraseActions">
+                          <button type="button" onClick={() => selectBrokenPhraseOnTimeline(phrase)}>Найти на таймлайне</button>
+                          <button className="podcastBrokenPhraseReplace" type="button" onClick={() => replaceBrokenPhraseWithActorBlock(phrase)} disabled={!repairOptions.length || busy}>
+                            {busy ? "Сохраняю..." : "Заменить новой фразой"}
+                          </button>
+                          <button className="podcastBrokenPhraseDelete" type="button" onClick={() => deleteBrokenPhraseInsertion(phrase)} disabled={busy}>Удалить вставку</button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
 
           {guideJsonDialog ? (
             <div className="podcastGuideJsonDialog" onClick={(event) => event.stopPropagation()}>
