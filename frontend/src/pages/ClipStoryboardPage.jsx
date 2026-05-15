@@ -6325,6 +6325,88 @@ function extractStoryboardScenesFromNodes(nodes = []) {
   return [];
 }
 
+
+const ASSEMBLY_AUDIO_MODES = new Set(["video_only", "scene_audio", "master_audio", "mix_master_scene"]);
+const ASSEMBLY_AUDIO_MODE_ALIASES = {
+  master_plus_scene_audio: "mix_master_scene",
+  scene_audio_only: "scene_audio",
+  silent_video_only: "video_only",
+};
+const ASSEMBLY_LOCAL_SETTINGS_FIELDS = [
+  "assemblyAudioMode",
+  "sceneAudioGainDb",
+  "masterAudioGainDb",
+  "assemblySettingsUpdatedAt",
+  "assemblySettingsRevision",
+  "assemblySettingsDirty",
+  "assemblySettingsChangedAt",
+];
+const ASSEMBLY_RESULT_STATE_FIELDS = [
+  "result",
+  "assemblyJobId",
+  "status",
+  "isAssembling",
+  "progressPercent",
+  "assemblyStage",
+  "assemblyStageLabel",
+  "assemblyStageCurrent",
+  "assemblyStageTotal",
+  "isStale",
+];
+const ASSEMBLY_STALE_REFRESH_REASONS = new Set([
+  "manual-director-board:event-update",
+  "manual-timing:embedded-director-board-update",
+  "video_poll_running",
+  "video_poll_queued",
+]);
+
+function normalizeAssemblyAudioMode(mode = "master_audio") {
+  const requestedMode = String(ASSEMBLY_AUDIO_MODE_ALIASES[String(mode || "")] || mode || "").trim();
+  return ASSEMBLY_AUDIO_MODES.has(requestedMode) ? requestedMode : "master_audio";
+}
+
+function getAssemblySettingsUpdatedAt(data = {}) {
+  const value = Number(data?.assemblySettingsUpdatedAt ?? data?.assemblySettingsChangedAt ?? data?.updatedAt ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function mergeAssemblyNodeDataPreservingFreshLocal(currentData = {}, incomingPatch = {}, options = {}) {
+  const traceReason = String(options?.traceReason || "").trim();
+  const currentUpdatedAt = getAssemblySettingsUpdatedAt(currentData);
+  const incomingUpdatedAt = getAssemblySettingsUpdatedAt(incomingPatch);
+  const shouldPreserveFreshLocal = currentUpdatedAt > 0 && incomingUpdatedAt > 0 && incomingUpdatedAt < currentUpdatedAt;
+  const shouldPreserveForBackgroundRefresh = ASSEMBLY_STALE_REFRESH_REASONS.has(traceReason) || /^manual-timing:/.test(traceReason) || /^manual-director-board:/.test(traceReason);
+  const nextData = { ...(currentData || {}), ...(incomingPatch || {}) };
+
+  if (shouldPreserveFreshLocal || shouldPreserveForBackgroundRefresh) {
+    ASSEMBLY_LOCAL_SETTINGS_FIELDS.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(currentData || {}, field)) nextData[field] = currentData[field];
+    });
+    if (currentData?.assemblyAudioMode) nextData.assemblyAudioMode = normalizeAssemblyAudioMode(currentData.assemblyAudioMode);
+    if (Number.isFinite(Number(currentData?.sceneAudioGainDb))) nextData.sceneAudioGainDb = Number(currentData.sceneAudioGainDb);
+    if (Number.isFinite(Number(currentData?.masterAudioGainDb))) nextData.masterAudioGainDb = Number(currentData.masterAudioGainDb);
+  }
+
+  if (shouldPreserveFreshLocal && typeof console !== "undefined") {
+    console.warn("[ASSEMBLY NODE HYDRATE SKIP_STALE]", {
+      nodeId: String(options?.nodeId || ""),
+      incomingUpdatedAt,
+      currentUpdatedAt,
+      preservedMode: normalizeAssemblyAudioMode(currentData?.assemblyAudioMode),
+      incomingMode: normalizeAssemblyAudioMode(incomingPatch?.assemblyAudioMode),
+      reason: traceReason || "assembly_patch_stale",
+    });
+  }
+
+  if (shouldPreserveForBackgroundRefresh || currentData?.isAssembling || String(currentData?.status || "") === "building" || String(currentData?.assemblyJobId || "").trim()) {
+    ASSEMBLY_RESULT_STATE_FIELDS.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(currentData || {}, field)) nextData[field] = currentData[field];
+    });
+  }
+
+  return nextData;
+}
+
 function normalizeComfyScenesForAssembly(scenes = [], fallbackFormat = DEFAULT_SCENE_IMAGE_FORMAT) {
   return normalizeSceneCollectionWithSceneId(scenes, "comfy_scene").map((scene, idx) => {
     const durationFromScene = normalizeDurationSec(scene?.durationSec);
@@ -11862,44 +11944,77 @@ useEffect(() => {
 }, [getManualBoardCanonicalModeReason, isLegacyScenarioStoryboardNodeForManualTiming, nodes, removeLegacyScenarioStoryboardNodes]);
 
 const updateAssemblyAudioMode = useCallback((mode) => {
-  const aliasMap = {
-    master_plus_scene_audio: "mix_master_scene",
-    scene_audio_only: "scene_audio",
-    silent_video_only: "video_only",
-  };
-  const requestedMode = aliasMap[mode] || mode;
-  const safeMode = ["video_only", "scene_audio", "master_audio", "mix_master_scene"].includes(requestedMode)
-    ? requestedMode
-    : "master_audio";
+  const safeMode = normalizeAssemblyAudioMode(mode);
+  const changedAt = Date.now();
 
-  setNodes((prev) => prev.map((node) => (
-    node.type === "assemblyNode"
-      ? {
-        ...node,
-        data: {
-          ...(node.data || {}),
-          assemblyAudioMode: safeMode,
-          sceneAudioGainDb: Number(node.data?.sceneAudioGainDb ?? -14),
-          masterAudioGainDb: Number(node.data?.masterAudioGainDb ?? 0),
-        },
-      }
-      : node
-  )));
+  setNodes((prev) => prev.map((node) => {
+    if (node.type !== "assemblyNode") return node;
+    const previousValue = normalizeAssemblyAudioMode(node.data?.assemblyAudioMode || "master_audio");
+    console.info("[ASSEMBLY SETTINGS CHANGE]", {
+      nodeId: node.id,
+      field: "assemblyAudioMode",
+      value: safeMode,
+      previousValue,
+      reason: "user_mode_select",
+    });
+    if (node.data?.isAssembling || String(node.data?.status || "") === "building" || String(node.data?.assemblyJobId || "").trim()) {
+      console.info("[ASSEMBLY AUTO_START BLOCKED]", {
+        nodeId: node.id,
+        reason: "settings_changed_while_assembly_running",
+        changedField: "assemblyAudioMode",
+      });
+    }
+    return {
+      ...node,
+      data: {
+        ...(node.data || {}),
+        assemblyAudioMode: safeMode,
+        sceneAudioGainDb: Number(node.data?.sceneAudioGainDb ?? -14),
+        masterAudioGainDb: Number(node.data?.masterAudioGainDb ?? 0),
+        assemblySettingsUpdatedAt: changedAt,
+        assemblySettingsChangedAt: changedAt,
+        assemblySettingsRevision: (Number(node.data?.assemblySettingsRevision || 0) || 0) + 1,
+        assemblySettingsDirty: true,
+        isStale: previousValue !== safeMode ? true : node.data?.isStale,
+      },
+    };
+  }));
 }, [setNodes]);
 const updateAssemblyGain = useCallback((field, value) => {
   const numericValue = Number(value);
   const fallback = field === "sceneAudioGainDb" ? -14 : 0;
-  setNodes((prev) => prev.map((node) => (
-    node.type === "assemblyNode"
-      ? {
-        ...node,
-        data: {
-          ...(node.data || {}),
-          [field]: Number.isFinite(numericValue) ? numericValue : fallback,
-        },
-      }
-      : node
-  )));
+  const nextValue = Number.isFinite(numericValue) ? numericValue : fallback;
+  const changedAt = Date.now();
+  setNodes((prev) => prev.map((node) => {
+    if (node.type !== "assemblyNode") return node;
+    const previousValue = Number(node.data?.[field] ?? fallback);
+    console.info("[ASSEMBLY SETTINGS CHANGE]", {
+      nodeId: node.id,
+      field,
+      value: nextValue,
+      previousValue,
+      reason: "user_mode_select",
+    });
+    if (node.data?.isAssembling || String(node.data?.status || "") === "building" || String(node.data?.assemblyJobId || "").trim()) {
+      console.info("[ASSEMBLY AUTO_START BLOCKED]", {
+        nodeId: node.id,
+        reason: "settings_changed_while_assembly_running",
+        changedField: field,
+      });
+    }
+    return {
+      ...node,
+      data: {
+        ...(node.data || {}),
+        [field]: nextValue,
+        assemblySettingsUpdatedAt: changedAt,
+        assemblySettingsChangedAt: changedAt,
+        assemblySettingsRevision: (Number(node.data?.assemblySettingsRevision || 0) || 0) + 1,
+        assemblySettingsDirty: true,
+        isStale: previousValue !== nextValue ? true : node.data?.isStale,
+      },
+    };
+  }));
 }, [setNodes]);
 const updateAssemblySceneAudioGainDb = useCallback((value) => updateAssemblyGain("sceneAudioGainDb", value), [updateAssemblyGain]);
 const updateAssemblyMasterAudioGainDb = useCallback((value) => updateAssemblyGain("masterAudioGainDb", value), [updateAssemblyGain]);
@@ -20283,8 +20398,7 @@ Aspect ratio: ${imageFormat}`,
     [nodes]
   );
   const rawAssemblyAudioMode = String(assemblyGraphNode?.data?.assemblyAudioMode || "master_audio");
-  const assemblyAudioModeAliasMap = { master_plus_scene_audio: "mix_master_scene", scene_audio_only: "scene_audio", silent_video_only: "video_only" };
-  const assemblyAudioMode = assemblyAudioModeAliasMap[rawAssemblyAudioMode] || rawAssemblyAudioMode;
+  const assemblyAudioMode = normalizeAssemblyAudioMode(rawAssemblyAudioMode);
   const sceneAudioGainDb = Number.isFinite(Number(assemblyGraphNode?.data?.sceneAudioGainDb)) ? Number(assemblyGraphNode?.data?.sceneAudioGainDb) : -14;
   const masterAudioGainDb = Number.isFinite(Number(assemblyGraphNode?.data?.masterAudioGainDb)) ? Number(assemblyGraphNode?.data?.masterAudioGainDb) : 0;
   const assemblyIntroFrame = assemblySource.introFrame;
@@ -20421,6 +20535,9 @@ Aspect ratio: ${imageFormat}`,
     assemblyAudioModeLabel,
     sceneAudioGainDb,
     masterAudioGainDb,
+    assemblyGraphNode?.data?.assemblySettingsUpdatedAt,
+    assemblyGraphNode?.data?.assemblySettingsRevision,
+    assemblyGraphNode?.data?.assemblySettingsDirty,
     assemblyHasIntro,
     assemblyIntroAddsDuration,
     assemblyIntroDurationSec,
@@ -20497,7 +20614,20 @@ Aspect ratio: ${imageFormat}`,
 
     lastAssemblyPayloadSignatureRef.current = assemblyPayloadSignature;
 
-    if (isAssembling) return;
+    if (isAssembling) {
+      console.info("[ASSEMBLY AUTO_START BLOCKED]", {
+        nodeId: assemblyNodeId,
+        reason: "payload_changed_while_assembly_running",
+        changedField: "assemblyPayloadSignature",
+      });
+      return;
+    }
+
+    console.info("[ASSEMBLY AUTO_START BLOCKED]", {
+      nodeId: assemblyNodeId,
+      reason: "payload_changed_requires_explicit_click",
+      changedField: "assemblyPayloadSignature",
+    });
 
     setAssemblyError("");
     setAssemblyInfo("");
@@ -20509,7 +20639,7 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyStageLabel("");
     setAssemblyStageCurrent(0);
     setAssemblyStageTotal(0);
-  }, [assemblyPayloadSignature, isAssembling]);
+  }, [assemblyNodeId, assemblyPayloadSignature, isAssembling]);
 
   const stopAssemblyPolling = useCallback(() => {
     assemblyPollingActiveRef.current = false;
@@ -20627,6 +20757,11 @@ Aspect ratio: ${imageFormat}`,
     setAssemblyBuildState("building");
 
     try {
+      console.info("[ASSEMBLY START EXPLICIT]", {
+        nodeId: assemblyNodeId,
+        assemblyAudioMode,
+        sceneCount: assemblyPayload.scenes.length,
+      });
       const assembleUrl = API_BASE ? `${API_BASE}/api/clip/assemble` : "/api/clip/assemble";
       const res = await fetch(assembleUrl, {
         method: "POST",
@@ -20662,7 +20797,7 @@ Aspect ratio: ${imageFormat}`,
         assemblyAbortControllerRef.current = null;
       }
     }
-  }, [assemblyPayload, isAssembling, startAssemblyPolling]);
+  }, [assemblyAudioMode, assemblyNodeId, assemblyPayload, isAssembling, startAssemblyPolling]);
 
   const handleAssemblyStop = useCallback(() => {
     assemblyAbortControllerRef.current?.abort();
@@ -20729,6 +20864,9 @@ Aspect ratio: ${imageFormat}`,
     assemblyAudioMode,
     sceneAudioGainDb,
     masterAudioGainDb,
+    assemblySettingsUpdatedAt: getAssemblySettingsUpdatedAt(assemblyGraphNode?.data || {}),
+    assemblySettingsRevision: Number(assemblyGraphNode?.data?.assemblySettingsRevision || 0) || 0,
+    assemblySettingsDirty: !!assemblyGraphNode?.data?.assemblySettingsDirty,
     format: assemblyFormat,
     durationSec: assemblyDurationEstimateSec,
     scenesSource: assemblyScenesSource,
@@ -20771,6 +20909,9 @@ Aspect ratio: ${imageFormat}`,
     assemblyAudioModeLabel,
     sceneAudioGainDb,
     masterAudioGainDb,
+    assemblyGraphNode?.data?.assemblySettingsUpdatedAt,
+    assemblyGraphNode?.data?.assemblySettingsRevision,
+    assemblyGraphNode?.data?.assemblySettingsDirty,
     assemblyHasIntro,
     assemblyIntroAddsDuration,
     assemblyInfo,
@@ -20846,10 +20987,10 @@ Aspect ratio: ${imageFormat}`,
         didChange = true;
         return {
           ...n,
-          data: {
-            ...n.data,
-            ...assemblyNodeDataPatch,
-          },
+          data: mergeAssemblyNodeDataPreservingFreshLocal(n.data || {}, assemblyNodeDataPatch, {
+            nodeId: n.id,
+            traceReason: "assembly-node-sync",
+          }),
         };
       });
       if (!didChange) {
@@ -25546,10 +25687,10 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
         if (n.type === "assemblyNode") {
           return {
             ...base,
-            data: {
-              ...base.data,
-              ...assemblyNodeDataPatch,
-            },
+            data: mergeAssemblyNodeDataPreservingFreshLocal(base.data || {}, assemblyNodeDataPatch, {
+              nodeId: n.id,
+              traceReason,
+            }),
           };
         }
         if (n.type === "manualClipBoard") {
@@ -26845,7 +26986,7 @@ const hydrate = useCallback((source = "unknown") => {
       const hydratedAudioUrl = extractGlobalAudioUrlFromNodes(hydratedNodes);
       const hydratedAssemblyNode = hydratedNodes.find((node) => node?.type === "assemblyNode") || null;
       const hydratedRawAssemblyAudioMode = String(hydratedAssemblyNode?.data?.assemblyAudioMode || "master_audio");
-      const hydratedAssemblyAudioMode = ({ master_plus_scene_audio: "mix_master_scene", scene_audio_only: "scene_audio", silent_video_only: "video_only" }[hydratedRawAssemblyAudioMode]) || hydratedRawAssemblyAudioMode;
+      const hydratedAssemblyAudioMode = normalizeAssemblyAudioMode(hydratedRawAssemblyAudioMode);
       const hydratedSceneAudioGainDb = Number.isFinite(Number(hydratedAssemblyNode?.data?.sceneAudioGainDb)) ? Number(hydratedAssemblyNode?.data?.sceneAudioGainDb) : -14;
       const hydratedMasterAudioGainDb = Number.isFinite(Number(hydratedAssemblyNode?.data?.masterAudioGainDb)) ? Number(hydratedAssemblyNode?.data?.masterAudioGainDb) : 0;
       const hydratedMasterAudioUrl = hydratedAudioUrl || hydratedAssemblySource.audioUrl || "";

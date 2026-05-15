@@ -419,6 +419,8 @@ function persistManualProject(nextProject = {}, options = {}) {
 }
 
 function dispatchManualDirectorBoardUpdate(sourceNodeId = "", project = {}) {
+  const reason = String(project?.lastPersistReason || "").trim();
+  if (isManualPollLocalOnlyReason(reason)) return;
   const safeSourceNodeId = String(sourceNodeId || project?.sourceNodeId || project?.nodeId || "").trim();
   if (!safeSourceNodeId || typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("manual-director-board:update", {
@@ -1530,6 +1532,7 @@ export default function ManualClipDirectorBoardEditor({
     }
     const safeProject = normalizeDirectorProjectOwner(candidateProject);
     const persistReason = options?.reason || safeProject.lastPersistReason || "manual_director_persist";
+    if (isManualPollLocalOnlyReason(persistReason)) return false;
     const persistOptions = { ...(options || {}), reason: persistReason, embedded };
 
     if (embedded && typeof onProjectChange === "function") {
