@@ -97,6 +97,8 @@ const NUDGE_STEPS = [-0.2, -0.1, -0.05, -0.02, 0.02, 0.05, 0.1, 0.2];
 const MANUAL_TIMING_NUDGE_DEFAULT_STEP_SEC = 0.5;
 const MANUAL_TIMING_INSERT_SILENCE_SEC = 0.5;
 const MANUAL_TIMING_MAX_SILENCE_SEC = 30;
+const MANUAL_TIMING_TIMELINE_MIN_WIDTH_PX = 1800;
+const MANUAL_TIMING_TIMELINE_PIXELS_PER_SECOND = 8;
 const SHOW_MISSING_PHRASE_TOOLS = false;
 const STORYBOARD_ROUTE = "/studio/storyboard";
 
@@ -1457,6 +1459,7 @@ export default function ManualTimingEditorPage() {
   const initialProjectRef = useRef(null);
   if (!initialProjectRef.current) initialProjectRef.current = buildInitialProject();
   const audioRef = useRef(null);
+  const timelineViewportRef = useRef(null);
   const timelineRef = useRef(null);
   const playUntilRef = useRef(null);
   const rafRef = useRef(null);
@@ -1476,6 +1479,8 @@ export default function ManualTimingEditorPage() {
   const [audioUploadStatus, setAudioUploadStatus] = useState("");
   const [handoffStatus, setHandoffStatus] = useState("");
   const [trackNudgeStepSec, setTrackNudgeStepSec] = useState(MANUAL_TIMING_NUDGE_DEFAULT_STEP_SEC);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
+  const [timelineScrollLeft, setTimelineScrollLeft] = useState(0);
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
   const [activeBoardProject, setActiveBoardProject] = useState(() => {
@@ -1596,6 +1601,14 @@ export default function ManualTimingEditorPage() {
   const selectedBoundaryIsInternal = selectedSceneIndex >= 0 && selectedSceneIndex < scenes.length - 1;
   const selectedSceneIsSilence = isManualTimingSilenceScene(selectedScene);
   const canUseTrackNudge = Boolean(selectedScene && (selectedSceneIsSilence || selectedBoundaryIsInternal));
+  const timelineWidthPx = Math.ceil(Math.max(
+    timelineViewportWidth || 0,
+    MANUAL_TIMING_TIMELINE_MIN_WIDTH_PX,
+    (durationSec || 0) * MANUAL_TIMING_TIMELINE_PIXELS_PER_SECOND
+  ));
+  const timelineInnerStyle = useMemo(() => ({
+    "--manual-timing-timeline-width": `${timelineWidthPx}px`,
+  }), [timelineWidthPx]);
   const playheadPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(currentTime || 0) / durationSec) * 100)) : 0;
   const lastCutPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(lastCutSec || 0) / durationSec) * 100)) : 0;
   const candidateWidthPercent = durationSec > 0 ? Math.max(0, Math.min(100 - lastCutPercent, ((Number(currentTime || 0) - Number(lastCutSec || 0)) / durationSec) * 100)) : 0;
@@ -1656,6 +1669,38 @@ export default function ManualTimingEditorPage() {
       };
     }).filter(Boolean);
   }, [durationSec, storyBlocks, scenes]);
+
+
+  useEffect(() => {
+    const viewport = timelineViewportRef.current;
+    if (!viewport) return undefined;
+
+    const updateViewportWidth = () => {
+      setTimelineViewportWidth(Math.round(viewport.getBoundingClientRect().width || 0));
+    };
+
+    updateViewportWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateViewportWidth);
+      return () => window.removeEventListener("resize", updateViewportWidth);
+    }
+
+    const observer = new ResizeObserver(updateViewportWidth);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    console.info("[MANUAL TIMING TIMELINE LAYOUT]", {
+      audioDurationSec: durationSec,
+      timelineWidthPx,
+      viewportWidth: timelineViewportWidth,
+      pixelsPerSecond: MANUAL_TIMING_TIMELINE_PIXELS_PER_SECOND,
+      sceneCount: scenes.length,
+      scrollLeft: timelineScrollLeft,
+    });
+  }, [durationSec, timelineWidthPx, timelineViewportWidth, scenes.length, timelineScrollLeft]);
 
   useEffect(() => {
     currentTimeRef.current = Number(currentTime || 0);
@@ -3684,6 +3729,10 @@ export default function ManualTimingEditorPage() {
     setAudioTime(time, { clearBound: true });
   };
 
+  const onTimelineViewportScroll = (event) => {
+    setTimelineScrollLeft(Math.round(event.currentTarget.scrollLeft || 0));
+  };
+
   const onTimelineSegmentClick = (event, scene) => {
     event.stopPropagation();
     selectSceneAndSeekStart(scene, { pause: true });
@@ -3816,64 +3865,75 @@ export default function ManualTimingEditorPage() {
             <div>верхняя полоса — story blocks · нижняя — сцены · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
           <div
-            className="manualTimingPlayerTrack"
-            ref={timelineRef}
-            onClick={onTimelineSeek}
-            role="button"
-            tabIndex={0}
-            title="Кликни по шкале, чтобы перейти к этому месту"
+            className="manualTimingTimelineViewport"
+            ref={timelineViewportRef}
+            onScroll={onTimelineViewportScroll}
           >
-            <div className="manualTimingUncutTrack" />
-            {timelineBlockRanges.length ? <div className="manualTimingBlockTrack" aria-label="смысловые блоки на шкале">
-              {timelineBlockRanges.map((blockRange) => <button
-                key={`player-block-${blockRange.block_id}`}
-                type="button"
-                className="manualTimingBlockRange"
-                style={getStoryBlockRangeStyle(blockRange)}
-                onClick={(event) => { event.stopPropagation(); onStoryBlockClick(blockRange); }}
-                title={`${blockRange.title}: ${formatTimingSec(blockRange.start_sec)} – ${formatTimingSec(blockRange.end_sec)}`}
+            <div
+              className="manualTimingTimelineInner"
+              style={timelineInnerStyle}
+            >
+              <div
+                className="manualTimingPlayerTrack"
+                ref={timelineRef}
+                onClick={onTimelineSeek}
+                role="button"
+                tabIndex={0}
+                title="Кликни по шкале, чтобы перейти к этому месту"
               >
-                <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
-              </button>)}
-            </div> : null}
-            {asrPhraseMarkers.length ? <div className="manualTimingPhraseTrack" aria-label="ASR phrase markers">
-              {asrPhraseMarkers.map((phrase) => <button
-                key={`phrase-marker-${phrase.phrase_id}`}
-                type="button"
-                className="manualTimingPhraseMarker"
-                style={phrase.style}
-                onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }}
-                title={`${phrase.phrase_id}: ${formatTimingSec(phrase.start_sec)} – ${formatTimingSec(phrase.end_sec)} · ${phrase.text_en || "ASR phrase"}`}
-              />)}
-            </div> : null}
-            {scenes.map((scene, idx) => {
-              const isOpenTail = scene.scene_id === openTailSceneId;
-              const isActive = selectedScene?.scene_id === scene.scene_id;
-              const durationWarning = getManualTimingSceneDurationWarning(scene);
-              const isSilence = isManualTimingSilenceScene(scene);
-              return <button
-                key={`player-${scene.scene_id}`}
-                className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isSilence ? "isSilence" : ""} ${isActive ? "isActive" : ""}`}
-                style={getSegmentStyle(scene, idx)}
-                onClick={(event) => onTimelineSegmentClick(event, scene)}
-                onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
-                title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${isSilence ? " · тишина" : ""}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
-              >
-                <span>
-                  {isSilence ? "тишина" : scene.scene_id}
-                  {isActive ? <small>{formatTimingSec(Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)))}</small> : null}
-                </span>
-              </button>;
-            })}
-            {candidateWidthPercent > 0.1 ? <div
-              className="manualTimingCandidateRange"
-              style={{ left: `${lastCutPercent}%`, width: `${candidateWidthPercent}%` }}
-              title={`Следующий отрезок: ${formatTimingSec(lastCutSec)} – ${formatTimingSec(currentTime)}`}
-            /> : null}
-            {markerPercents.map((marker) => <div key={"player-marker-" + marker.value} className="manualTimingPlayerMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
-            <div className="manualTimingLastCutLine" style={{ left: `${lastCutPercent}%` }} title={`Старт следующего отрезка: ${formatTimingSec(lastCutSec)}`} />
-            <div className="manualTimingPlayhead" style={{ left: `${playheadPercent}%` }}>
-              <span>{formatTimingSec(currentTime)}</span>
+                <div className="manualTimingUncutTrack" />
+                {timelineBlockRanges.length ? <div className="manualTimingBlockTrack" aria-label="смысловые блоки на шкале">
+                  {timelineBlockRanges.map((blockRange) => <button
+                    key={`player-block-${blockRange.block_id}`}
+                    type="button"
+                    className="manualTimingBlockRange"
+                    style={getStoryBlockRangeStyle(blockRange)}
+                    onClick={(event) => { event.stopPropagation(); onStoryBlockClick(blockRange); }}
+                    title={`${blockRange.title}: ${formatTimingSec(blockRange.start_sec)} – ${formatTimingSec(blockRange.end_sec)}`}
+                  >
+                    <span className="manualTimingBlockRangeLabel">{blockRange.title}</span>
+                  </button>)}
+                </div> : null}
+                {asrPhraseMarkers.length ? <div className="manualTimingPhraseTrack" aria-label="ASR phrase markers">
+                  {asrPhraseMarkers.map((phrase) => <button
+                    key={`phrase-marker-${phrase.phrase_id}`}
+                    type="button"
+                    className="manualTimingPhraseMarker"
+                    style={phrase.style}
+                    onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }}
+                    title={`${phrase.phrase_id}: ${formatTimingSec(phrase.start_sec)} – ${formatTimingSec(phrase.end_sec)} · ${phrase.text_en || "ASR phrase"}`}
+                  />)}
+                </div> : null}
+                {scenes.map((scene, idx) => {
+                  const isOpenTail = scene.scene_id === openTailSceneId;
+                  const isActive = selectedScene?.scene_id === scene.scene_id;
+                  const durationWarning = getManualTimingSceneDurationWarning(scene);
+                  const isSilence = isManualTimingSilenceScene(scene);
+                  return <button
+                    key={`player-${scene.scene_id}`}
+                    className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isSilence ? "isSilence" : ""} ${isActive ? "isActive" : ""}`}
+                    style={getSegmentStyle(scene, idx)}
+                    onClick={(event) => onTimelineSegmentClick(event, scene)}
+                    onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
+                    title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${isSilence ? " · тишина" : ""}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
+                  >
+                    <span>
+                      {isSilence ? "тишина" : scene.scene_id}
+                      {isActive ? <small>{formatTimingSec(Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)))}</small> : null}
+                    </span>
+                  </button>;
+                })}
+                {candidateWidthPercent > 0.1 ? <div
+                  className="manualTimingCandidateRange"
+                  style={{ left: `${lastCutPercent}%`, width: `${candidateWidthPercent}%` }}
+                  title={`Следующий отрезок: ${formatTimingSec(lastCutSec)} – ${formatTimingSec(currentTime)}`}
+                /> : null}
+                {markerPercents.map((marker) => <div key={"player-marker-" + marker.value} className="manualTimingPlayerMarker" style={{ left: marker.left }} title={formatTimingSec(marker.value)} />)}
+                <div className="manualTimingLastCutLine" style={{ left: `${lastCutPercent}%` }} title={`Старт следующего отрезка: ${formatTimingSec(lastCutSec)}`} />
+                <div className="manualTimingPlayhead" style={{ left: `${playheadPercent}%` }}>
+                  <span>{formatTimingSec(currentTime)}</span>
+                </div>
+              </div>
             </div>
           </div>
           <div className="manualTimingPlayerLegend">
