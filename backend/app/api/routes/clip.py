@@ -17562,6 +17562,7 @@ def clip_assemble(payload: AssembleClipIn):
         )
 
     job_id = uuid4().hex
+    assembly_audio_mode = _normalize_assembly_audio_mode(payload)
     scene_count = len(scenes)
     has_intro = _has_valid_intro_image(payload.intro)
     intro_steps = 1 if has_intro else 0
@@ -17583,6 +17584,13 @@ def clip_assemble(payload: AssembleClipIn):
             "progressPercent": 0,
             "finalVideoUrl": None,
             "audioApplied": False,
+            "assemblyAudioMode": assembly_audio_mode,
+            "audioAssemblyMode": assembly_audio_mode,
+            "effectiveAssemblyAudioMode": assembly_audio_mode,
+            "sceneAudioMixApplied": False,
+            "sceneAudioMixCount": 0,
+            "sceneAudioDetectedCount": 0,
+            "sceneAudioMissingCount": 0,
             "sceneCount": scene_count,
             "introIncluded": has_intro,
             "introDurationSec": intro_duration,
