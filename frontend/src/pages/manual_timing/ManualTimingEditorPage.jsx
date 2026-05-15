@@ -732,8 +732,30 @@ function getIncomingManualTimingProjectFromLocation(location = {}, fallbackProje
   );
   if (!hasIncomingAudio) return null;
   const safeOwnerNodeId = String(ownerNodeId || navState.sourceNodeId || rawProject.sourceNodeId || rawProject.nodeId || fallbackProject.sourceNodeId || fallbackProject.nodeId || "").trim();
-  const projectMode = String(rawProject.project_mode || navState.project_mode || (navState.fromPodcastComposer ? MANUAL_TIMING_PODCAST_DIALOGUE_MODE : fallbackProject.project_mode) || "").trim();
-  const projectKind = String(rawProject.project_kind || navState.project_kind || (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" : fallbackProject.project_kind) || "").trim();
+  const rawProjectMode = String(rawProject.project_mode || rawProject.projectMode || "").trim();
+  const navProjectMode = String(navState.project_mode || navState.projectMode || "").trim();
+  const fallbackProjectMode = String(fallbackProject.project_mode || fallbackProject.projectMode || "").trim();
+  const rawProjectKind = String(rawProject.project_kind || rawProject.projectKind || "").trim();
+  const navProjectKind = String(navState.project_kind || navState.projectKind || "").trim();
+  const fallbackProjectKind = String(fallbackProject.project_kind || fallbackProject.projectKind || "").trim();
+  const explicitProjectMode = rawProjectMode || navProjectMode || fallbackProjectMode;
+  const explicitProjectKind = rawProjectKind || navProjectKind || fallbackProjectKind;
+  const isExplicitPodcast = (
+    explicitProjectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE
+    || explicitProjectKind === "podcast"
+    || navState.forcePodcastMode === true
+  );
+  const projectMode = explicitProjectMode || (isExplicitPodcast ? MANUAL_TIMING_PODCAST_DIALOGUE_MODE : MANUAL_TIMING_STORY_VOICEOVER_MODE);
+  const projectKind = explicitProjectKind || (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" : MANUAL_TIMING_STORY_PROJECT_KIND);
+  console.info("[MANUAL TIMING PROJECT_MODE_RESOLVED]", {
+    fromPodcastComposer: navState.fromPodcastComposer === true,
+    rawProjectMode,
+    navProjectMode,
+    fallbackProjectMode,
+    resolvedProjectMode: projectMode,
+    resolvedProjectKind: projectKind,
+    isExplicitPodcast,
+  });
   const format = String(rawProject.format || rawProject.aspect_ratio || navState.format || navState.aspect_ratio || fallbackProject.format || fallbackProject.aspect_ratio || "9:16").trim();
   const baseProject = {
     ...fallbackProject,
@@ -746,6 +768,14 @@ function getIncomingManualTimingProjectFromLocation(location = {}, fallbackProje
     aspect_ratio: String(rawProject.aspect_ratio || rawProject.format || navState.aspect_ratio || navState.format || fallbackProject.aspect_ratio || fallbackProject.format || format || "9:16"),
   };
   const nextProject = buildManualTimingProjectForAudioChange(baseProject, incomingAudio, navState.fromPodcastComposer ? "podcast_audio_composer" : "incoming_audio");
+  const shouldPreserveStoryTiming = navState.fromPodcastComposer === true && projectMode !== MANUAL_TIMING_PODCAST_DIALOGUE_MODE;
+  if (shouldPreserveStoryTiming) {
+    nextProject.markers = Array.isArray(baseProject.markers) ? baseProject.markers : nextProject.markers;
+    nextProject.scenes = Array.isArray(baseProject.scenes) ? baseProject.scenes : nextProject.scenes;
+    nextProject.story_blocks = Array.isArray(baseProject.story_blocks) ? baseProject.story_blocks : nextProject.story_blocks;
+    nextProject.audio_phrases = Array.isArray(baseProject.audio_phrases) ? baseProject.audio_phrases : nextProject.audio_phrases;
+    nextProject.selectedSceneId = baseProject.selectedSceneId || nextProject.selectedSceneId;
+  }
   const incomingSignature = getManualTimingAudioSignature(nextProject);
   const projectId = String(rawProject.project_id || rawProject.projectId || "").trim()
     || `manual_timing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
