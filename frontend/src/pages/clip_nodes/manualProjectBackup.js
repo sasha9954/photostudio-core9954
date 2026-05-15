@@ -1418,6 +1418,8 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const existingStats = getManualClipBoardMaterialStats(existing);
   const nextStats = getManualClipBoardMaterialStats(safeProject);
 
+  const isIntentionalMaterialDelete = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete|explicit.*reset|reset|import/.test(reason.toLowerCase());
+
   if (hasMeaningfulManualProject(existing) && !manualClipBoardProjectsShareIdentity(safeProject, existing) && !forceReplace && !explicitReset) {
     console.warn("[MANUAL BOARD REJECT OLD SNAPSHOT]", {
       candidate: { revision: safeProject?.revision, updatedAt: safeProject?.updatedAt, stats: nextStats },
@@ -1433,7 +1435,39 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     return false;
   }
 
+  if (
+    hasMeaningfulManualProject(existing)
+    && !forceReplace
+    && !explicitReset
+    && !options?.allowMaterialLoss
+    && !isIntentionalMaterialDelete
+    && (
+      (nextStats.imageCount || nextStats.images || 0) < (existingStats.imageCount || existingStats.images || 0)
+      || (nextStats.videoCount || nextStats.videos || 0) < (existingStats.videoCount || existingStats.videos || 0)
+    )
+  ) {
+    console.warn("[MANUAL BOARD PERSIST BLOCKED MEDIA REGRESSION]", {
+      reason: reason || "incoming_project_media_regression",
+      currentScenesWithImage: existingStats.imageCount || existingStats.images || 0,
+      nextScenesWithImage: nextStats.imageCount || nextStats.images || 0,
+      currentScenesWithVideo: existingStats.videoCount || existingStats.videos || 0,
+      nextScenesWithVideo: nextStats.videoCount || nextStats.videos || 0,
+      project_id: safeProject.project_id || safeProject.projectId || "",
+      selectedSceneId: safeProject.selectedSceneId || "",
+    });
+    return false;
+  }
+
   if (shouldSkipManualBoardPersistToProtectMaterials(safeProject, existing, options)) {
+    console.warn("[MANUAL BOARD PERSIST BLOCKED MEDIA REGRESSION]", {
+      reason: reason || "incoming_project_has_fewer_materials",
+      currentScenesWithImage: existingStats.imageCount || existingStats.images || 0,
+      nextScenesWithImage: nextStats.imageCount || nextStats.images || 0,
+      currentScenesWithVideo: existingStats.videoCount || existingStats.videos || 0,
+      nextScenesWithVideo: nextStats.videoCount || nextStats.videos || 0,
+      project_id: safeProject.project_id || safeProject.projectId || "",
+      selectedSceneId: safeProject.selectedSceneId || "",
+    });
     console.warn("[MANUAL BOARD REJECT OLD SNAPSHOT]", {
       candidate: { revision: safeProject?.revision, updatedAt: safeProject?.updatedAt, stats: nextStats },
       current: { revision: existing?.revision, updatedAt: existing?.updatedAt, stats: existingStats },
@@ -1447,8 +1481,6 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     });
     return false;
   }
-
-  const isIntentionalMaterialDelete = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/.test(reason.toLowerCase());
 
   if (
     !forceReplace

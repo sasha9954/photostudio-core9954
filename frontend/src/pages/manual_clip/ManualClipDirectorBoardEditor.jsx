@@ -62,6 +62,64 @@ function withLtxCleanFinalPrompts(scene = {}, project = {}) {
   };
 }
 
+
+const MANUAL_SCENE_IMAGE_MEDIA_FIELDS = [
+  "image_url",
+  "imageUrl",
+  "start_image_url",
+  "startImageUrl",
+  "image_preview_url",
+  "imagePreviewUrl",
+  "generated_image_url",
+  "generatedImageUrl",
+];
+
+const MANUAL_SCENE_VIDEO_MEDIA_FIELDS = [
+  "video_url",
+  "videoUrl",
+  "result_video_url",
+  "resultVideoUrl",
+  "generated_video_url",
+  "generatedVideoUrl",
+  "final_video_url",
+  "finalVideoUrl",
+];
+
+const MANUAL_SCENE_PROTECTED_MEDIA_FIELDS = [
+  ...MANUAL_SCENE_IMAGE_MEDIA_FIELDS,
+  ...MANUAL_SCENE_VIDEO_MEDIA_FIELDS,
+];
+
+function isManualPollLocalOnlyReason(reason = "") {
+  return /^(video_poll_running|video_poll_queued|video_poll_retry|video_poll_unknown_status)$/.test(String(reason || ""));
+}
+
+function isManualExplicitMediaLossReason(reason = "") {
+  return /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete|explicit.*reset|reset|import/i.test(String(reason || ""));
+}
+
+function getManualBoardRevision(project = {}) {
+  return Number(project?.revision || project?.projectRevision || 0) || 0;
+}
+
+function projectHasManualVideoJobRunning(project = {}) {
+  return (Array.isArray(project?.scenes) ? project.scenes : []).some((scene = {}) => {
+    const status = String(scene?.status || scene?.video_status || scene?.videoStatus || "").trim().toLowerCase();
+    return status === "video_running" || status === "running" || status === "video_queued" || status === "queued";
+  });
+}
+
+function mergeManualScenePreservingMedia(currentScene = {}, patch = {}) {
+  const safePatch = patch && typeof patch === "object" ? patch : {};
+  const merged = { ...(currentScene || {}), ...safePatch };
+  MANUAL_SCENE_PROTECTED_MEDIA_FIELDS.forEach((field) => {
+    if (!Object.prototype.hasOwnProperty.call(safePatch, field)) {
+      merged[field] = currentScene?.[field];
+    }
+  });
+  return withManualSceneMediaAliases(merged);
+}
+
 const MANUAL_STALE_PROMPT_FIELD_CLEAR_PATCH = {
   positive_prompt: "",
   positivePrompt: "",
@@ -1367,6 +1425,7 @@ export default function ManualClipDirectorBoardEditor({
   const terminalVideoJobsRef = useRef(new Set());
   const autosaveTimerRef = useRef(null);
   const lastAutosaveSignatureRef = useRef("");
+  const lastPersistedProjectRef = useRef(null);
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
@@ -1475,6 +1534,7 @@ export default function ManualClipDirectorBoardEditor({
 
     if (embedded && typeof onProjectChange === "function") {
       const persisted = persistManualProject(safeProject, persistOptions);
+      if (!persisted) return false;
       dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
       writeManualClipBoardOpenState({
         isOpen: true,
@@ -1535,7 +1595,7 @@ export default function ManualClipDirectorBoardEditor({
       });
     }
 
-    dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
+    if (persisted && readbackOk) dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
     return Boolean(persisted && readbackOk);
   };
 
@@ -1586,6 +1646,42 @@ export default function ManualClipDirectorBoardEditor({
         scenes,
         selectedSceneId: selectedSceneIdForHydrate,
       });
+      const currentHydratedProject = projectRef.current;
+      const incomingReason = String(hydratedProject?.lastPersistReason || parsed?.lastPersistReason || "").trim();
+      const currentDiagnostics = getManualBoardMediaDiagnostics(currentHydratedProject || {}, currentHydratedProject?.selectedSceneId || selectedSceneIdRef.current || "");
+      const incomingDiagnostics = getManualBoardMediaDiagnostics(hydratedProject, selectedSceneIdForHydrate);
+      const incomingRevision = getManualBoardRevision(hydratedProject);
+      const currentRevision = getManualBoardRevision(currentHydratedProject || {});
+      const hasCurrentProject = hasMeaningfulManualProject(currentHydratedProject);
+      const shouldSkipHydrate = Boolean(
+        !explicitNewProject
+        && hasCurrentProject
+        && (
+          incomingReason === "video_poll_running"
+          || incomingReason === "video_poll_queued"
+          || incomingRevision <= currentRevision
+          || (
+            !isManualExplicitMediaLossReason(incomingReason)
+            && (
+              incomingDiagnostics.scenesWithImage < currentDiagnostics.scenesWithImage
+              || incomingDiagnostics.scenesWithVideo < currentDiagnostics.scenesWithVideo
+            )
+          )
+          || (projectHasManualVideoJobRunning(currentHydratedProject) && incomingRevision <= currentRevision + 1)
+        )
+      );
+      if (shouldSkipHydrate) {
+        console.warn("[MANUAL BOARD HYDRATE SKIP STALE_OR_REGRESSIVE]", {
+          incomingRevision,
+          currentRevision,
+          incomingScenesWithImage: incomingDiagnostics.scenesWithImage,
+          currentScenesWithImage: currentDiagnostics.scenesWithImage,
+          incomingScenesWithVideo: incomingDiagnostics.scenesWithVideo,
+          currentScenesWithVideo: currentDiagnostics.scenesWithVideo,
+          reason: incomingReason || "hydrate_stale_or_regressive",
+        });
+        return;
+      }
       console.info("[MANUAL BOARD AUDIO HYDRATE]", {
         project_id: hydratedProject.project_id || hydratedProject.projectId || "",
         audio: getManualBoardAudioInfo(hydratedProject),
@@ -1600,6 +1696,7 @@ export default function ManualClipDirectorBoardEditor({
       projectRef.current = hydratedProject;
       selectedSceneIdRef.current = selectedSceneIdForHydrate;
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(hydratedProject);
+      lastPersistedProjectRef.current = hydratedProject;
       setAutosaveStatus("Сохранено");
       setProject(hydratedProject);
       setSelectedSceneId(selectedSceneIdForHydrate);
@@ -1614,6 +1711,7 @@ export default function ManualClipDirectorBoardEditor({
         };
         projectRef.current = projectToPersist;
         lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(projectToPersist);
+        lastPersistedProjectRef.current = projectToPersist;
         setAutosaveStatus("Сохранено");
         setProject(projectToPersist);
         const ownerNodeId = sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId;
@@ -1691,6 +1789,30 @@ export default function ManualClipDirectorBoardEditor({
       updatedAt: Date.now(),
       lastPersistReason: reason,
     });
+    const persistedBaseline = lastPersistedProjectRef.current || readManualClipBoardProjectForNode(getProjectOwnerNodeId(safeProject));
+    const currentDiagnostics = getManualBoardMediaDiagnostics(persistedBaseline || {}, persistedBaseline?.selectedSceneId || selectedSceneIdRef.current || "");
+    const nextDiagnostics = getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId);
+    if (
+      hasMeaningfulManualProject(persistedBaseline)
+      && !isManualExplicitMediaLossReason(reason)
+      && (
+        nextDiagnostics.scenesWithImage < currentDiagnostics.scenesWithImage
+        || nextDiagnostics.scenesWithVideo < currentDiagnostics.scenesWithVideo
+      )
+    ) {
+      console.warn("[MANUAL BOARD PERSIST BLOCKED MEDIA REGRESSION]", {
+        reason,
+        currentScenesWithImage: currentDiagnostics.scenesWithImage,
+        nextScenesWithImage: nextDiagnostics.scenesWithImage,
+        currentScenesWithVideo: currentDiagnostics.scenesWithVideo,
+        nextScenesWithVideo: nextDiagnostics.scenesWithVideo,
+        project_id: safeProject.project_id || safeProject.projectId || "",
+        selectedSceneId: safeProject.selectedSceneId || selectedSceneIdRef.current || "",
+      });
+      if (updateStatus) setAutosaveStatus("Сохранено");
+      return false;
+    }
+
     projectRef.current = safeProject;
     selectedSceneIdRef.current = safeProject.selectedSceneId;
     if (updateStatus) {
@@ -1702,6 +1824,7 @@ export default function ManualClipDirectorBoardEditor({
       const saved = persistAndBroadcastDirectorProject(safeProject, { reason });
       if (!saved) throw new Error(getLastManualClipBoardStorageError()?.reason || "autosave_verify_failed");
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
+      lastPersistedProjectRef.current = safeProject;
       if (updateStatus) {
         setProject(safeProject);
         setAutosaveStatus("Сохранено");
@@ -1730,6 +1853,7 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const scheduleManualBoardAutosave = (reason = "manual_board_autosave") => {
+    if (isManualPollLocalOnlyReason(reason)) return;
     if (!didHydrateRef.current) return;
     const currentProject = projectRef.current;
     if (!hasMeaningfulManualProject(currentProject)) return;
@@ -1812,6 +1936,7 @@ export default function ManualClipDirectorBoardEditor({
     dispatchManualDirectorBoardUpdate(ownerNodeId, safeProject);
     if (readbackOk) {
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
+      lastPersistedProjectRef.current = safeProject;
       setAutosaveStatus("Сохранено");
       setAutosaveError("");
     } else {
@@ -2418,7 +2543,7 @@ export default function ManualClipDirectorBoardEditor({
     const nextScenes = prevScenes.map((scene) => {
       if (scene.scene_id !== sceneId) return scene;
       const patch = typeof patchOrFactory === "function" ? patchOrFactory(scene) : patchOrFactory;
-      return withManualSceneMediaAliases({ ...scene, ...(patch || {}) });
+      return mergeManualScenePreservingMedia(scene, patch || {});
     });
     const persistReason = options?.reason || "update_scene";
     const isDeletionUpdate = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/i.test(persistReason);
@@ -2428,7 +2553,7 @@ export default function ManualClipDirectorBoardEditor({
     const nextSelectedSceneId = prevScenes.some((scene) => scene.scene_id === refSelectedSceneId)
       ? refSelectedSceneId
       : (prevScenes.some((scene) => scene.scene_id === baseSelectedSceneId) ? baseSelectedSceneId : String(prevScenes[0]?.scene_id || ""));
-    if (/job|poll|video_done|video_queued|video_running|mmaudio/i.test(persistReason) && nextSelectedSceneId !== sceneId) {
+    if (!isManualPollLocalOnlyReason(persistReason) && /job|poll|video_done|video_queued|video_running|mmaudio/i.test(persistReason) && nextSelectedSceneId !== sceneId) {
       console.info("[MANUAL BOARD BLOCK AUTO SELECT FROM JOB]", { reason: persistReason, sceneId, selectedSceneId: nextSelectedSceneId });
     }
     const nextProject = normalizeDirectorProjectOwner({
@@ -2448,7 +2573,7 @@ export default function ManualClipDirectorBoardEditor({
     selectedSceneIdRef.current = nextProject.selectedSceneId;
     setProject(nextProject);
 
-    if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
+    if (didHydrateRef.current && hasMeaningfulManualProject(nextProject) && !isManualPollLocalOnlyReason(persistReason) && options?.autosave !== false) {
       scheduleManualBoardAutosave(persistReason);
       const savedScene = nextScenes.find((s) => s.scene_id === sceneId);
       console.debug("[manual director updateScene autosave scheduled]", {
@@ -3017,7 +3142,24 @@ export default function ManualClipDirectorBoardEditor({
         return;
       }
       if (status === "queued" || status === "running") {
-        updateScene(sceneId, { status: status === "queued" ? "video_queued" : "video_running", video_job_id: safeJobId, videoJobId: safeJobId, video_status_endpoint: endpoint, videoStatusEndpoint: endpoint, video_error: "", videoError: "", error: "" }, { reason: status === "queued" ? "video_poll_queued" : "video_poll_running" });
+        console.info("[MANUAL BOARD VIDEO POLL LOCAL STATUS ONLY]", {
+          sceneId,
+          jobId: safeJobId,
+          status,
+        });
+        updateScene(sceneId, {
+          status: status === "queued" ? "video_queued" : "video_running",
+          video_status: status,
+          videoStatus: status,
+          video_job_id: safeJobId,
+          videoJobId: safeJobId,
+          video_status_endpoint: endpoint,
+          videoStatusEndpoint: endpoint,
+          video_error: "",
+          videoError: "",
+          error: "",
+          lastPollAt: Date.now(),
+        }, { reason: status === "queued" ? "video_poll_queued" : "video_poll_running", autosave: false });
         setTimeout(() => pollManualSceneVideo(sceneId, safeJobId, attempt + 1, endpoint), delayMs);
         return;
       }
@@ -3027,7 +3169,8 @@ export default function ManualClipDirectorBoardEditor({
         updateScene(sceneId, { status: "video_error", video_job_id: jobId, videoJobId: jobId, video_error: "video_poll_timeout", videoError: "video_poll_timeout", error: "video_poll_timeout" }, { reason: "video_poll_timeout" });
         return;
       }
-      updateScene(sceneId, { status: "video_running", video_job_id: safeJobId, videoJobId: safeJobId, video_status_endpoint: endpoint, videoStatusEndpoint: endpoint, video_error: "", videoError: "" }, { reason: "video_poll_unknown_status" });
+      console.info("[MANUAL BOARD VIDEO POLL LOCAL STATUS ONLY]", { sceneId, jobId: safeJobId, status });
+      updateScene(sceneId, { status: "video_running", video_status: "running", videoStatus: "running", video_job_id: safeJobId, videoJobId: safeJobId, video_status_endpoint: endpoint, videoStatusEndpoint: endpoint, video_error: "", videoError: "", lastPollAt: Date.now() }, { reason: "video_poll_unknown_status", autosave: false });
       setTimeout(() => pollManualSceneVideo(sceneId, safeJobId, attempt + 1, endpoint), delayMs);
     } catch (err) {
       const currentScene = (Array.isArray(projectRef.current?.scenes) ? projectRef.current.scenes : []).find((scene) => scene.scene_id === sceneId);
@@ -3039,8 +3182,11 @@ export default function ManualClipDirectorBoardEditor({
         videoPollErrorCountRef.current.set(key, count);
 
         if (count < 6) {
+          console.info("[MANUAL BOARD VIDEO POLL LOCAL STATUS ONLY]", { sceneId, jobId: safeJobId, status: "running" });
           updateScene(sceneId, {
             status: "video_running",
+            video_status: "running",
+            videoStatus: "running",
             video_job_id: safeJobId,
             videoJobId: safeJobId,
             video_status_endpoint: endpoint,
@@ -3048,7 +3194,8 @@ export default function ManualClipDirectorBoardEditor({
             video_error: `status polling retry ${count}/6`,
             videoError: `status polling retry ${count}/6`,
             error: "",
-          }, { reason: "video_poll_retry" });
+            lastPollAt: Date.now(),
+          }, { reason: "video_poll_retry", autosave: false });
           setTimeout(() => pollManualSceneVideo(sceneId, safeJobId, attempt + 1, endpoint), 10000);
           return;
         }

@@ -25948,7 +25948,9 @@ return base;
     const onManualDirectorBoardUpdate = (event) => {
       const sourceNodeId = String(event?.detail?.sourceNodeId || "").trim();
       const project = event?.detail?.project;
+      const reason = String(project?.lastPersistReason || event?.detail?.reason || "").trim();
       if (!sourceNodeId || !project) return;
+      if (reason === "video_poll_running" || reason === "video_poll_queued") return;
       setActiveManualBoardProject(project);
       if (manualDirectorEditor.open && sourceNodeId === String(manualDirectorEditor.sourceNodeId || "").trim()) {
         writeManualClipBoardOpenState({
@@ -26085,6 +26087,7 @@ return base;
     if (!safeSourceNodeId || !nextProject) return;
 
     const now = Date.now();
+    if (reason === "video_poll_running" || reason === "video_poll_queued") return;
     const safeProject = {
       ...nextProject,
       source: "manual_timing_node",
