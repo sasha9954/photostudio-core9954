@@ -1873,6 +1873,24 @@
   line-height: 1;
 }
 
+.manualTimingCutButton {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 8px 12px !important;
+  border-color: rgba(45, 212, 191, 0.55) !important;
+  color: #ecfeff !important;
+  background: linear-gradient(135deg, rgba(13, 148, 136, 0.48), rgba(14, 165, 233, 0.22)) !important;
+  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.14);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.manualTimingCutButton:hover:not(:disabled) {
+  border-color: rgba(94, 234, 212, 0.82) !important;
+  box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22);
+}
+
 .manualTimingStepControl {
   display: inline-grid;
   grid-template-columns: auto 76px;
