@@ -533,12 +533,19 @@ function serializeSavedClipsForStorage(savedClips = []) {
 }
 
 function serializeActorAudiosForStorage(actorAudios = []) {
-  return (Array.isArray(actorAudios) ? actorAudios : []).map((actor) => ({
-    ...stripTransientSourceUrl(actor),
-    url: "",
-    blocks: serializeBlocksForStorage(actor?.blocks),
-    isPlaying: false,
-  }));
+  return (Array.isArray(actorAudios) ? actorAudios : []).map((actor) => {
+    const cleanActor = stripTransientSourceUrl(actor);
+    const serverUrl = getActorServerSourceUrl(cleanActor);
+    return {
+      ...cleanActor,
+      url: serverUrl,
+      asset_url: serverUrl || cleanActor.asset_url || cleanActor.assetUrl || "",
+      server_url: serverUrl || cleanActor.server_url || "",
+      publicUrl: serverUrl || cleanActor.publicUrl || "",
+      blocks: serializeBlocksForStorage(actor?.blocks),
+      isPlaying: false,
+    };
+  });
 }
 
 function getActorAudioBlobKey(sourceNodeId = "", actorId = "") {
@@ -604,22 +611,28 @@ async function restoreActorAudiosFromStorage(sourceNodeId = "", actorAudios = []
   for (const actor of rows) {
     const actorId = String(actor?.id || "");
     if (!actorId) continue;
-    let url = "";
+    const serverUrl = getActorServerSourceUrl(actor);
+    let browserUrl = serverUrl;
     try {
       const blob = await getActorAudioBlob(getActorAudioBlobKey(sourceNodeId, actorId));
-      if (blob) url = URL.createObjectURL(blob);
+      if (blob) browserUrl = URL.createObjectURL(blob);
     } catch {}
     const blocks = serializeBlocksForStorage(actor?.blocks).map((block) => ({
       ...block,
       source_audio_id: block.source_audio_id || actorId,
-      source_url: url || undefined,
+      source_url: browserUrl || undefined,
+      asset_url: serverUrl || block.asset_url || block.assetUrl || undefined,
+      server_url: serverUrl || block.server_url || undefined,
       source_name: block.source_name || actor.name || actor.filename || actorId,
       block_label: block.block_label || actor.label,
       color: block.color || actor.color,
     }));
     restored.push({
       ...actor,
-      url,
+      url: browserUrl,
+      asset_url: serverUrl || actor.asset_url || actor.assetUrl || "",
+      server_url: serverUrl || actor.server_url || "",
+      publicUrl: serverUrl || actor.publicUrl || "",
       blocks,
       isPlaying: false,
       currentTimeSec: clampSeconds(actor?.currentTimeSec || 0, 0, getTimelineDuration(blocks) || actor?.duration_sec || 0),
@@ -750,6 +763,124 @@ function findSavedClipForBlock(block = {}, savedClips = []) {
     if (match) return match;
   }
   return null;
+}
+
+function normalizePodcastSourceLabel(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\.[a-z0-9а-яёіїєґ]+$/i, "")
+    .replace(/[\s_-]+/g, " ")
+    .trim();
+}
+
+function getPodcastSourceIdentityValues(item = {}) {
+  return [
+    item?.label,
+    item?.name,
+    item?.filename,
+    item?.source_name,
+    item?.source_label,
+    item?.block_label,
+    item?.saved_clip_label,
+    item?.inserted_phrase_label,
+    item?.phrase_label,
+  ]
+    .map(normalizePodcastSourceLabel)
+    .filter(Boolean);
+}
+
+function findActorAudioByLogicalLabel({ savedClip = null, block = null, actorAudios = [] } = {}) {
+  const actors = Array.isArray(actorAudios) ? actorAudios : [];
+  const wanted = new Set([...getPodcastSourceIdentityValues(savedClip || {}), ...getPodcastSourceIdentityValues(block || {})]);
+  if (!wanted.size) return null;
+  const exact = actors.find((actor) => getPodcastSourceIdentityValues(actor).some((value) => wanted.has(value)));
+  if (exact) return exact;
+  if (actors.length === 1) {
+    const actorValues = getPodcastSourceIdentityValues(actors[0]);
+    const matchesSingleActor = actorValues.some((actorValue) => [...wanted].some((wantedValue) => (
+      actorValue.length >= 3 && wantedValue.length >= 3 && (actorValue.includes(wantedValue) || wantedValue.includes(actorValue))
+    )));
+    if (matchesSingleActor) return actors[0];
+  }
+  return null;
+}
+
+function getSavedClipServerSourceUrl(savedClip = {}) {
+  return getFirstBackendStaticAssetUrl(savedClip, ["source_url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl", "url"]);
+}
+
+function buildPodcastSourceRegistry({ actorAudios = [], savedClips = [], blocks = [], legacySourceUrlByActorId = new Map() } = {}) {
+  const actorById = new Map();
+  const savedClipById = new Map();
+  const sourceUrlByActorId = new Map();
+  const sourceUrlBySavedClipId = new Map();
+  const sourceUrlByInsertedPhraseId = new Map();
+  const sourceUrlByLegacyActorId = new Map(legacySourceUrlByActorId instanceof Map ? legacySourceUrlByActorId : []);
+
+  (Array.isArray(actorAudios) ? actorAudios : []).forEach((actor) => {
+    const id = String(actor?.id || "").trim();
+    if (!id) return;
+    actorById.set(id, actor);
+    const url = getActorServerSourceUrl(actor);
+    if (url) sourceUrlByActorId.set(id, url);
+  });
+
+  (Array.isArray(savedClips) ? savedClips : []).forEach((clip) => {
+    const ids = [clip?.id, clip?.saved_clip_id, clip?.inserted_phrase_id].map((value) => String(value || "").trim()).filter(Boolean);
+    ids.forEach((id) => savedClipById.set(id, clip));
+    const clipUrl = getSavedClipServerSourceUrl(clip);
+    ids.forEach((id) => {
+      if (clipUrl) {
+        sourceUrlBySavedClipId.set(id, clipUrl);
+        sourceUrlByInsertedPhraseId.set(id, clipUrl);
+      }
+    });
+    const sourceId = String(clip?.source_audio_id || "").trim();
+    if (sourceId && sourceId !== "main" && clipUrl && !sourceUrlByActorId.has(sourceId)) {
+      sourceUrlByLegacyActorId.set(sourceId, clipUrl);
+    }
+  });
+
+  (Array.isArray(blocks) ? blocks : []).forEach((block) => {
+    const blockUrl = getFirstBackendStaticAssetUrl(block, ["source_url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl", "url"]);
+    if (!blockUrl) return;
+    getBlockSavedClipLookupValues(block).forEach((id) => sourceUrlByInsertedPhraseId.set(id, blockUrl));
+    const sourceId = String(block?.source_audio_id || "").trim();
+    if (sourceId && sourceId !== "main" && !sourceUrlByActorId.has(sourceId)) sourceUrlByLegacyActorId.set(sourceId, blockUrl);
+  });
+
+  return { actorById, savedClipById, sourceUrlByActorId, sourceUrlBySavedClipId, sourceUrlByInsertedPhraseId, sourceUrlByLegacyActorId };
+}
+
+function resolveServerRenderableBlockSource({ block = {}, mainAudio = {}, originalAudioUrl = "", registry = null, savedClips = [], actorById = new Map() } = {}) {
+  const sourceId = String(block?.source_audio_id || "main").trim() || "main";
+  if (block?.type === "silence" || sourceId === "silence") return { sourceUrl: "", resolvedVia: "silence", savedClip: null };
+
+  const directBlockUrl = getFirstBackendStaticAssetUrl(block, ["source_url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl", "url"]);
+  if (directBlockUrl) return { sourceUrl: directBlockUrl, resolvedVia: "block", savedClip: null };
+
+  const savedClip = findSavedClipForBlock(block, savedClips);
+  const savedIds = getBlockSavedClipLookupValues(block);
+  for (const id of savedIds) {
+    const insertedUrl = registry?.sourceUrlByInsertedPhraseId?.get(id) || registry?.sourceUrlBySavedClipId?.get(id);
+    if (insertedUrl) return { sourceUrl: insertedUrl, resolvedVia: "inserted_phrase", savedClip };
+  }
+
+  if (savedClip) {
+    const clipUrl = getSavedClipServerSourceUrl(savedClip);
+    if (clipUrl) return { sourceUrl: clipUrl, resolvedVia: "saved_clip", savedClip };
+    const clipSourceId = String(savedClip?.source_audio_id || "").trim();
+    const clipActorUrl = clipSourceId ? (registry?.sourceUrlByActorId?.get(clipSourceId) || registry?.sourceUrlByLegacyActorId?.get(clipSourceId)) : "";
+    if (clipActorUrl) return { sourceUrl: clipActorUrl, resolvedVia: "saved_clip_source_audio_id", savedClip };
+  }
+
+  const actorUrl = registry?.sourceUrlByActorId?.get(sourceId) || registry?.sourceUrlByLegacyActorId?.get(sourceId) || getActorServerSourceUrl(actorById.get(sourceId));
+  if (sourceId !== "main" && actorUrl) return { sourceUrl: actorUrl, resolvedVia: registry?.sourceUrlByLegacyActorId?.has(sourceId) ? "legacy_actor" : "actor", savedClip };
+
+  const fallbackOriginalUrl = String(originalAudioUrl || mainAudio?.url || "").trim();
+  if (sourceId === "main" && isBackendStaticAssetUrl(fallbackOriginalUrl)) return { sourceUrl: fallbackOriginalUrl, resolvedVia: "main", savedClip };
+
+  return { sourceUrl: "", resolvedVia: "missing", savedClip };
 }
 
 function resolveServerRenderableBlockSourceUrl({ block = {}, mainAudio = {}, originalAudioUrl = "", actorById = new Map(), savedClips = [] } = {}) {
@@ -1510,11 +1641,13 @@ export default function PodcastAudioComposerPage() {
       const restoredActorAudios = await restoreActorAudiosFromStorage(sourceNodeId, saved.actorAudios || []);
       const restoredSavedClips = serializeSavedClipsForStorage(Array.isArray(saved.savedClips) ? saved.savedClips : []).map((clip) => {
         const actor = restoredActorAudios.find((item) => item.id === clip.source_audio_id);
-        return actor ? { ...clip, source_url: actor.url || undefined, source_name: clip.source_name || actor.name || actor.filename } : clip;
+        const actorServerUrl = getActorServerSourceUrl(actor || {});
+        return actor ? { ...clip, source_url: actor.url || actorServerUrl || undefined, asset_url: actorServerUrl || clip.asset_url || clip.assetUrl || undefined, server_url: actorServerUrl || clip.server_url || undefined, source_name: clip.source_name || actor.name || actor.filename } : clip;
       });
       const restoredBlocks = normalizeBlocks(saved.blocks, safeDuration, restoredSavedClips).map((block) => {
         const actor = restoredActorAudios.find((item) => item.id === block.source_audio_id);
-        return actor ? { ...block, source_url: actor.url || undefined, source_name: block.source_name || actor.name || actor.filename } : block;
+        const actorServerUrl = getActorServerSourceUrl(actor || {});
+        return actor ? { ...block, source_url: actor.url || actorServerUrl || undefined, asset_url: actorServerUrl || block.asset_url || block.assetUrl || undefined, server_url: actorServerUrl || block.server_url || undefined, source_name: block.source_name || actor.name || actor.filename } : block;
       });
       setBlocks(restoredBlocks);
       setSelectedBlockId(String(saved.selectedBlockId || restoredBlocks[0]?.id || ""));
@@ -2574,7 +2707,7 @@ export default function PodcastAudioComposerPage() {
 
   const uploadActorSourceAudioForServer = async (actor = {}) => {
     const existingUrl = String(actor?.url || actor?.asset_url || actor?.assetUrl || actor?.public_url || actor?.publicUrl || "").trim();
-    if (isBackendStaticAssetUrl(existingUrl)) return { ...actor, url: existingUrl, asset_url: existingUrl };
+    if (isBackendStaticAssetUrl(existingUrl)) return { ...actor, url: existingUrl, asset_url: existingUrl, server_url: existingUrl, publicUrl: existingUrl };
 
     const actorId = String(actor?.id || "").trim();
     let blob = null;
@@ -2596,6 +2729,8 @@ export default function PodcastAudioComposerPage() {
       ...actor,
       url: assetUrl,
       asset_url: assetUrl,
+      server_url: assetUrl,
+      publicUrl: assetUrl,
       filename: String(uploaded.filename || uploaded.name || filename).trim(),
       duration_sec: roundSeconds(uploaded.duration_sec || uploaded.durationSec || actor?.duration_sec || actor?.durationSec || 0),
     };
@@ -2606,49 +2741,157 @@ export default function PodcastAudioComposerPage() {
     for (const actor of Array.isArray(actorAudios) ? actorAudios : []) {
       nextActorAudios.push(await uploadActorSourceAudioForServer(actor));
     }
-    const actorById = new Map(nextActorAudios.map((actor) => [String(actor?.id || ""), actor]));
-    const nextSavedClips = (Array.isArray(savedClips) ? savedClips : []).map((clip) => {
-      const sourceId = String(clip?.source_audio_id || "main");
-      const actorUrl = sourceId !== "main" ? getActorServerSourceUrl(actorById.get(sourceId)) : "";
-      if (sourceId !== "main" && actorUrl) return { ...clip, source_url: actorUrl, asset_url: actorUrl };
-      return { ...clip };
+
+    const legacySourceUrlByActorId = new Map();
+    let nextSavedClips = (Array.isArray(savedClips) ? savedClips : []).map((clip) => ({ ...clip }));
+    let nextBlocks = (Array.isArray(blocks) ? blocks : []).map((block) => ({ ...block }));
+
+    const actorById = new Map(nextActorAudios.map((actor) => [String(actor?.id || "").trim(), actor]).filter(([id]) => Boolean(id)));
+    nextActorAudios.forEach((actor) => {
+      const actorId = String(actor?.id || "").trim();
+      const actorUrl = getActorServerSourceUrl(actor);
+      if (!actorId || !actorUrl) return;
+      nextSavedClips = nextSavedClips.map((clip) => String(clip?.source_audio_id || "").trim() === actorId ? {
+        ...clip,
+        source_url: actorUrl,
+        asset_url: actorUrl,
+        server_url: actorUrl,
+        publicUrl: actorUrl,
+      } : clip);
+      nextBlocks = nextBlocks.map((block) => String(block?.source_audio_id || "").trim() === actorId ? {
+        ...block,
+        source_url: actorUrl,
+        asset_url: actorUrl,
+        server_url: actorUrl,
+        publicUrl: actorUrl,
+      } : block);
     });
+
+    const rememberRecoveredSource = ({ legacySourceAudioId = "", sourceUrl = "", recoveredFrom = "", savedClip = null, block = null } = {}) => {
+      const legacyId = String(legacySourceAudioId || "").trim();
+      if (!legacyId || !sourceUrl) return;
+      legacySourceUrlByActorId.set(legacyId, sourceUrl);
+      nextSavedClips = nextSavedClips.map((clip) => {
+        const sameSource = String(clip?.source_audio_id || "").trim() === legacyId;
+        const sameClip = savedClip && [clip?.id, clip?.saved_clip_id, clip?.inserted_phrase_id].some((value) => String(value || "").trim() && [savedClip?.id, savedClip?.saved_clip_id, savedClip?.inserted_phrase_id].some((clipValue) => String(clipValue || "").trim() === String(value || "").trim()));
+        if (!sameSource && !sameClip) return clip;
+        return { ...clip, source_url: sourceUrl, asset_url: sourceUrl, server_url: sourceUrl, publicUrl: sourceUrl };
+      });
+      nextBlocks = nextBlocks.map((item) => {
+        const sameSource = String(item?.source_audio_id || "").trim() === legacyId;
+        const sameBlock = block && String(item?.id || "").trim() === String(block?.id || "").trim();
+        const sameSavedClip = savedClip && getBlockSavedClipLookupValues(item).some((id) => [savedClip?.id, savedClip?.saved_clip_id, savedClip?.inserted_phrase_id].some((value) => String(value || "").trim() === id));
+        if (!sameSource && !sameBlock && !sameSavedClip) return item;
+        return { ...item, source_url: sourceUrl, asset_url: sourceUrl, server_url: sourceUrl, publicUrl: sourceUrl };
+      });
+      console.log("[PODCAST LEGACY ACTOR SOURCE RECOVERED]", { legacySourceAudioId: legacyId, sourceUrl, recoveredFrom });
+    };
+
+    const uploadRecoveredActorBlob = async ({ blob, filename = "actor_audio.mp3" } = {}) => {
+      if (!blob) return "";
+      const uploaded = await uploadFinalAudioBlob({ blob, filename, mimeType: blob.type || inferAudioMimeTypeFromFilename(filename) });
+      return String(uploaded.url || uploaded.assetUrl || uploaded.asset_url || uploaded.publicUrl || uploaded.path || "").trim();
+    };
+
+    let registry = buildPodcastSourceRegistry({ actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks, legacySourceUrlByActorId });
     const originalUrl = String(audio.url || location.state?.audio?.url || storedManualTimingProject?.audio?.url || "").trim();
-    const nextBlocks = (Array.isArray(blocks) ? blocks : []).map((block) => {
-      const sourceUrl = resolveServerRenderableBlockSourceUrl({
+
+    for (const block of nextBlocks) {
+      const sourceId = String(block?.source_audio_id || "main").trim() || "main";
+      const isSilence = block?.type === "silence" || sourceId === "silence";
+      if (isSilence || sourceId === "main") continue;
+      const current = resolveServerRenderableBlockSource({ block, mainAudio: audio, originalAudioUrl: originalUrl, registry, savedClips: nextSavedClips, actorById });
+      if (current.sourceUrl) continue;
+
+      const savedClip = current.savedClip || findSavedClipForBlock(block, nextSavedClips);
+      const legacyIdCandidates = [savedClip?.source_audio_id, block?.source_audio_id]
+        .map((value) => String(value || "").trim())
+        .filter((value) => value && value !== "main" && !registry.sourceUrlByActorId.has(value));
+
+      for (const legacySourceAudioId of legacyIdCandidates) {
+        if (legacySourceUrlByActorId.has(legacySourceAudioId)) break;
+
+        const savedClipUrl = getSavedClipServerSourceUrl(savedClip || {});
+        if (savedClipUrl) {
+          rememberRecoveredSource({ legacySourceAudioId, sourceUrl: savedClipUrl, recoveredFrom: "saved_clip", savedClip, block });
+          break;
+        }
+
+        let blob = null;
+        try { blob = await getActorAudioBlob(getActorAudioBlobKey(sourceNodeId, legacySourceAudioId)); } catch {}
+        if (blob) {
+          const filename = String(savedClip?.source_name || block?.source_name || savedClip?.label || block?.saved_clip_label || `${legacySourceAudioId}.mp3`).trim();
+          const sourceUrl = await uploadRecoveredActorBlob({ blob, filename });
+          if (sourceUrl) {
+            rememberRecoveredSource({ legacySourceAudioId, sourceUrl, recoveredFrom: "indexeddb", savedClip, block });
+            break;
+          }
+        }
+
+        const matchingActor = findActorAudioByLogicalLabel({ savedClip, block, actorAudios: nextActorAudios });
+        const matchingActorUrl = getActorServerSourceUrl(matchingActor || {});
+        if (matchingActorUrl) {
+          rememberRecoveredSource({ legacySourceAudioId, sourceUrl: matchingActorUrl, recoveredFrom: "actor_label_match", savedClip, block });
+          break;
+        }
+      }
+
+      registry = buildPodcastSourceRegistry({ actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks, legacySourceUrlByActorId });
+    }
+
+    registry = buildPodcastSourceRegistry({ actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks, legacySourceUrlByActorId });
+    nextBlocks = nextBlocks.map((block) => {
+      const resolved = resolveServerRenderableBlockSource({
         block,
         mainAudio: audio,
         originalAudioUrl: originalUrl,
-        actorById,
+        registry,
         savedClips: nextSavedClips,
+        actorById,
       });
-      if (!sourceUrl || block?.type === "silence" || String(block?.source_audio_id || "main") === "silence") return { ...block };
-      return { ...block, source_url: sourceUrl };
+      if (!resolved.sourceUrl || block?.type === "silence" || String(block?.source_audio_id || "main") === "silence") return { ...block };
+      return { ...block, source_url: resolved.sourceUrl, asset_url: resolved.sourceUrl, server_url: resolved.sourceUrl, publicUrl: resolved.sourceUrl };
     });
-    const changedBlocks = nextBlocks.some((block, index) => String(block?.source_url || "") !== String(blocks?.[index]?.source_url || ""));
+
+    console.log("[PODCAST SOURCE REGISTRY]", {
+      actorIds: [...registry.actorById.keys()],
+      savedClipIds: [...registry.savedClipById.keys()],
+      legacySourceIds: [...registry.sourceUrlByLegacyActorId.keys()],
+      uploadedSourceUrlByActorId: Object.fromEntries(registry.sourceUrlByActorId),
+    });
+
+    const changedSavedClips = JSON.stringify(serializeSavedClipsForStorage(nextSavedClips)) !== JSON.stringify(serializeSavedClipsForStorage(savedClips));
+    const changedBlocks = JSON.stringify(serializeBlocksForStorage(nextBlocks)) !== JSON.stringify(serializeBlocksForStorage(blocks));
+    const changedActors = JSON.stringify(serializeActorAudiosForStorage(nextActorAudios)) !== JSON.stringify(serializeActorAudiosForStorage(actorAudios));
+    if (changedSavedClips) setSavedClips(nextSavedClips);
     if (changedBlocks) setBlocks(nextBlocks);
-    return { actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks };
+    if (changedActors) setActorAudios(nextActorAudios);
+    return { actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks, registry };
   };
 
   const renderComposerAudioToServerAsset = async ({ manifest, finalDurationSec }) => {
-    const { actorAudios: serverActorAudios, savedClips: serverSavedClips, blocks: serverBlocks } = await prepareServerRenderableAudioSources();
+    const { actorAudios: serverActorAudios, savedClips: serverSavedClips, blocks: serverBlocks, registry: preparedRegistry } = await prepareServerRenderableAudioSources();
     const actorById = new Map(serverActorAudios.map((actor) => [String(actor?.id || ""), actor]));
+    const sourceRegistry = preparedRegistry || buildPodcastSourceRegistry({ actorAudios: serverActorAudios, savedClips: serverSavedClips, blocks: serverBlocks });
     const originalUrl = String(audio.url || location.state?.audio?.url || storedManualTimingProject?.audio?.url || "").trim();
     const availableActorIds = serverActorAudios.map((actor) => String(actor?.id || "").trim()).filter(Boolean);
     const availableSavedClipIds = serverSavedClips.flatMap((clip) => [clip?.id, clip?.saved_clip_id, clip?.inserted_phrase_id])
       .map((value) => String(value || "").trim())
       .filter(Boolean);
+    const availableLegacySourceIds = [...sourceRegistry.sourceUrlByLegacyActorId.keys()];
     const missingSources = [];
     const renderBlocks = (Array.isArray(serverBlocks) ? serverBlocks : []).map((block) => {
       const sourceId = String(block?.source_audio_id || "main").trim() || "main";
       const isSilence = block?.type === "silence" || sourceId === "silence";
-      const sourceUrl = isSilence ? "" : resolveServerRenderableBlockSourceUrl({
+      const resolved = isSilence ? { sourceUrl: "", resolvedVia: "silence", savedClip: null } : resolveServerRenderableBlockSource({
         block,
         mainAudio: audio,
         originalAudioUrl: originalUrl,
+        registry: sourceRegistry,
         actorById,
         savedClips: serverSavedClips,
       });
+      const sourceUrl = resolved.sourceUrl;
       const renderedBlock = {
         ...block,
         source_url: sourceUrl,
@@ -2663,6 +2906,7 @@ export default function PodcastAudioComposerPage() {
           savedClipId: String(block?.saved_clip_id || ""),
           insertedPhraseId: String(block?.inserted_phrase_id || ""),
           resolvedSourceUrl: sourceUrl,
+          resolvedVia: resolved.resolvedVia,
           sourceStartSec: roundSeconds(block?.source_start_sec),
           sourceEndSec: roundSeconds(block?.source_end_sec),
           durationSec: getBlockDuration(block),
@@ -2674,8 +2918,11 @@ export default function PodcastAudioComposerPage() {
             sourceAudioId: sourceId,
             savedClipId: sourceMap.savedClipId,
             insertedPhraseId: sourceMap.insertedPhraseId,
+            savedClipLabel: String(block?.saved_clip_label || resolved.savedClip?.label || ""),
+            insertedPhraseLabel: String(block?.inserted_phrase_label || ""),
             availableActorIds,
             availableSavedClipIds,
+            availableLegacySourceIds,
           };
           console.error("[PODCAST RENDER BLOCK SOURCE MISSING]", missing);
           missingSources.push(missing);
@@ -2687,7 +2934,8 @@ export default function PodcastAudioComposerPage() {
 
     if (missingSources.length) {
       const firstMissing = missingSources[0];
-      throw new Error(`Не найден серверный source_url для блока ${firstMissing.blockId || "без id"}. Проверь загруженные актёрские аудио и сохранённые фразы.`);
+      const label = String(firstMissing.savedClipLabel || firstMissing.insertedPhraseLabel || firstMissing.savedClipId || firstMissing.insertedPhraseId || firstMissing.blockId || "без id").trim();
+      throw new Error(`Не найден исходный файл для сохранённой фразы ${label}. Пересохрани эту фразу из аудио актёра. blockId=${firstMissing.blockId || ""} savedClipId=${firstMissing.savedClipId || ""}`);
     }
 
     console.log("[PODCAST TO TIMING RENDER_TO_ASSET_START]", {
