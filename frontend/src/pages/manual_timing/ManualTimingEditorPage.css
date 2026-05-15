@@ -1849,12 +1849,23 @@
 .manualTimingTrackNudgeBox {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 7px;
+  width: auto;
+  max-width: 100%;
   min-height: 38px;
   padding: 5px;
   border-radius: 999px;
   border: 1px solid rgba(251, 191, 36, 0.24);
   background: rgba(2, 6, 23, 0.38);
+}
+
+.manualTimingTrackNudgeBox .clipSB_btn {
+  flex: 0 0 auto;
+  width: auto !important;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .manualTimingTrackNudgeBox .manualTimingSilenceButton {
@@ -1874,9 +1885,12 @@
 }
 
 .manualTimingCutButton {
-  flex: 0 0 auto;
-  min-width: 0;
-  padding: 8px 12px !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 118px;
+  max-width: max-content;
+  padding: 8px 13px !important;
+  justify-content: center;
   border-color: rgba(45, 212, 191, 0.55) !important;
   color: #ecfeff !important;
   background: linear-gradient(135deg, rgba(13, 148, 136, 0.48), rgba(14, 165, 233, 0.22)) !important;
@@ -1960,8 +1974,8 @@
   }
 
   .manualTimingTrackNudgeBox {
-    flex: 1 1 100%;
-    justify-content: space-between;
+    flex: 0 1 auto;
+    justify-content: flex-start;
   }
 
   .manualTimingStepControl {
@@ -3250,6 +3264,26 @@
 
 .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingTrackNudgeBox {
   flex: 0 0 auto;
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingTrackNudgeBox .clipSB_btn {
+  flex: 0 0 auto;
+  width: auto !important;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingCutButton {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 118px;
+  max-width: max-content;
+  padding: 8px 13px !important;
+  white-space: nowrap;
+  justify-content: center;
 }
 
 .manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingJsonPanelTrack {
