@@ -45,6 +45,7 @@ import {
   formatTimingSec,
   getDefaultManualTimingNodeData,
   getManualTimingSceneDurationWarning,
+  getManualTimingAudioSignature,
   getManualTimingPhrasesForScene,
   hydrateManualTimingScenesWithStoryBlocks,
   normalizeManualTimingAudio,
@@ -690,6 +691,118 @@ function manualBoardIdentityChanged(oldBoard = {}, newBoard = {}) {
   return ["projectId", "inputSignature", "audioSignature", "storySignature"].some((key) => (
     oldIdentity[key] && newIdentity[key] && oldIdentity[key] !== newIdentity[key]
   ));
+}
+
+function parseManualTimingAudioSignature(signature = "") {
+  try {
+    return JSON.parse(String(signature || ""));
+  } catch {
+    return {};
+  }
+}
+
+function manualTimingAudioSignaturesDiffer(a = "", b = "") {
+  const left = String(a || "").trim();
+  const right = String(b || "").trim();
+  if (!left || !right) return false;
+  return left !== right;
+}
+
+function getManualTimingAudioNameForDiagnostics(projectOrAudio = {}) {
+  const parsed = parseManualTimingAudioSignature(getManualTimingAudioSignature(projectOrAudio));
+  return String(parsed.audio_name || "").trim();
+}
+
+function getManualTimingAudioDurationForDiagnostics(projectOrAudio = {}) {
+  const parsed = parseManualTimingAudioSignature(getManualTimingAudioSignature(projectOrAudio));
+  return Number(parsed.audio_duration_sec || 0) || 0;
+}
+
+function getIncomingManualTimingProjectFromLocation(location = {}, fallbackProject = {}, ownerNodeId = "") {
+  const navState = location?.state && typeof location.state === "object" ? location.state : {};
+  const rawProject = navState.project || navState.manualTimingProject || navState.timingProject || {};
+  const incomingAudio = normalizeManualTimingProjectAudioForHandoff(rawProject, navState.audio || navState.audio_metadata || navState.audioMetadata);
+  const hasIncomingAudio = Boolean(incomingAudio.url) && (
+    navState.fromPodcastComposer === true
+    || navState.replaceAudio === true
+    || Boolean(navState.audio)
+    || Boolean(navState.audio_metadata)
+    || Boolean(navState.audioMetadata)
+    || Boolean(rawProject?.audio)
+  );
+  if (!hasIncomingAudio) return null;
+  const safeOwnerNodeId = String(ownerNodeId || navState.sourceNodeId || rawProject.sourceNodeId || rawProject.nodeId || fallbackProject.sourceNodeId || fallbackProject.nodeId || "").trim();
+  const projectMode = String(rawProject.project_mode || navState.project_mode || (navState.fromPodcastComposer ? MANUAL_TIMING_PODCAST_DIALOGUE_MODE : fallbackProject.project_mode) || "").trim();
+  const projectKind = String(rawProject.project_kind || navState.project_kind || (projectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" : fallbackProject.project_kind) || "").trim();
+  const format = String(rawProject.format || rawProject.aspect_ratio || navState.format || navState.aspect_ratio || fallbackProject.format || fallbackProject.aspect_ratio || "9:16").trim();
+  const baseProject = {
+    ...fallbackProject,
+    ...rawProject,
+    nodeId: safeOwnerNodeId,
+    sourceNodeId: safeOwnerNodeId,
+    project_mode: projectMode,
+    project_kind: projectKind,
+    format,
+    aspect_ratio: String(rawProject.aspect_ratio || rawProject.format || navState.aspect_ratio || navState.format || fallbackProject.aspect_ratio || fallbackProject.format || format || "9:16"),
+  };
+  const nextProject = buildManualTimingProjectForAudioChange(baseProject, incomingAudio, navState.fromPodcastComposer ? "podcast_audio_composer" : "incoming_audio");
+  const incomingSignature = getManualTimingAudioSignature(nextProject);
+  const projectId = String(rawProject.project_id || rawProject.projectId || "").trim()
+    || `manual_timing_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    ...nextProject,
+    audio_metadata: {
+      ...(rawProject.audio_metadata || rawProject.audioMetadata || {}),
+      ...incomingAudio,
+      name: incomingAudio.name || incomingAudio.filename || "",
+      filename: incomingAudio.filename || incomingAudio.name || "",
+    },
+    audio_duration_sec: Number(incomingAudio.duration_sec || 0) || 0,
+    project_id: projectId,
+    projectId,
+    input_signature: String(rawProject.input_signature || rawProject.inputSignature || incomingSignature),
+    inputSignature: String(rawProject.inputSignature || rawProject.input_signature || incomingSignature),
+    audio_signature: incomingSignature,
+    audioSignature: incomingSignature,
+    podcast_edit_manifest: navState.podcast_edit_manifest || rawProject.podcast_edit_manifest || rawProject.composer_edit_manifest || null,
+    composer_edit_manifest: navState.composer_edit_manifest || navState.podcast_edit_manifest || rawProject.composer_edit_manifest || rawProject.podcast_edit_manifest || null,
+  };
+}
+
+function getManualTimingBoardForOwnerMatchingProject(ownerNodeId = "", referenceProject = null, { logStale = false } = {}) {
+  const board = getManualTimingBoardForOwner(ownerNodeId);
+  if (!hasMeaningfulManualProject(board) || !referenceProject) return board;
+  const referenceSignature = getManualTimingAudioSignature(referenceProject);
+  const boardSignature = getManualTimingAudioSignature(board);
+  if (!manualTimingAudioSignaturesDiffer(referenceSignature, boardSignature)) return board;
+  if (logStale) {
+    console.info("[MANUAL TIMING STALE_ACTIVE_BOARD_IGNORED]", {
+      reason: "audio_signature_changed",
+      incomingAudioDurationSec: getManualTimingAudioDurationForDiagnostics(referenceProject),
+      storedAudioDurationSec: getManualTimingAudioDurationForDiagnostics(board),
+      incomingAudioName: getManualTimingAudioNameForDiagnostics(referenceProject),
+      storedAudioName: getManualTimingAudioNameForDiagnostics(board),
+    });
+  }
+  return null;
+}
+
+function validateManualTimingBackupMatchesCurrentProject(exportProject = {}, currentProject = {}) {
+  const exportPayload = buildManualProjectBackupJson(exportProject, { source: "manual_timing_editor_validation" });
+  const currentSignature = parseManualTimingAudioSignature(getManualTimingAudioSignature(currentProject));
+  const exportSignature = parseManualTimingAudioSignature(getManualTimingAudioSignature(exportPayload));
+  const durationMatches = Math.abs(Number(currentSignature.audio_duration_sec || 0) - Number(exportSignature.audio_duration_sec || 0)) <= 0.001;
+  const currentAudioRef = String(currentSignature.audio_url || currentSignature.audio_name || "").trim();
+  const exportAudioRef = String(exportSignature.audio_url || exportSignature.audio_name || "").trim();
+  const audioMatches = !currentAudioRef || !exportAudioRef || currentAudioRef === exportAudioRef;
+  return {
+    ok: durationMatches && audioMatches,
+    payload: exportPayload,
+    currentAudioDurationSec: Number(currentSignature.audio_duration_sec || 0) || 0,
+    exportAudioDurationSec: Number(exportSignature.audio_duration_sec || 0) || 0,
+    currentAudioName: String(currentSignature.audio_name || currentSignature.audio_url || ""),
+    exportAudioName: String(exportSignature.audio_name || exportSignature.audio_url || ""),
+  };
 }
 
 function downloadManualBoardBackupJson(project = {}, filename = "manual_clip_board_backup.json") {
@@ -1535,7 +1648,16 @@ export default function ManualTimingEditorPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const initialProjectRef = useRef(null);
-  if (!initialProjectRef.current) initialProjectRef.current = buildInitialProject();
+  if (!initialProjectRef.current) {
+    const storedInitialProject = buildInitialProject();
+    const initialOwner = resolveManualTimingOwnerNode(location, storedInitialProject).finalOwnerNodeId;
+    const incomingInitialProject = getIncomingManualTimingProjectFromLocation(location, storedInitialProject, initialOwner);
+    const incomingInitialSignature = incomingInitialProject ? getManualTimingAudioSignature(incomingInitialProject) : "";
+    const storedInitialSignature = storedInitialProject ? getManualTimingAudioSignature(storedInitialProject) : "";
+    initialProjectRef.current = incomingInitialProject && (!storedInitialProject || manualTimingAudioSignaturesDiffer(incomingInitialSignature, storedInitialSignature))
+      ? incomingInitialProject
+      : storedInitialProject;
+  }
   const audioRef = useRef(null);
   const timelineViewportRef = useRef(null);
   const timelineRef = useRef(null);
@@ -1563,7 +1685,7 @@ export default function ManualTimingEditorPage() {
   const [redoStack, setRedoStack] = useState([]);
   const [activeBoardProject, setActiveBoardProject] = useState(() => {
     const { finalOwnerNodeId } = resolveManualTimingOwnerNode(location, initialProjectRef.current);
-    return getManualTimingBoardForOwner(finalOwnerNodeId);
+    return getManualTimingBoardForOwnerMatchingProject(finalOwnerNodeId, initialProjectRef.current);
   });
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
   const [groupSelectedSceneIds, setGroupSelectedSceneIds] = useState([]);
@@ -1830,6 +1952,8 @@ export default function ManualTimingEditorPage() {
     const shouldHydrateReturn = Boolean(
       navState.returnFromStoryboard === true
       || navState.openManualTimingNode === true
+      || navState.fromPodcastComposer === true
+      || navState.replaceAudio === true
       || requestedOwnerNodeId
     );
     const ownerNodeId = requestedOwnerNodeId || finalOwnerNodeId;
@@ -1837,13 +1961,46 @@ export default function ManualTimingEditorPage() {
     if (!shouldHydrateReturn || !ownerNodeId || storyboardReturnHydrateKeyRef.current === hydrateKey) return;
 
     const storedProject = readManualTimingProjectForNode(ownerNodeId);
-    if (!storedProject) return;
+    const incomingProject = getIncomingManualTimingProjectFromLocation(location, storedProject || project, ownerNodeId);
+    const incomingSignature = incomingProject ? getManualTimingAudioSignature(incomingProject) : "";
+    const storedSignature = storedProject ? getManualTimingAudioSignature(storedProject) : "";
+    const changed = manualTimingAudioSignaturesDiffer(incomingSignature, storedSignature);
+
+    if (incomingProject) {
+      console.info("[MANUAL TIMING INCOMING_AUDIO_SIGNATURE]", {
+        incomingSignature,
+        storedSignature,
+        changed,
+      });
+    }
 
     storyboardReturnHydrateKeyRef.current = hydrateKey;
+
+    if (incomingProject && (changed || !storedProject)) {
+      if (changed && storedProject) {
+        console.info("[MANUAL TIMING STALE_ACTIVE_BOARD_IGNORED]", {
+          reason: "audio_signature_changed",
+          incomingAudioDurationSec: getManualTimingAudioDurationForDiagnostics(incomingProject),
+          storedAudioDurationSec: getManualTimingAudioDurationForDiagnostics(storedProject),
+          incomingAudioName: getManualTimingAudioNameForDiagnostics(incomingProject),
+          storedAudioName: getManualTimingAudioNameForDiagnostics(storedProject),
+        });
+      }
+      setProject(incomingProject);
+      persistManualTimingProject(incomingProject);
+      setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(ownerNodeId, incomingProject, { logStale: true }));
+      setAudioTime(0, { pause: true, clearBound: true });
+      setAsrStatus("");
+      setHandoffStatus("");
+      return;
+    }
+
+    if (!storedProject) return;
+
     const restoredProject = normalizeStoredManualTimingProject(storedProject, ownerNodeId);
     setProject(restoredProject);
     persistManualTimingProject(restoredProject);
-    setActiveBoardProject(getManualTimingBoardForOwner(ownerNodeId));
+    setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(ownerNodeId, restoredProject, { logStale: true }));
     console.info("[MANUAL TIMING RETURN FROM STORYBOARD]", {
       sourceNodeId: ownerNodeId,
       returnFromStoryboard: navState.returnFromStoryboard === true,
@@ -1854,8 +2011,8 @@ export default function ManualTimingEditorPage() {
   }, [location?.key, location?.state, finalOwnerNodeId]);
 
   useEffect(() => {
-    setActiveBoardProject(getManualTimingBoardForOwner(finalOwnerNodeId));
-  }, [finalOwnerNodeId]);
+    setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(finalOwnerNodeId, project, { logStale: true }));
+  }, [finalOwnerNodeId, project]);
 
   useEffect(() => {
     setGroupSelectedSceneIds((selectedIds) => {
@@ -3562,6 +3719,25 @@ export default function ManualTimingEditorPage() {
 
   const onDownloadProjectBackup = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
+    const validation = validateManualTimingBackupMatchesCurrentProject(project, project);
+    if (!validation.ok) {
+      console.info("[MANUAL TIMING BACKUP_BLOCKED_STALE_PROJECT]", {
+        currentAudioDurationSec: validation.currentAudioDurationSec,
+        exportAudioDurationSec: validation.exportAudioDurationSec,
+        currentAudioName: validation.currentAudioName,
+        exportAudioName: validation.exportAudioName,
+      });
+      setCopyStatus("Бэкап остановлен: текущий проект не совпадает с активной доской. Обновите проект или скачайте текущий JSON.");
+      window.setTimeout(() => setCopyStatus(""), 5200);
+      return;
+    }
+    console.info("[MANUAL TIMING CURRENT_PROJECT_BACKUP_VALIDATED]", {
+      audioDurationSec: validation.currentAudioDurationSec,
+      audioName: validation.currentAudioName,
+      sceneCount: scenes.length,
+      storyBlockCount: storyBlocks.length,
+      markerCount: markers.length,
+    });
     downloadJsonPayload(buildManualProjectBackupJson(project, { source: "manual_timing_editor" }), "manual_project_backup.json");
   };
 
@@ -3600,8 +3776,28 @@ export default function ManualTimingEditorPage() {
       window.setTimeout(() => setCopyStatus(""), 4200);
       return;
     }
+    const validation = validateManualTimingBackupMatchesCurrentProject(existingBoard, project);
+    if (!validation.ok) {
+      console.info("[MANUAL TIMING BACKUP_BLOCKED_STALE_PROJECT]", {
+        currentAudioDurationSec: validation.currentAudioDurationSec,
+        exportAudioDurationSec: validation.exportAudioDurationSec,
+        currentAudioName: validation.currentAudioName,
+        exportAudioName: validation.exportAudioName,
+      });
+      setActiveBoardProject(null);
+      setCopyStatus("Бэкап остановлен: текущий проект не совпадает с активной доской. Обновите проект или скачайте текущий JSON.");
+      window.setTimeout(() => setCopyStatus(""), 5200);
+      return;
+    }
     setActiveBoardProject(existingBoard);
-    downloadJsonPayload(buildManualProjectBackupJson(existingBoard, { source: "manual_timing_editor_active_board" }), "manual_clip_board_backup.json");
+    console.info("[MANUAL TIMING CURRENT_PROJECT_BACKUP_VALIDATED]", {
+      audioDurationSec: validation.currentAudioDurationSec,
+      audioName: validation.currentAudioName,
+      sceneCount: scenes.length,
+      storyBlockCount: storyBlocks.length,
+      markerCount: markers.length,
+    });
+    downloadJsonPayload(buildManualProjectBackupJson(project, { source: "manual_timing_editor_active_board_current_project" }), "manual_project_backup.json");
   };
 
   const onStartNewAnalysisWithConfirm = () => {
