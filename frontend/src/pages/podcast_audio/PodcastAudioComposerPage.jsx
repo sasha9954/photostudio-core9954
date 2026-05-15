@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { getAccountScopedStorageKey } from "../clip_nodes/manualProjectBackup.js";
 import { API_BASE } from "../../services/api.js";
@@ -26,6 +26,66 @@ const BLOCK_COLORS = [
   "var(--podcast-block-color-5)",
   "var(--podcast-block-color-6)",
 ];
+
+
+const BLOCK_ACTION_MENU_OFFSET = 12;
+const BLOCK_ACTION_MENU_PADDING = 16;
+const BLOCK_ACTION_MENU_FALLBACK_WIDTH = 460;
+const BLOCK_ACTION_MENU_FALLBACK_HEIGHT = 560;
+
+function getSafeBlockMenuPosition(clickX = 220, clickY = 220, menuSize = {}) {
+  if (typeof window === "undefined") {
+    return {
+      x: clickX,
+      y: clickY,
+      menuWidth: BLOCK_ACTION_MENU_FALLBACK_WIDTH,
+      menuHeight: BLOCK_ACTION_MENU_FALLBACK_HEIGHT,
+      flippedX: false,
+      shiftedY: false,
+    };
+  }
+
+  const padding = BLOCK_ACTION_MENU_PADDING;
+  const viewportWidth = window.innerWidth || 0;
+  const viewportHeight = window.innerHeight || 0;
+  const maxMenuWidth = Math.max(0, viewportWidth - (padding * 2));
+  const maxMenuHeight = Math.max(0, viewportHeight - (padding * 2));
+  const menuWidth = Math.min(
+    maxMenuWidth || BLOCK_ACTION_MENU_FALLBACK_WIDTH,
+    Number.isFinite(menuSize.width) && menuSize.width > 0 ? menuSize.width : BLOCK_ACTION_MENU_FALLBACK_WIDTH
+  );
+  const menuHeight = Math.min(
+    maxMenuHeight || BLOCK_ACTION_MENU_FALLBACK_HEIGHT,
+    Number.isFinite(menuSize.height) && menuSize.height > 0 ? menuSize.height : BLOCK_ACTION_MENU_FALLBACK_HEIGHT
+  );
+
+  let left = clickX + BLOCK_ACTION_MENU_OFFSET;
+  let top = clickY + BLOCK_ACTION_MENU_OFFSET;
+  let flippedX = false;
+  let shiftedY = false;
+
+  if (left + menuWidth > viewportWidth - padding) {
+    left = clickX - menuWidth - BLOCK_ACTION_MENU_OFFSET;
+    flippedX = true;
+  }
+
+  if (top + menuHeight > viewportHeight - padding) {
+    top = Math.max(padding, viewportHeight - menuHeight - padding);
+    shiftedY = true;
+  }
+
+  left = Math.max(padding, Math.min(left, viewportWidth - menuWidth - padding));
+  top = Math.max(padding, Math.min(top, viewportHeight - menuHeight - padding));
+
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    menuWidth: Math.round(menuWidth),
+    menuHeight: Math.round(menuHeight),
+    flippedX,
+    shiftedY,
+  };
+}
 
 const COLOR_SWATCHES = [
   "#60a5fa",
@@ -1164,6 +1224,7 @@ export default function PodcastAudioComposerPage() {
   const silenceFrameRef = useRef(null);
   const phrasePreviewRef = useRef(null);
   const actorAudioInputRef = useRef(null);
+  const blockMenuRef = useRef(null);
   const activeActorPlaybackRef = useRef(null);
   const blocksRef = useRef([]);
   const currentBlockIndexRef = useRef(0);
@@ -1197,6 +1258,63 @@ export default function PodcastAudioComposerPage() {
   useEffect(() => {
     hydratedRef.current = hasHydrated;
   }, [hasHydrated]);
+
+  const updateBlockMenuPosition = (menuElement = blockMenuRef.current) => {
+    if (!blockMenu) return;
+    const clickX = Number.isFinite(blockMenu.clickX) ? blockMenu.clickX : blockMenu.x;
+    const clickY = Number.isFinite(blockMenu.clickY) ? blockMenu.clickY : blockMenu.y;
+    const rect = menuElement?.getBoundingClientRect();
+    const safePosition = getSafeBlockMenuPosition(clickX, clickY, {
+      width: rect?.width,
+      height: rect?.height,
+    });
+    const shouldUpdate =
+      blockMenu.x !== safePosition.x ||
+      blockMenu.y !== safePosition.y ||
+      blockMenu.menuWidth !== safePosition.menuWidth ||
+      blockMenu.menuHeight !== safePosition.menuHeight ||
+      blockMenu.flippedX !== safePosition.flippedX ||
+      blockMenu.shiftedY !== safePosition.shiftedY;
+
+    console.log("[PODCAST BLOCK MENU POSITION]", {
+      clickX,
+      clickY,
+      menuWidth: safePosition.menuWidth,
+      menuHeight: safePosition.menuHeight,
+      finalLeft: safePosition.x,
+      finalTop: safePosition.y,
+      flippedX: safePosition.flippedX,
+      shiftedY: safePosition.shiftedY,
+    });
+
+    if (shouldUpdate) {
+      setBlockMenu((menu) => menu ? {
+        ...menu,
+        x: safePosition.x,
+        y: safePosition.y,
+        menuWidth: safePosition.menuWidth,
+        menuHeight: safePosition.menuHeight,
+        flippedX: safePosition.flippedX,
+        shiftedY: safePosition.shiftedY,
+      } : menu);
+    }
+  };
+
+  useLayoutEffect(() => {
+    if (!blockMenu) return;
+    updateBlockMenuPosition();
+  }, [blockMenu?.blockId, blockMenu?.clickX, blockMenu?.clickY, savedClips.length]);
+
+  useEffect(() => {
+    if (!blockMenu) return undefined;
+    const handleViewportChange = () => updateBlockMenuPosition();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [blockMenu]);
 
   useEffect(() => {
     if (!audioRef.current || !audio.url) return;
@@ -1389,12 +1507,21 @@ export default function PodcastAudioComposerPage() {
   };
 
   const openBlockMenu = (blockId, startSec, point = {}) => {
+    const clickX = Number.isFinite(point.x) ? point.x : 220;
+    const clickY = Number.isFinite(point.y) ? point.y : 220;
+    const safePosition = getSafeBlockMenuPosition(clickX, clickY);
     setSelectedBlockId(blockId);
     seekOnTimeline(startSec, blocksRef.current);
     setBlockMenu({
       blockId,
-      x: Number.isFinite(point.x) ? point.x : 220,
-      y: Number.isFinite(point.y) ? point.y : 220,
+      clickX,
+      clickY,
+      x: safePosition.x,
+      y: safePosition.y,
+      menuWidth: safePosition.menuWidth,
+      menuHeight: safePosition.menuHeight,
+      flippedX: safePosition.flippedX,
+      shiftedY: safePosition.shiftedY,
     });
     setSaveClipDialog(null);
     setMessage("Открыто меню блока: удаление, сохранение, цвет блока и аудио-фразы.");
@@ -2685,8 +2812,14 @@ export default function PodcastAudioComposerPage() {
 
           {blockMenu ? (
             <div
+              ref={blockMenuRef}
               className="podcastBlockActionMenu"
-              style={{ "--menu-x": `${blockMenu.x}px`, "--menu-y": `${blockMenu.y}px` }}
+              style={{
+                "--menu-x": `${blockMenu.x}px`,
+                "--menu-y": `${blockMenu.y}px`,
+                "--menu-left": `${blockMenu.x}px`,
+                "--menu-top": `${blockMenu.y}px`,
+              }}
               onClick={(event) => event.stopPropagation()}
             >
               <button className="podcastMenuClose" type="button" onClick={closeBlockMenu}>×</button>
