@@ -1495,6 +1495,15 @@ export default function ManualTimingEditorPage() {
   });
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
   const [groupSelectedSceneIds, setGroupSelectedSceneIds] = useState([]);
+  const [storyBlockDialog, setStoryBlockDialog] = useState({
+    isOpen: false,
+    selectedSceneIds: [],
+    defaultTitle: "",
+    title: "",
+    color: "",
+    hasExistingStoryBlock: false,
+    confirmMoveExisting: false,
+  });
   const newBoardConfirmResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
   const silenceRepairSignatureRef = useRef("");
@@ -3822,29 +3831,38 @@ export default function ManualTimingEditorPage() {
     selectSceneAndSeekStart(scene, { pause: true });
   };
 
-  const getNextManualStoryBlockNumber = (blocks = []) => {
-    const normalizedBlocks = normalizeManualTimingStoryBlocks(blocks);
+  const getManualStoryBlocksWithScenes = (blocks = []) => {
     const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
-    return normalizedBlocks.filter((block) => String(block?.block_id || "") !== unknownBlockId).length + 1;
+    return normalizeManualTimingStoryBlocks(blocks).filter((block) => {
+      const blockId = String(block?.block_id || "").trim();
+      if (!blockId || blockId === unknownBlockId) return false;
+      return (Array.isArray(block?.scene_ids) ? block.scene_ids : [])
+        .map((sceneId) => String(sceneId || "").trim())
+        .filter(Boolean)
+        .length > 0;
+    });
   };
+
+  const getNextManualStoryBlockNumber = (blocks = []) => getManualStoryBlocksWithScenes(blocks).length + 1;
 
   const getNextManualStoryBlockId = (blocks = []) => {
     const normalizedBlocks = normalizeManualTimingStoryBlocks(blocks);
     const usedIds = new Set(normalizedBlocks.map((block) => String(block?.block_id || "")).filter(Boolean));
-    let blockNumber = getNextManualStoryBlockNumber(normalizedBlocks);
-    let blockId = `manual_story_block_${String(blockNumber).padStart(2, "0")}`;
+    const blockNumber = getNextManualStoryBlockNumber(normalizedBlocks);
+    const baseBlockId = `manual_story_block_${String(blockNumber).padStart(2, "0")}`;
+    if (!usedIds.has(baseBlockId)) return { blockId: baseBlockId, blockNumber };
+
+    let suffix = 2;
+    let blockId = `${baseBlockId}_${suffix}`;
     while (usedIds.has(blockId)) {
-      blockNumber += 1;
-      blockId = `manual_story_block_${String(blockNumber).padStart(2, "0")}`;
+      suffix += 1;
+      blockId = `${baseBlockId}_${suffix}`;
     }
     return { blockId, blockNumber };
   };
 
   const getNextManualStoryBlockColor = (blocks = []) => {
-    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
-    const realBlockCount = normalizeManualTimingStoryBlocks(blocks)
-      .filter((block) => String(block?.block_id || "") !== unknownBlockId)
-      .length;
+    const realBlockCount = getManualStoryBlocksWithScenes(blocks).length;
     return STORY_BLOCK_COLORS[realBlockCount % STORY_BLOCK_COLORS.length] || "#37d6c2";
   };
 
@@ -3878,6 +3896,49 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const resetStoryBlockDialog = () => {
+    setStoryBlockDialog({
+      isOpen: false,
+      selectedSceneIds: [],
+      defaultTitle: "",
+      title: "",
+      color: "",
+      hasExistingStoryBlock: false,
+      confirmMoveExisting: false,
+    });
+  };
+
+  const clearManualStoryBlocks = () => {
+    const confirmed = window.confirm("Очистить старые смысловые блоки? Сцены и разрезы останутся.");
+    if (!confirmed) return;
+
+    const oldBlockCount = normalizeManualTimingStoryBlocks(project.story_blocks)
+      .filter((block) => String(block?.block_id || "") !== String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || ""))
+      .length;
+    const nextStoryBlocks = [MANUAL_TIMING_UNKNOWN_STORY_BLOCK];
+    const nextScenes = scenes.map((scene) => {
+      const { story_block_id, story_block_title_ru, story_block_color, ...restScene } = scene || {};
+      return restScene;
+    });
+
+    rememberManualTimingAction("очистить story blocks");
+    persist({
+      ...project,
+      story_blocks: nextStoryBlocks,
+      scenes: nextScenes,
+      selectedSceneId: project.selectedSceneId || nextScenes[0]?.scene_id || "",
+    });
+    resetStoryBlockDialog();
+    console.info("[MANUAL TIMING STORY BLOCKS_CLEARED]", {
+      sceneCount: nextScenes.length,
+      oldBlockCount,
+      newBlockCount: nextStoryBlocks.length,
+      markersPreserved: true,
+    });
+    setCopyStatus("Смысловые блоки очищены. Сцены и разрезы сохранены.");
+    window.setTimeout(() => setCopyStatus(""), 2400);
+  };
+
   const createManualStoryBlockFromSelection = () => {
     const selectedScenes = selectedGroupScenesInTimelineOrder();
     const selectedSceneIds = selectedScenes.map((scene) => String(scene?.scene_id || "")).filter(Boolean);
@@ -3897,26 +3958,55 @@ export default function ManualTimingEditorPage() {
       const storyBlockId = String(scene?.story_block_id || "").trim();
       return storyBlockId && storyBlockId !== unknownBlockId;
     });
-    if (hasExistingStoryBlock) {
-      const shouldMove = window.confirm("Эти сцены уже входят в другой смысловой блок. Перенести их в новый блок?");
-      if (!shouldMove) {
-        rejectManualStoryBlockGrouping("move_existing_cancelled");
-        return;
-      }
-    }
-
-    const { blockId, blockNumber } = getNextManualStoryBlockId(project.story_blocks);
+    const { blockNumber } = getNextManualStoryBlockId(project.story_blocks);
     const defaultTitle = `Смысловой блок ${blockNumber}`;
-    const promptedTitle = window.prompt("Название смыслового блока", defaultTitle);
-    if (promptedTitle === null) {
-      rejectManualStoryBlockGrouping("title_cancelled");
+    const color = getNextManualStoryBlockColor(project.story_blocks);
+    setStoryBlockDialog({
+      isOpen: true,
+      selectedSceneIds,
+      defaultTitle,
+      title: defaultTitle,
+      color,
+      hasExistingStoryBlock,
+      confirmMoveExisting: !hasExistingStoryBlock,
+    });
+    console.info("[MANUAL TIMING STORY BLOCK_DIALOG_OPEN]", {
+      selectedSceneIds,
+      defaultTitle,
+      color,
+    });
+  };
+
+  const submitManualStoryBlockDialog = () => {
+    if (!storyBlockDialog.isOpen) return;
+    const selectedSceneIdSet = new Set((Array.isArray(storyBlockDialog.selectedSceneIds) ? storyBlockDialog.selectedSceneIds : [])
+      .map((sceneId) => String(sceneId || "").trim())
+      .filter(Boolean));
+    const selectedScenes = scenes.filter((scene) => selectedSceneIdSet.has(String(scene?.scene_id || "")));
+    const selectedSceneIds = selectedScenes.map((scene) => String(scene?.scene_id || "")).filter(Boolean);
+
+    if (!selectedSceneIds.length) {
+      rejectManualStoryBlockGrouping("dialog_empty_selection", "Выбранные сцены больше не найдены.");
+      resetStoryBlockDialog();
       return;
     }
-    const title = String(promptedTitle || "").trim() || defaultTitle;
-    const color = getNextManualStoryBlockColor(project.story_blocks);
+    if (!areScenesAdjacentInTimeline(selectedScenes)) {
+      rejectManualStoryBlockGrouping("dialog_non_adjacent_selection", "Можно объединять только соседние сцены.");
+      resetStoryBlockDialog();
+      return;
+    }
+    if (storyBlockDialog.hasExistingStoryBlock && !storyBlockDialog.confirmMoveExisting) {
+      rejectManualStoryBlockGrouping("move_existing_not_confirmed", "Подтвердите перенос сцен в новый смысловой блок.");
+      return;
+    }
+
+    const { blockId } = getNextManualStoryBlockId(project.story_blocks);
+    const title = String(storyBlockDialog.title || "").trim() || storyBlockDialog.defaultTitle;
+    const color = String(storyBlockDialog.color || "").trim() || getNextManualStoryBlockColor(project.story_blocks);
     const startSec = roundTimingSec(Math.min(...selectedScenes.map((scene) => Number(scene?.start_sec || 0))));
     const endSec = roundTimingSec(Math.max(...selectedScenes.map((scene) => Number(scene?.end_sec || 0))));
     const selectedIdSet = new Set(selectedSceneIds);
+    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
     const normalizedBlocks = normalizeManualTimingStoryBlocks(project.story_blocks);
     const newBlock = {
       block_id: blockId,
@@ -3959,6 +4049,10 @@ export default function ManualTimingEditorPage() {
         start_sec: 0,
         end_sec: 0,
       };
+    }).filter((block) => {
+      const blockIdValue = String(block?.block_id || "").trim();
+      if (blockIdValue === unknownBlockId) return true;
+      return (Array.isArray(block?.scene_ids) ? block.scene_ids : []).length > 0;
     });
 
     rememberManualTimingAction("смысловой блок");
@@ -3975,11 +4069,11 @@ export default function ManualTimingEditorPage() {
       startSec,
       endSec,
       color,
-      manualSceneEdits: Boolean(project.manualSceneEdits ?? project.manual_scene_edits),
     });
     setCopyStatus(`Создан смысловой блок: ${title}`);
     window.setTimeout(() => setCopyStatus(""), 2200);
     clearStoryBlockGroupSelection();
+    resetStoryBlockDialog();
   };
 
   const onStoryBlockClick = (block) => {
@@ -4244,6 +4338,13 @@ export default function ManualTimingEditorPage() {
                   disabled={!groupSelectedSceneIds.length}
                   title="Снять выбор сцен для смыслового блока"
                 >Снять выбор</button>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary manualTimingStoryGroupResetButton"
+                  type="button"
+                  onClick={clearManualStoryBlocks}
+                  disabled={!scenes.length && !storyBlocks.length}
+                  title="Очистить только story_blocks: сцены, разрезы и маркеры останутся"
+                >Очистить блоки</button>
                 <span className="manualTimingStoryGroupCount">Выбрано сцен: {groupSelectedSceneIds.length}</span>
               </div>
               <button
@@ -4271,6 +4372,56 @@ export default function ManualTimingEditorPage() {
                 title="Вернуть отменённое действие"
               >↷ вернуть</button>
             </div>
+
+            {storyBlockDialog.isOpen ? <div className="manualTimingStoryBlockDialog" role="dialog" aria-modal="false" aria-label="Создание смыслового блока">
+              <div className="manualTimingStoryBlockDialogHeader">
+                <strong>Новый смысловой блок</strong>
+                <span>{storyBlockDialog.selectedSceneIds.length} сцен</span>
+              </div>
+              {storyBlockDialog.hasExistingStoryBlock ? <div className="manualTimingStoryBlockDialogWarning">
+                <p>Эти сцены уже входят в другой смысловой блок. Перенести их в новый блок?</p>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={storyBlockDialog.confirmMoveExisting}
+                    onChange={(event) => setStoryBlockDialog((dialog) => ({ ...dialog, confirmMoveExisting: event.target.checked }))}
+                  />
+                  <span>Да, перенести выбранные сцены</span>
+                </label>
+              </div> : null}
+              <label className="manualTimingStoryBlockDialogField">
+                <span>Название</span>
+                <input
+                  type="text"
+                  value={storyBlockDialog.title}
+                  placeholder={storyBlockDialog.defaultTitle}
+                  onChange={(event) => setStoryBlockDialog((dialog) => ({ ...dialog, title: event.target.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") submitManualStoryBlockDialog();
+                    if (event.key === "Escape") resetStoryBlockDialog();
+                  }}
+                  autoFocus
+                />
+              </label>
+              <div className="manualTimingStoryBlockDialogColor">
+                <span style={{ background: storyBlockDialog.color || "#37d6c2" }} />
+                <b>Автоцвет блока</b>
+                <code>{storyBlockDialog.color || "#37d6c2"}</code>
+              </div>
+              <div className="manualTimingStoryBlockDialogActions">
+                <button
+                  className="clipSB_btn clipSB_btnSecondary"
+                  type="button"
+                  onClick={resetStoryBlockDialog}
+                >Отмена</button>
+                <button
+                  className="clipSB_btn clipSB_btnPrimary"
+                  type="button"
+                  onClick={submitManualStoryBlockDialog}
+                  disabled={storyBlockDialog.hasExistingStoryBlock && !storyBlockDialog.confirmMoveExisting}
+                >Создать блок</button>
+              </div>
+            </div> : null}
 
         <details className="manualTimingJsonPanel manualTimingJsonPanelCompact manualTimingJsonPanelTrack">
           <summary className="manualTimingJsonSummary">
