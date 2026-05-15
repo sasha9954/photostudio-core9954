@@ -111,6 +111,20 @@ function formatManualBoardUpdatedAt(value) {
   return date.toLocaleString("ru-RU");
 }
 
+
+const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE = "photostudio_manual_timing_current_project_backup";
+const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_SOURCE = "manual_timing_editor_current_project";
+const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_EXTRA_KEYS = [
+  "project_story_summary_ru",
+  "project_visual_bible_ru",
+  "project_continuity_rules_ru",
+  "characters",
+  "locations",
+  "visual_style",
+  "recurring_symbols",
+  "do_not_change_rules",
+];
+
 const STORY_PASS_REQUIRED_SCENE_FIELDS = [
   "translated_text_ru",
   "meaning_hint_ru",
@@ -832,6 +846,125 @@ function validateManualTimingBackupMatchesCurrentProject(exportProject = {}, cur
     exportAudioDurationSec: Number(exportSignature.audio_duration_sec || 0) || 0,
     currentAudioName: String(currentSignature.audio_name || currentSignature.audio_url || ""),
     exportAudioName: String(exportSignature.audio_name || exportSignature.audio_url || ""),
+  };
+}
+
+function getManualTimingCurrentProjectAudioDuration(project = {}) {
+  const audio = normalizeManualTimingAudio(project?.audio);
+  return Number(project?.audio_duration_sec || audio.duration_sec || project?.audioDurationSec || 0) || 0;
+}
+
+function getManualTimingCurrentProjectAudioName(project = {}) {
+  const audio = normalizeManualTimingAudio(project?.audio);
+  const metadata = project?.audio_metadata || project?.audioMetadata || {};
+  return String(
+    audio.name
+    || audio.filename
+    || metadata.name
+    || metadata.filename
+    || project?.audio_name
+    || project?.audioName
+    || project?.audio_filename
+    || project?.audioFilename
+    || "manual_timing"
+  ).trim() || "manual_timing";
+}
+
+function sanitizeManualTimingBackupFilenamePart(value = "manual_timing", maxLength = 48) {
+  const safe = String(value || "manual_timing")
+    .replace(/\.[a-z0-9]{2,5}$/i, "")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[_ .-]+|[_ .-]+$/g, "")
+    .slice(0, maxLength)
+    .replace(/^[_ .-]+|[_ .-]+$/g, "");
+  return safe || "manual_timing";
+}
+
+function formatManualTimingBackupTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
+function buildManualTimingCurrentProjectBackupFilename(project = {}, createdAt = new Date()) {
+  const audioName = sanitizeManualTimingBackupFilenamePart(getManualTimingCurrentProjectAudioName(project));
+  const durationSec = Math.max(0, Math.round(getManualTimingCurrentProjectAudioDuration(project)));
+  return `manual_timing_backup_${audioName}_${durationSec}s_${formatManualTimingBackupTimestamp(createdAt)}.json`;
+}
+
+function buildManualTimingCurrentProjectBackupPayload(project = {}, createdAt = new Date()) {
+  const payload = {
+    backup_type: MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE,
+    backup_schema_version: 1,
+    createdAt: createdAt.toISOString(),
+    source: MANUAL_TIMING_CURRENT_PROJECT_BACKUP_SOURCE,
+    project_mode: project?.project_mode,
+    project_kind: project?.project_kind,
+    story_pass_mode: project?.story_pass_mode,
+    split_type: project?.split_type,
+    format: project?.format,
+    aspect_ratio: project?.aspect_ratio,
+    format_locked: project?.format_locked,
+    audio: project?.audio,
+    audio_metadata: project?.audio_metadata,
+    audio_duration_sec: project?.audio_duration_sec ?? getManualTimingCurrentProjectAudioDuration(project),
+    audio_phrases: project?.audio_phrases || [],
+    markers: project?.markers || [],
+    scenes: project?.scenes || [],
+    story_blocks: project?.story_blocks || [],
+    song_blocks: project?.song_blocks || [],
+    topic_blocks: project?.topic_blocks || [],
+    speakers: project?.speakers || [],
+    manual_scene_edits: project?.manual_scene_edits,
+    manualSceneEdits: project?.manualSceneEdits,
+    lastManualEditReason: project?.lastManualEditReason,
+    selectedSceneId: project?.selectedSceneId,
+    project_id: project?.project_id,
+    projectId: project?.projectId,
+    input_signature: project?.input_signature,
+    inputSignature: project?.inputSignature,
+    audio_signature: project?.audio_signature,
+    audioSignature: project?.audioSignature,
+    nodeId: project?.nodeId,
+    sourceNodeId: project?.sourceNodeId,
+    updatedAt: project?.updatedAt,
+  };
+
+  MANUAL_TIMING_CURRENT_PROJECT_BACKUP_EXTRA_KEYS.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(project || {}, key)) payload[key] = project[key];
+  });
+
+  return payload;
+}
+
+function validateManualTimingCurrentProjectBackupPayload(payload = {}, currentProject = {}, currentState = {}) {
+  const currentAudioDurationSec = Number(currentState.audioDurationSec ?? getManualTimingCurrentProjectAudioDuration(currentProject)) || 0;
+  const payloadAudioDurationSec = Number(payload?.audio_duration_sec || 0) || 0;
+  const currentSceneCount = Number(currentState.sceneCount ?? (Array.isArray(currentProject?.scenes) ? currentProject.scenes.length : 0)) || 0;
+  const payloadSceneCount = Array.isArray(payload?.scenes) ? payload.scenes.length : 0;
+  const currentMarkerCount = Number(currentState.markerCount ?? (Array.isArray(currentProject?.markers) ? currentProject.markers.length : 0)) || 0;
+  const payloadMarkerCount = Array.isArray(payload?.markers) ? payload.markers.length : 0;
+  const currentStoryBlockCount = Number(currentState.storyBlockCount ?? normalizeManualTimingStoryBlocks(currentProject?.story_blocks).length) || 0;
+  const payloadStoryBlockCount = Array.isArray(payload?.story_blocks) ? payload.story_blocks.length : 0;
+
+  let reason = "";
+  if (Math.abs(payloadAudioDurationSec - currentAudioDurationSec) > 0.01) reason = "audio_duration_mismatch";
+  else if (payloadSceneCount !== currentSceneCount) reason = "scene_count_mismatch";
+  else if (payloadMarkerCount !== currentMarkerCount) reason = "marker_count_mismatch";
+  else if (!Array.isArray(payload?.story_blocks)) reason = "story_blocks_missing";
+
+  return {
+    ok: !reason,
+    reason,
+    payloadAudioDurationSec,
+    currentAudioDurationSec,
+    payloadSceneCount,
+    currentSceneCount,
+    payloadMarkerCount,
+    currentMarkerCount,
+    payloadStoryBlockCount,
+    currentStoryBlockCount,
   };
 }
 
@@ -3748,6 +3881,47 @@ export default function ManualTimingEditorPage() {
     downloadJsonPayload(buildManualTimingExportJson(project), "manual_timing_export.json");
   };
 
+  const onDownloadCurrentTimingBackup = () => {
+    const createdAt = new Date();
+    const payload = buildManualTimingCurrentProjectBackupPayload(project, createdAt);
+    const audioName = getManualTimingCurrentProjectAudioName(project);
+    const validation = validateManualTimingCurrentProjectBackupPayload(payload, project, {
+      audioDurationSec: durationSec,
+      sceneCount: scenes.length,
+      markerCount: markers.length,
+      storyBlockCount: storyBlocks.length,
+    });
+
+    if (!validation.ok) {
+      console.info("[MANUAL TIMING CURRENT_TIMING_BACKUP_BLOCKED]", {
+        reason: validation.reason,
+        payloadAudioDurationSec: validation.payloadAudioDurationSec,
+        currentAudioDurationSec: validation.currentAudioDurationSec,
+        payloadSceneCount: validation.payloadSceneCount,
+        currentSceneCount: validation.currentSceneCount,
+        payloadMarkerCount: validation.payloadMarkerCount,
+        currentMarkerCount: validation.currentMarkerCount,
+        payloadStoryBlockCount: validation.payloadStoryBlockCount,
+        currentStoryBlockCount: validation.currentStoryBlockCount,
+      });
+      setCopyStatus("Бэкап остановлен: экспорт не совпадает с текущим таймингом.");
+      window.setTimeout(() => setCopyStatus(""), 5200);
+      return;
+    }
+
+    console.info("[MANUAL TIMING CURRENT_TIMING_BACKUP_DOWNLOADED]", {
+      audioDurationSec: validation.currentAudioDurationSec,
+      audioName,
+      sceneCount: validation.currentSceneCount,
+      markerCount: validation.currentMarkerCount,
+      storyBlockCount: validation.currentStoryBlockCount,
+      projectMode: project?.project_mode,
+      projectKind: project?.project_kind,
+      source: "current_project",
+    });
+    downloadJsonPayload(payload, buildManualTimingCurrentProjectBackupFilename(project, createdAt));
+  };
+
   const onDownloadProjectBackup = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const validation = validateManualTimingBackupMatchesCurrentProject(project, project);
@@ -4905,6 +5079,7 @@ export default function ManualTimingEditorPage() {
               Импорт файла JSON
               <input type="file" accept="application/json,.json,text/plain" onChange={onImportJsonFile} disabled={!isProjectModeSelected} />
             </label>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadCurrentTimingBackup}>Скачать бэкап тайминга</button>
             <div className="manualTimingJsonPassGroup">
               <span>1 · Semantic Story Cut</span>
               <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
