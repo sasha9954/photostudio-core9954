@@ -934,3 +934,63 @@
     padding: 38px 16px 18px !important;
   }
 }
+
+.podcastDeleteGuardDialog {
+  position: fixed;
+  z-index: 80;
+  left: 50%;
+  top: 50%;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  transform: translate(-50%, -50%);
+  overflow-y: auto;
+  border: 1px solid rgba(251, 191, 36, 0.42);
+  border-radius: 22px;
+  padding: 42px 20px 20px;
+  color: #f8fafc;
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.98), rgba(69, 26, 3, 0.96));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+
+.podcastDeleteGuardDialog h3 {
+  margin: 0 0 10px;
+  color: #fde68a;
+}
+
+.podcastDeleteGuardDialog p {
+  margin: 0 0 14px;
+  color: #ffedd5;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.podcastDeleteGuardList {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+
+.podcastDeleteGuardPhrase {
+  display: grid;
+  gap: 3px;
+  border: 1px solid rgba(251, 191, 36, 0.22);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: rgba(15, 23, 42, 0.54);
+}
+
+.podcastDeleteGuardPhrase small {
+  color: #cbd5e1;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.podcastDeleteGuardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.podcastDeleteGuardActions button {
+  flex: 1 1 150px;
+}

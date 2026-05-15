@@ -918,6 +918,8 @@ function resolveServerRenderableBlockSourceUrl({ block = {}, mainAudio = {}, ori
 
 function getItemSourceUrl(item = {}, mainAudio = {}, actorAudios = []) {
   if (!item || item.type === "silence" || item.source_audio_id === "silence") return "";
+  const staticAssetUrl = getFirstBackendStaticAssetUrl(item, ["source_url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl", "url"]);
+  if (staticAssetUrl) return staticAssetUrl;
   const sourceId = String(item.source_audio_id || "main").trim() || "main";
   if (sourceId && sourceId !== "main") {
     const actorUrl = getAudioUrlForSourceId(sourceId, mainAudio, actorAudios);
@@ -1492,6 +1494,7 @@ export default function PodcastAudioComposerPage() {
   const [actorAudios, setActorAudios] = useState([]);
   const [blockMenu, setBlockMenu] = useState(null);
   const [saveClipDialog, setSaveClipDialog] = useState(null);
+  const [deleteActorDialog, setDeleteActorDialog] = useState(null);
   const [guideJsonDialog, setGuideJsonDialog] = useState(null);
   const [phrasePreview, setPhrasePreview] = useState({ clipId: "", positionSec: 0, isPlaying: false });
   const [message, setMessage] = useState("");
@@ -2282,13 +2285,66 @@ export default function PodcastAudioComposerPage() {
     setMessage("Добавлено аудио актёра. В этом блоке можно только резать, слушать и сохранять фразы в общий список.");
   };
 
-  const deleteActorAudio = (actorId) => {
+  const getActorPhraseDependencies = (actorId) => {
+    const safeActorId = String(actorId || "").trim();
+    if (!safeActorId) return [];
+    const byKey = new Map();
+    const remember = (phrase = {}, reason = "") => {
+      const id = String(phrase.id || phrase.saved_clip_id || phrase.inserted_phrase_id || phrase.blockId || phrase.label || reason || "").trim();
+      if (!id) return;
+      const label = String(phrase.label || phrase.saved_clip_label || phrase.inserted_phrase_label || phrase.phrase_label || phrase.block_label || id).trim() || id;
+      const existing = byKey.get(id) || { id, label, reasons: new Set(), savedClipId: String(phrase.savedClipId || phrase.id || phrase.saved_clip_id || "").trim(), blockId: String(phrase.blockId || "").trim() };
+      if (reason) existing.reasons.add(reason);
+      if (phrase.savedClipId || phrase.id || phrase.saved_clip_id) existing.savedClipId = String(phrase.savedClipId || phrase.id || phrase.saved_clip_id || "").trim();
+      if (phrase.blockId) existing.blockId = String(phrase.blockId || "").trim();
+      byKey.set(id, existing);
+    };
+
+    (Array.isArray(savedClips) ? savedClips : []).forEach((clip) => {
+      if (String(clip?.source_audio_id || "").trim() === safeActorId) remember(clip, "savedClip.source_audio_id");
+    });
+
+    (Array.isArray(blocks) ? blocks : []).forEach((block) => {
+      const blockSourceId = String(block?.source_audio_id || "").trim();
+      const linkedClip = findSavedClipForBlock(block, savedClips);
+      const linkedClipFromActor = linkedClip && String(linkedClip?.source_audio_id || "").trim() === safeActorId;
+      if (blockSourceId === safeActorId) {
+        remember({ ...block, id: block?.saved_clip_id || block?.inserted_phrase_id || block?.id, blockId: block?.id, savedClipId: block?.saved_clip_id }, "block.source_audio_id");
+      }
+      if (linkedClipFromActor) {
+        remember({ ...linkedClip, blockId: block?.id, savedClipId: linkedClip?.id }, "block.saved_clip_id");
+      }
+    });
+
+    return [...byKey.values()].map((item) => ({ ...item, reasons: [...item.reasons] }));
+  };
+
+  const deleteActorAudioNow = (actorId) => {
     const actor = actorAudios.find((item) => item.id === actorId);
     if (!actor) return;
     if (activeActorPlaybackRef.current?.actorId === actorId) stopActorPlayback({ pause: true });
     void deleteActorAudioBlob(getActorAudioBlobKey(sourceNodeId, actorId));
     setActorAudios((items) => items.filter((item) => item.id !== actorId));
-    setMessage(`Дополнительное аудио “${actor.name}” удалено. Уже сохранённые фразы остаются в списке.`);
+    setDeleteActorDialog(null);
+    setMessage(`Дополнительное аудио “${actor.name}” удалено.`);
+  };
+
+  const deleteActorAudio = (actorId) => {
+    const actor = actorAudios.find((item) => item.id === actorId);
+    if (!actor) return;
+    const dependentPhrases = getActorPhraseDependencies(actorId);
+    if (dependentPhrases.length) {
+      console.warn("[PODCAST ACTOR DELETE BLOCKED_USED_BY_PHRASES]", {
+        actorId,
+        actorName: actor.name || actor.label || actorId,
+        dependentPhraseCount: dependentPhrases.length,
+        dependentPhrases,
+      });
+      setDeleteActorDialog({ actorId, actorName: actor.name || actor.label || actorId, dependentPhrases, busy: false });
+      setMessage("Это аудио используется во вставленных фразах. Если удалить его, финальная сборка не сможет собрать подкаст.");
+      return;
+    }
+    deleteActorAudioNow(actorId);
   };
 
   const selectActorBlock = (actorId, blockId, startSec) => {
@@ -2382,7 +2438,87 @@ export default function PodcastAudioComposerPage() {
     setMessage(`Подправлен конец выбранного блока актёра “${actor.label}”.`);
   };
 
-  const saveActorSelectedClip = (actorId) => {
+  const extractPhraseToServerAsset = async ({ sourceAudioUrl, sourceStartSec, sourceEndSec, durationSec, label, sourceNodeId: nodeId }) => {
+    const response = await fetch(`${API_BASE}/api/podcast-audio/extract-phrase-to-asset`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceAudioUrl,
+        sourceStartSec: roundSeconds(sourceStartSec),
+        sourceEndSec: roundSeconds(sourceEndSec),
+        durationSec: roundSeconds(durationSec),
+        label,
+        sourceNodeId: nodeId || sourceNodeId,
+      }),
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok || data?.ok === false) {
+      throw new Error(String(data?.message || data?.detail || data?.code || `extract_failed:${response.status}`));
+    }
+    const url = String(data?.url || data?.assetUrl || data?.asset_url || data?.server_url || data?.publicUrl || data?.path || "").trim();
+    if (!url) throw new Error("backend не вернул URL сохранённой фразы");
+    return {
+      ...data,
+      url,
+      assetUrl: String(data?.assetUrl || data?.asset_url || url).trim() || url,
+      asset_url: String(data?.asset_url || data?.assetUrl || url).trim() || url,
+      server_url: String(data?.server_url || url).trim() || url,
+      publicUrl: String(data?.publicUrl || data?.public_url || url).trim() || url,
+      duration_sec: roundSeconds(data?.duration_sec || data?.durationSec || durationSec),
+      source: "podcast_saved_phrase",
+    };
+  };
+
+  const makeIndependentSavedClip = async ({ clip, actor, block, label }) => {
+    const actorWithServerAsset = await uploadActorSourceAudioForServer(actor);
+    const sourceAudioUrl = getActorServerSourceUrl(actorWithServerAsset);
+    if (!sourceAudioUrl) throw new Error(`Не удалось сохранить исходное аудио актёра “${actor?.name || actor?.label || actor?.id}” на сервере.`);
+
+    setActorAudios((items) => items.map((item) => item.id === actorWithServerAsset.id ? { ...item, ...actorWithServerAsset, isPlaying: false } : item));
+
+    const duration = roundSeconds(clip?.duration_sec || getBlockDuration(block) || (roundSeconds(block?.source_end_sec) - roundSeconds(block?.source_start_sec)));
+    const sourceStartSec = roundSeconds(clip?.source_start_sec ?? block?.source_start_sec);
+    const sourceEndSec = roundSeconds(clip?.source_end_sec ?? block?.source_end_sec ?? (sourceStartSec + duration));
+    const asset = await extractPhraseToServerAsset({
+      sourceAudioUrl,
+      sourceStartSec,
+      sourceEndSec,
+      durationSec: duration,
+      label: label || clip?.label,
+      sourceNodeId,
+    });
+    const clipId = String(clip?.id || createId("saved_clip"));
+    const sourceUrl = asset.url;
+    console.log("[PODCAST SAVED PHRASE ASSET_CREATED]", {
+      savedClipId: clipId,
+      label: label || clip?.label || clipId,
+      sourceUrl,
+      durationSec: asset.duration_sec || duration,
+    });
+    return {
+      ...(clip || {}),
+      id: clipId,
+      label: label || clip?.label || "Фраза",
+      type: "audio",
+      source: "podcast_saved_phrase",
+      original_source_audio_id: clip?.original_source_audio_id || actor?.id || clip?.source_audio_id || "",
+      source_audio_id: clipId,
+      source_url: sourceUrl,
+      asset_url: asset.asset_url || sourceUrl,
+      assetUrl: asset.assetUrl || sourceUrl,
+      server_url: asset.server_url || sourceUrl,
+      publicUrl: asset.publicUrl || sourceUrl,
+      source_name: asset.filename || clip?.source_name || actor?.name || label || clipId,
+      filename: asset.filename || clip?.filename || undefined,
+      source_start_sec: 0,
+      source_end_sec: roundSeconds(asset.duration_sec || duration),
+      duration_sec: roundSeconds(asset.duration_sec || duration),
+      mime_type: asset.mime_type || "audio/mpeg",
+    };
+  };
+
+  const saveActorSelectedClip = async (actorId) => {
     const actor = actorAudios.find((item) => item.id === actorId);
     if (!actor) return;
     const selectedIndex = getSelectedBlockIndex(actor.blocks, actor.selectedBlockId);
@@ -2393,9 +2529,9 @@ export default function PodcastAudioComposerPage() {
     const block = actor.blocks[selectedIndex];
     const duration = getBlockDuration(block);
     if (duration <= 0) return;
-    const countForActor = savedClips.filter((clip) => String(clip.source_audio_id || "") === actorId || String(clip.label || "").startsWith(actor.label)).length + 1;
+    const countForActor = savedClips.filter((clip) => String(clip.original_source_audio_id || clip.source_audio_id || "") === actorId || String(clip.label || "").startsWith(actor.label)).length + 1;
     const label = `${compactBlockBadge(actor.label || actor.name || "АКТ") || "АКТ"}${countForActor}`;
-    const clip = {
+    const baseClip = {
       id: createId("saved_clip"),
       label,
       type: "audio",
@@ -2410,8 +2546,107 @@ export default function PodcastAudioComposerPage() {
       source_label: actor.label,
       created_at: Date.now(),
     };
-    setSavedClips((items) => [...items, clip]);
-    setMessage(`Сохранена фраза актёра “${clip.label}” (${formatTimer(duration)}). Она появилась в общем списке “Аудио фразы”.`);
+    try {
+      setMessage(`Сохраняю фразу актёра “${label}” как независимый серверный файл...`);
+      const clip = await makeIndependentSavedClip({ clip: baseClip, actor, block, label });
+      setSavedClips((items) => [...items, clip]);
+      setMessage(`Сохранена независимая фраза актёра “${clip.label}” (${formatTimer(clip.duration_sec)}). Теперь исходное аудио актёра можно удалить.`);
+    } catch (error) {
+      console.error("[PODCAST SAVED PHRASE ASSET_CREATE_FAILED]", error);
+      setMessage(`Не удалось сохранить фразу актёра на сервере: ${error?.message || error}`);
+    }
+  };
+
+  const saveActorDependentPhrasesAsIndependent = async (actorId) => {
+    const actor = actorAudios.find((item) => item.id === actorId);
+    if (!actor) return;
+    const dependencies = getActorPhraseDependencies(actorId);
+    const dependencyIds = new Set(dependencies.flatMap((dep) => [dep.id, dep.savedClipId]).map((value) => String(value || "").trim()).filter(Boolean));
+    const clipsToConvert = (Array.isArray(savedClips) ? savedClips : []).filter((clip) => (
+      String(clip?.source_audio_id || "").trim() === String(actorId)
+      || dependencyIds.has(String(clip?.id || "").trim())
+      || dependencyIds.has(String(clip?.saved_clip_id || "").trim())
+      || dependencyIds.has(String(clip?.inserted_phrase_id || "").trim())
+    ));
+
+    const directBlocksToConvert = (Array.isArray(blocks) ? blocks : []).filter((block) => (
+      String(block?.source_audio_id || "").trim() === String(actorId)
+      && !findSavedClipForBlock(block, clipsToConvert)
+    ));
+
+    if (!clipsToConvert.length && !directBlocksToConvert.length) {
+      setDeleteActorDialog((dialog) => dialog ? { ...dialog, busy: false } : dialog);
+      setMessage("Не нашёл сохранённые фразы для независимого сохранения.");
+      return;
+    }
+
+    setDeleteActorDialog((dialog) => dialog ? { ...dialog, busy: true } : dialog);
+    try {
+      const convertedById = new Map();
+      const convertedByBlockId = new Map();
+      for (const clip of clipsToConvert) {
+        const converted = await makeIndependentSavedClip({ clip, actor, block: clip, label: clip.label });
+        convertedById.set(String(clip.id || ""), converted);
+      }
+      for (const block of directBlocksToConvert) {
+        const label = String(block?.saved_clip_label || block?.inserted_phrase_label || block?.phrase_label || block?.block_label || actor.label || "Фраза").trim();
+        const baseClip = {
+          id: block?.saved_clip_id || block?.inserted_phrase_id || createId("saved_clip"),
+          label,
+          type: "audio",
+          source_audio_id: actorId,
+          source_url: actor.url,
+          source_name: actor.name,
+          source_start_sec: roundSeconds(block?.source_start_sec),
+          source_end_sec: roundSeconds(block?.source_end_sec),
+          duration_sec: getBlockDuration(block),
+          color_index: block?.color_index,
+          color: block?.color || actor.color,
+          source_label: actor.label,
+          created_at: Date.now(),
+        };
+        const converted = await makeIndependentSavedClip({ clip: baseClip, actor, block, label });
+        convertedByBlockId.set(String(block?.id || ""), converted);
+        convertedById.set(String(baseClip.id || ""), converted);
+      }
+
+      setSavedClips((items) => {
+        const convertedDirect = [...convertedByBlockId.values()].filter((clip) => !(items || []).some((item) => String(item?.id || "") === String(clip?.id || "")));
+        return [...items.map((clip) => convertedById.get(String(clip.id || "")) || clip), ...convertedDirect];
+      });
+      setBlocks((items) => items.map((block) => {
+        const linkedClip = findSavedClipForBlock(block, clipsToConvert);
+        const converted = (linkedClip ? convertedById.get(String(linkedClip.id || "")) : null) || convertedByBlockId.get(String(block?.id || ""));
+        if (!converted && String(block?.source_audio_id || "").trim() !== String(actorId)) return block;
+        const sourceUrl = converted?.source_url || converted?.asset_url || converted?.server_url || "";
+        const duration = roundSeconds(converted?.duration_sec || getBlockDuration(block));
+        return {
+          ...block,
+          source_audio_id: converted?.id || block.source_audio_id,
+          source_url: sourceUrl || block.source_url,
+          asset_url: sourceUrl || block.asset_url,
+          assetUrl: sourceUrl || block.assetUrl,
+          server_url: sourceUrl || block.server_url,
+          publicUrl: sourceUrl || block.publicUrl,
+          source_start_sec: converted ? 0 : block.source_start_sec,
+          source_end_sec: converted ? duration : block.source_end_sec,
+          duration_sec: duration || block.duration_sec,
+          saved_clip_id: converted?.id || block.saved_clip_id,
+          inserted_phrase_id: converted?.id || block.inserted_phrase_id,
+          saved_clip_label: converted?.label || block.saved_clip_label,
+          inserted_phrase_label: converted?.label || block.inserted_phrase_label,
+          phrase_label: converted?.label || block.phrase_label,
+          block_label: converted?.label || block.block_label,
+        };
+      }));
+
+      setDeleteActorDialog(null);
+      setMessage(`Зависимые фразы сохранены как независимые файлы. Теперь можно удалить аудио “${actor.name}”.`);
+    } catch (error) {
+      console.error("[PODCAST DEPENDENT PHRASES ASSET_CREATE_FAILED]", error);
+      setDeleteActorDialog((dialog) => dialog ? { ...dialog, busy: false } : dialog);
+      setMessage(`Не удалось сохранить зависимые фразы: ${error?.message || error}`);
+    }
   };
 
   const splitCurrentBlock = () => {
@@ -3588,6 +3823,29 @@ export default function PodcastAudioComposerPage() {
                 autoFocus
               />
               <button type="button" onClick={saveSelectedClip}>OK</button>
+            </div>
+          ) : null}
+
+          {deleteActorDialog ? (
+            <div className="podcastDeleteGuardDialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+              <button className="podcastMenuClose" type="button" onClick={() => setDeleteActorDialog(null)} disabled={deleteActorDialog.busy}>×</button>
+              <h3>Аудио используется во фразах</h3>
+              <p>Это аудио используется во вставленных фразах. Если удалить его, финальная сборка не сможет собрать подкаст.</p>
+              <div className="podcastDeleteGuardList" aria-label="Зависимые фразы">
+                {(deleteActorDialog.dependentPhrases || []).map((phrase) => (
+                  <div className="podcastDeleteGuardPhrase" key={`${phrase.id}-${phrase.blockId || ""}`}>
+                    <strong>{phrase.label || phrase.id}</strong>
+                    <small>{[phrase.id, phrase.blockId ? `block: ${phrase.blockId}` : ""].filter(Boolean).join(" · ")}</small>
+                  </div>
+                ))}
+              </div>
+              <div className="podcastDeleteGuardActions">
+                <button type="button" onClick={() => setDeleteActorDialog(null)} disabled={deleteActorDialog.busy}>Cancel</button>
+                <button className="podcastMenuDangerAction" type="button" onClick={() => deleteActorAudioNow(deleteActorDialog.actorId)} disabled={deleteActorDialog.busy}>Delete anyway</button>
+                <button className="podcastMenuSaveAction" type="button" onClick={() => saveActorDependentPhrasesAsIndependent(deleteActorDialog.actorId)} disabled={deleteActorDialog.busy}>
+                  {deleteActorDialog.busy ? "Saving..." : "Save dependent phrases as independent assets first"}
+                </button>
+              </div>
             </div>
           ) : null}
 

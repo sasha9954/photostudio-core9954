@@ -437,6 +437,99 @@ def render_podcast_audio_to_asset(payload: PodcastAudioRenderIn):
     }
 
 
+class PodcastAudioExtractPhraseIn(BaseModel):
+    sourceAudioUrl: str
+    sourceStartSec: float = 0.0
+    sourceEndSec: float | None = None
+    durationSec: float | None = None
+    label: str | None = None
+    sourceNodeId: str | None = None
+
+
+@router.post("/podcast-audio/extract-phrase-to-asset")
+def extract_podcast_phrase_to_asset(payload: PodcastAudioExtractPhraseIn):
+    _ensure_assets_dir()
+    source_url = str(payload.sourceAudioUrl or "").strip()
+    source_path = _resolve_static_audio_source(source_url)
+    if not source_path:
+        return _podcast_audio_error(400, "PODCAST_AUDIO_SOURCE_NOT_FOUND", sourceUrl=source_url)
+
+    source_start_sec = _round_audio_sec(payload.sourceStartSec, 0.0)
+    source_end_sec = _round_audio_sec(payload.sourceEndSec, 0.0) if payload.sourceEndSec is not None else 0.0
+    duration_sec = _round_audio_sec(payload.durationSec, 0.0)
+    if duration_sec <= 0 and source_end_sec > source_start_sec:
+        duration_sec = _round_audio_sec(source_end_sec - source_start_sec, 0.0)
+    if duration_sec <= 0:
+        return _podcast_audio_error(400, "PODCAST_AUDIO_EXTRACT_FAILED", message="duration_empty")
+
+    raw_label = str(payload.label or "phrase").strip() or "phrase"
+    safe_label = re.sub(r"[^0-9A-Za-zА-Яа-яЁёІіЇїЄєҐґ_-]+", "_", raw_label).strip("_")[:48] or "phrase"
+    source_node_id = re.sub(r"[^0-9A-Za-z_-]+", "_", str(payload.sourceNodeId or "podcast").strip())[:48] or "podcast"
+
+    with tempfile.TemporaryDirectory(prefix="podcast_phrase_extract_") as tmpdir:
+        tmp_path = Path(tmpdir)
+        temp_output = tmp_path / "podcast_saved_phrase.mp3"
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", f"{source_start_sec:.6f}",
+            "-t", f"{duration_sec:.6f}",
+            "-i", source_path,
+            "-vn",
+            "-ac", "2",
+            "-ar", "44100",
+            "-c:a", "libmp3lame",
+            "-b:a", "192k",
+            str(temp_output),
+        ]
+        print("[PODCAST SAVED PHRASE EXTRACT START]", {
+            "sourceUrl": source_url,
+            "sourceStartSec": source_start_sec,
+            "durationSec": duration_sec,
+            "label": raw_label,
+            "sourceNodeId": str(payload.sourceNodeId or ""),
+        })
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            return _podcast_audio_error(500, "PODCAST_AUDIO_EXTRACT_FAILED", message="ffmpeg_not_found")
+        if r.returncode != 0 or not temp_output.exists():
+            return _podcast_audio_error(500, "PODCAST_AUDIO_EXTRACT_FAILED", message=(r.stderr or r.stdout or "ffmpeg_failed")[-2000:])
+
+        raw = temp_output.read_bytes()
+        hid = _hash_bytes(raw)
+        filename = f"podcast_saved_phrase_{source_node_id}_{safe_label}_{hid}.mp3"
+        output_path = ASSETS_DIR / filename
+        if not output_path.exists():
+            output_path.write_bytes(raw)
+
+    probed_duration_sec = _probe_audio_file_duration_sec(str(output_path)) or duration_sec
+    probed_duration_sec = _round_audio_sec(probed_duration_sec, duration_sec)
+    output_url = asset_url(filename)
+    print("[PODCAST SAVED PHRASE EXTRACT DONE]", {
+        "url": output_url,
+        "durationSec": probed_duration_sec,
+        "filename": filename,
+    })
+    return {
+        "ok": True,
+        "url": output_url,
+        "assetUrl": output_url,
+        "asset_url": output_url,
+        "server_url": output_url,
+        "publicUrl": output_url,
+        "public_url": output_url,
+        "filename": filename,
+        "name": filename,
+        "duration_sec": probed_duration_sec,
+        "durationSec": probed_duration_sec,
+        "duration_ms": int(round(probed_duration_sec * 1000)),
+        "durationMs": int(round(probed_duration_sec * 1000)),
+        "mime_type": "audio/mpeg",
+        "mime": "audio/mpeg",
+        "source": "podcast_saved_phrase",
+    }
+
+
 def _raise_upload_bad_request(*, file: UploadFile | None, ext: str, content_type: str, size: int | None, detail: str) -> None:
     logger.warning(
         "[ASSET UPLOAD 400] filename=%s ext=%s content_type=%s size=%s detail=%s",
