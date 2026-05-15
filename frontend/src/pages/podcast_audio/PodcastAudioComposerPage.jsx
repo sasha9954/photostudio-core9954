@@ -3,6 +3,10 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { getAccountScopedStorageKey } from "../clip_nodes/manualProjectBackup.js";
 import { API_BASE } from "../../services/api.js";
 import {
+  MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
+  MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND,
+  MANUAL_TIMING_STORY_PROJECT_KIND,
+  MANUAL_TIMING_STORY_VOICEOVER_MODE,
   MANUAL_TIMING_UNKNOWN_STORY_BLOCK,
   normalizeManualTimingAudio,
   persistManualTimingProject,
@@ -3780,20 +3784,30 @@ export default function PodcastAudioComposerPage() {
         end_sec: finalDurationSec,
       };
       const baseProject = storedManualTimingProject && typeof storedManualTimingProject === "object" ? storedManualTimingProject : {};
+      const baseProjectMode = String(baseProject.project_mode || "").trim();
+      const baseProjectKind = String(baseProject.project_kind || "").trim();
+      const isExplicitPodcastProject = baseProjectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE || baseProjectKind === MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND;
+      const nextProjectMode = baseProjectMode || (isExplicitPodcastProject ? MANUAL_TIMING_PODCAST_DIALOGUE_MODE : MANUAL_TIMING_STORY_VOICEOVER_MODE);
+      const nextProjectKind = baseProjectKind || (nextProjectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? MANUAL_TIMING_PODCAST_DIALOGUE_PROJECT_KIND : MANUAL_TIMING_STORY_PROJECT_KIND);
+      const usePodcastManifestTiming = nextProjectMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE;
+      const preservedMarkers = Array.isArray(baseProject.markers) && baseProject.markers.length ? baseProject.markers : handoffMarkers;
+      const preservedScenes = Array.isArray(baseProject.scenes) && baseProject.scenes.length ? baseProject.scenes : handoffScenes;
+      const preservedStoryBlocks = Array.isArray(baseProject.story_blocks) && baseProject.story_blocks.length ? baseProject.story_blocks : [handoffStoryBlock];
+      const preservedAudioPhrases = Array.isArray(baseProject.audio_phrases) ? baseProject.audio_phrases : [];
       const nextProject = {
         ...baseProject,
         nodeId: sourceNodeId,
         sourceNodeId,
         audio: finalAudio,
         audio_source: "podcast_audio_composer",
-        project_mode: baseProject.project_mode || "podcast_dialogue",
-        project_kind: baseProject.project_kind || "podcast",
+        project_mode: nextProjectMode,
+        project_kind: nextProjectKind,
         timing_status: "draft",
-        markers: handoffMarkers,
-        scenes: handoffScenes,
-        audio_phrases: [],
-        selectedSceneId: handoffScenes[0]?.scene_id || "",
-        story_blocks: [handoffStoryBlock],
+        markers: usePodcastManifestTiming ? handoffMarkers : preservedMarkers,
+        scenes: usePodcastManifestTiming ? handoffScenes : preservedScenes,
+        audio_phrases: usePodcastManifestTiming ? [] : preservedAudioPhrases,
+        selectedSceneId: usePodcastManifestTiming ? (handoffScenes[0]?.scene_id || "") : (baseProject.selectedSceneId || preservedScenes[0]?.scene_id || ""),
+        story_blocks: usePodcastManifestTiming ? [handoffStoryBlock] : preservedStoryBlocks,
         podcast_edit_manifest: editManifest,
         composer_edit_manifest: editManifest,
         edit_manifest_source: "podcast_audio_composer",
@@ -3807,6 +3821,8 @@ export default function PodcastAudioComposerPage() {
           sourceNodeId,
           fromPodcastComposer: true,
           replaceAudio: true,
+          project_mode: nextProjectMode,
+          project_kind: nextProjectKind,
           audio: finalAudio,
           podcast_edit_manifest: editManifest,
         },
