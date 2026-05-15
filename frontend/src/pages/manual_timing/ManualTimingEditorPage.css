@@ -1919,6 +1919,27 @@
   box-shadow: 0 14px 30px rgba(20, 184, 166, 0.22);
 }
 
+.manualTimingMergeButton {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 108px;
+  max-width: max-content;
+  padding: 8px 13px !important;
+  justify-content: center;
+  white-space: nowrap;
+  border-color: rgba(129, 140, 248, 0.55) !important;
+  color: #eef2ff !important;
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.42), rgba(14, 165, 233, 0.16)) !important;
+  box-shadow: 0 10px 24px rgba(79, 70, 229, 0.14);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.manualTimingMergeButton:hover:not(:disabled) {
+  border-color: rgba(165, 180, 252, 0.85) !important;
+  box-shadow: 0 14px 30px rgba(79, 70, 229, 0.22);
+}
+
 .manualTimingStepControl {
   display: inline-grid;
   grid-template-columns: auto 76px;
@@ -3307,6 +3328,16 @@
   flex: 0 0 auto !important;
   width: auto !important;
   min-width: 118px;
+  max-width: max-content;
+  padding: 8px 13px !important;
+  white-space: nowrap;
+  justify-content: center;
+}
+
+.manualTimingPage[data-build="manual-timing-stable-v18"] .manualTimingMergeButton {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 108px;
   max-width: max-content;
   padding: 8px 13px !important;
   white-space: nowrap;

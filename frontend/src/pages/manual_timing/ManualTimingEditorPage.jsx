@@ -51,6 +51,7 @@ import {
   normalizeManualTimingAudioPhrases,
   normalizeManualTimingMarkers,
   normalizeManualTimingProjectFromJson,
+  normalizeManualTimingRoute,
   normalizeManualTimingSourcePhraseIds,
   readManualTimingProjectForNode,
   normalizeManualTimingStoryBlocks,
@@ -1115,6 +1116,77 @@ function getManualTimingRouteOptions(mode = "") {
   return MANUAL_TIMING_ROUTES;
 }
 
+function getMergedManualTimingRoute(currentRoute = "", nextRoute = "") {
+  const current = normalizeManualTimingRoute(currentRoute);
+  const next = normalizeManualTimingRoute(nextRoute);
+  const routeStrength = {
+    i2v: 1,
+    i2v_sound: 2,
+    i2v_text: 3,
+    ia2v: 4,
+  };
+  if (!String(currentRoute || "").trim() && String(nextRoute || "").trim()) return next;
+  return (routeStrength[next] || 0) > (routeStrength[current] || 0) ? next : current;
+}
+
+function mergeManualTimingSourcePhraseIds(...phraseIdLists) {
+  const merged = [];
+  const seen = new Set();
+  phraseIdLists.forEach((phraseIds) => {
+    normalizeManualTimingSourcePhraseIds(phraseIds).forEach((phraseId) => {
+      const key = String(phraseId || "").trim();
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      merged.push(key);
+    });
+  });
+  return merged;
+}
+
+function mergeManualTimingTextValue(primaryValue = "", nextValue = "") {
+  const primary = String(primaryValue || "").trim();
+  const next = String(nextValue || "").trim();
+  if (!primary) return next;
+  if (!next || primary === next || primary.includes(next)) return primary;
+  return `${primary}
+${next}`;
+}
+
+function rebuildManualTimingStoryBlocksForScenes(storyBlocks = [], nextScenes = []) {
+  const sceneIds = new Set((Array.isArray(nextScenes) ? nextScenes : [])
+    .map((scene) => String(scene?.scene_id || "").trim())
+    .filter(Boolean));
+  const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+
+  return normalizeManualTimingStoryBlocks(storyBlocks).map((block) => {
+    const filteredBlock = {
+      ...block,
+      scene_ids: (Array.isArray(block?.scene_ids) ? block.scene_ids : [])
+        .map((sceneId) => String(sceneId || "").trim())
+        .filter((sceneId) => sceneId && sceneIds.has(sceneId)),
+    };
+    const derived = deriveStoryBlockRangeFromScenes(filteredBlock, nextScenes);
+    if (derived) {
+      return {
+        ...filteredBlock,
+        scene_ids: derived.scene_ids,
+        start_sec: derived.start_sec,
+        end_sec: derived.end_sec,
+      };
+    }
+    return {
+      ...filteredBlock,
+      scene_ids: [],
+      start_sec: 0,
+      end_sec: 0,
+    };
+  }).filter((block) => {
+    const blockIdValue = String(block?.block_id || "").trim();
+    if (blockIdValue === unknownBlockId) return true;
+    return (Array.isArray(block?.scene_ids) ? block.scene_ids : []).length > 0;
+  });
+}
+
 function getManualTimingWorkflowLabels(mode = "") {
   if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
     return {
@@ -1625,7 +1697,8 @@ export default function ManualTimingEditorPage() {
     return hasSelected ? selectedSceneAudioPhrases : [selectedMissingPhrase, ...selectedSceneAudioPhrases];
   }, [selectedMissingPhrase, selectedSceneAudioPhrases]);
   const selectedBoundarySec = selectedSceneEndSec;
-  const selectedBoundaryIsInternal = selectedSceneIndex >= 0 && selectedSceneIndex < scenes.length - 1;
+  const canMergeSelectedWithNext = selectedSceneIndex >= 0 && selectedSceneIndex < scenes.length - 1;
+  const selectedBoundaryIsInternal = canMergeSelectedWithNext;
   const selectedSceneIsSilence = isManualTimingSilenceScene(selectedScene);
   const canUseTrackNudge = Boolean(selectedScene && (selectedSceneIsSilence || selectedBoundaryIsInternal));
   const timelineWidthPx = Math.ceil(Math.max(
@@ -2464,6 +2537,96 @@ export default function ManualTimingEditorPage() {
   };
 
   const onAddMarker = () => addMarkerAt(currentTimeRef.current ?? currentTime);
+
+  const mergeSelectedSceneWithNext = () => {
+    if (!canMergeSelectedWithNext) return;
+
+    const current = scenes[selectedSceneIndex];
+    const next = scenes[selectedSceneIndex + 1];
+    if (!current || !next) return;
+
+    const currentSceneId = String(current.scene_id || "").trim();
+    const nextSceneId = String(next.scene_id || "").trim();
+    const startSec = roundTimingSec(Number(current.start_sec || 0));
+    const endSec = roundTimingSec(Number(next.end_sec || current.end_sec || startSec));
+    const duration = roundTimingSec(Math.max(0, endSec - startSec));
+    const mergedSourcePhraseIds = mergeManualTimingSourcePhraseIds(current.source_phrase_ids, next.source_phrase_ids);
+    const sameStoryBlock = String(current.story_block_id || "").trim()
+      && String(current.story_block_id || "").trim() === String(next.story_block_id || "").trim();
+
+    const mergedScene = {
+      ...current,
+      scene_id: currentSceneId || nextSceneId || getSceneIdForIndex(selectedSceneIndex),
+      start_sec: startSec,
+      end_sec: endSec,
+      duration_sec: duration,
+      speech_start_sec: roundTimingSec(Math.min(
+        Number(current.speech_start_sec ?? current.start_sec ?? startSec),
+        Number(next.speech_start_sec ?? next.start_sec ?? endSec)
+      )),
+      speech_end_sec: roundTimingSec(Math.max(
+        Number(current.speech_end_sec ?? current.end_sec ?? startSec),
+        Number(next.speech_end_sec ?? next.end_sec ?? endSec)
+      )),
+      post_silence_sec: Number(next.post_silence_sec ?? current.post_silence_sec ?? 0),
+      source_phrase_ids: mergedSourcePhraseIds,
+      route: getMergedManualTimingRoute(current.route, next.route),
+      text: mergeManualTimingTextValue(current.text, next.text),
+      text_ru: mergeManualTimingTextValue(current.text_ru, next.text_ru),
+      source_text: mergeManualTimingTextValue(current.source_text, next.source_text),
+      source_text_ru: mergeManualTimingTextValue(current.source_text_ru, next.source_text_ru),
+      source_text_en: mergeManualTimingTextValue(current.source_text_en, next.source_text_en),
+      original_text: mergeManualTimingTextValue(current.original_text, next.original_text),
+      translated_text_ru: mergeManualTimingTextValue(current.translated_text_ru, next.translated_text_ru),
+      notes: mergeManualTimingTextValue(current.notes, next.notes),
+      note_ru: mergeManualTimingTextValue(current.note_ru, next.note_ru),
+      short_note: mergeManualTimingTextValue(current.short_note, next.short_note),
+      story_block_id: String(current.story_block_id || "").trim() || MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id,
+      story_block_title_ru: String(current.story_block_title_ru || ""),
+      story_block_color: String(current.story_block_color || ""),
+    };
+
+    if (sameStoryBlock) {
+      mergedScene.story_block_id = String(current.story_block_id || "").trim();
+      mergedScene.story_block_title_ru = String(current.story_block_title_ru || next.story_block_title_ru || "");
+      mergedScene.story_block_color = String(current.story_block_color || next.story_block_color || "");
+    }
+
+    const nextScenes = [
+      ...scenes.slice(0, selectedSceneIndex),
+      mergedScene,
+      ...scenes.slice(selectedSceneIndex + 2),
+    ];
+    const nextMarkers = normalizeManualTimingMarkers(
+      nextScenes.flatMap((scene) => [scene.start_sec, scene.end_sec]),
+      durationSec
+    );
+    const nextStoryBlocks = rebuildManualTimingStoryBlocksForScenes(project.story_blocks, nextScenes);
+
+    rememberManualTimingAction("соединить сцены");
+    persist({
+      ...project,
+      scenes: nextScenes,
+      markers: nextMarkers,
+      story_blocks: nextStoryBlocks,
+      selectedSceneId: mergedScene.scene_id,
+      timing_status: "draft",
+      manual_scene_edits: true,
+      manualSceneEdits: true,
+      lastManualEditReason: "merge_scene",
+    });
+
+    console.info("[MANUAL TIMING SCENES_MERGED]", {
+      selectedSceneId: currentSceneId,
+      nextSceneId,
+      startSec,
+      endSec,
+      sceneCountBefore: scenes.length,
+      sceneCountAfter: nextScenes.length,
+      manualSceneEdits: true,
+    });
+    setAudioTime(startSec, { pause: true, clearBound: true });
+  };
 
   const getNextMissingPhraseId = (phrases = []) => {
     const used = new Set((Array.isArray(phrases) ? phrases : []).map((phrase) => String(phrase?.phrase_id || "")));
@@ -4323,6 +4486,13 @@ export default function ManualTimingEditorPage() {
                 disabled={!canCutAtCurrentTime}
                 title="Разрезать сцену по текущей жёлтой линии"
               >✂ Разрезать</button>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingMergeButton"
+                type="button"
+                onClick={mergeSelectedSceneWithNext}
+                disabled={!canMergeSelectedWithNext}
+                title="Соединить выбранную сцену со следующей соседней сценой"
+              >🔗 Соединить</button>
               <div className="manualTimingStoryGroupControls" aria-label="Ручная группировка смыслового блока">
                 <button
                   className="clipSB_btn clipSB_btnSecondary manualTimingStoryGroupButton"
