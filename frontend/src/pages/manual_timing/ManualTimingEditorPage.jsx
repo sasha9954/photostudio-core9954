@@ -130,6 +130,9 @@ const SEGMENT_COLORS = [
   "#d3e85a",
 ];
 
+const STORY_BLOCK_COLORS = SEGMENT_COLORS;
+
+
 
 const MANUAL_NEW_BOARD_IMAGE_FIELDS = [
   "image_url",
@@ -1491,6 +1494,7 @@ export default function ManualTimingEditorPage() {
     return getManualTimingBoardForOwner(finalOwnerNodeId);
   });
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
+  const [groupSelectedSceneIds, setGroupSelectedSceneIds] = useState([]);
   const newBoardConfirmResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
   const silenceRepairSignatureRef = useRef("");
@@ -1566,6 +1570,10 @@ export default function ManualTimingEditorPage() {
   const quickEditScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === quickEditSceneId) || null,
     [scenes, quickEditSceneId]
+  );
+  const groupSelectedSceneIdSet = useMemo(
+    () => new Set(groupSelectedSceneIds.map((sceneId) => String(sceneId || "")).filter(Boolean)),
+    [groupSelectedSceneIds]
   );
   const warnings = useMemo(() => buildManualTimingWarnings(project), [project]);
   const compactWarningItems = useMemo(() => getCompactWarningItems(project, warnings), [project, warnings]);
@@ -1766,6 +1774,15 @@ export default function ManualTimingEditorPage() {
   useEffect(() => {
     setActiveBoardProject(getManualTimingBoardForOwner(finalOwnerNodeId));
   }, [finalOwnerNodeId]);
+
+  useEffect(() => {
+    setGroupSelectedSceneIds((selectedIds) => {
+      if (!selectedIds.length) return selectedIds;
+      const sceneIds = new Set(scenes.map((scene) => String(scene?.scene_id || "")).filter(Boolean));
+      const nextIds = selectedIds.filter((sceneId) => sceneIds.has(String(sceneId || "")));
+      return nextIds.length === selectedIds.length ? selectedIds : nextIds;
+    });
+  }, [scenes]);
 
   const persist = (nextProject) => {
     const ownerNodeId = String(routeSourceNodeId || nextProject?.sourceNodeId || nextProject?.nodeId || getManualTimingOwnerNodeId(nextProject) || finalOwnerNodeId || "").trim();
@@ -3775,9 +3792,194 @@ export default function ManualTimingEditorPage() {
     setTimelineScrollLeft(Math.round(event.currentTarget.scrollLeft || 0));
   };
 
+  const toggleStoryBlockGroupSceneSelection = (scene) => {
+    const sceneId = String(scene?.scene_id || "").trim();
+    if (!sceneId) return;
+
+    setGroupSelectedSceneIds((selectedIds) => {
+      const exists = selectedIds.some((selectedId) => String(selectedId || "") === sceneId);
+      const nextIds = exists
+        ? selectedIds.filter((selectedId) => String(selectedId || "") !== sceneId)
+        : [...selectedIds, sceneId];
+      console.info("[MANUAL TIMING STORY BLOCK GROUP_SELECTION_TOGGLE]", {
+        sceneId,
+        selectedSceneIds: nextIds,
+      });
+      return nextIds;
+    });
+  };
+
+  const clearStoryBlockGroupSelection = () => {
+    setGroupSelectedSceneIds([]);
+  };
+
   const onTimelineSegmentClick = (event, scene) => {
     event.stopPropagation();
+    if (event.ctrlKey || event.metaKey) {
+      toggleStoryBlockGroupSceneSelection(scene);
+      return;
+    }
     selectSceneAndSeekStart(scene, { pause: true });
+  };
+
+  const getNextManualStoryBlockNumber = (blocks = []) => {
+    const normalizedBlocks = normalizeManualTimingStoryBlocks(blocks);
+    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+    return normalizedBlocks.filter((block) => String(block?.block_id || "") !== unknownBlockId).length + 1;
+  };
+
+  const getNextManualStoryBlockId = (blocks = []) => {
+    const normalizedBlocks = normalizeManualTimingStoryBlocks(blocks);
+    const usedIds = new Set(normalizedBlocks.map((block) => String(block?.block_id || "")).filter(Boolean));
+    let blockNumber = getNextManualStoryBlockNumber(normalizedBlocks);
+    let blockId = `manual_story_block_${String(blockNumber).padStart(2, "0")}`;
+    while (usedIds.has(blockId)) {
+      blockNumber += 1;
+      blockId = `manual_story_block_${String(blockNumber).padStart(2, "0")}`;
+    }
+    return { blockId, blockNumber };
+  };
+
+  const getNextManualStoryBlockColor = (blocks = []) => {
+    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+    const realBlockCount = normalizeManualTimingStoryBlocks(blocks)
+      .filter((block) => String(block?.block_id || "") !== unknownBlockId)
+      .length;
+    return STORY_BLOCK_COLORS[realBlockCount % STORY_BLOCK_COLORS.length] || "#37d6c2";
+  };
+
+  const selectedGroupScenesInTimelineOrder = () => {
+    if (!groupSelectedSceneIds.length) return [];
+    const selectedIds = new Set(groupSelectedSceneIds.map((sceneId) => String(sceneId || "")).filter(Boolean));
+    return scenes.filter((scene) => selectedIds.has(String(scene?.scene_id || "")));
+  };
+
+  const areScenesAdjacentInTimeline = (selectedScenes = []) => {
+    if (selectedScenes.length <= 1) return true;
+    const selectedIds = new Set(selectedScenes.map((scene) => String(scene?.scene_id || "")));
+    const indexes = scenes
+      .map((scene, index) => selectedIds.has(String(scene?.scene_id || "")) ? index : -1)
+      .filter((index) => index >= 0);
+    if (indexes.length !== selectedScenes.length) return false;
+    for (let idx = 1; idx < indexes.length; idx += 1) {
+      if (indexes[idx] !== indexes[idx - 1] + 1) return false;
+    }
+    return true;
+  };
+
+  const rejectManualStoryBlockGrouping = (reason, message = "") => {
+    console.info("[MANUAL TIMING STORY BLOCK_GROUP_REJECTED]", {
+      reason,
+      selectedSceneIds: groupSelectedSceneIds,
+    });
+    if (message) {
+      setCopyStatus(message);
+      window.setTimeout(() => setCopyStatus(""), 2200);
+    }
+  };
+
+  const createManualStoryBlockFromSelection = () => {
+    const selectedScenes = selectedGroupScenesInTimelineOrder();
+    const selectedSceneIds = selectedScenes.map((scene) => String(scene?.scene_id || "")).filter(Boolean);
+
+    if (!selectedSceneIds.length) {
+      rejectManualStoryBlockGrouping("empty_selection", "Выберите сцены через Ctrl+Click.");
+      return;
+    }
+
+    if (!areScenesAdjacentInTimeline(selectedScenes)) {
+      rejectManualStoryBlockGrouping("non_adjacent_selection", "Можно объединять только соседние сцены.");
+      return;
+    }
+
+    const unknownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "");
+    const hasExistingStoryBlock = selectedScenes.some((scene) => {
+      const storyBlockId = String(scene?.story_block_id || "").trim();
+      return storyBlockId && storyBlockId !== unknownBlockId;
+    });
+    if (hasExistingStoryBlock) {
+      const shouldMove = window.confirm("Эти сцены уже входят в другой смысловой блок. Перенести их в новый блок?");
+      if (!shouldMove) {
+        rejectManualStoryBlockGrouping("move_existing_cancelled");
+        return;
+      }
+    }
+
+    const { blockId, blockNumber } = getNextManualStoryBlockId(project.story_blocks);
+    const defaultTitle = `Смысловой блок ${blockNumber}`;
+    const promptedTitle = window.prompt("Название смыслового блока", defaultTitle);
+    if (promptedTitle === null) {
+      rejectManualStoryBlockGrouping("title_cancelled");
+      return;
+    }
+    const title = String(promptedTitle || "").trim() || defaultTitle;
+    const color = getNextManualStoryBlockColor(project.story_blocks);
+    const startSec = roundTimingSec(Math.min(...selectedScenes.map((scene) => Number(scene?.start_sec || 0))));
+    const endSec = roundTimingSec(Math.max(...selectedScenes.map((scene) => Number(scene?.end_sec || 0))));
+    const selectedIdSet = new Set(selectedSceneIds);
+    const normalizedBlocks = normalizeManualTimingStoryBlocks(project.story_blocks);
+    const newBlock = {
+      block_id: blockId,
+      title_ru: title,
+      scene_ids: selectedSceneIds,
+      start_sec: startSec,
+      end_sec: endSec,
+      color,
+    };
+    const nextStoryBlocks = [
+      ...normalizedBlocks.map((block) => ({
+        ...block,
+        scene_ids: (Array.isArray(block?.scene_ids) ? block.scene_ids : [])
+          .map((sceneId) => String(sceneId || "").trim())
+          .filter((sceneId) => sceneId && !selectedIdSet.has(sceneId)),
+      })),
+      newBlock,
+    ];
+    const nextScenes = scenes.map((scene) => selectedIdSet.has(String(scene?.scene_id || ""))
+      ? {
+        ...scene,
+        story_block_id: blockId,
+        story_block_title_ru: title,
+        story_block_color: color,
+      }
+      : scene);
+    const normalizedNextStoryBlocks = normalizeManualTimingStoryBlocks(nextStoryBlocks).map((block) => {
+      const derived = deriveStoryBlockRangeFromScenes(block, nextScenes);
+      if (derived) {
+        return {
+          ...block,
+          scene_ids: derived.scene_ids,
+          start_sec: derived.start_sec,
+          end_sec: derived.end_sec,
+        };
+      }
+      return {
+        ...block,
+        scene_ids: [],
+        start_sec: 0,
+        end_sec: 0,
+      };
+    });
+
+    rememberManualTimingAction("смысловой блок");
+    persist({
+      ...project,
+      story_blocks: normalizedNextStoryBlocks,
+      scenes: nextScenes,
+      selectedSceneId: selectedSceneIds[0] || project.selectedSceneId || "",
+    });
+    console.info("[MANUAL TIMING STORY BLOCK_GROUP_CREATED]", {
+      blockId,
+      title,
+      sceneIds: selectedSceneIds,
+      startSec,
+      endSec,
+      color,
+      manualSceneEdits: Boolean(project.manualSceneEdits ?? project.manual_scene_edits),
+    });
+    setCopyStatus(`Создан смысловой блок: ${title}`);
+    window.setTimeout(() => setCopyStatus(""), 2200);
+    clearStoryBlockGroupSelection();
   };
 
   const onStoryBlockClick = (block) => {
@@ -3949,15 +4151,16 @@ export default function ManualTimingEditorPage() {
                 {scenes.map((scene, idx) => {
                   const isOpenTail = scene.scene_id === openTailSceneId;
                   const isActive = selectedScene?.scene_id === scene.scene_id;
+                  const isGroupSelected = groupSelectedSceneIdSet.has(String(scene.scene_id || ""));
                   const durationWarning = getManualTimingSceneDurationWarning(scene);
                   const isSilence = isManualTimingSilenceScene(scene);
                   return <button
                     key={`player-${scene.scene_id}`}
-                    className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isSilence ? "isSilence" : ""} ${isActive ? "isActive" : ""}`}
+                    className={`manualTimingPlayerSegment ${isOpenTail ? "isOpenTail" : "isCut"} ${isSilence ? "isSilence" : ""} ${isActive ? "isActive" : ""} ${isGroupSelected ? "isGroupSelected" : ""}`}
                     style={getSegmentStyle(scene, idx)}
                     onClick={(event) => onTimelineSegmentClick(event, scene)}
                     onDoubleClick={(event) => { event.stopPropagation(); openQuickEdit(scene); }}
-                    title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${isSilence ? " · тишина" : ""}${durationWarning ? ` · ${durationWarning.text}` : ""}. Двойной клик — быстрая правка`}
+                    title={`${scene.scene_id}: ${formatTimingSec(scene.start_sec)} – ${formatTimingSec(scene.end_sec)}${isSilence ? " · тишина" : ""}${durationWarning ? ` · ${durationWarning.text}` : ""}. Ctrl+Click — выбрать для смыслового блока. Двойной клик — быстрая правка`}
                   >
                     <span>
                       {isSilence ? "тишина" : scene.scene_id}
@@ -4026,6 +4229,23 @@ export default function ManualTimingEditorPage() {
                 disabled={!canCutAtCurrentTime}
                 title="Разрезать сцену по текущей жёлтой линии"
               >✂ Разрезать</button>
+              <div className="manualTimingStoryGroupControls" aria-label="Ручная группировка смыслового блока">
+                <button
+                  className="clipSB_btn clipSB_btnSecondary manualTimingStoryGroupButton"
+                  type="button"
+                  onClick={createManualStoryBlockFromSelection}
+                  disabled={!groupSelectedSceneIds.length}
+                  title="Создать смысловой блок из выбранных Ctrl+Click соседних сцен"
+                >＋ Смысловой блок</button>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary manualTimingStoryGroupClearButton"
+                  type="button"
+                  onClick={clearStoryBlockGroupSelection}
+                  disabled={!groupSelectedSceneIds.length}
+                  title="Снять выбор сцен для смыслового блока"
+                >Снять выбор</button>
+                <span className="manualTimingStoryGroupCount">Выбрано сцен: {groupSelectedSceneIds.length}</span>
+              </div>
               <button
                 className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
                 onClick={insertSilenceAtCursor}
