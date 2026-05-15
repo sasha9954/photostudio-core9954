@@ -2498,28 +2498,81 @@ export default function PodcastAudioComposerPage() {
     return data || {};
   };
 
+  const getOriginalAudioDurationSec = () => roundSeconds(audio.duration_sec || durationSec);
+
+  const hasComposerEdits = () => {
+    const originalDurationSec = getOriginalAudioDurationSec();
+    const editedDurationSec = roundSeconds(totalDurationSec || durationSec || audio.duration_sec);
+    const hasInsertedPhrases = (Array.isArray(blocks) ? blocks : []).some((block) => {
+      const sourceId = String(block?.source_audio_id || "main");
+      return hasPhraseIdentity(block) || (sourceId && sourceId !== "main" && sourceId !== "silence");
+    });
+    const hasSilence = (Array.isArray(blocks) ? blocks : []).some((block) => block?.type === "silence" || block?.source_audio_id === "silence");
+    const hasDeletions = Array.isArray(deletionMarkers) && deletionMarkers.length > 0;
+    const hasExternalAudio = (Array.isArray(actorAudios) && actorAudios.length > 0) || (Array.isArray(savedClips) && savedClips.length > 0);
+    const durationChanged = originalDurationSec > 0 && editedDurationSec > 0 && Math.abs(editedDurationSec - originalDurationSec) > 0.25;
+    return Boolean(hasInsertedPhrases || hasSilence || hasDeletions || hasExternalAudio || durationChanged);
+  };
+
+  const getFinalAudioStateCandidates = () => [
+    storedManualTimingProject?.podcast_edit_manifest?.final_audio,
+    storedManualTimingProject?.composer_edit_manifest?.final_audio,
+    location.state?.podcast_edit_manifest?.final_audio,
+    location.state?.composer_edit_manifest?.final_audio,
+    location.state?.finalAudio,
+    location.state?.composedAudio,
+    location.state?.renderedAudio,
+    storedManualTimingProject?.finalAudio,
+    storedManualTimingProject?.composedAudio,
+    storedManualTimingProject?.renderedAudio,
+  ];
+
+  const normalizeStaticFinalAudioCandidate = (candidate, { requireComposerSource = false, requireDurationMatch = false } = {}) => {
+    const url = String(candidate?.url || candidate?.assetUrl || candidate?.asset_url || candidate?.publicUrl || candidate?.path || "").trim();
+    if (!isBackendStaticAssetUrl(url)) return null;
+
+    const source = String(candidate?.source || candidate?.audio_source || "").trim();
+    if (requireComposerSource && source !== PODCAST_AUDIO_HANDOFF_SOURCE) return null;
+
+    const editedDurationSec = roundSeconds(totalDurationSec || durationSec || audio.duration_sec);
+    const candidateDurationSec = roundSeconds(candidate?.duration_sec || candidate?.durationSec || candidate?.duration || editedDurationSec);
+    const hasCandidateDuration = candidateDurationSec > 0;
+    if (requireDurationMatch && (!hasCandidateDuration || Math.abs(candidateDurationSec - editedDurationSec) > 0.75)) return null;
+
+    const filename = String(candidate?.filename || candidate?.fileName || candidate?.name || extractBackendStaticAssetFilename(url)).trim();
+    const staticDurationSec = candidateDurationSec || editedDurationSec;
+    return {
+      url,
+      filename: filename || extractBackendStaticAssetFilename(url),
+      duration_sec: staticDurationSec,
+      duration_ms: Math.round(staticDurationSec * 1000),
+      mime_type: String(candidate?.mime_type || candidate?.mimeType || inferAudioMimeTypeFromFilename(filename || url)).trim(),
+      source: PODCAST_AUDIO_HANDOFF_SOURCE,
+    };
+  };
+
   const resolvePersistedStaticFinalAudio = () => {
-    const candidates = [
-      storedManualTimingProject?.podcast_edit_manifest?.final_audio,
-      storedManualTimingProject?.composer_edit_manifest?.final_audio,
+    const hasEdits = hasComposerEdits();
+    for (const candidate of getFinalAudioStateCandidates()) {
+      const finalAudio = normalizeStaticFinalAudioCandidate(candidate, { requireDurationMatch: hasEdits });
+      if (finalAudio) return finalAudio;
+    }
+
+    const composerSourceCandidates = [
       storedManualTimingProject?.audio,
       audio,
       location.state?.audio,
     ];
+    for (const candidate of composerSourceCandidates) {
+      const finalAudio = normalizeStaticFinalAudioCandidate(candidate, { requireComposerSource: true, requireDurationMatch: true });
+      if (finalAudio) return finalAudio;
+    }
 
-    for (const candidate of candidates) {
-      const url = String(candidate?.url || candidate?.assetUrl || candidate?.asset_url || candidate?.publicUrl || candidate?.path || "").trim();
-      if (!isBackendStaticAssetUrl(url)) continue;
-      const filename = String(candidate?.filename || candidate?.fileName || candidate?.name || extractBackendStaticAssetFilename(url)).trim();
-      const staticDurationSec = roundSeconds(candidate?.duration_sec || candidate?.durationSec || totalDurationSec || durationSec || audio.duration_sec);
-      return {
-        url,
-        filename: filename || extractBackendStaticAssetFilename(url),
-        duration_sec: staticDurationSec,
-        duration_ms: Math.round(staticDurationSec * 1000),
-        mime_type: String(candidate?.mime_type || candidate?.mimeType || inferAudioMimeTypeFromFilename(filename || url)).trim(),
-        source: PODCAST_AUDIO_HANDOFF_SOURCE,
-      };
+    if (!hasEdits) {
+      for (const candidate of composerSourceCandidates) {
+        const originalAudio = normalizeStaticFinalAudioCandidate(candidate);
+        if (originalAudio) return originalAudio;
+      }
     }
 
     return null;
@@ -2723,6 +2776,19 @@ export default function PodcastAudioComposerPage() {
     setMessage("Готовлю финальное аудио для тайминга...");
     try {
       const persistedStaticAudio = resolvePersistedStaticFinalAudio();
+      const hasEdits = hasComposerEdits();
+      const originalDurationSec = getOriginalAudioDurationSec();
+      const editedTotalDurationSec = roundSeconds(totalDurationSec || durationSec || audio.duration_sec);
+      const originalAudioUrl = String(audio.url || location.state?.audio?.url || storedManualTimingProject?.audio?.url || "").trim();
+      const logBlockedWrongAudio = () => {
+        console.log("[PODCAST TO TIMING BLOCKED_WRONG_AUDIO]", {
+          reason: "would_pass_original_audio_instead_of_composed_audio",
+          originalAudioUrl,
+          totalDurationSec: editedTotalDurationSec,
+          originalDurationSec,
+          hasEdits,
+        });
+      };
       let result = null;
       let usedUpload = false;
       let finalAudio = null;
@@ -2737,9 +2803,16 @@ export default function PodcastAudioComposerPage() {
         setMessage("Собираю финальное аудио и загружаю его в тайминг...");
         result = await renderComposerAudioBlob();
         if (Number(result?.blob?.size || 0) > ASSET_UPLOAD_SOFT_LIMIT_BYTES) {
-          throw new Error("Аудио ещё не сохранено на сервере / слишком большое для upload");
+          if (hasEdits) logBlockedWrongAudio();
+          throw new Error("Сначала нужно сохранить финальное аудио после монтажа на сервере");
         }
-        const uploaded = await uploadFinalAudioBlob(result);
+        let uploaded = null;
+        try {
+          uploaded = await uploadFinalAudioBlob(result);
+        } catch (uploadError) {
+          if (hasEdits) logBlockedWrongAudio();
+          throw uploadError;
+        }
         const finalUrl = String(uploaded.url || uploaded.assetUrl || uploaded.asset_url || uploaded.publicUrl || uploaded.path || "").trim();
         if (!finalUrl) throw new Error("backend не вернул URL собранного аудио");
         const finalDurationSec = roundSeconds(uploaded.duration_sec || uploaded.durationSec || result.durationSec);
@@ -2817,7 +2890,11 @@ export default function PodcastAudioComposerPage() {
         },
       });
     } catch (error) {
-      setMessage(`Не удалось перейти в тайминг: ${error?.message || "ошибка сборки/загрузки"}.`);
+      const detail = String(error?.message || "ошибка сборки/загрузки");
+      const safeDetail = detail.includes("слишком большое") || detail.includes("too_large") || detail.includes("file_too_large")
+        ? "Сначала нужно сохранить финальное аудио после монтажа на сервере"
+        : detail;
+      setMessage(`Не удалось перейти в тайминг: ${safeDetail}.`);
     } finally {
       setFinalAudioBusy("");
     }
