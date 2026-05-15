@@ -6352,6 +6352,9 @@ const ASSEMBLY_RESULT_STATE_FIELDS = [
   "assemblyStageCurrent",
   "assemblyStageTotal",
   "isStale",
+  "assemblyBuildState",
+  "finalVideoUrl",
+  "outputUrl",
 ];
 const ASSEMBLY_STALE_REFRESH_REASONS = new Set([
   "manual-director-board:event-update",
@@ -6398,7 +6401,11 @@ function mergeAssemblyNodeDataPreservingFreshLocal(currentData = {}, incomingPat
     });
   }
 
-  if (shouldPreserveForBackgroundRefresh || currentData?.isAssembling || String(currentData?.status || "") === "building" || String(currentData?.assemblyJobId || "").trim()) {
+  const incomingStatus = String(incomingPatch?.status || "").toLowerCase();
+  const incomingFinalVideoUrl = String(incomingPatch?.finalVideoUrl || incomingPatch?.outputUrl || incomingPatch?.result?.finalVideoUrl || "").trim();
+  const incomingIsTerminalDone = ["done", "success", "completed"].includes(incomingStatus) && !!incomingFinalVideoUrl;
+
+  if (!incomingIsTerminalDone && (shouldPreserveForBackgroundRefresh || currentData?.isAssembling || String(currentData?.status || "") === "building" || String(currentData?.assemblyJobId || "").trim())) {
     ASSEMBLY_RESULT_STATE_FIELDS.forEach((field) => {
       if (Object.prototype.hasOwnProperty.call(currentData || {}, field)) nextData[field] = currentData[field];
     });
@@ -11039,7 +11046,7 @@ function AssemblyNode({ id, data }) {
   const canAssemble = !!data?.canAssemble;
   const status = data?.status || "empty";
   const result = data?.result || null;
-  const finalVideoUrl = resolveAssetUrl(data?.result?.finalVideoUrl);
+  const finalVideoUrl = resolveAssetUrl(data?.result?.finalVideoUrl || data?.finalVideoUrl || data?.outputUrl);
   const resultSceneCount = Number(result?.sceneCount || 0);
   const resultTotalSegments = Number(result?.totalSegments || 0);
   const audioApplied = !!(result?.outputHasAudio ?? result?.audioApplied);
@@ -20670,31 +20677,69 @@ Aspect ratio: ${imageFormat}`,
         if (!assemblyPollingActiveRef.current) return;
 
         const status = String(out?.status || "").toLowerCase();
+        const finalVideoUrlFromStatus = String(out?.finalVideoUrl || out?.outputUrl || out?.result?.finalVideoUrl || "").trim();
         setAssemblyProgressPercent(Number(out?.progressPercent || 0));
         setAssemblyStage(String(out?.stage || ""));
         setAssemblyStageLabel(String(out?.label || ""));
         setAssemblyStageCurrent(Number(out?.current || 0));
         setAssemblyStageTotal(Number(out?.total || 0));
 
-        if (status === "done") {
+        if (["done", "success", "completed"].includes(status) && finalVideoUrlFromStatus) {
           stopAssemblyPolling();
-          const finalVideoUrl = String(out?.finalVideoUrl || "").trim();
-          if (!finalVideoUrl) throw new Error("Сборка завершена, но finalVideoUrl не получен");
-          setAssemblyResult({
+          const finalVideoUrl = finalVideoUrlFromStatus;
+          const completedResult = {
+            ...(out && typeof out === "object" ? out : {}),
             finalVideoUrl,
+            outputUrl: finalVideoUrl,
             audioApplied: !!out?.audioApplied,
             sceneCount: Number(out?.sceneCount || assemblyPayload.scenes.length || 0),
             introIncluded: !!out?.introIncluded,
             totalSegments: Number(out?.totalSegments || 0),
             totalSteps: Number(out?.totalSteps || out?.total || 0),
             introDurationSec: Number(out?.introDurationSec || 0),
+          };
+          console.info("[ASSEMBLY RESULT APPLY]", {
+            jobId,
+            finalVideoUrl,
+            status,
+            nodeId: assemblyNodeId,
           });
+          setAssemblyResult(completedResult);
           setAssemblyBuildState("done");
           setAssemblyInfo("");
+          setAssemblyError("");
           setIsAssemblyStale(false);
-          setAssemblyJobId("");
+          setAssemblyJobId(jobId);
+          setAssemblyProgressPercent(100);
+          setAssemblyStage("done");
+          setAssemblyStageLabel("done");
+          setAssemblyStageCurrent(Number(out?.current || out?.total || 0));
+          setAssemblyStageTotal(Number(out?.total || out?.totalSteps || 0));
           setIsAssembling(false);
-          setNodes((prev) => [...prev]);
+          setNodes((prev) => prev.map((node) => {
+            if (node.type !== "assemblyNode") return node;
+            if (assemblyNodeId && node.id !== assemblyNodeId) return node;
+            return {
+              ...node,
+              data: {
+                ...(node.data || {}),
+                status: "done",
+                isAssembling: false,
+                assemblyBuildState: "done",
+                result: completedResult,
+                finalVideoUrl,
+                outputUrl: finalVideoUrl,
+                progressPercent: 100,
+                assemblyJobId: jobId,
+                isStale: false,
+                errorMessage: "",
+                assemblyStage: "done",
+                assemblyStageLabel: "done",
+                assemblyStageCurrent: Number(out?.current || out?.total || 0),
+                assemblyStageTotal: Number(out?.total || out?.totalSteps || 0),
+              },
+            };
+          }));
           return;
         }
 
@@ -20730,7 +20775,7 @@ Aspect ratio: ${imageFormat}`,
     };
 
     tick();
-  }, [assemblyPayload.scenes.length, setNodes, stopAssemblyPolling]);
+  }, [assemblyNodeId, assemblyPayload.scenes.length, setNodes, stopAssemblyPolling]);
 
   useEffect(() => {
     return () => stopAssemblyPolling();
@@ -20738,7 +20783,60 @@ Aspect ratio: ${imageFormat}`,
 
   const handleAssemblyBuild = useCallback(async () => {
     if (isAssembling) return;
-    if (!assemblyPayload.scenes.length) return;
+
+    const freshNodes = Array.isArray(nodesRef.current) && nodesRef.current.length ? nodesRef.current : [];
+    const freshEdges = Array.isArray(edgesRef.current) ? edgesRef.current : [];
+    const freshAssemblySource = resolveAssemblySource({ nodes: freshNodes, edges: freshEdges, activeManualBoardProject });
+    const freshAssemblyNode = freshNodes.find((node) => node?.type === "assemblyNode" && (!freshAssemblySource.assemblyNodeId || node.id === freshAssemblySource.assemblyNodeId))
+      || freshNodes.find((node) => node?.type === "assemblyNode")
+      || assemblyGraphNode;
+    const uiAssemblyAudioMode = normalizeAssemblyAudioMode(freshAssemblyNode?.data?.assemblyAudioMode || assemblyAudioMode);
+    const freshSceneAudioGainDb = Number.isFinite(Number(freshAssemblyNode?.data?.sceneAudioGainDb)) ? Number(freshAssemblyNode.data.sceneAudioGainDb) : sceneAudioGainDb;
+    const freshMasterAudioGainDb = Number.isFinite(Number(freshAssemblyNode?.data?.masterAudioGainDb)) ? Number(freshAssemblyNode.data.masterAudioGainDb) : masterAudioGainDb;
+    const freshScenesForAudioMode = uiAssemblyAudioMode === "video_only"
+      ? (freshAssemblySource.scenes || []).map((scene) => ({
+        ...scene,
+        keepGeneratedAudio: false,
+        keep_generated_audio: false,
+      }))
+      : (freshAssemblySource.scenes || []);
+    const freshAudioUrl = ["master_audio", "mix_master_scene"].includes(uiAssemblyAudioMode)
+      ? (globalAudioUrlRaw || freshAssemblySource.audioUrl || "")
+      : "";
+    const freshSceneFormat = resolvePreferredSceneFormat(
+      freshAssemblySource.scenarioFormat,
+      (freshAssemblySource.scenes || []).find((scene) => String(scene?.imageFormat || scene?.format || "").trim())?.imageFormat,
+      (freshAssemblySource.scenes || []).find((scene) => String(scene?.format || "").trim())?.format
+    );
+    const finalAssemblyPayload = buildAssemblyPayload({
+      scenes: freshScenesForAudioMode,
+      audioUrl: freshAudioUrl,
+      format: freshSceneFormat,
+      intro: freshAssemblySource.introFrame,
+      assemblyAudioMode: uiAssemblyAudioMode,
+      sceneAudioGainDb: freshSceneAudioGainDb,
+      masterAudioGainDb: freshMasterAudioGainDb,
+    });
+
+    if (!finalAssemblyPayload.scenes.length) return;
+
+    const payloadAssemblyAudioMode = normalizeAssemblyAudioMode(finalAssemblyPayload.assemblyAudioMode);
+    console.info("[ASSEMBLY BUILD PAYLOAD FINAL]", {
+      assemblyNodeId: String(freshAssemblySource.assemblyNodeId || assemblyNodeId || ""),
+      uiAssemblyAudioMode,
+      payloadAssemblyAudioMode,
+      audioAssemblyMode: normalizeAssemblyAudioMode(finalAssemblyPayload.audioAssemblyMode),
+      sceneAudioGainDb: finalAssemblyPayload.sceneAudioGainDb,
+      masterAudioGainDb: finalAssemblyPayload.masterAudioGainDb,
+      sceneCount: finalAssemblyPayload.scenes.length,
+      sceneIds: finalAssemblyPayload.scenes.map((scene) => String(scene?.sceneId || scene?.scene_id || "").trim()).filter(Boolean),
+    });
+    if (uiAssemblyAudioMode !== payloadAssemblyAudioMode) {
+      console.warn("[ASSEMBLY MODE MISMATCH]", {
+        uiAssemblyAudioMode,
+        payloadAssemblyAudioMode,
+      });
+    }
 
     const abortController = new AbortController();
     assemblyAbortControllerRef.current = abortController;
@@ -20758,16 +20856,16 @@ Aspect ratio: ${imageFormat}`,
 
     try {
       console.info("[ASSEMBLY START EXPLICIT]", {
-        nodeId: assemblyNodeId,
-        assemblyAudioMode,
-        sceneCount: assemblyPayload.scenes.length,
+        nodeId: String(freshAssemblySource.assemblyNodeId || assemblyNodeId || ""),
+        assemblyAudioMode: payloadAssemblyAudioMode,
+        sceneCount: finalAssemblyPayload.scenes.length,
       });
       const assembleUrl = API_BASE ? `${API_BASE}/api/clip/assemble` : "/api/clip/assemble";
       const res = await fetch(assembleUrl, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(assemblyPayload),
+        body: JSON.stringify(finalAssemblyPayload),
         signal: abortController.signal,
       });
       let out = null;
@@ -20797,7 +20895,7 @@ Aspect ratio: ${imageFormat}`,
         assemblyAbortControllerRef.current = null;
       }
     }
-  }, [assemblyAudioMode, assemblyNodeId, assemblyPayload, isAssembling, startAssemblyPolling]);
+  }, [activeManualBoardProject, assemblyAudioMode, assemblyGraphNode, assemblyNodeId, globalAudioUrlRaw, isAssembling, masterAudioGainDb, sceneAudioGainDb, startAssemblyPolling]);
 
   const handleAssemblyStop = useCallback(() => {
     assemblyAbortControllerRef.current?.abort();
@@ -20883,7 +20981,10 @@ Aspect ratio: ${imageFormat}`,
     canAssemble: assemblyCanAssemble,
     isAssembling,
     status: assemblyStatus,
+    assemblyBuildState,
     result: assemblyResult,
+    finalVideoUrl: assemblyResult?.finalVideoUrl || "",
+    outputUrl: assemblyResult?.outputUrl || assemblyResult?.finalVideoUrl || "",
     errorMessage: assemblyError,
     infoMessage: assemblyInfo,
     assemblyJobId,
@@ -20925,6 +21026,7 @@ Aspect ratio: ${imageFormat}`,
     assemblyProgressPercent,
     assemblyReadySceneCount,
     assemblyResult,
+    assemblyBuildState,
     assemblyScenesForPayload.length,
     assemblyScenesSource,
     assemblySourceLabel,
