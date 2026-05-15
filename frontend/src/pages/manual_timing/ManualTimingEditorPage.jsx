@@ -1773,6 +1773,7 @@ export default function ManualTimingEditorPage() {
   const routeOptions = getManualTimingRouteOptions(modeConfig.mode);
   const isMusicClip = modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE;
   const isPodcastDialogue = modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE;
+  const canRecoverPodcastProjectToStory = isPodcastDialogue && scenes.length > 0 && Boolean(audio.url || durationSec > 0);
   const passReadyForDirector = project.timing_status === "confirmed"
     && scenes.length > 0
     && (
@@ -3864,6 +3865,37 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const onRecoverPodcastProjectToStory = () => {
+    if (!canRecoverPodcastProjectToStory) return;
+    const previousProjectMode = String(project?.project_mode || project?.projectMode || "").trim();
+    const previousProjectKind = String(project?.project_kind || project?.projectKind || "").trim();
+    const nextProject = persist({
+      ...project,
+      project_mode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
+      projectMode: MANUAL_TIMING_STORY_VOICEOVER_MODE,
+      project_kind: MANUAL_TIMING_STORY_PROJECT_KIND,
+      projectKind: MANUAL_TIMING_STORY_PROJECT_KIND,
+      story_pass_mode: "semantic_story_cut",
+      storyPassMode: "semantic_story_cut",
+      split_type: "semantic_story_cut_pass",
+      splitType: "semantic_story_cut_pass",
+      lastPersistReason: "manual_timing_recovered_to_story_mode",
+    });
+
+    console.info("[MANUAL TIMING PROJECT_MODE_RECOVERED_TO_STORY]", {
+      previousProjectMode,
+      previousProjectKind,
+      nextProjectMode: nextProject.project_mode,
+      nextProjectKind: nextProject.project_kind,
+      sceneCount: scenes.length,
+      markerCount: markers.length,
+      storyBlockCount: storyBlocks.length,
+      audioDurationSec: durationSec,
+    });
+    setCopyStatus("Режим восстановлен: История. Тайминги, сцены, маркеры и story_blocks сохранены.");
+    window.setTimeout(() => setCopyStatus(""), 3200);
+  };
+
   const onCopyModePassJson = async () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const payload = buildManualTimingModePassJson(project);
@@ -4522,6 +4554,10 @@ export default function ManualTimingEditorPage() {
       </div>
       <div className="manualTimingModeHint">{modeConfig.hint}</div>
       {!isProjectModeSelected ? <div className="manualTimingModeMissing">Режим проекта не выбран. Вернитесь в ноду и выберите тип проекта.</div> : null}
+      {canRecoverPodcastProjectToStory ? <div className="manualTimingCompactActions manualTimingRecoveryActions">
+        <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onRecoverPodcastProjectToStory}>Вернуть режим: История</button>
+        <span className="manualTimingWorkflowStatus">Без сброса аудио, сцен, маркеров и story_blocks.</span>
+      </div> : null}
       {hasActiveBoardProject ? <div className="manualTimingActiveBoardWarning">
         <div>
           <b>🎬 Активная доска</b>
@@ -4827,6 +4863,7 @@ export default function ManualTimingEditorPage() {
           <div className="manualTimingJsonHeader">
             <strong>{workflowLabels.panelTitle}</strong>
             <span>{workflowLabels.panelHint}</span>
+            {canRecoverPodcastProjectToStory ? <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onRecoverPodcastProjectToStory}>Вернуть режим: История</button> : null}
           </div>
           <details className="manualTimingJsonHelpBox">
             <summary>Как пользоваться JSON-проходами по порядку</summary>
