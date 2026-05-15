@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse, JSONResponse
+from pydantic import BaseModel, Field
 import logging
 import os
 import re
@@ -13,6 +13,7 @@ import urllib.request
 import urllib.parse
 import tempfile
 import subprocess
+from pathlib import Path
 from app.core.static_paths import ASSETS_DIR, ensure_static_dirs, asset_url, resolve_asset_filename_with_image_fallback
 
 router = APIRouter()
@@ -152,6 +153,260 @@ def _probe_audio_duration_sec(raw: bytes, ext: str) -> float | None:
                 pass
     except Exception:
         return None
+
+
+def _probe_audio_file_duration_sec(path: str) -> float | None:
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        s = (r.stdout or "").strip()
+        dur = float(s) if s else None
+        if dur and dur > 0:
+            return dur
+        return None
+    except Exception:
+        return None
+
+
+def _round_audio_sec(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except Exception:
+        number = default
+    if not (number == number) or number < 0:
+        number = default
+    return round(number, 6)
+
+
+def _resolve_static_audio_source(url: str) -> str | None:
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        path = parsed.path or raw
+    except Exception:
+        path = raw.split("?", 1)[0].split("#", 1)[0]
+
+    marker = "/static/assets/"
+    if marker not in path:
+        return None
+    rel = urllib.parse.unquote(path.split(marker, 1)[1]).strip().lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        return None
+    candidate = (ASSETS_DIR / rel).resolve()
+    try:
+        assets_root = ASSETS_DIR.resolve()
+        candidate.relative_to(assets_root)
+    except Exception:
+        return None
+    if not candidate.is_file():
+        return None
+    return str(candidate)
+
+
+def _podcast_audio_error(status_code: int, code: str, **payload):
+    body = {"ok": False, "code": code}
+    body.update(payload)
+    return JSONResponse(status_code=status_code, content=body)
+
+
+def _find_actor_audio_source_url(source_id: str, actor_audios: list, saved_clips: list) -> str:
+    safe_id = str(source_id or "").strip()
+    for row in actor_audios if isinstance(actor_audios, list) else []:
+        if str((row or {}).get("id") or "").strip() != safe_id:
+            continue
+        for key in ("server_url", "asset_url", "assetUrl", "public_url", "publicUrl", "url", "source_url"):
+            value = str((row or {}).get(key) or "").strip()
+            if value:
+                return value
+    for row in saved_clips if isinstance(saved_clips, list) else []:
+        if str((row or {}).get("source_audio_id") or "").strip() != safe_id:
+            continue
+        for key in ("server_url", "asset_url", "assetUrl", "public_url", "publicUrl", "source_url", "url"):
+            value = str((row or {}).get(key) or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _block_source_url(block: dict, *, original_audio_url: str, actor_audios: list, saved_clips: list) -> str:
+    source_id = str((block or {}).get("source_audio_id") or "main").strip() or "main"
+    if source_id == "main":
+        return str((block or {}).get("source_url") or original_audio_url or "").strip()
+    for key in ("source_url", "url", "asset_url", "assetUrl", "server_url"):
+        value = str((block or {}).get(key) or "").strip()
+        if value and not value.startswith("blob:"):
+            return value
+    return _find_actor_audio_source_url(source_id, actor_audios, saved_clips)
+
+
+class PodcastAudioRenderIn(BaseModel):
+    sourceNodeId: str | None = None
+    originalAudioUrl: str | None = None
+    blocks: list[dict] = Field(default_factory=list)
+    actorAudios: list[dict] = Field(default_factory=list)
+    savedClips: list[dict] = Field(default_factory=list)
+    deletionMarkers: list[dict] = Field(default_factory=list)
+    finalDurationSec: float | None = None
+    podcastEditManifest: dict | None = None
+
+
+@router.post("/podcast-audio/render-to-asset")
+def render_podcast_audio_to_asset(payload: PodcastAudioRenderIn):
+    _ensure_assets_dir()
+    blocks = payload.blocks if isinstance(payload.blocks, list) else []
+    actor_audios = payload.actorAudios if isinstance(payload.actorAudios, list) else []
+    saved_clips = payload.savedClips if isinstance(payload.savedClips, list) else []
+    final_duration_sec = _round_audio_sec(payload.finalDurationSec, 0.0)
+    source_node_id = str(payload.sourceNodeId or "").strip()
+    original_audio_url = str(payload.originalAudioUrl or "").strip()
+
+    print("[PODCAST AUDIO RENDER START]", {
+        "blockCount": len(blocks),
+        "finalDurationSec": final_duration_sec,
+        "sourceNodeId": source_node_id,
+    })
+
+    if not blocks:
+        return _podcast_audio_error(400, "PODCAST_AUDIO_RENDER_FAILED", message="blocks_empty")
+
+    with tempfile.TemporaryDirectory(prefix="podcast_audio_render_") as tmpdir:
+        tmp_path = Path(tmpdir)
+        segment_paths: list[Path] = []
+        concat_lines: list[str] = []
+
+        for index, block in enumerate(blocks):
+            block = block or {}
+            block_id = str(block.get("id") or block.get("block_id") or f"block_{index}")
+            source_id = str(block.get("source_audio_id") or "main").strip() or "main"
+            source_kind = str(block.get("source_kind") or block.get("type") or ("silence" if source_id == "silence" else "audio")).strip()
+            is_silence = source_id == "silence" or str(block.get("type") or "").strip() == "silence" or source_kind == "silence"
+            source_start_sec = _round_audio_sec(block.get("source_start_sec"), 0.0)
+            source_end_sec = _round_audio_sec(block.get("source_end_sec"), 0.0)
+            duration_sec = _round_audio_sec(block.get("duration_sec") or block.get("durationSec"), 0.0)
+            if duration_sec <= 0 and source_end_sec > source_start_sec:
+                duration_sec = _round_audio_sec(source_end_sec - source_start_sec, 0.0)
+            if duration_sec <= 0:
+                timeline_start = _round_audio_sec(block.get("timeline_start_sec"), 0.0)
+                timeline_end = _round_audio_sec(block.get("timeline_end_sec"), 0.0)
+                if timeline_end > timeline_start:
+                    duration_sec = _round_audio_sec(timeline_end - timeline_start, 0.0)
+            if duration_sec <= 0:
+                continue
+
+            source_url = "" if is_silence else _block_source_url(block, original_audio_url=original_audio_url, actor_audios=actor_audios, saved_clips=saved_clips)
+            print("[PODCAST AUDIO RENDER SEGMENT]", {
+                "index": index,
+                "blockId": block_id,
+                "sourceKind": "silence" if is_silence else source_kind,
+                "sourceUrl": source_url,
+                "sourceStartSec": source_start_sec,
+                "sourceEndSec": source_end_sec,
+                "durationSec": duration_sec,
+            })
+
+            out_segment = tmp_path / f"segment_{index:05d}.wav"
+            if is_silence:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-f", "lavfi",
+                    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                    "-t", f"{duration_sec:.6f}",
+                    "-ac", "2",
+                    "-ar", "44100",
+                    "-c:a", "pcm_s16le",
+                    str(out_segment),
+                ]
+            else:
+                source_path = _resolve_static_audio_source(source_url)
+                if not source_path:
+                    return _podcast_audio_error(400, "PODCAST_AUDIO_SOURCE_NOT_FOUND", blockId=block_id, sourceUrl=source_url)
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", f"{source_start_sec:.6f}",
+                    "-t", f"{duration_sec:.6f}",
+                    "-i", source_path,
+                    "-vn",
+                    "-ac", "2",
+                    "-ar", "44100",
+                    "-c:a", "pcm_s16le",
+                    str(out_segment),
+                ]
+
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True)
+            except FileNotFoundError:
+                return _podcast_audio_error(500, "PODCAST_AUDIO_RENDER_FAILED", blockId=block_id, message="ffmpeg_not_found")
+            if r.returncode != 0 or not out_segment.exists():
+                return _podcast_audio_error(500, "PODCAST_AUDIO_RENDER_FAILED", blockId=block_id, message=(r.stderr or r.stdout or "ffmpeg_failed")[-2000:])
+            segment_paths.append(out_segment)
+            escaped = str(out_segment).replace("'", "'\\''")
+            concat_lines.append(f"file '{escaped}'")
+
+        if not segment_paths:
+            return _podcast_audio_error(400, "PODCAST_AUDIO_RENDER_FAILED", message="no_renderable_segments")
+
+        concat_file = tmp_path / "concat.txt"
+        concat_file.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
+        temp_output = tmp_path / "podcast_composer_final.mp3"
+        concat_cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(concat_file),
+            "-c:a", "libmp3lame",
+            "-b:a", "192k",
+            str(temp_output),
+        ]
+        try:
+            r = subprocess.run(concat_cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            return _podcast_audio_error(500, "PODCAST_AUDIO_RENDER_FAILED", message="ffmpeg_not_found")
+        if r.returncode != 0 or not temp_output.exists():
+            return _podcast_audio_error(500, "PODCAST_AUDIO_RENDER_FAILED", message=(r.stderr or r.stdout or "ffmpeg_concat_failed")[-2000:])
+
+        raw = temp_output.read_bytes()
+        hid = _hash_bytes(raw)
+        filename = f"podcast_audio_composer_{hid}.mp3"
+        output_path = ASSETS_DIR / filename
+        if not output_path.exists():
+            output_path.write_bytes(raw)
+
+    duration_sec = _probe_audio_file_duration_sec(str(output_path)) or final_duration_sec
+    duration_sec = _round_audio_sec(duration_sec, final_duration_sec)
+    output_url = asset_url(filename)
+    print("[PODCAST AUDIO RENDER DONE]", {
+        "outputUrl": output_url,
+        "durationSec": duration_sec,
+        "outputPath": str(output_path),
+    })
+    return {
+        "ok": True,
+        "url": output_url,
+        "assetUrl": output_url,
+        "asset_url": output_url,
+        "publicUrl": output_url,
+        "public_url": output_url,
+        "filename": filename,
+        "name": filename,
+        "duration_sec": duration_sec,
+        "durationSec": duration_sec,
+        "duration_ms": int(round(duration_sec * 1000)),
+        "durationMs": int(round(duration_sec * 1000)),
+        "mime_type": "audio/mpeg",
+        "mime": "audio/mpeg",
+        "source": "podcast_audio_composer",
+    }
 
 
 def _raise_upload_bad_request(*, file: UploadFile | None, ext: str, content_type: str, size: int | None, detail: str) -> None:
