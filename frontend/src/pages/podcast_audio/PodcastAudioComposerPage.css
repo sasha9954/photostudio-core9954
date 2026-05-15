@@ -32,15 +32,13 @@
 .podcastComposerPage button:disabled{ cursor:not-allowed; opacity:.42; }
 .podcastComposerMessage,.podcastComposerCard{ max-width:1120px; box-sizing:border-box; margin:0 auto; border:1px solid rgba(148,163,184,.2); border-radius:24px; box-shadow:0 24px 80px rgba(2,6,23,.36); }
 .podcastComposerMessage{ padding:18px 20px; color:#fde68a; background:rgba(120,53,15,.34); }
-.podcastComposerCard{ overflow:hidden; padding:24px; background:linear-gradient(180deg, rgba(15,23,42,.94), rgba(2,6,23,.76)); }
+.podcastComposerCard{ padding:24px; background:linear-gradient(180deg, rgba(15,23,42,.94), rgba(2,6,23,.76)); }
 .podcastComposerAudioMeta{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:18px; align-items:start; margin-bottom:24px; }
 .podcastComposerAudioMeta div{ display:grid; gap:6px; min-width:0; }
 .podcastComposerAudioMeta span{ color:#8ea3bf; font-size:12px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
 .podcastComposerAudioMeta strong{ overflow:hidden; color:#f8fafc; font-size:17px; text-overflow:ellipsis; white-space:nowrap; }
 
-.podcastBlockTimelineWrap{ max-width:100%; min-width:0; overflow:hidden; padding:18px 0 10px; }
-.podcastTimelineQuickNav{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:flex-end; margin-bottom:10px; }
-.podcastTimelineQuickNav button{ padding:8px 11px; font-size:12px; }
+.podcastBlockTimelineWrap{ max-width:100%; min-width:0; padding:18px 0 10px; }
 .podcastTimelineViewport{
   width:100%;
   max-width:100%;
@@ -54,13 +52,12 @@
 .podcastTimelineViewport::-webkit-scrollbar-thumb{ border-radius:999px; background:rgba(125,211,252,.42); }
 .podcastTimelineInner{
   position:relative;
-  width:1200px;
-  min-width:1200px;
-  box-sizing:border-box;
+  width:100%;
+  min-width:max(100%, var(--timeline-width, 1200px));
   padding-bottom:8px;
 }
 .podcastBlockTimeline{
-  position:relative; width:100%; height:120px; overflow:hidden; box-sizing:border-box; border:1px solid rgba(125,211,252,.26); border-radius:20px;
+  position:relative; height:120px; overflow:hidden; border:1px solid rgba(125,211,252,.26); border-radius:20px;
   background:linear-gradient(180deg, rgba(30,41,59,.72), rgba(15,23,42,.72)), linear-gradient(90deg, rgba(56,189,248,.18), rgba(59,130,246,.08));
   cursor:pointer;
 }
@@ -129,8 +126,6 @@
   position:absolute; top:10px; left:10px; border:1px solid rgba(254,240,138,.56); border-radius:999px; padding:4px 8px; color:#422006; background:#fef08a;
   font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12px; font-weight:900; white-space:nowrap;
 }
-.podcastTimelineEndMarker{ position:absolute; top:8px; bottom:8px; width:2px; background:rgba(248,250,252,.82); box-shadow:0 0 12px rgba(125,211,252,.72); transform:translateX(-100%); z-index:3; pointer-events:none; }
-.podcastTimelineEndMarker span{ position:absolute; right:8px; bottom:6px; border:1px solid rgba(125,211,252,.34); border-radius:999px; padding:4px 8px; color:#e0f2fe; background:rgba(15,23,42,.9); font-size:11px; font-weight:900; white-space:nowrap; text-transform:uppercase; }
 .podcastComposerHint{ margin-top:10px; color:#fde68a; font-size:14px; font-weight:700; }
 
 .podcastComposerControls{ display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:18px; }

@@ -1088,117 +1088,46 @@ function BlockTimeline({
   selectedBlockId = "",
   currentTimeSec = 0,
   totalDurationSec = 0,
-  audioDurationSec = 0,
   deletionMarkers = [],
   onSeek,
   onSelectBlock,
   onBlockDoubleClick,
 }) {
   const viewportRef = useRef(null);
-  const lastSelectedBlockIdRef = useRef("");
-  const [viewportWidth, setViewportWidth] = useState(0);
-  const normalizedTotalDurationSec = Math.max(0, normalizeNumber(totalDurationSec, 0));
-  const normalizedAudioDurationSec = Math.max(0, normalizeNumber(audioDurationSec, 0));
-  const lastBlockEndSec = getTimelineDuration(blocks);
-  const fullTimelineDurationSec = Math.max(
-    normalizedTotalDurationSec,
-    normalizedAudioDurationSec,
-    lastBlockEndSec
-  );
-  const safeDuration = fullTimelineDurationSec;
+  const safeDuration = Math.max(0, normalizeNumber(totalDurationSec, 0));
   const timelineWidthPx = Math.ceil(Math.max(
-    viewportWidth || 0,
     TIMELINE_MIN_WIDTH_PX,
-    fullTimelineDurationSec * TIMELINE_PIXELS_PER_SECOND,
+    safeDuration * TIMELINE_PIXELS_PER_SECOND,
     blocks.length * TIMELINE_PIXELS_PER_BLOCK
   ));
   const playheadLeft = safeDuration > 0 ? `${Math.min(100, Math.max(0, (currentTimeSec / safeDuration) * 100))}%` : "0%";
 
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport) return undefined;
-
-    const updateViewportWidth = () => setViewportWidth(Math.max(0, Math.round(viewport.clientWidth || 0)));
-    updateViewportWidth();
-
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateViewportWidth);
-      return () => window.removeEventListener("resize", updateViewportWidth);
-    }
-
-    const observer = new ResizeObserver(updateViewportWidth);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    console.debug("[PODCAST TIMELINE LAYOUT]", {
-      totalDurationSec: normalizedTotalDurationSec,
-      audioDurationSec: normalizedAudioDurationSec,
-      lastBlockEndSec,
-      fullTimelineDurationSec,
-      timelineWidthPx,
-      viewportWidth,
-      blockCount: blocks.length,
-      selectedBlockId,
-    });
-  }, [blocks.length, fullTimelineDurationSec, lastBlockEndSec, normalizedAudioDurationSec, normalizedTotalDurationSec, selectedBlockId, timelineWidthPx, viewportWidth]);
-
-  const scrollTimeIntoView = (timeSec, { behavior = "smooth", forceCenter = false } = {}) => {
-    const viewport = viewportRef.current;
     if (!viewport || !safeDuration || timelineWidthPx <= viewport.clientWidth) return;
 
-    const targetX = clampSeconds(timeSec, 0, safeDuration) / safeDuration * timelineWidthPx;
+    const selectedIndex = blocks.findIndex((block) => block.id === selectedBlockId);
+    const targetTimeSec = selectedIndex >= 0
+      ? getBlockVirtualStart(blocks, selectedIndex) + (getBlockDuration(blocks[selectedIndex]) / 2)
+      : currentTimeSec;
+    const targetX = clampSeconds(targetTimeSec, 0, safeDuration) / safeDuration * timelineWidthPx;
     const padding = Math.min(96, Math.max(32, viewport.clientWidth * 0.12));
     const visibleStart = viewport.scrollLeft + padding;
     const visibleEnd = viewport.scrollLeft + viewport.clientWidth - padding;
 
-    if (forceCenter) {
-      viewport.scrollTo({ left: Math.max(0, targetX - (viewport.clientWidth / 2)), behavior });
-    } else if (targetX < visibleStart) {
-      viewport.scrollTo({ left: Math.max(0, targetX - padding), behavior });
+    if (targetX < visibleStart) {
+      viewport.scrollTo({ left: Math.max(0, targetX - padding), behavior: "smooth" });
     } else if (targetX > visibleEnd) {
-      viewport.scrollTo({ left: Math.max(0, targetX - viewport.clientWidth + padding), behavior });
+      viewport.scrollTo({ left: Math.max(0, targetX - viewport.clientWidth + padding), behavior: "smooth" });
     }
-  };
-
-  const scrollToTimelineStart = () => viewportRef.current?.scrollTo({ left: 0, behavior: "smooth" });
-  const scrollToTimelineEnd = () => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    viewport.scrollTo({ left: Math.max(0, timelineWidthPx - viewport.clientWidth), behavior: "smooth" });
-  };
-  const scrollToSelectedBlock = () => {
-    const selectedIndex = blocks.findIndex((block) => block.id === selectedBlockId);
-    if (selectedIndex < 0) return;
-    scrollTimeIntoView(getBlockVirtualStart(blocks, selectedIndex) + (getBlockDuration(blocks[selectedIndex]) / 2), { forceCenter: true });
-  };
-
-  useEffect(() => {
-    if (!selectedBlockId || selectedBlockId === lastSelectedBlockIdRef.current) return;
-    lastSelectedBlockIdRef.current = selectedBlockId;
-    scrollToSelectedBlock();
-  }, [blocks, selectedBlockId, safeDuration, timelineWidthPx]);
-
-  useEffect(() => {
-    if (!selectedBlockId) lastSelectedBlockIdRef.current = "";
-  }, [selectedBlockId]);
-
-  useEffect(() => {
-    scrollTimeIntoView(currentTimeSec, { behavior: "auto" });
-  }, [currentTimeSec, safeDuration, timelineWidthPx]);
+  }, [blocks, currentTimeSec, safeDuration, selectedBlockId, timelineWidthPx]);
 
   return (
     <div className="podcastBlockTimelineWrap">
-      <div className="podcastTimelineQuickNav" aria-label="Быстрая прокрутка таймлайна">
-        <button type="button" onClick={scrollToTimelineStart}>← начало</button>
-        <button type="button" onClick={scrollToSelectedBlock} disabled={!selectedBlockId}>к выбранному</button>
-        <button type="button" onClick={scrollToTimelineEnd}>конец →</button>
-      </div>
       <div className="podcastTimelineViewport" ref={viewportRef}>
         <div
           className="podcastTimelineInner"
-          style={{ width: `${timelineWidthPx}px`, minWidth: `${timelineWidthPx}px` }}
+          style={{ "--timeline-width": `${timelineWidthPx}px` }}
         >
           <div
             className="podcastBlockTimeline"
@@ -1242,13 +1171,9 @@ function BlockTimeline({
             })}
 
             {deletionMarkers.map((marker) => {
-              const left = safeDuration > 0 ? `${(clampSeconds(roundSeconds(marker.at_sec), 0, safeDuration) / safeDuration) * 100}%` : "0%";
+              const left = safeDuration > 0 ? `${(roundSeconds(marker.at_sec) / safeDuration) * 100}%` : "0%";
               return <div key={marker.id} className="podcastDeleteCutMark" style={{ left }} title={`Удалено ${formatTimer(marker.removed_duration_sec)}`} />;
             })}
-
-            <div className="podcastTimelineEndMarker" style={{ left: safeDuration > 0 ? "100%" : "0%" }} title={`Конец ${formatTimer(safeDuration)}`}>
-              <span>конец · {formatTimer(safeDuration)}</span>
-            </div>
 
             <div className="podcastPlayhead" style={{ left: playheadLeft }}>
               <span>{formatTimer(currentTimeSec)}</span>
@@ -2731,8 +2656,7 @@ export default function PodcastAudioComposerPage() {
             onSelectBlock={selectBlock}
             onBlockDoubleClick={openBlockMenu}
             selectedBlockId={selectedBlockId}
-            totalDurationSec={totalDurationSec}
-            audioDurationSec={durationSec || audio.durationSec || audio.duration_sec}
+            totalDurationSec={totalDurationSec || durationSec || audio.duration_sec}
           />
 
           <div className="podcastComposerHint">Жёлтая линия = прицел разреза. “Тишина” вставляет отдельный блок 0.5 сек по прицелу и сдвигает основное аудио вправо. Доводчик ← / → меняет конец выбранного блока; для тишины лимит до 30 сек. Двойной клик по блоку открывает меню: удалить, сохранить, цвет блока, аудио-фразы. JSON-кнопки нужны только для монтажной карты внутри композера: актёрские блоки — места для будущих вставок, не найденные голоса. Тишину JSON не размечает — паузы ставятся вручную.</div>
@@ -2933,7 +2857,6 @@ export default function PodcastAudioComposerPage() {
                         onSelectBlock={(blockId, startSec) => selectActorBlock(actor.id, blockId, startSec)}
                         selectedBlockId={actor.selectedBlockId}
                         totalDurationSec={actorDuration}
-                        audioDurationSec={actor.duration_sec || actor.durationSec}
                       />
 
                       <div className="podcastActorAudioControls">
