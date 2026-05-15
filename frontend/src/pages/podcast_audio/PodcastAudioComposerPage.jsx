@@ -18,6 +18,8 @@ const ACTOR_AUDIO_DB_STORE = "audio_files";
 const DEFAULT_MICRO_STEP_SEC = 0.5;
 const MIN_BLOCK_SEC = 0.001;
 const MAX_HISTORY_ITEMS = 50;
+const ASSET_UPLOAD_SOFT_LIMIT_BYTES = 60 * 1024 * 1024;
+const PODCAST_AUDIO_HANDOFF_SOURCE = "podcast_audio_composer";
 const BLOCK_COLORS = [
   "var(--podcast-block-color-1)",
   "var(--podcast-block-color-2)",
@@ -468,6 +470,49 @@ function removeComposerStorage(sourceNodeId = "") {
 
 function isBlobUrl(value = "") {
   return String(value || "").trim().startsWith("blob:");
+}
+
+
+function isBackendStaticAssetUrl(url = "") {
+  const raw = String(url || "").trim();
+  if (!raw || !raw.includes("/static/assets/")) return false;
+
+  let pathname = raw;
+  try {
+    pathname = new URL(raw, typeof window !== "undefined" ? window.location.href : "http://localhost").pathname;
+  } catch {
+    pathname = raw.split(/[?#]/, 1)[0];
+  }
+
+  const assetIndex = pathname.indexOf("/static/assets/");
+  if (assetIndex < 0) return false;
+  const assetPath = pathname.slice(assetIndex + "/static/assets/".length).trim();
+  if (!assetPath || assetPath.includes("..")) return false;
+  const cleanPath = assetPath.split(/[?#]/, 1)[0];
+  return /\.(mp3|wav|m4a|aac|ogg|oga|webm|flac)$/i.test(cleanPath) || cleanPath.length > 0;
+}
+
+function extractBackendStaticAssetFilename(url = "", fallback = "podcast_audio.mp3") {
+  const raw = String(url || "").trim();
+  let pathname = raw;
+  try {
+    pathname = new URL(raw, typeof window !== "undefined" ? window.location.href : "http://localhost").pathname;
+  } catch {
+    pathname = raw.split(/[?#]/, 1)[0];
+  }
+  const filename = decodeURIComponent(String(pathname || "").split("/").filter(Boolean).pop() || "").trim();
+  return filename || fallback;
+}
+
+function inferAudioMimeTypeFromFilename(filename = "") {
+  const lower = String(filename || "").toLowerCase();
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".m4a") || lower.endsWith(".aac")) return "audio/aac";
+  if (lower.endsWith(".ogg") || lower.endsWith(".oga")) return "audio/ogg";
+  if (lower.endsWith(".webm")) return "audio/webm";
+  if (lower.endsWith(".flac")) return "audio/flac";
+  return "audio/mpeg";
 }
 
 function stripTransientSourceUrl(row = {}) {
@@ -2430,6 +2475,11 @@ export default function PodcastAudioComposerPage() {
   };
 
   const uploadFinalAudioBlob = async ({ blob, filename }) => {
+    const sizeBytes = Number(blob?.size || 0);
+    if (sizeBytes > ASSET_UPLOAD_SOFT_LIMIT_BYTES) {
+      throw new Error("Аудио ещё не сохранено на сервере / слишком большое для upload");
+    }
+
     const form = new FormData();
     form.append("file", new File([blob], filename || "podcast_composer.wav", { type: "audio/wav" }));
     const response = await fetch(`${API_BASE}/api/assets/upload`, {
@@ -2439,9 +2489,40 @@ export default function PodcastAudioComposerPage() {
     });
     const data = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(data?.detail || data?.message || `upload_failed:${response.status}`);
+      const detail = String(data?.detail || data?.message || `upload_failed:${response.status}`);
+      if (response.status === 413 || detail === "file_too_large") {
+        throw new Error("Аудио ещё не сохранено на сервере / слишком большое для upload");
+      }
+      throw new Error(detail);
     }
     return data || {};
+  };
+
+  const resolvePersistedStaticFinalAudio = () => {
+    const candidates = [
+      storedManualTimingProject?.podcast_edit_manifest?.final_audio,
+      storedManualTimingProject?.composer_edit_manifest?.final_audio,
+      storedManualTimingProject?.audio,
+      audio,
+      location.state?.audio,
+    ];
+
+    for (const candidate of candidates) {
+      const url = String(candidate?.url || candidate?.assetUrl || candidate?.asset_url || candidate?.publicUrl || candidate?.path || "").trim();
+      if (!isBackendStaticAssetUrl(url)) continue;
+      const filename = String(candidate?.filename || candidate?.fileName || candidate?.name || extractBackendStaticAssetFilename(url)).trim();
+      const staticDurationSec = roundSeconds(candidate?.duration_sec || candidate?.durationSec || totalDurationSec || durationSec || audio.duration_sec);
+      return {
+        url,
+        filename: filename || extractBackendStaticAssetFilename(url),
+        duration_sec: staticDurationSec,
+        duration_ms: Math.round(staticDurationSec * 1000),
+        mime_type: String(candidate?.mime_type || candidate?.mimeType || inferAudioMimeTypeFromFilename(filename || url)).trim(),
+        source: PODCAST_AUDIO_HANDOFF_SOURCE,
+      };
+    }
+
+    return null;
   };
 
 
@@ -2495,6 +2576,8 @@ export default function PodcastAudioComposerPage() {
         url: finalAudio.url || "",
         filename: finalAudio.filename || "",
         duration_sec: roundSeconds(finalAudio.duration_sec || timelineDurationSec),
+        mime_type: finalAudio.mime_type || finalAudio.mimeType || "",
+        source: finalAudio.source || PODCAST_AUDIO_HANDOFF_SOURCE,
       } : null,
       original_main_audio: {
         url: audio.url || "",
@@ -2637,19 +2720,59 @@ export default function PodcastAudioComposerPage() {
   const applyComposedAudioToTiming = async () => {
     if (finalAudioBusy) return;
     setFinalAudioBusy("timing");
-    setMessage("Собираю финальное аудио и загружаю его в тайминг...");
+    setMessage("Готовлю финальное аудио для тайминга...");
     try {
-      const result = await renderComposerAudioBlob();
-      const uploaded = await uploadFinalAudioBlob(result);
-      const finalUrl = String(uploaded.url || uploaded.assetUrl || uploaded.asset_url || uploaded.publicUrl || uploaded.path || "").trim();
-      if (!finalUrl) throw new Error("backend не вернул URL собранного аудио");
-      const finalDurationSec = roundSeconds(uploaded.duration_sec || uploaded.durationSec || result.durationSec);
-      const finalAudio = {
-        url: finalUrl,
-        filename: uploaded.filename || uploaded.name || result.filename,
+      const persistedStaticAudio = resolvePersistedStaticFinalAudio();
+      let result = null;
+      let usedUpload = false;
+      let finalAudio = null;
+
+      if (persistedStaticAudio?.url) {
+        finalAudio = persistedStaticAudio;
+        console.log("[PODCAST TO TIMING UPLOAD SKIPPED_STATIC_ASSET]", {
+          url: finalAudio.url,
+          filename: finalAudio.filename,
+        });
+      } else {
+        setMessage("Собираю финальное аудио и загружаю его в тайминг...");
+        result = await renderComposerAudioBlob();
+        if (Number(result?.blob?.size || 0) > ASSET_UPLOAD_SOFT_LIMIT_BYTES) {
+          throw new Error("Аудио ещё не сохранено на сервере / слишком большое для upload");
+        }
+        const uploaded = await uploadFinalAudioBlob(result);
+        const finalUrl = String(uploaded.url || uploaded.assetUrl || uploaded.asset_url || uploaded.publicUrl || uploaded.path || "").trim();
+        if (!finalUrl) throw new Error("backend не вернул URL собранного аудио");
+        const finalDurationSec = roundSeconds(uploaded.duration_sec || uploaded.durationSec || result.durationSec);
+        const filename = String(uploaded.filename || uploaded.name || result.filename || extractBackendStaticAssetFilename(finalUrl, "podcast_composer.wav")).trim();
+        finalAudio = {
+          url: finalUrl,
+          filename,
+          duration_sec: finalDurationSec,
+          duration_ms: Math.round(finalDurationSec * 1000),
+          mime_type: String(uploaded.mime_type || uploaded.mimeType || result.blob?.type || inferAudioMimeTypeFromFilename(filename)).trim(),
+          source: PODCAST_AUDIO_HANDOFF_SOURCE,
+        };
+        usedUpload = true;
+      }
+
+      const finalDurationSec = roundSeconds(finalAudio.duration_sec || totalDurationSec || durationSec || audio.duration_sec);
+      finalAudio = {
+        ...finalAudio,
         duration_sec: finalDurationSec,
         duration_ms: Math.round(finalDurationSec * 1000),
+        mime_type: finalAudio.mime_type || inferAudioMimeTypeFromFilename(finalAudio.filename || finalAudio.url),
+        source: PODCAST_AUDIO_HANDOFF_SOURCE,
       };
+
+      console.log("[PODCAST TO TIMING AUDIO HANDOFF]", {
+        sourceUrl: String(finalAudio.url || ""),
+        isStaticAsset: isBackendStaticAssetUrl(finalAudio.url),
+        usedUpload,
+        filename: finalAudio.filename,
+        durationSec: finalDurationSec,
+        sizeBytes: Number(result?.blob?.size || 0),
+      });
+
       const editManifest = buildPodcastEditManifestForTiming({ finalAudio, finalDurationSec });
       const handoffScenes = buildManualTimingScenesFromPodcastManifest(editManifest, finalDurationSec);
       const handoffMarkers = handoffScenes.length

@@ -251,9 +251,11 @@ export function getManualTimingProjectKindForMode(mode = "") {
 }
 
 export function normalizeManualTimingAudio(audio = null) {
-  if (!audio || typeof audio !== "object") return { url: "", filename: "", duration_sec: 0, duration_ms: 0 };
+  if (!audio || typeof audio !== "object") return { url: "", filename: "", duration_sec: 0, duration_ms: 0, mime_type: "", source: "" };
   const url = String(audio.url || audio.value || audio.href || "").trim();
   const filename = String(audio.filename || audio.fileName || audio.name || audio.preview || audio.meta?.filename || "").trim();
+  const mime_type = String(audio.mime_type || audio.mimeType || audio.type || audio.meta?.mime_type || audio.meta?.mimeType || "").trim();
+  const source = String(audio.source || audio.audio_source || audio.audioSource || audio.meta?.source || "").trim();
   const durationSecRaw = Number(
     audio.duration_sec
     ?? audio.durationSec
@@ -268,7 +270,7 @@ export function normalizeManualTimingAudio(audio = null) {
   const durationMsRaw = Number(audio.duration_ms ?? audio.durationMs ?? audio.meta?.duration_ms ?? 0);
   const duration_sec = Number.isFinite(durationSecRaw) ? Number(durationSecRaw.toFixed(3)) : 0;
   const duration_ms = Number.isFinite(durationMsRaw) && durationMsRaw > 0 ? Math.round(durationMsRaw) : Math.round(duration_sec * 1000);
-  return { url, filename, duration_sec, duration_ms };
+  return { url, filename, duration_sec, duration_ms, mime_type, source };
 }
 
 export function roundTimingSec(value) {
