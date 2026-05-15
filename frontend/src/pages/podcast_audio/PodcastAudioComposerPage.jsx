@@ -711,6 +711,80 @@ function getAudioNameForSourceId(sourceId = "", mainAudio = {}, actorAudios = []
   return String(actor?.name || actor?.filename || safeId);
 }
 
+const SERVER_AUDIO_URL_KEYS = ["source_url", "url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl"];
+
+function getFirstBackendStaticAssetUrl(row = {}, keys = SERVER_AUDIO_URL_KEYS) {
+  if (!row || typeof row !== "object") return "";
+  for (const key of keys) {
+    const value = String(row?.[key] || "").trim();
+    if (value && isBackendStaticAssetUrl(value)) return value;
+  }
+  return "";
+}
+
+function getActorServerSourceUrl(actor = {}) {
+  return getFirstBackendStaticAssetUrl(actor, ["url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl", "source_url"]);
+}
+
+function getBlockSavedClipLookupValues(block = {}) {
+  return [block?.saved_clip_id, block?.inserted_phrase_id, block?.phrase_id]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function findSavedClipForBlock(block = {}, savedClips = []) {
+  const clips = Array.isArray(savedClips) ? savedClips : [];
+  const ids = getBlockSavedClipLookupValues(block);
+  for (const id of ids) {
+    const match = clips.find((clip) => [clip?.id, clip?.saved_clip_id, clip?.inserted_phrase_id]
+      .some((value) => String(value || "").trim() === id));
+    if (match) return match;
+  }
+
+  const labels = [block?.saved_clip_label, block?.inserted_phrase_label, block?.phrase_label]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  for (const label of labels) {
+    const match = clips.find((clip) => [clip?.label, clip?.saved_clip_label, clip?.inserted_phrase_label]
+      .some((value) => String(value || "").trim() === label));
+    if (match) return match;
+  }
+  return null;
+}
+
+function resolveServerRenderableBlockSourceUrl({ block = {}, mainAudio = {}, originalAudioUrl = "", actorById = new Map(), savedClips = [] } = {}) {
+  const sourceId = String(block?.source_audio_id || "main").trim() || "main";
+  if (block?.type === "silence" || sourceId === "silence") return "";
+
+  const explicitSourceUrl = String(block?.source_url || "").trim();
+  if (isBackendStaticAssetUrl(explicitSourceUrl)) return explicitSourceUrl;
+
+  const directAssetUrl = getFirstBackendStaticAssetUrl(block, ["asset_url", "assetUrl", "server_url", "public_url", "publicUrl", "url"]);
+  if (directAssetUrl) return directAssetUrl;
+
+  const savedClip = findSavedClipForBlock(block, savedClips);
+  if (savedClip) {
+    const clipUrl = getFirstBackendStaticAssetUrl(savedClip);
+    if (clipUrl) return clipUrl;
+
+    const clipSourceId = String(savedClip?.source_audio_id || "").trim();
+    if (clipSourceId && clipSourceId !== "main") {
+      const actorUrl = getActorServerSourceUrl(actorById.get(clipSourceId));
+      if (actorUrl) return actorUrl;
+    }
+  }
+
+  if (sourceId !== "main") {
+    const actorUrl = getActorServerSourceUrl(actorById.get(sourceId));
+    if (actorUrl) return actorUrl;
+  }
+
+  const fallbackOriginalUrl = String(originalAudioUrl || mainAudio?.url || "").trim();
+  if (sourceId === "main" && isBackendStaticAssetUrl(fallbackOriginalUrl)) return fallbackOriginalUrl;
+
+  return "";
+}
+
 function getItemSourceUrl(item = {}, mainAudio = {}, actorAudios = []) {
   if (!item || item.type === "silence" || item.source_audio_id === "silence") return "";
   const sourceId = String(item.source_audio_id || "main").trim() || "main";
@@ -2535,33 +2609,86 @@ export default function PodcastAudioComposerPage() {
     const actorById = new Map(nextActorAudios.map((actor) => [String(actor?.id || ""), actor]));
     const nextSavedClips = (Array.isArray(savedClips) ? savedClips : []).map((clip) => {
       const sourceId = String(clip?.source_audio_id || "main");
-      const actor = actorById.get(sourceId);
-      const actorUrl = String(actor?.url || actor?.asset_url || "").trim();
-      if (sourceId !== "main" && actorUrl) return { ...clip, source_url: actorUrl };
+      const actorUrl = sourceId !== "main" ? getActorServerSourceUrl(actorById.get(sourceId)) : "";
+      if (sourceId !== "main" && actorUrl) return { ...clip, source_url: actorUrl, asset_url: actorUrl };
       return { ...clip };
     });
-    return { actorAudios: nextActorAudios, savedClips: nextSavedClips };
+    const originalUrl = String(audio.url || location.state?.audio?.url || storedManualTimingProject?.audio?.url || "").trim();
+    const nextBlocks = (Array.isArray(blocks) ? blocks : []).map((block) => {
+      const sourceUrl = resolveServerRenderableBlockSourceUrl({
+        block,
+        mainAudio: audio,
+        originalAudioUrl: originalUrl,
+        actorById,
+        savedClips: nextSavedClips,
+      });
+      if (!sourceUrl || block?.type === "silence" || String(block?.source_audio_id || "main") === "silence") return { ...block };
+      return { ...block, source_url: sourceUrl };
+    });
+    const changedBlocks = nextBlocks.some((block, index) => String(block?.source_url || "") !== String(blocks?.[index]?.source_url || ""));
+    if (changedBlocks) setBlocks(nextBlocks);
+    return { actorAudios: nextActorAudios, savedClips: nextSavedClips, blocks: nextBlocks };
   };
 
   const renderComposerAudioToServerAsset = async ({ manifest, finalDurationSec }) => {
-    const { actorAudios: serverActorAudios, savedClips: serverSavedClips } = await prepareServerRenderableAudioSources();
+    const { actorAudios: serverActorAudios, savedClips: serverSavedClips, blocks: serverBlocks } = await prepareServerRenderableAudioSources();
     const actorById = new Map(serverActorAudios.map((actor) => [String(actor?.id || ""), actor]));
-    const renderBlocks = (Array.isArray(blocks) ? blocks : []).map((block) => {
+    const originalUrl = String(audio.url || location.state?.audio?.url || storedManualTimingProject?.audio?.url || "").trim();
+    const availableActorIds = serverActorAudios.map((actor) => String(actor?.id || "").trim()).filter(Boolean);
+    const availableSavedClipIds = serverSavedClips.flatMap((clip) => [clip?.id, clip?.saved_clip_id, clip?.inserted_phrase_id])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const missingSources = [];
+    const renderBlocks = (Array.isArray(serverBlocks) ? serverBlocks : []).map((block) => {
       const sourceId = String(block?.source_audio_id || "main").trim() || "main";
       const isSilence = block?.type === "silence" || sourceId === "silence";
-      const actor = actorById.get(sourceId);
-      const actorUrl = String(actor?.url || actor?.asset_url || "").trim();
-      const originalUrl = String(audio.url || location.state?.audio?.url || storedManualTimingProject?.audio?.url || "").trim();
-      const candidateUrl = getItemSourceUrl(block, audio, serverActorAudios);
-      const sourceUrl = isSilence
-        ? ""
-        : (sourceId === "main" ? (isBlobUrl(candidateUrl) ? originalUrl : candidateUrl || originalUrl) : (actorUrl || candidateUrl));
-      return {
+      const sourceUrl = isSilence ? "" : resolveServerRenderableBlockSourceUrl({
+        block,
+        mainAudio: audio,
+        originalAudioUrl: originalUrl,
+        actorById,
+        savedClips: serverSavedClips,
+      });
+      const renderedBlock = {
         ...block,
         source_url: sourceUrl,
         duration_sec: getBlockDuration(block),
       };
+
+      if (!isSilence) {
+        const sourceMap = {
+          blockId: String(block?.id || ""),
+          type: String(block?.type || "audio"),
+          sourceAudioId: sourceId,
+          savedClipId: String(block?.saved_clip_id || ""),
+          insertedPhraseId: String(block?.inserted_phrase_id || ""),
+          resolvedSourceUrl: sourceUrl,
+          sourceStartSec: roundSeconds(block?.source_start_sec),
+          sourceEndSec: roundSeconds(block?.source_end_sec),
+          durationSec: getBlockDuration(block),
+        };
+        console.log("[PODCAST RENDER BLOCK SOURCE MAP]", sourceMap);
+        if (!sourceUrl) {
+          const missing = {
+            blockId: sourceMap.blockId,
+            sourceAudioId: sourceId,
+            savedClipId: sourceMap.savedClipId,
+            insertedPhraseId: sourceMap.insertedPhraseId,
+            availableActorIds,
+            availableSavedClipIds,
+          };
+          console.error("[PODCAST RENDER BLOCK SOURCE MISSING]", missing);
+          missingSources.push(missing);
+        }
+      }
+
+      return renderedBlock;
     });
+
+    if (missingSources.length) {
+      const firstMissing = missingSources[0];
+      throw new Error(`Не найден серверный source_url для блока ${firstMissing.blockId || "без id"}. Проверь загруженные актёрские аудио и сохранённые фразы.`);
+    }
 
     console.log("[PODCAST TO TIMING RENDER_TO_ASSET_START]", {
       originalAudioUrl: String(audio.url || ""),

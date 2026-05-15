@@ -220,22 +220,44 @@ def _podcast_audio_error(status_code: int, code: str, **payload):
     return JSONResponse(status_code=status_code, content=body)
 
 
+_PODCAST_AUDIO_URL_KEYS = ("source_url", "url", "asset_url", "assetUrl", "server_url", "public_url", "publicUrl")
+
+
+def _first_audio_url(row: dict | None) -> str:
+    for key in _PODCAST_AUDIO_URL_KEYS:
+        value = str((row or {}).get(key) or "").strip()
+        if value and not value.startswith("blob:"):
+            return value
+    return ""
+
+
 def _find_actor_audio_source_url(source_id: str, actor_audios: list, saved_clips: list) -> str:
     safe_id = str(source_id or "").strip()
+    if not safe_id:
+        return ""
     for row in actor_audios if isinstance(actor_audios, list) else []:
         if str((row or {}).get("id") or "").strip() != safe_id:
             continue
-        for key in ("server_url", "asset_url", "assetUrl", "public_url", "publicUrl", "url", "source_url"):
-            value = str((row or {}).get(key) or "").strip()
-            if value:
-                return value
+        value = _first_audio_url(row)
+        if value:
+            return value
     for row in saved_clips if isinstance(saved_clips, list) else []:
-        if str((row or {}).get("source_audio_id") or "").strip() != safe_id:
+        identifiers = (
+            str((row or {}).get("source_audio_id") or "").strip(),
+            str((row or {}).get("id") or "").strip(),
+            str((row or {}).get("saved_clip_id") or "").strip(),
+            str((row or {}).get("inserted_phrase_id") or "").strip(),
+        )
+        if safe_id not in identifiers:
             continue
-        for key in ("server_url", "asset_url", "assetUrl", "public_url", "publicUrl", "source_url", "url"):
-            value = str((row or {}).get(key) or "").strip()
-            if value:
-                return value
+        value = _first_audio_url(row)
+        if value:
+            return value
+        nested_source_id = str((row or {}).get("source_audio_id") or "").strip()
+        if nested_source_id and nested_source_id != safe_id:
+            nested_value = _find_actor_audio_source_url(nested_source_id, actor_audios, [])
+            if nested_value:
+                return nested_value
     return ""
 
 
@@ -243,9 +265,15 @@ def _block_source_url(block: dict, *, original_audio_url: str, actor_audios: lis
     source_id = str((block or {}).get("source_audio_id") or "main").strip() or "main"
     if source_id == "main":
         return str((block or {}).get("source_url") or original_audio_url or "").strip()
-    for key in ("source_url", "url", "asset_url", "assetUrl", "server_url"):
-        value = str((block or {}).get(key) or "").strip()
-        if value and not value.startswith("blob:"):
+    value = _first_audio_url(block)
+    if value:
+        return value
+    for key in ("saved_clip_id", "inserted_phrase_id", "phrase_id"):
+        clip_id = str((block or {}).get(key) or "").strip()
+        if not clip_id:
+            continue
+        value = _find_actor_audio_source_url(clip_id, actor_audios, saved_clips)
+        if value:
             return value
     return _find_actor_audio_source_url(source_id, actor_audios, saved_clips)
 
