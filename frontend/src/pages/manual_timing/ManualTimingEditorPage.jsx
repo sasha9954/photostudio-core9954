@@ -615,6 +615,9 @@ function normalizeStoredManualTimingProject(raw = null, ownerNodeId = "") {
     scenes,
     selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
     timing_status: project.timing_status || (scenes.length ? "draft" : "empty"),
+    manual_scene_edits: Boolean(project.manual_scene_edits ?? project.manualSceneEdits),
+    manualSceneEdits: Boolean(project.manualSceneEdits ?? project.manual_scene_edits),
+    lastManualEditReason: String(project.lastManualEditReason || project.last_manual_edit_reason || ""),
   };
 }
 
@@ -1507,6 +1510,7 @@ export default function ManualTimingEditorPage() {
   const hasActiveBoardProject = hasMeaningfulManualProject(activeBoardProject);
   const projectFormat = String(project.format || project.aspect_ratio || "9:16");
   const hasSceneMaterials = scenes.some(sceneHasCreatedMaterials);
+  const manualSceneEdits = Boolean(project.manualSceneEdits ?? project.manual_scene_edits);
   const currentCutTime = roundTimingSec(currentTime);
   const canCutAtCurrentTime = Boolean(audio.url)
     && durationSec > 0
@@ -2416,7 +2420,20 @@ export default function ManualTimingEditorPage() {
     const normalized = normalizeManualTimingMarkers(nextMarkers, durationSec);
     const boundaryIndex = normalized.findIndex((marker) => Math.abs(Number(marker) - time) < 0.001);
     const selectedSceneId = boundaryIndex > 0 ? getSceneIdForIndex(boundaryIndex - 1) : project.selectedSceneId;
-    rebuildFromMarkers(normalized, scenes, { selectedSceneId, timing_status: "draft" });
+    const nextProject = rebuildFromMarkers(normalized, scenes, {
+      selectedSceneId,
+      timing_status: "draft",
+      manual_scene_edits: true,
+      manualSceneEdits: true,
+      lastManualEditReason: "cut_scene",
+    });
+    console.info("[MANUAL TIMING MANUAL CUT APPLIED]", {
+      timeSec: time,
+      selectedSceneId,
+      sceneCountBefore: scenes.length,
+      sceneCountAfter: Array.isArray(nextProject?.scenes) ? nextProject.scenes.length : scenes.length + 1,
+      manualSceneEdits: true,
+    });
     setAudioTime(time, { pause: true, clearBound: true });
   };
 
@@ -2949,6 +2966,15 @@ export default function ManualTimingEditorPage() {
       nextMode === MANUAL_TIMING_MUSIC_CLIP_MODE ? "clip" :
       nextMode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE ? "podcast" :
       MANUAL_TIMING_STORY_PROJECT_KIND;
+    if (manualSceneEdits) {
+      console.info("[MANUAL TIMING REBUILD_BLOCKED_BY_MANUAL_EDITS]", {
+        sceneCount: scenes.length,
+        manualSceneEdits,
+        source: "build_scenes",
+      });
+      const confirmedManualOverwrite = window.confirm("У тебя есть ручные разрезы сцен. Повторная сборка перезапишет их. Продолжить?");
+      if (!confirmedManualOverwrite) return;
+    }
     const hasCreatedMaterials = scenes.some(sceneHasCreatedMaterials);
     if (hasCreatedMaterials) {
       const confirmed = window.confirm("В сценах уже есть созданные материалы. Пересборка scenes может отвязать их. Продолжить?");
@@ -2970,7 +2996,8 @@ export default function ManualTimingEditorPage() {
       hydratedScenes.flatMap((scene) => [scene.start_sec, scene.end_sec]),
       audioDurationSec
     );
-    persist({
+    const sceneCountBeforeRebuild = scenes.length;
+    const nextProject = persist({
       ...project,
       project_mode: nextMode,
       project_kind: nextKind,
@@ -2984,7 +3011,16 @@ export default function ManualTimingEditorPage() {
       story_blocks: draftBlocks,
       selectedSceneId: hydratedScenes[0]?.scene_id || project.selectedSceneId || "",
       timing_status: "draft",
+      manual_scene_edits: false,
+      manualSceneEdits: false,
+      lastManualEditReason: "",
     });
+    if (manualSceneEdits) {
+      console.info("[MANUAL TIMING REBUILD_CONFIRMED_OVERWRITE_MANUAL_EDITS]", {
+        sceneCountBefore: sceneCountBeforeRebuild,
+        sceneCountAfter: Array.isArray(nextProject?.scenes) ? nextProject.scenes.length : hydratedScenes.length,
+      });
+    }
     const statusTail = coverage.ok ? "Покрытие audio_duration_sec проверено: без дыр и overlap." : coverage.errors.join(" ");
     setAsrStatus(`${workflowLabels.buildScenes}: собрано ${hydratedScenes.length} сцен, ${draftBlocks.length} черновых story_blocks. ${statusTail}`);
     window.setTimeout(() => setAsrStatus(""), 7000);
@@ -4105,7 +4141,12 @@ export default function ManualTimingEditorPage() {
         <div className="manualTimingWorkflowPanel" aria-label={`Основной workflow ${workflowLabels.pass}`}>
           <div className="manualTimingWorkflowActions manualTimingWorkflowActionsPrimary">
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>1 · Audio Phrase Map</button>
-            <button className="clipSB_btn clipSB_btnPrimary" onClick={onBuildStoryScenesFromAsr} disabled={mainActionsDisabled || !audioPhrases.length}>2 · Собрать сцены</button>
+            <button
+              className="clipSB_btn clipSB_btnPrimary"
+              onClick={onBuildStoryScenesFromAsr}
+              disabled={mainActionsDisabled || !audioPhrases.length}
+              title="Пересобрать сцены из текущего JSON/ASR. Может перезаписать ручные разрезы."
+            >2 · Собрать сцены</button>
             <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>3 · Подтвердить</button>
             <button
               className="clipSB_btn clipSB_btnSecondary"
