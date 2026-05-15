@@ -1507,6 +1507,12 @@ export default function ManualTimingEditorPage() {
   const hasActiveBoardProject = hasMeaningfulManualProject(activeBoardProject);
   const projectFormat = String(project.format || project.aspect_ratio || "9:16");
   const hasSceneMaterials = scenes.some(sceneHasCreatedMaterials);
+  const currentCutTime = roundTimingSec(currentTime);
+  const canCutAtCurrentTime = Boolean(audio.url)
+    && durationSec > 0
+    && currentCutTime > 0.001
+    && currentCutTime < durationSec - 0.001
+    && !markers.some((marker) => Math.abs(Number(marker) - currentCutTime) < 0.15);
   const isFormatLocked = Boolean(project.format_locked || hasActiveBoardProject || project.timing_status === "confirmed" || hasSceneMaterials || hasRealStoryBlocks(storyBlocks));
   const isStoryVoiceover = isStoryVoiceoverProject(project);
   const modeConfig = getManualTimingModeConfig(project);
@@ -3978,6 +3984,12 @@ export default function ManualTimingEditorPage() {
                 onClick={() => nudgeSelectedBoundary(clampManualTimingStep(trackNudgeStepSec))}
                 title="Увеличить выбранный отрезок"
               >→</button>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingCutButton"
+                onClick={onAddMarker}
+                disabled={!canCutAtCurrentTime}
+                title="Разрезать сцену по текущей жёлтой линии"
+              >✂ Разрезать</button>
               <button
                 className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
                 onClick={insertSilenceAtCursor}
