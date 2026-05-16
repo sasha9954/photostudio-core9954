@@ -53,6 +53,7 @@ import {
   getManualTimingAudioSignature,
   getManualTimingPhrasesForScene,
   hydrateManualTimingScenesWithStoryBlocks,
+  isManualTimingAiRequestJson,
   normalizeManualTimingAudio,
   normalizeManualTimingAudioPhrases,
   normalizeManualTimingMarkers,
@@ -110,6 +111,8 @@ const MANUAL_TIMING_TIMELINE_MIN_WIDTH_PX = 1800;
 const MANUAL_TIMING_TIMELINE_PIXELS_PER_SECOND = 8;
 const SHOW_MISSING_PHRASE_TOOLS = false;
 const STORYBOARD_ROUTE = "/studio/storyboard";
+
+const MANUAL_TIMING_AI_REQUEST_JSON_MESSAGE = "Это JSON-задание для AI, а не заполненный результат. Отправьте этот файл в ChatGPT/Gemini, затем вставьте ответ с manual_timing_pass_result.activation_phrase.";
 
 function formatManualBoardUpdatedAt(value) {
   if (!value) return "неизвестно";
@@ -4261,6 +4264,19 @@ export default function ManualTimingEditorPage() {
     window.setTimeout(() => setCopyStatus(""), 3200);
   };
 
+  const blockManualTimingAiRequestJsonApply = (rawObject = {}, clickedPassType = "") => {
+    const importedObject = unwrapManualProjectBackupJson(rawObject);
+    if (!isManualTimingAiRequestJson(importedObject)) return false;
+    blockManualTimingPassApply(
+      MANUAL_TIMING_AI_REQUEST_JSON_MESSAGE,
+      "ai_request_json_pasted_as_result",
+      clickedPassType,
+      getManualTimingJsonPassType(importedObject),
+      MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType]?.requires || []
+    );
+    return true;
+  };
+
   const getManualTimingActivationErrorMessage = (importedObject = {}, clickedPassType = "") => {
     const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType];
     const result = importedObject?.manual_timing_pass_result || importedObject?.manualTimingPassResult || {};
@@ -4376,6 +4392,7 @@ export default function ManualTimingEditorPage() {
         applyImportedTimingJson(raw, "");
         return;
       }
+      if (blockManualTimingAiRequestJsonApply(raw, "semantic_story_cut")) return;
       const passValidation = validateManualTimingClickedPass(raw, "semantic_story_cut");
       if (!passValidation.ok) return;
       applyImportedTimingJson(raw, "semantic_story_cut");
@@ -4391,6 +4408,7 @@ export default function ManualTimingEditorPage() {
         applyImportedTimingJson(raw, "");
         return;
       }
+      if (blockManualTimingAiRequestJsonApply(raw, "story_bible")) return;
       applyImportedStoryBibleJson(raw);
     } catch (error) {
       setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
@@ -4404,6 +4422,7 @@ export default function ManualTimingEditorPage() {
         applyImportedTimingJson(raw, "");
         return;
       }
+      if (blockManualTimingAiRequestJsonApply(raw, "block_storyboard")) return;
       const passValidation = validateManualTimingClickedPass(raw, "block_storyboard");
       if (!passValidation.ok) return;
       applyImportedTimingJson(raw, "block_storyboard");
@@ -4419,6 +4438,7 @@ export default function ManualTimingEditorPage() {
     const stageToComplete = isBackupImport ? "" : clickedPassType;
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const importedObject = isCurrentTimingBackupImport ? rawObject : unwrapManualProjectBackupJson(rawObject);
+    if (!isBackupImport && blockManualTimingAiRequestJsonApply(importedObject, clickedPassType)) return;
     if (!isBackupImport) {
       let validations = [];
       if (clickedPassType === "semantic_story_cut") {
