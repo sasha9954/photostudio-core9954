@@ -68,6 +68,7 @@ import {
   validateManualTimingBlockStoryboardPassImport,
   validateManualTimingClipPassImport,
   validateManualTimingPodcastPassImport,
+  validateManualTimingPassResultActivation,
   validateManualTimingStoryBiblePassImport,
   validateManualTimingStoryPassImport,
   validateSceneCoverage,
@@ -4260,9 +4261,34 @@ export default function ManualTimingEditorPage() {
     window.setTimeout(() => setCopyStatus(""), 3200);
   };
 
+  const getManualTimingActivationErrorMessage = (importedObject = {}, clickedPassType = "") => {
+    const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType];
+    const result = importedObject?.manual_timing_pass_result || importedObject?.manualTimingPassResult || {};
+    const activationPhrase = String(result?.activation_phrase || result?.activationPhrase || "").trim();
+    if (!activationPhrase) return `Этап не активирован: отсутствует activation_phrase ${stage?.activation_phrase || ""}`.trim();
+    return "Этап не активирован: неверный activation_phrase";
+  };
+
+  const validateManualTimingActivationOrBlock = (importedObject = {}, clickedPassType = "", payloadPassType = "") => {
+    const activationValidation = validateManualTimingPassResultActivation(importedObject, clickedPassType);
+    if (activationValidation.ok) return true;
+    blockManualTimingPassApply(
+      getManualTimingActivationErrorMessage(importedObject, clickedPassType),
+      "activation_phrase_invalid",
+      clickedPassType,
+      payloadPassType || getManualTimingJsonPassType(importedObject),
+      MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType]?.requires || []
+    );
+    return false;
+  };
+
   const validateManualTimingClickedPass = (rawObject = {}, clickedPassType = "") => {
-    if (String(rawObject?.backup_type || rawObject?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
+    const backupType = String(rawObject?.backup_type || rawObject?.backupType || "");
+    if (backupType === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
       return { ok: true, importedObject: rawObject, payloadPassType: "timing_backup", isCurrentTimingBackup: true };
+    }
+    if (backupType === "photostudio_manual_project_backup") {
+      return { ok: true, importedObject: unwrapManualProjectBackupJson(rawObject), payloadPassType: "project_backup", isProjectBackup: true };
     }
     const importedObject = unwrapManualProjectBackupJson(rawObject);
     const explicitPassType = getManualTimingPayloadPassType(importedObject);
@@ -4325,6 +4351,7 @@ export default function ManualTimingEditorPage() {
       blockManualTimingPassApply(`Библия истории отклонена: ${errors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`, "validator_failed", "story_bible", passValidation.payloadPassType, MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.requires);
       return;
     }
+    if (!validateManualTimingActivationOrBlock(importedObject, "story_bible", passValidation.payloadPassType)) return;
     const nextProject = { ...project };
     MANUAL_STORY_BIBLE_PROJECT_KEYS.forEach((key) => {
       if (Object.prototype.hasOwnProperty.call(importedObject, key)) {
@@ -4360,7 +4387,7 @@ export default function ManualTimingEditorPage() {
   const onApplyStoryBibleJson = () => {
     try {
       const raw = parseJsonImportText();
-      if (String(raw?.backup_type || raw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
+      if ([MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE, "photostudio_manual_project_backup"].includes(String(raw?.backup_type || raw?.backupType || ""))) {
         applyImportedTimingJson(raw, "");
         return;
       }
@@ -4389,7 +4416,7 @@ export default function ManualTimingEditorPage() {
     const backupType = String(rawObject?.backup_type || rawObject?.backupType || "");
     const isCurrentTimingBackupImport = backupType === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE;
     const isBackupImport = backupType === "photostudio_manual_project_backup" || isCurrentTimingBackupImport;
-    const stageToComplete = isCurrentTimingBackupImport ? "" : clickedPassType;
+    const stageToComplete = isBackupImport ? "" : clickedPassType;
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const importedObject = isCurrentTimingBackupImport ? rawObject : unwrapManualProjectBackupJson(rawObject);
     if (!isBackupImport) {
@@ -4433,6 +4460,7 @@ export default function ManualTimingEditorPage() {
         }
         return;
       }
+      if (clickedPassType && !validateManualTimingActivationOrBlock(importedObject, clickedPassType, getManualTimingJsonPassType(importedObject))) return;
     }
     const importedProject = normalizeManualTimingProjectFromJson(importedObject, project);
     const nextProject = stageToComplete ? buildProjectWithCompletedManualTimingStage(importedProject, stageToComplete) : importedProject;
@@ -5312,6 +5340,12 @@ export default function ManualTimingEditorPage() {
                 <b>7 · Открыть режиссёрскую доску</b>
                 <span>После блочной раскадровки и подтверждения тайминга можно переходить в Director Board / Storyboard.</span>
               </div>
+            </div>
+            <div className="manualTimingJsonHelpNote manualTimingAiHelpNote">
+              <b>Activation phrase:</b> Каждый AI-ответ должен вернуть activation_phrase. Без него следующий этап не откроется:<br />
+              - SEMANTIC_STORY_CUT_DONE открывает Библию истории<br />
+              - STORY_BIBLE_DONE открывает Блочную раскадровку<br />
+              - BLOCK_STORYBOARD_DONE открывает Director Board
             </div>
             <div className="manualTimingJsonHelpNote manualTimingAiHelpNote">
               <b>Важно:</b> Current timing backup — это не AI-pass, а резервная копия для восстановления проекта. AI JSON этапы применяются только через соответствующие кнопки этапов. Если вставлен JSON не того этапа, нужно нажимать правильную кнопку применения.
