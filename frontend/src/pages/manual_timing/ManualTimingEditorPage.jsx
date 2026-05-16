@@ -5228,7 +5228,8 @@ export default function ManualTimingEditorPage() {
     });
     setCopyStatus(`Создан смысловой блок: ${title}`);
     window.setTimeout(() => setCopyStatus(""), 2200);
-    clearStoryBlockGroupSelection();
+    setGroupSelectedSceneIds([]);
+    setSelectedMissingPhraseId("");
     resetStoryBlockDialog();
   };
 
