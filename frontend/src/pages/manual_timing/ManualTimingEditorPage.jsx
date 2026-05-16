@@ -65,6 +65,7 @@ import {
   readManualTimingProjectForNode,
   normalizeManualTimingStoryBlocks,
   persistManualTimingProject,
+  repairManualTimingSourcePhraseIdsFromTiming,
   roundTimingSec,
   updateManualTimingSceneById,
   validateManualTimingBlockStoryboardPassImport,
@@ -1884,6 +1885,73 @@ function createManualTimingHistorySnapshot(project, currentTimeSec = 0, label = 
   };
 }
 
+
+function pickManualTimingAudioPhraseOriginalText(phrase = {}) {
+  return String(
+    phrase?.text_original
+    || phrase?.textOriginal
+    || phrase?.text
+    || phrase?.text_en
+    || phrase?.textEn
+    || phrase?.text_de
+    || phrase?.textDe
+    || phrase?.text_fr
+    || phrase?.textFr
+    || phrase?.original_text
+    || phrase?.originalText
+    || ""
+  ).trim();
+}
+
+function pickManualTimingAudioPhraseRuText(phrase = {}) {
+  return String(phrase?.text_ru || phrase?.textRu || phrase?.translation_ru || phrase?.translationRu || phrase?.meaning_ru || phrase?.meaningRu || "").trim();
+}
+
+function isManualTimingPhrasePartialInScene(phrase = {}, scene = null) {
+  if (!scene) return false;
+  const sceneStart = Number(scene?.start_sec || 0);
+  const sceneEnd = Number(scene?.end_sec || 0);
+  const phraseStart = Number(phrase?.start_sec || 0);
+  const phraseEnd = Number(phrase?.end_sec || 0);
+  if (!(sceneEnd > sceneStart) || !(phraseEnd > phraseStart)) return false;
+  return phraseStart < sceneStart - 0.001 || phraseEnd > sceneEnd + 0.001;
+}
+
+function buildManualTimingAsrTranslationPassJson(project = {}) {
+  const audioPhrases = normalizeManualTimingAudioPhrases(project?.audio_phrases).map((phrase) => ({
+    phrase_id: phrase.phrase_id,
+    start_sec: phrase.start_sec,
+    end_sec: phrase.end_sec,
+    text_original: pickManualTimingAudioPhraseOriginalText(phrase),
+    text_ru: pickManualTimingAudioPhraseRuText(phrase),
+  }));
+
+  return {
+    split_type: "manual_timing_asr_translation_pass",
+    pass_type: "asr_translation",
+    instruction_ru: "Заполни только audio_phrases[].text_ru русским переводом исходной ASR-фразы. Не меняй phrase_id, start_sec, end_sec и порядок фраз.",
+    audio_duration_sec: Number(project?.audio?.duration_sec || project?.audio_duration_sec || 0),
+    audio_phrases: audioPhrases,
+  };
+}
+
+function mergeManualTimingAsrTranslationPhrases(currentPhrases = [], importedPhrases = []) {
+  const normalizedCurrent = normalizeManualTimingAudioPhrases(currentPhrases);
+  const importedById = new Map(normalizeManualTimingAudioPhrases(importedPhrases).map((phrase) => [String(phrase.phrase_id || ""), phrase]));
+  let updatedCount = 0;
+  const nextPhrases = normalizedCurrent.map((phrase) => {
+    const importedPhrase = importedById.get(String(phrase.phrase_id || ""));
+    if (!importedPhrase) return phrase;
+    const importedRu = pickManualTimingAudioPhraseRuText(importedPhrase);
+    if (!importedRu) return phrase;
+    const currentRu = pickManualTimingAudioPhraseRuText(phrase);
+    if (currentRu === importedRu) return phrase;
+    updatedCount += 1;
+    return { ...phrase, text_ru: importedRu, translation_ru: importedRu };
+  });
+  return { audio_phrases: nextPhrases, updatedCount };
+}
+
 export default function ManualTimingEditorPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -2058,6 +2126,18 @@ export default function ManualTimingEditorPage() {
     () => getManualTimingPhrasesForScene(audioPhrases, selectedScene),
     [audioPhrases, selectedScene]
   );
+  const selectedScenePhraseInspectorRows = useMemo(
+    () => selectedSceneAudioPhrases.map((phrase) => ({
+      phrase,
+      phraseId: String(phrase?.phrase_id || "").trim(),
+      timingLabel: `${formatTimingSec(phrase.start_sec)} → ${formatTimingSec(phrase.end_sec)}`,
+      originalText: pickManualTimingAudioPhraseOriginalText(phrase) || "—",
+      ruText: pickManualTimingAudioPhraseRuText(phrase) || "перевод пока не заполнен",
+      isPartial: isManualTimingPhrasePartialInScene(phrase, selectedScene),
+    })),
+    [selectedSceneAudioPhrases, selectedScene]
+  );
+  const selectedSceneHasPartialPhrase = selectedScenePhraseInspectorRows.some((row) => row.isPartial);
   const selectedScenePhraseWarnings = useMemo(
     () => getScenePhraseAlignmentWarnings(selectedScene, selectedSceneAudioPhrases, audioPhrases, scenes, durationSec),
     [selectedScene, selectedSceneAudioPhrases, audioPhrases, scenes, durationSec]
@@ -3969,6 +4049,60 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const refreshSceneSourcePhraseIds = () => {
+    if (!scenes.length || !audioPhrases.length) {
+      setCopyStatus("Нет сцен или audio_phrases для обновления");
+      window.setTimeout(() => setCopyStatus(""), 1800);
+      return;
+    }
+    const repaired = repairManualTimingSourcePhraseIdsFromTiming(scenes, audioPhrases);
+    if (!repaired.repaired) {
+      setCopyStatus("Фразы уже соответствуют границам сцен");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+    rememberManualTimingAction("обновить source_phrase_ids");
+    persist({ ...project, scenes: repaired.scenes, timing_status: "draft" });
+    setCopyStatus(`Фразы обновлены: ${repaired.repairedEmptyCount + repaired.replacedWrongCount} сцен`);
+    window.setTimeout(() => setCopyStatus(""), 2200);
+  };
+
+  const onDownloadAsrTranslationJson = () => {
+    downloadJsonPayload(buildManualTimingAsrTranslationPassJson(project), "manual_timing_asr_translation_pass.json");
+  };
+
+  const applyAsrTranslationJson = (rawObject = {}) => {
+    const importedPhrases = Array.isArray(rawObject?.audio_phrases) ? rawObject.audio_phrases : [];
+    if (!importedPhrases.length) {
+      setCopyStatus("В JSON нет audio_phrases для импорта перевода");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+    const merged = mergeManualTimingAsrTranslationPhrases(project.audio_phrases, importedPhrases);
+    if (!merged.updatedCount) {
+      setCopyStatus("Новых text_ru для audio_phrases не найдено");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+    rememberManualTimingAction("импорт ASR text_ru");
+    persist({ ...project, audio_phrases: merged.audio_phrases, timing_status: "draft" });
+    setCopyStatus(`ASR-перевод импортирован: обновлено ${merged.updatedCount} фраз`);
+    window.setTimeout(() => setCopyStatus(""), 2400);
+  };
+
+  const onImportAsrTranslationJsonFile = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    try {
+      const text = await file.text();
+      applyAsrTranslationJson(JSON.parse(text));
+    } catch (error) {
+      setCopyStatus(`Ошибка ASR Translation JSON: ${error?.message || "неверный формат"}`);
+      window.setTimeout(() => setCopyStatus(""), 2600);
+    }
+  };
+
   const onDownloadTimingJson = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     downloadJsonPayload(buildManualTimingExportJson(project), "manual_timing_export.json");
@@ -5090,6 +5224,37 @@ export default function ManualTimingEditorPage() {
             <div><b>Главная шкала разметки</b></div>
             <div>верхняя полоса — story blocks · нижняя — сцены · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
+          <div className={`manualTimingSelectedPhraseInspector ${selectedSceneHasPartialPhrase ? "hasPartialPhrase" : ""}`}>
+            <div className="manualTimingSelectedPhraseMeta">
+              <span>scene_id</span>
+              <strong>{selectedScene?.scene_id || "—"}</strong>
+              <span>{selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
+              {selectedSceneHasPartialPhrase ? <b className="manualTimingPartialBadge">частично</b> : null}
+            </div>
+            <div className="manualTimingSelectedPhraseRows">
+              {selectedScene ? (selectedScenePhraseInspectorRows.length ? selectedScenePhraseInspectorRows.map((row) => <div
+                key={`selected-phrase-inspector-${row.phraseId || row.timingLabel}`}
+                className={`manualTimingSelectedPhraseRow ${row.isPartial ? "isPartial" : ""}`}
+              >
+                <div className="manualTimingSelectedPhraseOriginal">
+                  <span>{row.phraseId || "audio_phrase"} · {row.timingLabel}</span>
+                  <p>{row.originalText}</p>
+                </div>
+                <div className="manualTimingSelectedPhraseRu">
+                  <span>RU</span>
+                  <p>{row.ruText}</p>
+                </div>
+              </div>) : <div className="manualTimingSelectedPhraseEmpty">В выбранной сцене нет ASR-фразы.</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
+            </div>
+            <div className="manualTimingSelectedPhraseActions">
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
+              <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!audioPhrases.length ? "isDisabled" : ""}`}>
+                Импорт ASR text_ru
+                <input type="file" accept="application/json,.json,text/plain" onChange={onImportAsrTranslationJsonFile} disabled={!audioPhrases.length} />
+              </label>
+            </div>
+          </div>
           <div
             className="manualTimingTimelineViewport"
             ref={timelineViewportRef}
@@ -5127,7 +5292,7 @@ export default function ManualTimingEditorPage() {
                     className="manualTimingPhraseMarker"
                     style={phrase.style}
                     onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }}
-                    title={`${phrase.phrase_id}: ${formatTimingSec(phrase.start_sec)} – ${formatTimingSec(phrase.end_sec)} · ${phrase.text_en || "ASR phrase"}`}
+                    title={`${phrase.phrase_id}: ${formatTimingSec(phrase.start_sec)} – ${formatTimingSec(phrase.end_sec)} · ${pickManualTimingAudioPhraseOriginalText(phrase) || "ASR phrase"}`}
                   />)}
                 </div> : null}
                 {scenes.map((scene, idx) => {
@@ -5530,8 +5695,8 @@ export default function ManualTimingEditorPage() {
                     По таймингу сейчас внутри: <b>{timingSceneId || "—"}</b>. Это подсказка, не привязка.
                   </div>
                   <div className="manualTimingAudioPhraseTextGrid">
-                    <div><span>text_en</span><p>{String(phrase.text_en || "").trim() || "—"}</p></div>
-                    <div><span>text_ru</span><p>{String(phrase.text_ru || "").trim() || "—"}</p></div>
+                    <div><span>original</span><p>{pickManualTimingAudioPhraseOriginalText(phrase) || "—"}</p></div>
+                    <div><span>text_ru</span><p>{pickManualTimingAudioPhraseRuText(phrase) || "перевод пока не заполнен"}</p></div>
                     <div><span>note_ru</span><p>{String(phrase.note_ru || "").trim() || "—"}</p></div>
                   </div>
                   <div className="manualTimingAudioPhraseActions">

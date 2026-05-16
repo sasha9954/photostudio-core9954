@@ -3924,3 +3924,116 @@
     min-width: 0;
   }
 }
+
+.manualTimingSelectedPhraseInspector {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(125, 211, 252, 0.18);
+}
+
+.manualTimingSelectedPhraseInspector.hasPartialPhrase {
+  border-color: rgba(251, 113, 133, 0.42);
+  background: rgba(38, 18, 30, 0.64);
+}
+
+.manualTimingSelectedPhraseMeta,
+.manualTimingSelectedPhraseActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.manualTimingSelectedPhraseMeta span {
+  color: rgba(219, 234, 254, 0.72);
+  font-size: 12px;
+}
+
+.manualTimingSelectedPhraseMeta strong {
+  color: #e0f2fe;
+  font-size: 13px;
+}
+
+.manualTimingPartialBadge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(251, 113, 133, 0.16);
+  border: 1px solid rgba(251, 113, 133, 0.36);
+  color: #fecdd3;
+  font-size: 11px;
+  line-height: 1.4;
+  text-transform: lowercase;
+}
+
+.manualTimingSelectedPhraseRows {
+  display: grid;
+  gap: 6px;
+}
+
+.manualTimingSelectedPhraseRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.manualTimingSelectedPhraseRow.isPartial {
+  border-color: rgba(251, 113, 133, 0.36);
+  background: rgba(251, 113, 133, 0.08);
+}
+
+.manualTimingSelectedPhraseOriginal,
+.manualTimingSelectedPhraseRu {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.manualTimingSelectedPhraseOriginal span,
+.manualTimingSelectedPhraseRu span {
+  color: rgba(191, 219, 254, 0.7);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.manualTimingSelectedPhraseOriginal p,
+.manualTimingSelectedPhraseRu p {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.manualTimingSelectedPhraseRow.isPartial .manualTimingSelectedPhraseRu p {
+  color: #fecdd3;
+  font-weight: 700;
+}
+
+.manualTimingSelectedPhraseEmpty {
+  padding: 8px;
+  border-radius: 10px;
+  color: rgba(219, 234, 254, 0.72);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+}
+
+.manualTimingSelectedPhraseActions .clipSB_btn {
+  width: auto;
+  min-width: 0;
+  padding: 6px 9px;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .manualTimingSelectedPhraseRow {
+    grid-template-columns: 1fr;
+  }
+}

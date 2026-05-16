@@ -526,8 +526,14 @@ export function normalizeManualTimingAudioPhrases(audioPhrases = []) {
         phrase_id,
         start_sec: start,
         end_sec: end,
+        text_original: String(phrase?.text_original || phrase?.textOriginal || phrase?.original_text || phrase?.originalText || ""),
+        original_text: String(phrase?.original_text || phrase?.originalText || phrase?.text_original || phrase?.textOriginal || ""),
+        text: String(phrase?.text || ""),
         text_en: String(phrase?.text_en || phrase?.textEn || ""),
-        text_ru: String(phrase?.text_ru || phrase?.textRu || ""),
+        text_de: String(phrase?.text_de || phrase?.textDe || ""),
+        text_fr: String(phrase?.text_fr || phrase?.textFr || ""),
+        text_ru: String(phrase?.text_ru || phrase?.textRu || phrase?.translation_ru || phrase?.translationRu || ""),
+        translation_ru: String(phrase?.translation_ru || phrase?.translationRu || phrase?.text_ru || phrase?.textRu || ""),
         meaning_ru: String(phrase?.meaning_ru || phrase?.meaningRu || ""),
         status: String(phrase?.status || "needs_transcription"),
         assignment_status: String(phrase?.assignment_status || phrase?.assignmentStatus || (String(phrase?.status || "needs_transcription") === "needs_transcription" ? "unassigned" : "")),
@@ -2525,7 +2531,7 @@ export function repairManualTimingSourcePhraseIdsFromTiming(scenes = [], audioPh
     const currentIds = getManualTimingSceneSourcePhraseIds(scene);
     const expectedSourcePhraseIds = getExpectedManualTimingSourcePhraseIds(scene, normalizedPhrases);
 
-    if (!expectedSourcePhraseIds.length) {
+    if (!currentIds.length && !expectedSourcePhraseIds.length) {
       return scene;
     }
 
