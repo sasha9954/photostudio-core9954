@@ -23,6 +23,7 @@ import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
   MANUAL_TIMING_AI_PASS_BY_TYPE,
   MANUAL_TIMING_AI_PASS_STAGES,
+  MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE,
   MANUAL_TIMING_ENERGY,
   MANUAL_TIMING_MUSIC_CLIP_MODE,
   MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
@@ -117,7 +118,6 @@ function formatManualBoardUpdatedAt(value) {
 }
 
 
-const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE = "photostudio_manual_timing_current_project_backup";
 const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_SOURCE = "manual_timing_editor_current_project";
 const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_EXTRA_KEYS = [
   "project_story_summary_ru",
@@ -1936,7 +1936,20 @@ export default function ManualTimingEditorPage() {
   const isPodcastDialogue = modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE;
   const canRecoverPodcastProjectToStory = isPodcastDialogue && scenes.length > 0 && Boolean(audio.url || durationSec > 0);
   const hasWorkflowCompletedStages = Array.isArray(project?.manual_timing_workflow?.completed_stages) && project.manual_timing_workflow.completed_stages.length > 0;
-  const inferredCompletedStages = hasWorkflowCompletedStages ? [] : inferManualTimingCompletedStages(project);
+  const inferredCompletedStages = useMemo(
+    () => hasWorkflowCompletedStages ? [] : inferManualTimingCompletedStages(project),
+    [
+      hasWorkflowCompletedStages,
+      project?.manual_timing_workflow,
+      project?.scenes,
+      project?.story_blocks,
+      project?.project_story_summary_ru,
+      project?.project_visual_bible_ru,
+      project?.project_continuity_rules_ru,
+      project?.project_style_lock_ru,
+      project?.project_world_lock_ru,
+    ]
+  );
   const manualTimingWorkflow = normalizeManualTimingWorkflow(project.manual_timing_workflow, inferredCompletedStages);
   const manualTimingStageStatuses = MANUAL_TIMING_AI_PASS_STAGES.reduce((acc, stage) => {
     acc[stage.pass_type] = getManualTimingStageStatus(manualTimingWorkflow, stage.pass_type, scenes);
