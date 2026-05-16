@@ -796,12 +796,270 @@ CLIP_ASSEMBLE_JOBS: dict[str, dict] = {}
 CLIP_ASSEMBLE_JOBS_LOCK = threading.Lock()
 
 CLIP_VIDEO_JOBS: dict[str, dict] = {}
-CLIP_VIDEO_JOBS_LOCK = threading.Lock()
+CLIP_VIDEO_JOBS_LOCK = threading.RLock()
 CLIP_VIDEO_QUEUE = queue.Queue()
 CLIP_VIDEO_QUEUE_WORKER_STARTED = False
 CLIP_VIDEO_QUEUE_LOCK = threading.Lock()
+CLIP_VIDEO_RECOVERY_COMPLETED = False
+CLIP_VIDEO_ENQUEUED_JOB_IDS: set[str] = set()
+CLIP_VIDEO_JOBS_DIR = os.path.join(STATIC_DIR, "clip_video_jobs")
+CLIP_VIDEO_DURABLE_STATE_FIELDS = [
+    "ok", "jobId", "job_id", "id", "sceneId", "provider", "status", "queueStatus", "queuePosition",
+    "queuedAt", "startedAt", "completedAt", "updatedAt", "videoUrl", "error", "requestSignature",
+    "statusEndpoint", "resolvedWorkflowKey", "workflowKey", "mode", "model", "providerJobId", "comfyPromptId",
+    "payloadPromptPreview", "payloadSoundPromptPreview", "payloadNegativeAudioPromptPreview", "requestedDurationSec",
+    "sceneStartSec", "sceneEndSec", "sceneDurationSec", "videoHasAudio", "keepGeneratedAudio",
+    "generatedAudioPolicy", "generatedAudioGainDb", "retryable", "recoveredAt", "resumedAt", "supersededBy",
+    "video_url", "finalVideoUrl", "final_video_url", "hasAudio", "keep_generated_audio", "generated_audio_policy",
+    "generated_audio_gain_db", "targetDurationSec", "providerDurationSec", "generationDurationSec",
+]
 CLIP_VIDEO_JOBS_REGISTRY_STARTED_AT = time.time()
 CLIP_VIDEO_JOBS_REGISTRY_GENERATION_ID = uuid4().hex
+
+
+def _safe_clip_video_job_id(job_id) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_.-]+", "", str(job_id or "").strip())
+    if not safe or safe in {".", ".."}:
+        raise ValueError("invalid_clip_video_job_id")
+    return safe[:128]
+
+
+def _clip_video_job_dir(job_id) -> str:
+    safe_job_id = _safe_clip_video_job_id(job_id)
+    return os.path.join(CLIP_VIDEO_JOBS_DIR, safe_job_id)
+
+
+def _json_safe_clip_video_value(value):
+    if isinstance(value, BaseModel):
+        try:
+            return value.model_dump(mode="json")
+        except Exception:
+            return value.dict()
+    if isinstance(value, dict):
+        return {str(k): _json_safe_clip_video_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_clip_video_value(v) for v in value]
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return str(value)
+
+
+def _write_json_atomic(path, data):
+    final_path = os.path.abspath(str(path))
+    os.makedirs(os.path.dirname(final_path), exist_ok=True)
+    tmp_path = f"{final_path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(_json_safe_clip_video_value(data), f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp_path, final_path)
+
+
+def _clip_video_payload_kind(payload) -> str:
+    if isinstance(payload, ClipVideoMMAudioStartIn):
+        return MMAUDIO_WORKFLOW_KEY
+    return "clip_video"
+
+
+def _clip_video_payload_to_disk(payload):
+    payload_data = _json_safe_clip_video_value(payload)
+    if isinstance(payload_data, dict) and "payload" in payload_data and "kind" in payload_data:
+        return payload_data
+    return {
+        "kind": _clip_video_payload_kind(payload),
+        "payload": payload_data if isinstance(payload_data, dict) else {},
+        "savedAt": time.time(),
+    }
+
+
+def _save_clip_video_job_payload(job_id, payload):
+    try:
+        payload_path = os.path.join(_clip_video_job_dir(job_id), "payload.json")
+        _write_json_atomic(payload_path, _clip_video_payload_to_disk(payload))
+    except Exception as exc:
+        print(f"[CLIP VIDEO JOB PERSIST] payload_save_failed jobId={job_id} error={str(exc)[:300]}")
+
+
+def _clip_video_job_state_for_disk(job_id, job):
+    safe_job_id = _safe_clip_video_job_id(job_id)
+    source = dict(job or {})
+    state = {field: source.get(field) for field in CLIP_VIDEO_DURABLE_STATE_FIELDS if field in source}
+    state["ok"] = bool(source.get("ok", True))
+    state["jobId"] = str(source.get("jobId") or safe_job_id)
+    state["job_id"] = str(source.get("job_id") or source.get("jobId") or safe_job_id)
+    state["id"] = str(source.get("id") or source.get("jobId") or safe_job_id)
+    state["status"] = str(source.get("status") or "queued").lower()
+    state["queueStatus"] = str(source.get("queueStatus") or state["status"] or "queued").lower()
+    state["statusEndpoint"] = str(source.get("statusEndpoint") or f"/api/clip/video/status/{safe_job_id}")
+    state["updatedAt"] = source.get("updatedAt") or time.time()
+    if state.get("error") is None:
+        state["error"] = ""
+    if "videoUrl" not in state:
+        state["videoUrl"] = source.get("video_url")
+    return _json_safe_clip_video_value(state)
+
+
+def _prune_clip_video_job_snapshots(job_id, keep=20):
+    try:
+        snapshots_dir = os.path.join(_clip_video_job_dir(job_id), "snapshots")
+        if not os.path.isdir(snapshots_dir):
+            return
+        snapshots = sorted(
+            [os.path.join(snapshots_dir, name) for name in os.listdir(snapshots_dir) if name.startswith("job_state_") and name.endswith(".json")],
+            key=lambda path: os.path.getmtime(path),
+            reverse=True,
+        )
+        for old_path in snapshots[int(keep):]:
+            try:
+                os.remove(old_path)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _save_clip_video_job_state(job_id):
+    try:
+        safe_job_id = _safe_clip_video_job_id(job_id)
+        with CLIP_VIDEO_JOBS_LOCK:
+            job = dict(CLIP_VIDEO_JOBS.get(safe_job_id) or {})
+        if not job:
+            return
+        state = _clip_video_job_state_for_disk(safe_job_id, job)
+        job_dir = _clip_video_job_dir(safe_job_id)
+        _write_json_atomic(os.path.join(job_dir, "job_state.json"), state)
+        snapshot_name = time.strftime("job_state_%Y-%m-%d_%H-%M-%S.json", time.localtime())
+        _write_json_atomic(os.path.join(job_dir, "snapshots", snapshot_name), state)
+        _prune_clip_video_job_snapshots(safe_job_id, keep=20)
+    except Exception as exc:
+        print(f"[CLIP VIDEO JOB PERSIST] state_save_failed jobId={job_id} error={str(exc)[:300]}")
+
+
+def _load_clip_video_job_state(job_id):
+    try:
+        state_path = os.path.join(_clip_video_job_dir(job_id), "job_state.json")
+        if not os.path.isfile(state_path):
+            return None
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        if not isinstance(state, dict):
+            return None
+        safe_job_id = _safe_clip_video_job_id(job_id)
+        state["jobId"] = str(state.get("jobId") or safe_job_id)
+        state["job_id"] = str(state.get("job_id") or state.get("jobId") or safe_job_id)
+        state["id"] = str(state.get("id") or state.get("jobId") or safe_job_id)
+        state["statusEndpoint"] = str(state.get("statusEndpoint") or f"/api/clip/video/status/{safe_job_id}")
+        state["status"] = str(state.get("status") or "queued").lower()
+        state["queueStatus"] = str(state.get("queueStatus") or state.get("status") or "queued").lower()
+        if state.get("error") is None:
+            state["error"] = ""
+        return state
+    except Exception as exc:
+        print(f"[CLIP VIDEO JOB RECOVERY] state_load_failed jobId={job_id} error={str(exc)[:300]}")
+        return None
+
+
+def _load_clip_video_jobs_from_disk():
+    loaded = {}
+    os.makedirs(CLIP_VIDEO_JOBS_DIR, exist_ok=True)
+    try:
+        for name in sorted(os.listdir(CLIP_VIDEO_JOBS_DIR)):
+            try:
+                safe_name = _safe_clip_video_job_id(name)
+            except Exception:
+                continue
+            if safe_name != name:
+                continue
+            state = _load_clip_video_job_state(safe_name)
+            if state:
+                loaded[safe_name] = state
+                with CLIP_VIDEO_JOBS_LOCK:
+                    if safe_name not in CLIP_VIDEO_JOBS:
+                        CLIP_VIDEO_JOBS[safe_name] = dict(state)
+    except Exception as exc:
+        print(f"[CLIP VIDEO JOB RECOVERY] load_failed error={str(exc)[:300]}")
+    print(f"[CLIP VIDEO JOB RECOVERY] loaded {len(loaded)} durable jobs from {CLIP_VIDEO_JOBS_DIR}")
+    return loaded
+
+
+def _load_clip_video_job_payload(job_id):
+    try:
+        payload_path = os.path.join(_clip_video_job_dir(job_id), "payload.json")
+        if not os.path.isfile(payload_path):
+            return None, "", "payload_missing"
+        with open(payload_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if isinstance(saved, dict) and "payload" in saved:
+            payload_dict = saved.get("payload") if isinstance(saved.get("payload"), dict) else {}
+            kind = str(saved.get("kind") or "").strip()
+        elif isinstance(saved, dict):
+            payload_dict = saved
+            kind = ""
+        else:
+            return None, "", "payload_invalid"
+        state = _load_clip_video_job_state(job_id) or {}
+        if not kind:
+            kind = MMAUDIO_WORKFLOW_KEY if str(state.get("workflowKey") or state.get("resolvedWorkflowKey") or "").strip() == MMAUDIO_WORKFLOW_KEY else "clip_video"
+        payload_obj = ClipVideoMMAudioStartIn(**payload_dict) if kind == MMAUDIO_WORKFLOW_KEY else ClipVideoIn(**payload_dict)
+        return payload_obj, kind, ""
+    except Exception as exc:
+        return None, "", str(exc)[:300]
+
+
+def _enqueue_clip_video_job_once(job_id, payload, *, kind="") -> bool:
+    safe_job_id = _safe_clip_video_job_id(job_id)
+    with CLIP_VIDEO_QUEUE_LOCK:
+        if safe_job_id in CLIP_VIDEO_ENQUEUED_JOB_IDS:
+            return False
+        CLIP_VIDEO_ENQUEUED_JOB_IDS.add(safe_job_id)
+    item = {"job_id": safe_job_id, "payload": payload}
+    if kind:
+        item["kind"] = kind
+    CLIP_VIDEO_QUEUE.put(item)
+    return True
+
+
+def _recover_clip_video_jobs_from_disk_once():
+    global CLIP_VIDEO_RECOVERY_COMPLETED
+    if CLIP_VIDEO_RECOVERY_COMPLETED:
+        return
+    CLIP_VIDEO_RECOVERY_COMPLETED = True
+    loaded = _load_clip_video_jobs_from_disk()
+    recovered_at = time.time()
+    for job_id, state in loaded.items():
+        status = str(state.get("status") or "").lower()
+        if status == "queued":
+            payload, kind, payload_err = _load_clip_video_job_payload(job_id)
+            if payload is None:
+                with CLIP_VIDEO_JOBS_LOCK:
+                    job = CLIP_VIDEO_JOBS.get(job_id) or dict(state)
+                    job.update({"status": "interrupted", "queueStatus": "interrupted", "error": f"queued_payload_missing:{payload_err}", "retryable": False, "recoveredAt": recovered_at, "updatedAt": recovered_at})
+                    CLIP_VIDEO_JOBS[job_id] = job
+                _save_clip_video_job_state(job_id)
+                print(f"[CLIP VIDEO JOB RECOVERY] marked_interrupted jobId={job_id} reason=payload_missing")
+                continue
+            with CLIP_VIDEO_JOBS_LOCK:
+                job = CLIP_VIDEO_JOBS.get(job_id) or dict(state)
+                job.update({"status": "queued", "queueStatus": "queued", "recoveredAt": recovered_at, "updatedAt": recovered_at})
+                CLIP_VIDEO_JOBS[job_id] = job
+            _save_clip_video_job_state(job_id)
+            enqueued = _enqueue_clip_video_job_once(job_id, payload, kind=kind if kind == MMAUDIO_WORKFLOW_KEY else "")
+            print(f"[CLIP VIDEO JOB RECOVERY] requeued jobId={job_id} enqueued={enqueued}")
+        elif status == "running":
+            with CLIP_VIDEO_JOBS_LOCK:
+                job = CLIP_VIDEO_JOBS.get(job_id) or dict(state)
+                job.update({
+                    "status": "interrupted",
+                    "queueStatus": "interrupted",
+                    "error": "backend_restarted_while_job_running",
+                    "retryable": True,
+                    "recoveredAt": recovered_at,
+                    "updatedAt": recovered_at,
+                })
+                CLIP_VIDEO_JOBS[job_id] = job
+            _save_clip_video_job_state(job_id)
+            print(f"[CLIP VIDEO JOB RECOVERY] marked_interrupted jobId={job_id} reason=backend_restarted_while_job_running")
 
 
 def _kie_headers() -> dict:
@@ -17900,6 +18158,7 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
         job = CLIP_VIDEO_JOBS.get(job_id) or {}
         job.update({"status": "running", "queueStatus": "running", "updatedAt": time.time(), "startedAt": job.get("startedAt") or time.time(), **debug_base})
         CLIP_VIDEO_JOBS[job_id] = job
+    _save_clip_video_job_state(job_id)
     try:
         source_path, resolve_err = _resolve_media_input(video_url, temp_files)
         if resolve_err or not source_path or not os.path.isfile(source_path):
@@ -17951,6 +18210,7 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
             job = CLIP_VIDEO_JOBS.get(job_id) or {}
             job.update({"comfyPromptId": prompt_id, "providerJobId": prompt_id, "updatedAt": time.time()})
             CLIP_VIDEO_JOBS[job_id] = job
+        _save_clip_video_job_state(job_id)
         history, history_err = wait_for_comfy_result(
             prompt_id,
             timeout_sec=3600,
@@ -18020,12 +18280,14 @@ def _run_mmaudio_video_job(job_id: str, payload: ClipVideoMMAudioStartIn):
                 "comfyOutputHandoffStrategy": handoff_strategy,
             })
             CLIP_VIDEO_JOBS[job_id] = job
+        _save_clip_video_job_state(job_id)
     except Exception as exc:
         err_text = str(exc)[:500]
         with CLIP_VIDEO_JOBS_LOCK:
             job = CLIP_VIDEO_JOBS.get(job_id) or {}
             job.update({"ok": False, "status": "error", "queueStatus": "error", "error": err_text, "completedAt": time.time(), "updatedAt": time.time(), **debug_base})
             CLIP_VIDEO_JOBS[job_id] = job
+        _save_clip_video_job_state(job_id)
     finally:
         for path in temp_files:
             try:
@@ -18052,6 +18314,8 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         if not job:
             return
         job.update({"status": "running", "queueStatus": "running", "updatedAt": time.time(), "startedAt": job.get("startedAt") or time.time()})
+        CLIP_VIDEO_JOBS[job_id] = job
+    _save_clip_video_job_state(job_id)
 
     try:
         print(
@@ -18259,6 +18523,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 f"resolvedWorkflow={str((out.get('debug') or {}).get('workflow_key') if isinstance(out.get('debug'), dict) else '') or resolved_workflow_hint} "
                 f"code={str(out.get('code') or '').strip()} error={str(out.get('details') or out.get('hint') or out.get('code') or '')[:300]}"
             )
+        _save_clip_video_job_state(job_id)
     except Exception as exc:
         print(
             "[CLIP VIDEO JOB WORKER] "
@@ -18270,11 +18535,14 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
             if not job:
                 return
             job.update({"status": "error", "queueStatus": "error", "error": str(exc), "updatedAt": time.time(), "completedAt": time.time()})
+            CLIP_VIDEO_JOBS[job_id] = job
+        _save_clip_video_job_state(job_id)
         print(f"[CLIP VIDEO JOB WORKER] terminal_transition jobId={job_id} status=error")
 
 
 def ensure_clip_video_queue_worker_started():
     global CLIP_VIDEO_QUEUE_WORKER_STARTED
+    _recover_clip_video_jobs_from_disk_once()
     with CLIP_VIDEO_QUEUE_LOCK:
         if CLIP_VIDEO_QUEUE_WORKER_STARTED:
             return
@@ -18309,6 +18577,7 @@ def _clip_video_queue_worker_loop():
                     "updatedAt": now_ts,
                 })
                 CLIP_VIDEO_JOBS[job_id] = job
+            _save_clip_video_job_state(job_id)
 
             if isinstance(item, dict) and str(item.get("kind") or "").strip() == "mmaudio_sound_design":
                 _run_mmaudio_video_job(job_id, payload)
@@ -18327,7 +18596,11 @@ def _clip_video_queue_worker_loop():
                         "completedAt": time.time(),
                     })
                     CLIP_VIDEO_JOBS[job_id] = job
+                _save_clip_video_job_state(job_id)
         finally:
+            if job_id:
+                with CLIP_VIDEO_QUEUE_LOCK:
+                    CLIP_VIDEO_ENQUEUED_JOB_IDS.discard(job_id)
             CLIP_VIDEO_QUEUE.task_done()
 
 @router.post("/clip/video/mmaudio/start")
@@ -18384,7 +18657,9 @@ def clip_video_mmaudio_start(payload: ClipVideoMMAudioStartIn):
             "error": "",
             **debug_fields,
         }
-    CLIP_VIDEO_QUEUE.put({"kind": MMAUDIO_WORKFLOW_KEY, "job_id": job_id, "payload": payload})
+    _save_clip_video_job_payload(job_id, payload)
+    _save_clip_video_job_state(job_id)
+    _enqueue_clip_video_job_once(job_id, payload, kind=MMAUDIO_WORKFLOW_KEY)
     ensure_clip_video_queue_worker_started()
     return {
         "ok": True,
@@ -18615,6 +18890,7 @@ def clip_video_start(payload: ClipVideoIn):
                     "updatedAt": time.time(),
                 })
                 CLIP_VIDEO_JOBS[existing_job_id] = existing_job
+                _save_clip_video_job_state(existing_job_id)
 
     job_id = uuid4().hex
     queued_at = time.time()
@@ -18695,7 +18971,9 @@ def clip_video_start(payload: ClipVideoIn):
         "[CLIP VIDEO JOB] "
         f"queued sceneId={scene_id} jobId={job_id} provider={provider} resolvedWorkflow={resolved_workflow_hint} queuePosition={queue_position} requestSignature={request_signature[:12]}"
     )
-    CLIP_VIDEO_QUEUE.put({"job_id": job_id, "payload": payload})
+    _save_clip_video_job_payload(job_id, payload)
+    _save_clip_video_job_state(job_id)
+    _enqueue_clip_video_job_once(job_id, payload)
     ensure_clip_video_queue_worker_started()
     return {
         "ok": True,
@@ -18721,35 +18999,113 @@ def clip_video_start(payload: ClipVideoIn):
 
 @router.get("/clip/video/status/{job_id}")
 def clip_video_status(job_id: str):
-    safe_job_id = str(job_id or "").strip()
+    try:
+        safe_job_id = _safe_clip_video_job_id(job_id)
+    except Exception:
+        safe_job_id = str(job_id or "").strip()
+    recovered_from_disk = False
     with CLIP_VIDEO_JOBS_LOCK:
         job = CLIP_VIDEO_JOBS.get(safe_job_id)
-        if not job:
-            known_job_ids_preview = list(CLIP_VIDEO_JOBS.keys())[:5]
+        known_job_ids_preview = list(CLIP_VIDEO_JOBS.keys())[:5]
+
+    if not job:
+        disk_state = _load_clip_video_job_state(safe_job_id) if safe_job_id else None
+        if disk_state:
+            recovered_from_disk = True
+            job = dict(disk_state)
+            with CLIP_VIDEO_JOBS_LOCK:
+                CLIP_VIDEO_JOBS[safe_job_id] = dict(job)
+            print(
+                "[CLIP VIDEO JOB STATUS] "
+                f"read jobId={safe_job_id} status={job.get('status')} recoveredFromDisk=True hasVideoUrl={bool(str(job.get('videoUrl') or '').strip())}"
+            )
+        else:
             print(f"[CLIP VIDEO JOB STATUS] read jobId={safe_job_id} status=not_found hasVideoUrl=False")
             return {
                 "ok": False,
                 "status": "not_found",
                 "code": "VIDEO_JOB_NOT_FOUND",
-                "hint": "job_id_not_found_or_expired",
+                "hint": "job_id_not_found_in_memory_or_backend_disk",
                 "requestedJobId": safe_job_id,
                 "knownJobCount": len(CLIP_VIDEO_JOBS),
                 "knownJobIdsPreview": known_job_ids_preview,
                 "backendStartedAt": CLIP_VIDEO_JOBS_REGISTRY_STARTED_AT,
                 "registryGenerationId": CLIP_VIDEO_JOBS_REGISTRY_GENERATION_ID,
             }
+    else:
         print(
             "[CLIP VIDEO JOB STATUS] "
             f"read jobId={safe_job_id} status={job.get('status')} hasVideoUrl={bool(str(job.get('videoUrl') or '').strip())}"
         )
-        response_job = dict(job)
-        response_job["status"] = str(response_job.get("status") or "queued").lower()
-        response_job["queueStatus"] = str(response_job.get("queueStatus") or response_job.get("status") or "queued").lower()
-        if response_job.get("error") is None:
-            response_job["error"] = ""
-        if response_job.get("videoUrl") is None:
-            response_job["videoUrl"] = None
-        return {"ok": True, **response_job}
+
+    response_job = dict(job)
+    response_job["status"] = str(response_job.get("status") or "queued").lower()
+    response_job["queueStatus"] = str(response_job.get("queueStatus") or response_job.get("status") or "queued").lower()
+    response_job["statusEndpoint"] = str(response_job.get("statusEndpoint") or f"/api/clip/video/status/{safe_job_id}")
+    if response_job.get("error") is None:
+        response_job["error"] = ""
+    if response_job.get("videoUrl") is None:
+        response_job["videoUrl"] = None
+    if recovered_from_disk:
+        response_job["recoveredFromDisk"] = True
+    return {"ok": True, **response_job}
+
+
+@router.post("/clip/video/resume/{job_id}")
+def clip_video_resume(job_id: str):
+    try:
+        safe_job_id = _safe_clip_video_job_id(job_id)
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "code": "VIDEO_JOB_ID_INVALID", "hint": "invalid_job_id"})
+
+    state = _load_clip_video_job_state(safe_job_id)
+    if not state:
+        return JSONResponse(status_code=404, content={"ok": False, "code": "VIDEO_JOB_NOT_FOUND", "hint": "job_state_missing"})
+    payload, kind, payload_err = _load_clip_video_job_payload(safe_job_id)
+    if payload is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "code": "VIDEO_JOB_PAYLOAD_MISSING", "hint": payload_err or "payload_json_missing", "jobId": safe_job_id},
+        )
+    status = str(state.get("status") or "").lower()
+    if status not in {"interrupted", "error", "queued"}:
+        return JSONResponse(
+            status_code=409,
+            content={"ok": False, "code": "VIDEO_JOB_NOT_RESUMABLE", "hint": f"status_not_resumable:{status}", "jobId": safe_job_id, "status": status},
+        )
+
+    now_ts = time.time()
+    with CLIP_VIDEO_JOBS_LOCK:
+        job = CLIP_VIDEO_JOBS.get(safe_job_id) or dict(state)
+        job.update({
+            "ok": True,
+            "jobId": safe_job_id,
+            "job_id": safe_job_id,
+            "id": safe_job_id,
+            "status": "queued",
+            "queueStatus": "queued",
+            "queuePosition": int(CLIP_VIDEO_QUEUE.qsize()) + 1,
+            "error": "",
+            "retryable": False,
+            "resumedAt": now_ts,
+            "updatedAt": now_ts,
+            "completedAt": None,
+            "statusEndpoint": f"/api/clip/video/status/{safe_job_id}",
+        })
+        CLIP_VIDEO_JOBS[safe_job_id] = job
+    _save_clip_video_job_state(safe_job_id)
+    enqueued = _enqueue_clip_video_job_once(safe_job_id, payload, kind=kind if kind == MMAUDIO_WORKFLOW_KEY else "")
+    ensure_clip_video_queue_worker_started()
+    return {
+        "ok": True,
+        "jobId": safe_job_id,
+        "job_id": safe_job_id,
+        "id": safe_job_id,
+        "status": "queued",
+        "queueStatus": "queued",
+        "statusEndpoint": f"/api/clip/video/status/{safe_job_id}",
+        "enqueued": bool(enqueued),
+    }
 
 
 @router.post("/clip/video")
