@@ -1524,6 +1524,9 @@ export default function PodcastAudioComposerPage() {
   const actorAudioInputRef = useRef(null);
   const blockMenuRef = useRef(null);
   const activeActorPlaybackRef = useRef(null);
+  const activeMainPlaybackRef = useRef(null);
+  const playbackGuardRafRef = useRef(null);
+  const selectedBlockIdRef = useRef("");
   const blocksRef = useRef([]);
   const currentBlockIndexRef = useRef(0);
   const hydratedRef = useRef(false);
@@ -1556,6 +1559,10 @@ export default function PodcastAudioComposerPage() {
   useEffect(() => {
     blocksRef.current = blocks;
   }, [blocks]);
+
+  useEffect(() => {
+    selectedBlockIdRef.current = selectedBlockId;
+  }, [selectedBlockId]);
 
   useEffect(() => {
     hydratedRef.current = hasHydrated;
@@ -1631,6 +1638,7 @@ export default function PodcastAudioComposerPage() {
   useEffect(() => {
     return () => {
       if (silenceFrameRef.current) cancelAnimationFrame(silenceFrameRef.current);
+      stopMainPlaybackGuard();
     };
   }, []);
 
@@ -1639,6 +1647,8 @@ export default function PodcastAudioComposerPage() {
     setDurationSec(safeDuration);
     setCurrentTimeSec(0);
     stopSilencePlayback();
+    stopMainPlaybackGuard();
+    activeMainPlaybackRef.current = null;
     setIsPlaying(false);
     setBlocks([]);
     setSelectedBlockId("");
@@ -1786,6 +1796,63 @@ export default function PodcastAudioComposerPage() {
     const time = sourceTimeSec === null || sourceTimeSec === undefined ? block.source_start_sec : sourceTimeSec;
     return prepareAudioElement(sourceUrl, time);
   };
+
+  function stopMainPlaybackGuard() {
+    if (playbackGuardRafRef.current) {
+      cancelAnimationFrame(playbackGuardRafRef.current);
+      playbackGuardRafRef.current = null;
+    }
+  }
+
+  function stopSelectedBlockPlaybackAtEnd(reason = "selected_block_end") {
+    void reason;
+    const element = audioRef.current;
+    const session = activeMainPlaybackRef.current;
+    stopMainPlaybackGuard();
+
+    if (element) {
+      try {
+        if (session?.sourceEndSec != null) {
+          element.currentTime = roundSeconds(session.sourceEndSec);
+        }
+        element.pause();
+      } catch {}
+    }
+
+    if (session) {
+      setCurrentTimeSec(roundSeconds(session.virtualStartSec + session.durationSec));
+    }
+
+    setIsPlaying(false);
+    activeMainPlaybackRef.current = null;
+  }
+
+  function startMainPlaybackGuard() {
+    stopMainPlaybackGuard();
+
+    const tick = () => {
+      const element = audioRef.current;
+      const session = activeMainPlaybackRef.current;
+      if (!element || !session) {
+        stopMainPlaybackGuard();
+        return;
+      }
+
+      const sourceTime = roundSeconds(element.currentTime);
+      const sourceEnd = roundSeconds(session.sourceEndSec);
+
+      if (sourceTime >= sourceEnd - 0.015) {
+        stopSelectedBlockPlaybackAtEnd("raf_guard_end");
+        return;
+      }
+
+      const position = clampSeconds(sourceTime - session.sourceStartSec, 0, session.durationSec);
+      setCurrentTimeSec(roundSeconds(session.virtualStartSec + position));
+      playbackGuardRafRef.current = requestAnimationFrame(tick);
+    };
+
+    playbackGuardRafRef.current = requestAnimationFrame(tick);
+  }
 
   const stopActorPlayback = ({ pause = true } = {}) => {
     activeActorPlaybackRef.current = null;
@@ -2304,6 +2371,8 @@ export default function PodcastAudioComposerPage() {
     if (isPlaying) {
       stopPhrasePreview({ pause: false });
       stopSilencePlayback();
+      stopMainPlaybackGuard();
+      activeMainPlaybackRef.current = null;
       element.pause();
       setIsPlaying(false);
       return;
@@ -2311,6 +2380,8 @@ export default function PodcastAudioComposerPage() {
 
     stopPhrasePreview({ pause: false });
     stopActorPlayback({ pause: false });
+    stopMainPlaybackGuard();
+    activeMainPlaybackRef.current = null;
 
     let selectedIndex = blocks.findIndex((block) => block.id === selectedBlockId);
     if (selectedIndex < 0) selectedIndex = 0;
@@ -2337,6 +2408,15 @@ export default function PodcastAudioComposerPage() {
         setMessage("Не удалось открыть источник выбранного блока.");
         return;
       }
+      activeMainPlaybackRef.current = {
+        mode: "selected_block",
+        blockId: block.id,
+        blockIndex: selectedIndex,
+        sourceStartSec: roundSeconds(block.source_start_sec),
+        sourceEndSec: roundSeconds(block.source_end_sec),
+        virtualStartSec: blockStartSec,
+        durationSec: blockDuration,
+      };
     } else if (currentTimeSec >= totalDurationSec - 0.05) {
       seekOnTimeline(0, blocks);
     }
@@ -2344,7 +2424,10 @@ export default function PodcastAudioComposerPage() {
     try {
       await element.play();
       setIsPlaying(true);
+      startMainPlaybackGuard();
     } catch {
+      stopMainPlaybackGuard();
+      activeMainPlaybackRef.current = null;
       setIsPlaying(false);
     }
   };
@@ -2391,6 +2474,17 @@ export default function PodcastAudioComposerPage() {
       return;
     }
 
+    const mainPlayback = activeMainPlaybackRef.current;
+    if (mainPlayback?.mode === "selected_block") {
+      const position = clampSeconds(sourceTime - mainPlayback.sourceStartSec, 0, mainPlayback.durationSec);
+      setCurrentTimeSec(roundSeconds(mainPlayback.virtualStartSec + position));
+
+      if (sourceTime >= roundSeconds(mainPlayback.sourceEndSec) - 0.025) {
+        stopSelectedBlockPlaybackAtEnd("timeupdate_end");
+      }
+      return;
+    }
+
     if (!safeBlocks.length) return;
 
     const index = currentBlockIndexRef.current;
@@ -2399,7 +2493,7 @@ export default function PodcastAudioComposerPage() {
     const virtualTime = roundSeconds(blockVirtualStart + Math.max(0, sourceTime - roundSeconds(block.source_start_sec)));
 
     if (sourceTime >= roundSeconds(block.source_end_sec) - 0.025) {
-      const selectedIndex = safeBlocks.findIndex((item) => item.id === selectedBlockId);
+      const selectedIndex = safeBlocks.findIndex((item) => item.id === selectedBlockIdRef.current);
       if (selectedIndex === index) {
         setCurrentTimeSec(roundSeconds(blockVirtualStart + getBlockDuration(block)));
         setIsPlaying(false);
@@ -2868,6 +2962,8 @@ export default function PodcastAudioComposerPage() {
     pushHistory("split_block");
     setBlocks(result.blocks);
     setSelectedBlockId(result.selectedBlockId);
+    activeMainPlaybackRef.current = null;
+    stopMainPlaybackGuard();
     seekOnTimeline(result.selectedBlockStart, result.blocks);
     setMessage("Разрезано по жёлтому прицелу. Левая часть выбрана автоматически, плеер поставлен в начало выбранного блока.");
   };
@@ -2897,7 +2993,27 @@ export default function PodcastAudioComposerPage() {
 
     pushHistory("resize_selected_block_end");
     setBlocks(result.blocks);
-    setSelectedBlockId(result.blocks[selectedIndex]?.id || selectedBlockId);
+    const nextSelectedBlockId = result.blocks[selectedIndex]?.id || selectedBlockId;
+    setSelectedBlockId(nextSelectedBlockId);
+
+    if (activeMainPlaybackRef.current?.blockId === selectedBlockId) {
+      const updatedIndex = result.blocks.findIndex((block) => block.id === selectedBlockId);
+      const updatedBlock = result.blocks[updatedIndex];
+      if (updatedBlock) {
+        const sourceEndSec = roundSeconds(updatedBlock.source_end_sec);
+        const durationSec = getBlockDuration(updatedBlock);
+        activeMainPlaybackRef.current = {
+          ...activeMainPlaybackRef.current,
+          blockIndex: updatedIndex,
+          sourceEndSec,
+          durationSec,
+          virtualStartSec: getBlockVirtualStart(result.blocks, updatedIndex),
+        };
+        if (audioRef.current && roundSeconds(audioRef.current.currentTime) >= sourceEndSec - 0.015) {
+          stopSelectedBlockPlaybackAtEnd("boundary_nudged_past_end");
+        }
+      }
+    }
 
     // Как в Manual Timing: меняем конечную границу выбранного блока.
     // Прицел реза/currentTimeSec не двигаем. Он нужен только для кнопки “резать”.
@@ -4198,9 +4314,17 @@ export default function PodcastAudioComposerPage() {
           <audio
             ref={audioRef}
             preload="metadata"
-            onEnded={() => setIsPlaying(false)}
+            onEnded={() => {
+              stopMainPlaybackGuard();
+              activeMainPlaybackRef.current = null;
+              setIsPlaying(false);
+            }}
             onLoadedMetadata={onLoadedMetadata}
-            onPause={() => setIsPlaying(false)}
+            onPause={() => {
+              stopMainPlaybackGuard();
+              activeMainPlaybackRef.current = null;
+              setIsPlaying(false);
+            }}
             onPlay={() => setIsPlaying(true)}
             onTimeUpdate={onTimeUpdate}
           />
