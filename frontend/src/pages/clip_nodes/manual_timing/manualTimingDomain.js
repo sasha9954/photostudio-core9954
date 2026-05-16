@@ -1600,16 +1600,13 @@ export const MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU = `BLOCK STORYBOARD PAS
 
 function logManualTimingExportSourcePhraseIdsRepair(passType = "", sourcePhraseRepair = {}, sceneCount = 0, audioPhraseCount = 0) {
   if (!sourcePhraseRepair?.repaired) return;
-  const repairedSceneCount = (Array.isArray(sourcePhraseRepair.scenes) ? sourcePhraseRepair.scenes : [])
-    .filter((scene, index) => {
-      const originalScene = sourcePhraseRepair.originalScenes?.[index];
-      const originalIds = getManualTimingSceneSourcePhraseIds(originalScene);
-      const repairedIds = getManualTimingSceneSourcePhraseIds(scene);
-      return !originalIds.length && repairedIds.length;
-    }).length;
+  const repairedEmptyCount = Number(sourcePhraseRepair.repairedEmptyCount || 0);
+  const replacedWrongCount = Number(sourcePhraseRepair.replacedWrongCount || 0);
   console.info("[MANUAL TIMING EXPORT_SOURCE_PHRASE_IDS_REPAIRED]", {
     passType,
-    repairedSceneCount,
+    repairedSceneCount: repairedEmptyCount + replacedWrongCount,
+    repairedEmptyCount,
+    replacedWrongCount,
     sceneCount,
     audioPhraseCount,
   });
@@ -2495,36 +2492,72 @@ function manualTimingRangesOverlap(aStart = 0, aEnd = 0, bStart = 0, bEnd = 0) {
   return end - start > 0.001;
 }
 
+function areManualTimingSourcePhraseIdsEqual(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  return left.every((id, index) => id === right[index]);
+}
+
+function getExpectedManualTimingSourcePhraseIds(scene = {}, normalizedPhrases = []) {
+  const startSec = Number(scene?.start_sec ?? scene?.startSec ?? 0);
+  const endSec = Number(scene?.end_sec ?? scene?.endSec ?? 0);
+  if (!(endSec > startSec)) return [];
+
+  return normalizedPhrases
+    .filter((phrase) => manualTimingRangesOverlap(startSec, endSec, phrase.start_sec, phrase.end_sec))
+    .map((phrase) => String(phrase.phrase_id || "").trim())
+    .filter(Boolean);
+}
+
 export function repairManualTimingSourcePhraseIdsFromTiming(scenes = [], audioPhrases = []) {
   const normalizedScenes = Array.isArray(scenes) ? scenes : [];
   const normalizedPhrases = normalizeManualTimingAudioPhrases(audioPhrases);
-  if (!normalizedScenes.length || !normalizedPhrases.length) return { scenes: normalizedScenes, repaired: false };
+  const emptyResult = {
+    scenes: normalizedScenes,
+    repaired: false,
+    repairedEmptyCount: 0,
+    replacedWrongCount: 0,
+  };
+  if (!normalizedScenes.length || !normalizedPhrases.length) return emptyResult;
 
-  let repairedCount = 0;
+  let repairedEmptyCount = 0;
+  let replacedWrongCount = 0;
   const repairedScenes = normalizedScenes.map((scene) => {
     const currentIds = getManualTimingSceneSourcePhraseIds(scene);
-    if (currentIds.length) return scene;
-    const startSec = Number(scene?.start_sec ?? scene?.startSec ?? 0);
-    const endSec = Number(scene?.end_sec ?? scene?.endSec ?? 0);
-    if (!(endSec > startSec)) return scene;
-    const sourcePhraseIds = normalizedPhrases
-      .filter((phrase) => manualTimingRangesOverlap(startSec, endSec, phrase.start_sec, phrase.end_sec))
-      .map((phrase) => String(phrase.phrase_id || "").trim())
-      .filter(Boolean);
-    if (!sourcePhraseIds.length) return scene;
-    repairedCount += 1;
-    return { ...scene, source_phrase_ids: sourcePhraseIds };
+    const expectedSourcePhraseIds = getExpectedManualTimingSourcePhraseIds(scene, normalizedPhrases);
+
+    if (!expectedSourcePhraseIds.length) {
+      return scene;
+    }
+
+    if (!currentIds.length) {
+      repairedEmptyCount += 1;
+      return { ...scene, source_phrase_ids: expectedSourcePhraseIds };
+    }
+
+    if (!areManualTimingSourcePhraseIdsEqual(currentIds, expectedSourcePhraseIds)) {
+      replacedWrongCount += 1;
+      return { ...scene, source_phrase_ids: expectedSourcePhraseIds };
+    }
+
+    return scene;
   });
 
+  const repairedCount = repairedEmptyCount + replacedWrongCount;
   if (repairedCount > 0) {
     console.info("[MANUAL TIMING SOURCE_PHRASE_IDS_REPAIRED]", {
+      repairedEmptyCount,
+      replacedWrongCount,
       sceneCount: normalizedScenes.length,
-      repairedSceneCount: repairedCount,
       audioPhraseCount: normalizedPhrases.length,
     });
   }
 
-  return { scenes: repairedScenes, repaired: repairedCount > 0 };
+  return {
+    scenes: repairedScenes,
+    repaired: repairedCount > 0,
+    repairedEmptyCount,
+    replacedWrongCount,
+  };
 }
 
 export function inferManualTimingCompletedStages(project = {}) {
