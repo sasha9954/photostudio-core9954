@@ -1917,6 +1917,38 @@ function isManualTimingPhrasePartialInScene(phrase = {}, scene = null) {
   return phraseStart < sceneStart - 0.001 || phraseEnd > sceneEnd + 0.001;
 }
 
+function getManualTimingPhrasesForSceneInspector(audioPhrases = [], scene = null) {
+  if (!scene || !Array.isArray(audioPhrases)) return [];
+  const sceneStart = Number(scene?.start_sec || 0);
+  const sceneEnd = Number(scene?.end_sec || 0);
+  if (!(sceneEnd > sceneStart)) return [];
+
+  return audioPhrases.reduce((inspectorPhrases, phrase) => {
+    const phraseStart = Number(phrase?.start_sec || 0);
+    const phraseEnd = Number(phrase?.end_sec || 0);
+    const phraseDuration = phraseEnd - phraseStart;
+    if (!(phraseDuration > 0)) return inspectorPhrases;
+
+    const overlapStart = Math.max(sceneStart, phraseStart);
+    const overlapEnd = Math.min(sceneEnd, phraseEnd);
+    const overlapSec = overlapEnd - overlapStart;
+    const overlapRatio = overlapSec > 0 ? overlapSec / phraseDuration : 0;
+    const isFullyInside = phraseStart >= sceneStart - 0.001 && phraseEnd <= sceneEnd + 0.001;
+    const isMeaningfulOverlap = overlapSec >= 0.35 || overlapRatio >= 0.25;
+
+    if (isFullyInside || isMeaningfulOverlap) {
+      inspectorPhrases.push({
+        ...phrase,
+        overlapSec,
+        overlapRatio,
+        isPartial: !isFullyInside,
+      });
+    }
+
+    return inspectorPhrases;
+  }, []);
+}
+
 function buildManualTimingAsrTranslationPassJson(project = {}) {
   const audioPhrases = normalizeManualTimingAudioPhrases(project?.audio_phrases).map((phrase) => ({
     phrase_id: phrase.phrase_id,
@@ -2137,16 +2169,20 @@ export default function ManualTimingEditorPage() {
     () => getManualTimingPhrasesForScene(audioPhrases, selectedScene),
     [audioPhrases, selectedScene]
   );
+  const selectedSceneInspectorPhrases = useMemo(
+    () => getManualTimingPhrasesForSceneInspector(audioPhrases, selectedScene),
+    [audioPhrases, selectedScene]
+  );
   const selectedScenePhraseInspectorRows = useMemo(
-    () => selectedSceneAudioPhrases.map((phrase) => ({
+    () => selectedSceneInspectorPhrases.map((phrase) => ({
       phrase,
       phraseId: String(phrase?.phrase_id || "").trim(),
       timingLabel: `${formatTimingSec(phrase.start_sec)} → ${formatTimingSec(phrase.end_sec)}`,
       originalText: pickManualTimingAudioPhraseOriginalText(phrase) || "—",
       ruText: pickManualTimingAudioPhraseRuText(phrase) || "перевод пока не заполнен",
-      isPartial: isManualTimingPhrasePartialInScene(phrase, selectedScene),
+      isPartial: phrase?.isPartial ?? isManualTimingPhrasePartialInScene(phrase, selectedScene),
     })),
-    [selectedSceneAudioPhrases, selectedScene]
+    [selectedSceneInspectorPhrases, selectedScene]
   );
   const selectedSceneHasPartialPhrase = selectedScenePhraseInspectorRows.some((row) => row.isPartial);
   const selectedScenePhraseWarnings = useMemo(
