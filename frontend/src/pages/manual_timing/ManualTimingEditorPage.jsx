@@ -115,6 +115,30 @@ const SHOW_MISSING_PHRASE_TOOLS = false;
 const STORYBOARD_ROUTE = "/studio/storyboard";
 
 const MANUAL_TIMING_AI_REQUEST_JSON_MESSAGE = "Это JSON-задание для AI, а не заполненный результат. Отправьте этот файл в ChatGPT/Gemini, затем вставьте ответ с manual_timing_pass_result.activation_phrase.";
+const MANUAL_TIMING_RU_TTS_EMPTY_TEXT = "перевод пока не заполнен";
+
+function speakManualTimingRuText(text = "") {
+  const value = String(text || "").trim();
+  if (!value || value === MANUAL_TIMING_RU_TTS_EMPTY_TEXT) return;
+
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(value);
+    utterance.lang = "ru-RU";
+    utterance.rate = 0.92;
+    utterance.pitch = 1;
+    utterance.volume = 1;
+    window.speechSynthesis.speak(utterance);
+  } catch (error) {
+    console.warn("[MANUAL TIMING RU_TTS_FAILED]", error);
+  }
+}
+
+function stopManualTimingSpeech() {
+  try {
+    window.speechSynthesis.cancel();
+  } catch {}
+}
 
 function formatManualBoardUpdatedAt(value) {
   if (!value) return "неизвестно";
@@ -2259,16 +2283,28 @@ export default function ManualTimingEditorPage() {
     ? selectedGroupInspectorPhrases
     : selectedSceneInspectorPhrases;
   const selectedScenePhraseInspectorRows = useMemo(
-    () => activeInspectorPhrases.map((phrase) => ({
-      phrase,
-      phraseId: String(phrase?.phrase_id || "").trim(),
-      timingLabel: `${formatTimingSec(phrase.start_sec)} → ${formatTimingSec(phrase.end_sec)}`,
-      originalText: pickManualTimingAudioPhraseOriginalText(phrase) || "—",
-      ruText: pickManualTimingAudioPhraseRuText(phrase) || "перевод пока не заполнен",
-      isPartial: phrase?.isPartial ?? isManualTimingPhrasePartialInScene(phrase, selectedScene),
-    })),
+    () => activeInspectorPhrases.map((phrase) => {
+      const ruText = pickManualTimingAudioPhraseRuText(phrase);
+      return {
+        phrase,
+        phraseId: String(phrase?.phrase_id || "").trim(),
+        timingLabel: `${formatTimingSec(phrase.start_sec)} → ${formatTimingSec(phrase.end_sec)}`,
+        originalText: pickManualTimingAudioPhraseOriginalText(phrase) || "—",
+        ruText: ruText || MANUAL_TIMING_RU_TTS_EMPTY_TEXT,
+        hasRuText: Boolean(ruText && ruText !== MANUAL_TIMING_RU_TTS_EMPTY_TEXT),
+        isPartial: phrase?.isPartial ?? isManualTimingPhrasePartialInScene(phrase, selectedScene),
+      };
+    }),
     [activeInspectorPhrases, selectedScene]
   );
+  const selectedSceneFullRuText = useMemo(
+    () => selectedScenePhraseInspectorRows
+      .map((row) => row.ruText)
+      .filter((text) => text && text !== MANUAL_TIMING_RU_TTS_EMPTY_TEXT)
+      .join(" "),
+    [selectedScenePhraseInspectorRows]
+  );
+  const selectedSceneHasRuText = Boolean(selectedSceneFullRuText);
   const selectedSceneHasPartialPhrase = selectedScenePhraseInspectorRows.some((row) => row.isPartial);
   const selectedGroupStartSec = selectedGroupScenes.length ? Math.min(...selectedGroupScenes.map((scene) => Number(scene?.start_sec || 0))) : 0;
   const selectedGroupEndSec = selectedGroupScenes.length ? Math.max(...selectedGroupScenes.map((scene) => Number(scene?.end_sec || 0))) : 0;
@@ -5386,12 +5422,24 @@ export default function ManualTimingEditorPage() {
                   <p>{row.originalText}</p>
                 </div>
                 <div className="manualTimingSelectedPhraseRu">
-                  <span>RU</span>
+                  <div className="manualTimingSelectedPhraseRuHeader">
+                    <span>RU</span>
+                    <button
+                      className="clipSB_btn clipSB_btnSecondary manualTimingSelectedPhraseSpeakBtn"
+                      type="button"
+                      onClick={() => speakManualTimingRuText(row.ruText)}
+                      disabled={!row.hasRuText}
+                    >
+                      ▶ RU
+                    </button>
+                  </div>
                   <p>{row.ruText}</p>
                 </div>
               </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
             </div>
             <div className="manualTimingSelectedPhraseActions">
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneFullRuText)} disabled={!selectedSceneHasRuText}>▶ весь перевод</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={stopManualTimingSpeech}>■ стоп</button>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
               <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!audioPhrases.length ? "isDisabled" : ""}`}>
