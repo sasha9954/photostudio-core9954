@@ -21,6 +21,8 @@ import {
 import "./ManualTimingEditorPage.css";
 import {
   MANUAL_TIMING_ACTIVE_PROJECT_KEY,
+  MANUAL_TIMING_AI_PASS_BY_TYPE,
+  MANUAL_TIMING_AI_PASS_STAGES,
   MANUAL_TIMING_ENERGY,
   MANUAL_TIMING_MUSIC_CLIP_MODE,
   MANUAL_TIMING_PODCAST_DIALOGUE_MODE,
@@ -33,12 +35,11 @@ import {
   buildGapAwareScenesFromAudioPhrases,
   buildManualTimingAiSplitRequestJson,
   buildManualTimingBlockStoryboardPassJson,
-  buildManualTimingClipPassJson,
   buildManualTimingExportJson,
-  buildManualTimingPodcastPassJson,
   buildManualTimingStoryBiblePassJson,
   buildManualTimingStoryPassJson,
   buildManualTimingSampleJson,
+  completeManualTimingWorkflowStage,
   buildManualTimingScenesFromMarkers,
   buildManualTimingWarnings,
   deriveStoryBlockRangeFromScenes,
@@ -51,6 +52,7 @@ import {
   normalizeManualTimingAudio,
   normalizeManualTimingAudioPhrases,
   normalizeManualTimingMarkers,
+  normalizeManualTimingWorkflow,
   normalizeManualTimingProjectFromJson,
   normalizeManualTimingRoute,
   normalizeManualTimingSourcePhraseIds,
@@ -1493,21 +1495,14 @@ function getManualTimingWorkflowLabels(mode = "") {
   return {
     phraseMap: "Создать Audio Phrase Map",
     buildScenes: "Собрать story scenes из ASR",
-    pass: "Semantic Story Cut",
-    copyPass: "Скопировать Semantic Story Cut JSON",
-    applyPass: "Применить Semantic Story Cut JSON",
-    insertPass: "Вставить Semantic Story Cut JSON",
-    panelTitle: "Semantic Story Cut JSON",
-    panelHint: "Вставь JSON после Semantic Story Cut: режем не текст, а будущую съёмку — 1 сцена = 1 фото + 1 i2v; video_prompt/negative_prompt/sound_prompt остаются пустыми.",
-    placeholder: "Вставь сюда Semantic Story Cut JSON: scenes/story_blocks с сохранёнными audio_phrases и заполненными смысловыми полями...",
+    pass: "Смысловая нарезка",
+    copyPass: "Скопировать смысловую нарезку",
+    applyPass: "Применить смысловую нарезку",
+    insertPass: "Вставить смысловую нарезку",
+    panelTitle: "AI JSON workflow",
+    panelHint: "Вставь JSON нужного этапа: смысловая нарезка, библия истории или блочная раскадровка. video_prompt/negative_prompt/sound_prompt остаются пустыми до отдельного video-pass.",
+    placeholder: "Вставь сюда JSON нужного этапа Manual Timing с manual_timing_pass.pass_type...",
   };
-}
-
-function buildManualTimingModePassJson(project = {}) {
-  const mode = String(project?.project_mode || project?.projectMode || "");
-  if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) return buildManualTimingClipPassJson(project);
-  if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return buildManualTimingPodcastPassJson(project);
-  return buildManualTimingStoryPassJson(project);
 }
 
 const MANUAL_STORY_BIBLE_PROJECT_KEYS = [
@@ -1529,14 +1524,40 @@ const MANUAL_STORY_BIBLE_PROJECT_KEYS = [
   "project_reference_prompt_en",
 ];
 
+function getManualTimingPayloadPassType(rawObject = {}) {
+  const object = unwrapManualProjectBackupJson(rawObject);
+  return String(object?.manual_timing_pass?.pass_type || object?.manualTimingPass?.passType || "").trim();
+}
+
 function getManualTimingJsonPassType(rawObject = {}) {
   const object = unwrapManualProjectBackupJson(rawObject);
+  const payloadPassType = getManualTimingPayloadPassType(object);
+  if (payloadPassType) return payloadPassType;
   const splitType = String(object?.split_type || object?.splitType || "").trim();
   if (splitType === "manual_story_bible_pass") return "story_bible";
   if (splitType === "manual_block_storyboard_pass") return "block_storyboard";
-  if (splitType === "manual_timing_draft" || splitType === "semantic_story_cut_pass" || splitType === "manual_story_pass") return "story_cut";
-  if (String(object?.chatgpt_task || object?.chatgpt_task?.task_type || "").includes("GLOBAL STORY BIBLE")) return "story_bible";
+  if (splitType === "manual_timing_draft" || splitType === "semantic_story_cut_pass" || splitType === "manual_story_pass") return "semantic_story_cut";
+  const task = typeof object?.chatgpt_task === "string" ? object.chatgpt_task : JSON.stringify(object?.chatgpt_task || "");
+  if (task.includes("GLOBAL STORY BIBLE")) return "story_bible";
+  if (task.includes("SEMANTIC STORY CUT PASS") || task.includes("СМЫСЛОВАЯ НАРЕЗКА ИСТОРИИ")) return "semantic_story_cut";
   return splitType || "unknown";
+}
+
+function getManualTimingPassNameRu(passType = "") {
+  return MANUAL_TIMING_AI_PASS_BY_TYPE[passType]?.pass_name_ru || String(passType || "неизвестный этап");
+}
+
+function getManualTimingStageStatus(workflow = {}, passType = "", scenes = []) {
+  const completedStages = Array.isArray(workflow?.completed_stages) ? workflow.completed_stages : [];
+  if (completedStages.includes(passType)) return "применён";
+  if (passType === "semantic_story_cut") return scenes.length ? "готов" : "заблокирован";
+  const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[passType];
+  const ready = stage?.requires?.every((required) => completedStages.includes(required));
+  return ready ? "готов" : "заблокирован";
+}
+
+function isManualTimingStageAvailable(workflow = {}, passType = "", scenes = []) {
+  return getManualTimingStageStatus(workflow, passType, scenes) !== "заблокирован";
 }
 
 function getCompactWarningItems(project = {}, warnings = []) {
@@ -1907,23 +1928,24 @@ export default function ManualTimingEditorPage() {
   const isMusicClip = modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE;
   const isPodcastDialogue = modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE;
   const canRecoverPodcastProjectToStory = isPodcastDialogue && scenes.length > 0 && Boolean(audio.url || durationSec > 0);
+  const manualTimingWorkflow = normalizeManualTimingWorkflow(project.manual_timing_workflow);
+  const manualTimingStageStatuses = MANUAL_TIMING_AI_PASS_STAGES.reduce((acc, stage) => {
+    acc[stage.pass_type] = getManualTimingStageStatus(manualTimingWorkflow, stage.pass_type, scenes);
+    return acc;
+  }, {});
+  const semanticStoryCutReady = isManualTimingStageAvailable(manualTimingWorkflow, "semantic_story_cut", scenes);
+  const storyBiblePassReady = isManualTimingStageAvailable(manualTimingWorkflow, "story_bible", scenes);
+  const blockStoryboardPassReady = isManualTimingStageAvailable(manualTimingWorkflow, "block_storyboard", scenes);
+  const storyBibleButtonTitle = storyBiblePassReady ? "Скопировать JSON для библии истории" : "Сначала примените этап: Смысловая нарезка";
+  const blockStoryboardButtonTitle = blockStoryboardPassReady ? "Скопировать JSON для блочной раскадровки" : "Сначала примените этап: Библия истории";
   const passReadyForDirector = project.timing_status === "confirmed"
     && scenes.length > 0
     && (
-      (isStoryVoiceover && hasRealStoryBlocks(storyBlocks) && scenes.every(sceneHasCompleteStoryPassFields))
+      (manualTimingWorkflow.completed_stages.includes("block_storyboard") && hasRealStoryBlocks(storyBlocks) && scenes.every(sceneHasCompleteStoryPassFields))
       || (isMusicClip && hasNonEmptyArray(project.song_blocks) && scenes.every(sceneHasCompleteClipPassFields))
       || (isPodcastDialogue && hasNonEmptyArray(project.speakers) && hasNonEmptyArray(project.topic_blocks) && scenes.every(sceneHasCompletePodcastPassFields))
     );
   const storyPassReadyForDirector = passReadyForDirector;
-  const storyBiblePassReady =
-    isStoryVoiceover
-    && hasRealStoryBlocks(storyBlocks)
-    && scenes.length > 0
-    && scenes.every(sceneHasCompleteStoryPassFields);
-  const storyBibleButtonTitle = storyBiblePassReady ? "Скопировать JSON для Story Bible Pass" : "Сначала примените Story Pass JSON";
-  const blockStoryboardPassReady = isStoryVoiceover
-    && ["project_story_summary_ru", "project_visual_bible_ru", "project_continuity_rules_ru"].every((key) => String(project?.[key] || "").trim());
-  const blockStoryboardButtonTitle = blockStoryboardPassReady ? "Скопировать JSON для Block Storyboard Pass" : "Сначала примените Story Bible Pass";
   const openDirectorBoardTitle = passReadyForDirector ? "Открыть режиссёрскую доску" : `Сначала примените ${workflowLabels.pass} JSON и подтвердите тайминг`;
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
@@ -4070,57 +4092,118 @@ export default function ManualTimingEditorPage() {
     window.setTimeout(() => setCopyStatus(""), 3200);
   };
 
-  const onCopyModePassJson = async () => {
+  const logManualTimingPassExport = (payload = {}, passType = "") => {
+    const passMeta = MANUAL_TIMING_AI_PASS_BY_TYPE[passType] || {};
+    console.info("[MANUAL TIMING PASS_EXPORT_BUILT]", {
+      passType,
+      passNameRu: passMeta.pass_name_ru || payload?.manual_timing_pass?.pass_name_ru || "",
+      sceneCount: Array.isArray(payload?.scenes) ? payload.scenes.length : 0,
+      storyBlockCount: Array.isArray(payload?.story_blocks) ? payload.story_blocks.length : 0,
+      audioPhraseCount: Array.isArray(payload?.audio_phrases) ? payload.audio_phrases.length : 0,
+      completedStages: payload?.manual_timing_workflow?.completed_stages || [],
+      lockedStages: payload?.manual_timing_workflow?.locked_stages || [],
+    });
+  };
+
+  const copyManualTimingPassJson = async (passType = "semantic_story_cut", buildPayload) => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const payload = buildManualTimingModePassJson(project);
+    const passMeta = MANUAL_TIMING_AI_PASS_BY_TYPE[passType] || {};
+    const payload = buildPayload(project);
+    logManualTimingPassExport(payload, passType);
     try {
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setCopyStatus(`JSON для ${workflowLabels.pass} скопирован`);
+      setCopyStatus(`JSON для этапа “${passMeta.pass_name_ru || passType}” скопирован`);
       window.setTimeout(() => setCopyStatus(""), 1600);
     } catch {
-      setCopyStatus(`Не удалось скопировать JSON для ${workflowLabels.pass}`);
+      setCopyStatus(`Не удалось скопировать JSON для этапа “${passMeta.pass_name_ru || passType}”`);
     }
   };
 
-  const onCopyStoryBiblePassJson = async () => {
-    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const payload = buildManualTimingStoryBiblePassJson(project);
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setCopyStatus("JSON для Story Bible Pass скопирован");
-      window.setTimeout(() => setCopyStatus(""), 1600);
-    } catch {
-      setCopyStatus("Не удалось скопировать JSON для Story Bible Pass");
-    }
-  };
+  const onCopyModePassJson = async () => copyManualTimingPassJson("semantic_story_cut", buildManualTimingStoryPassJson);
 
-  const onCopyBlockStoryboardPassJson = async () => {
-    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const payload = buildManualTimingBlockStoryboardPassJson(project);
-    try {
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setCopyStatus("JSON для Block Storyboard Pass скопирован");
-      window.setTimeout(() => setCopyStatus(""), 1600);
-    } catch {
-      setCopyStatus("Не удалось скопировать JSON для Block Storyboard Pass");
-    }
-  };
+  const onCopyStoryBiblePassJson = async () => copyManualTimingPassJson("story_bible", buildManualTimingStoryBiblePassJson);
+
+  const onCopyBlockStoryboardPassJson = async () => copyManualTimingPassJson("block_storyboard", buildManualTimingBlockStoryboardPassJson);
 
 
   const parseJsonImportText = () => JSON.parse(jsonImportText || "{}");
 
+  const logManualTimingPassApplyBlocked = (reason = "", clickedPassType = "", payloadPassType = "", requiredStages = []) => {
+    console.warn("[MANUAL TIMING PASS_APPLY_BLOCKED]", {
+      reason,
+      clickedPassType,
+      payloadPassType,
+      requiredStages,
+      completedStages: manualTimingWorkflow.completed_stages,
+    });
+  };
+
+  const blockManualTimingPassApply = (message = "", reason = "", clickedPassType = "", payloadPassType = "", requiredStages = []) => {
+    logManualTimingPassApplyBlocked(reason, clickedPassType, payloadPassType, requiredStages);
+    setCopyStatus(message);
+    window.setTimeout(() => setCopyStatus(""), 3200);
+  };
+
+  const validateManualTimingClickedPass = (rawObject = {}, clickedPassType = "") => {
+    const importedObject = unwrapManualProjectBackupJson(rawObject);
+    const explicitPassType = getManualTimingPayloadPassType(importedObject);
+    if (!explicitPassType) {
+      console.warn("[MANUAL TIMING PASS_APPLY_LEGACY_PAYLOAD] manual_timing_pass.pass_type missing; falling back to legacy validator.", {
+        clickedPassType,
+        inferredPassType: getManualTimingJsonPassType(importedObject),
+      });
+    }
+    const payloadPassType = explicitPassType || getManualTimingJsonPassType(importedObject);
+    if (payloadPassType !== clickedPassType) {
+      blockManualTimingPassApply(
+        `Этот JSON относится к этапу: ${getManualTimingPassNameRu(payloadPassType)}. Выберите правильную кнопку применения.`,
+        "pass_type_mismatch",
+        clickedPassType,
+        payloadPassType,
+        MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType]?.requires || []
+      );
+      return { ok: false, importedObject, payloadPassType };
+    }
+
+    const requiredStages = MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType]?.requires || [];
+    const missingRequiredStage = requiredStages.find((stage) => !manualTimingWorkflow.completed_stages.includes(stage));
+    if (missingRequiredStage) {
+      blockManualTimingPassApply(
+        `Сначала примените этап: ${getManualTimingPassNameRu(missingRequiredStage)}.`,
+        "required_stage_missing",
+        clickedPassType,
+        payloadPassType,
+        requiredStages
+      );
+      return { ok: false, importedObject, payloadPassType };
+    }
+    return { ok: true, importedObject, payloadPassType };
+  };
+
+  const buildProjectWithCompletedManualTimingStage = (baseProject = {}, passType = "") => ({
+    ...baseProject,
+    manual_timing_workflow: completeManualTimingWorkflowStage(baseProject, passType),
+  });
+
+  const logManualTimingPassApplied = (nextProject = {}, passType = "") => {
+    console.info("[MANUAL TIMING PASS_APPLIED]", {
+      passType,
+      nextStage: nextProject?.manual_timing_workflow?.current_stage || "",
+      completedStages: nextProject?.manual_timing_workflow?.completed_stages || [],
+      sceneCount: Array.isArray(nextProject?.scenes) ? nextProject.scenes.length : 0,
+      storyBlockCount: Array.isArray(nextProject?.story_blocks) ? nextProject.story_blocks.length : 0,
+    });
+  };
+
   const applyImportedStoryBibleJson = (rawObject) => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const importedObject = unwrapManualProjectBackupJson(rawObject);
-    const splitType = String(importedObject?.split_type || importedObject?.splitType || "").trim();
-    if (splitType !== "manual_story_bible_pass") {
-      setCopyStatus("Это не Story Bible JSON: нужен split_type = manual_story_bible_pass");
-      return;
-    }
+    const passValidation = validateManualTimingClickedPass(rawObject, "story_bible");
+    if (!passValidation.ok) return;
+    const importedObject = passValidation.importedObject;
     const validation = validateManualTimingStoryBiblePassImport(importedObject, project);
     if (!validation?.ok) {
       const errors = Array.isArray(validation?.errors) ? validation.errors : [];
-      setCopyStatus(`Story Bible отклонён: ${errors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`);
+      blockManualTimingPassApply(`Библия истории отклонена: ${errors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`, "validator_failed", "story_bible", passValidation.payloadPassType, MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.requires);
       return;
     }
     const nextProject = { ...project };
@@ -4131,26 +4214,21 @@ export default function ManualTimingEditorPage() {
     });
     nextProject.story_bible_status = "applied";
     nextProject.story_bible_applied_at = Date.now();
-    nextProject.story_bible_split_type = splitType;
-    const savedProject = persist(nextProject);
+    nextProject.story_bible_split_type = String(importedObject?.split_type || importedObject?.splitType || "manual_story_bible_pass").trim();
+    const completedProject = buildProjectWithCompletedManualTimingStage(nextProject, "story_bible");
+    const savedProject = persist(completedProject);
+    logManualTimingPassApplied(savedProject, "story_bible");
     setJsonImportText(JSON.stringify(buildManualTimingExportJson(savedProject), null, 2));
-    setCopyStatus("Story Bible применён: обновлены только project_* поля, сцены и тайминги не тронуты");
+    setCopyStatus("Библия истории применена: обновлены только project_* поля, сцены и тайминги не тронуты");
     window.setTimeout(() => setCopyStatus(""), 2400);
   };
 
   const onApplyStoryCutJson = () => {
     try {
       const raw = parseJsonImportText();
-      const passType = getManualTimingJsonPassType(raw);
-      if (passType === "story_bible") {
-        setCopyStatus("Это Story Bible JSON — нажмите “Применить Story Bible”");
-        return;
-      }
-      if (passType === "block_storyboard") {
-        setCopyStatus("Это Block Storyboard JSON — нажмите “Применить Block Storyboard”");
-        return;
-      }
-      applyImportedTimingJson(raw);
+      const passValidation = validateManualTimingClickedPass(raw, "semantic_story_cut");
+      if (!passValidation.ok) return;
+      applyImportedTimingJson(raw, "semantic_story_cut");
     } catch (error) {
       setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
     }
@@ -4161,64 +4239,73 @@ export default function ManualTimingEditorPage() {
       const raw = parseJsonImportText();
       applyImportedStoryBibleJson(raw);
     } catch (error) {
-      setCopyStatus(`Ошибка Story Bible JSON: ${error?.message || "неверный формат"}`);
+      setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
     }
   };
 
   const onApplyBlockStoryboardJson = () => {
     try {
       const raw = parseJsonImportText();
-      const passType = getManualTimingJsonPassType(raw);
-      if (passType !== "block_storyboard") {
-        setCopyStatus("Это не Block Storyboard JSON: нужен split_type = manual_block_storyboard_pass");
-        return;
-      }
-      applyImportedTimingJson(raw);
+      const passValidation = validateManualTimingClickedPass(raw, "block_storyboard");
+      if (!passValidation.ok) return;
+      applyImportedTimingJson(raw, "block_storyboard");
     } catch (error) {
-      setCopyStatus(`Ошибка Block Storyboard JSON: ${error?.message || "неверный формат"}`);
+      setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
     }
   };
 
-  const applyImportedTimingJson = (rawObject) => {
+  const applyImportedTimingJson = (rawObject, clickedPassType = "") => {
     const isBackupImport = rawObject?.backup_type === "photostudio_manual_project_backup";
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const importedObject = unwrapManualProjectBackupJson(rawObject);
     if (!isBackupImport) {
-      const mode = String(importedObject.project_mode || project.project_mode || project.projectMode || "");
       let validations = [];
-      if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
-        validations = [validateManualTimingClipPassImport(importedObject, project)];
-      } else if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) {
-        validations = [validateManualTimingPodcastPassImport(importedObject, project)];
-      } else if (mode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
-        const splitType = String(importedObject.split_type || importedObject.splitType || "");
-        if (splitType === "manual_story_bible_pass") {
-          validations = [validateManualTimingStoryBiblePassImport(importedObject, project)];
-        } else if (splitType === "manual_block_storyboard_pass") {
-          validations = [validateManualTimingBlockStoryboardPassImport(importedObject, project)];
-        } else {
-          validations = [validateManualTimingStoryPassImport(importedObject, project)];
-        }
+      if (clickedPassType === "semantic_story_cut") {
+        validations = [validateManualTimingStoryPassImport(importedObject, project)];
+      } else if (clickedPassType === "block_storyboard") {
+        validations = [validateManualTimingBlockStoryboardPassImport(importedObject, project)];
       } else {
-        validations = [
-          validateManualTimingStoryBiblePassImport(importedObject, project),
-          validateManualTimingBlockStoryboardPassImport(importedObject, project),
-          validateManualTimingStoryPassImport(importedObject, project),
-          validateManualTimingClipPassImport(importedObject, project),
-          validateManualTimingPodcastPassImport(importedObject, project),
-        ];
+        const mode = String(importedObject.project_mode || project.project_mode || project.projectMode || "");
+        if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
+          validations = [validateManualTimingClipPassImport(importedObject, project)];
+        } else if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) {
+          validations = [validateManualTimingPodcastPassImport(importedObject, project)];
+        } else if (mode === MANUAL_TIMING_STORY_VOICEOVER_MODE) {
+          const splitType = String(importedObject.split_type || importedObject.splitType || "");
+          if (splitType === "manual_story_bible_pass") {
+            validations = [validateManualTimingStoryBiblePassImport(importedObject, project)];
+          } else if (splitType === "manual_block_storyboard_pass") {
+            validations = [validateManualTimingBlockStoryboardPassImport(importedObject, project)];
+          } else {
+            validations = [validateManualTimingStoryPassImport(importedObject, project)];
+          }
+        } else {
+          validations = [
+            validateManualTimingStoryBiblePassImport(importedObject, project),
+            validateManualTimingBlockStoryboardPassImport(importedObject, project),
+            validateManualTimingStoryPassImport(importedObject, project),
+            validateManualTimingClipPassImport(importedObject, project),
+            validateManualTimingPodcastPassImport(importedObject, project),
+          ];
+        }
       }
       const passedValidation = validations.find((item) => item.ok);
       if (!passedValidation) {
         const validationErrors = validations.flatMap((item) => Array.isArray(item?.errors) ? item.errors : []);
-        setCopyStatus(`${workflowLabels.pass} отклонён: ${validationErrors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`);
+        if (clickedPassType) {
+          blockManualTimingPassApply(`${getManualTimingPassNameRu(clickedPassType)} отклонена: ${validationErrors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`, "validator_failed", clickedPassType, getManualTimingJsonPassType(importedObject), MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType]?.requires || []);
+        } else {
+          setCopyStatus(`${workflowLabels.pass} отклонён: ${validationErrors.slice(0, 3).join(" ") || "формат не прошёл проверку"}`);
+        }
         return;
       }
     }
-    const nextProject = normalizeManualTimingProjectFromJson(importedObject, project);
+    const importedProject = normalizeManualTimingProjectFromJson(importedObject, project);
+    const nextProject = clickedPassType ? buildProjectWithCompletedManualTimingStage(importedProject, clickedPassType) : importedProject;
     persist(nextProject);
+    if (clickedPassType) logManualTimingPassApplied(nextProject, clickedPassType);
     setJsonImportText(JSON.stringify(buildManualTimingExportJson(nextProject), null, 2));
-    setCopyStatus(`JSON загружен: сцен ${nextProject.scenes?.length || 0}`);
+    setCopyStatus(clickedPassType ? `Этап “${getManualTimingPassNameRu(clickedPassType)}” применён` : `JSON загружен: сцен ${nextProject.scenes?.length || 0}`);
     window.setTimeout(() => setCopyStatus(""), 1800);
     setAudioTime(0, { pause: true, clearBound: true });
   };
@@ -4233,7 +4320,7 @@ export default function ManualTimingEditorPage() {
       const text = await file.text();
       const raw = JSON.parse(text);
       const passType = getManualTimingJsonPassType(raw);
-      const passLabel = passType === "story_bible" ? "Story Bible" : passType === "block_storyboard" ? "Block Storyboard" : passType === "story_cut" ? workflowLabels.pass : "неизвестный JSON";
+      const passLabel = MANUAL_TIMING_AI_PASS_BY_TYPE[passType]?.pass_name_ru || (passType === "unknown" ? "неизвестный JSON" : passType);
       setJsonImportText(text);
       setIsJsonImportOpen(true);
       setCopyStatus(`JSON-файл вставлен в поле: ${passLabel}. Нажмите нужную кнопку применения.`);
@@ -5048,15 +5135,15 @@ export default function ManualTimingEditorPage() {
               </div>
               <div className="manualTimingJsonHelpStep">
                 <b>2 · Собрать сцены</b>
-                <span>Локально собираются черновые scenes из ASR с паузами. После этого копируй Semantic Story Cut JSON и скидывай мне/Gemini.</span>
+                <span>Локально собираются черновые scenes из ASR с паузами. После этого копируй JSON “Смысловая нарезка” и скидывай мне/Gemini.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
-                <b>3 · Semantic Story Cut</b>
-                <span>Я/Gemini заполняю смысл сцен и story_blocks. Вставь ответ в это же поле и нажми “Применить Semantic Story Cut”.</span>
+                <b>3 · Смысловая нарезка</b>
+                <span>Я/Gemini заполняю смысл сцен и story_blocks. Вставь ответ в это же поле и нажми “Применить смысловую нарезку”.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
-                <b>4 · Story Bible</b>
-                <span>После Story Cut копируй Story Bible JSON и скидывай мне/Gemini. Вставь готовый паспорт и нажми “Применить Story Bible”. Он обновляет только project_* поля.</span>
+                <b>4 · Библия истории</b>
+                <span>После смысловой нарезки копируй JSON “Библия истории” и скидывай мне/Gemini. Вставь готовый паспорт и нажми “Применить библию истории”. Он обновляет только project_* поля.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
                 <b>5 · Подтвердить</b>
@@ -5068,7 +5155,7 @@ export default function ManualTimingEditorPage() {
               </div>
             </div>
             <div className="manualTimingJsonHelpNote">
-              <b>Важно:</b> Semantic Story Cut меняет сцены и story_blocks. Story Bible не трогает сцены, тайминги, audio_phrases и story_blocks — только верхние project_* поля. Block Storyboard — следующий отдельный проход для подготовки доски.
+              <b>Важно:</b> “Смысловая нарезка” заполняет смысл сцен и story_blocks. “Библия истории” не трогает сцены, тайминги, audio_phrases и story_blocks — только верхние project_* поля. “Блочная раскадровка” — отдельный проход подготовки доски.
             </div>
           </details>
           <div className="manualTimingJsonActions manualTimingJsonActionsV21">
@@ -5081,20 +5168,20 @@ export default function ManualTimingEditorPage() {
             </label>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadCurrentTimingBackup}>Скачать бэкап тайминга</button>
             <div className="manualTimingJsonPassGroup">
-              <span>1 · Semantic Story Cut</span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
+              <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.semantic_story_cut}</b></span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
             </div>
-            {isStoryVoiceoverProject(project) ? <div className="manualTimingJsonPassGroup">
-              <span>2 · Story Bible</span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>Скопировать Story Bible</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Story Bible</button>
-            </div> : null}
-            {isStoryVoiceoverProject(project) ? <div className="manualTimingJsonPassGroup">
-              <span>3 · Block Storyboard</span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>Скопировать Block Storyboard</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim()}>Применить Block Storyboard</button>
-            </div> : null}
+            <div className="manualTimingJsonPassGroup">
+              <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.story_bible}</b></span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.copy_label_ru}</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.apply_label_ru}</button>
+            </div>
+            <div className="manualTimingJsonPassGroup">
+              <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.block_storyboard}</b></span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.copy_label_ru}</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.apply_label_ru}</button>
+            </div>
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
