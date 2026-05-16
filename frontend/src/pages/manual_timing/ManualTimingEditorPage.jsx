@@ -1949,6 +1949,77 @@ function getManualTimingPhrasesForSceneInspector(audioPhrases = [], scene = null
   }, []);
 }
 
+function getManualTimingPhraseGroupCoverage(phrase = {}, groupScenes = []) {
+  const phraseStart = Number(phrase?.start_sec || 0);
+  const phraseEnd = Number(phrase?.end_sec || 0);
+  const phraseDuration = phraseEnd - phraseStart;
+  if (!(phraseDuration > 0) || !Array.isArray(groupScenes) || !groupScenes.length) {
+    return { overlapSec: 0, overlapRatio: 0, isFullyInside: false };
+  }
+
+  const overlaps = groupScenes
+    .map((scene) => {
+      const sceneStart = Number(scene?.start_sec || 0);
+      const sceneEnd = Number(scene?.end_sec || 0);
+      const overlapStart = Math.max(sceneStart, phraseStart);
+      const overlapEnd = Math.min(sceneEnd, phraseEnd);
+      return overlapEnd > overlapStart ? [overlapStart, overlapEnd] : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a[0] - b[0]);
+
+  const merged = [];
+  overlaps.forEach(([start, end]) => {
+    const last = merged[merged.length - 1];
+    if (!last || start > last[1] + 0.001) {
+      merged.push([start, end]);
+      return;
+    }
+    last[1] = Math.max(last[1], end);
+  });
+
+  const overlapSec = Math.min(phraseDuration, merged.reduce((total, [start, end]) => total + Math.max(0, end - start), 0));
+  const overlapRatio = overlapSec > 0 ? overlapSec / phraseDuration : 0;
+  const isFullyInside = overlapSec >= phraseDuration - 0.001;
+  return { overlapSec, overlapRatio, isFullyInside };
+}
+
+function getManualTimingPhrasesForSceneGroupInspector(audioPhrases = [], groupScenes = []) {
+  if (!Array.isArray(groupScenes) || !groupScenes.length || !Array.isArray(audioPhrases)) return [];
+
+  const phraseByKey = new Map();
+  const upsertPhrase = (phrase) => {
+    const phraseId = String(phrase?.phrase_id || "").trim();
+    const phraseStart = Number(phrase?.start_sec || 0);
+    const phraseEnd = Number(phrase?.end_sec || 0);
+    const key = phraseId || `${phraseStart}:${phraseEnd}:${pickManualTimingAudioPhraseOriginalText(phrase)}`;
+    if (!key) return;
+
+    const coverage = getManualTimingPhraseGroupCoverage(phrase, groupScenes);
+    const existing = phraseByKey.get(key);
+    phraseByKey.set(key, {
+      ...(existing || phrase),
+      ...phrase,
+      overlapSec: coverage.overlapSec,
+      overlapRatio: coverage.overlapRatio,
+      isPartial: !coverage.isFullyInside,
+    });
+  };
+
+  groupScenes.forEach((scene) => {
+    getManualTimingPhrasesForSceneInspector(audioPhrases, scene).forEach(upsertPhrase);
+  });
+
+  audioPhrases.forEach((phrase) => {
+    const coverage = getManualTimingPhraseGroupCoverage(phrase, groupScenes);
+    const isMeaningfulGroupOverlap = coverage.overlapSec >= 0.35 || coverage.overlapRatio >= 0.25;
+    if (coverage.isFullyInside || isMeaningfulGroupOverlap) upsertPhrase(phrase);
+  });
+
+  return Array.from(phraseByKey.values())
+    .sort((a, b) => Number(a?.start_sec || 0) - Number(b?.start_sec || 0));
+}
+
 function buildManualTimingAsrTranslationPassJson(project = {}) {
   const audioPhrases = normalizeManualTimingAudioPhrases(project?.audio_phrases).map((phrase) => ({
     phrase_id: phrase.phrase_id,
@@ -2146,6 +2217,13 @@ export default function ManualTimingEditorPage() {
     () => new Set(groupSelectedSceneIds.map((sceneId) => String(sceneId || "")).filter(Boolean)),
     [groupSelectedSceneIds]
   );
+  const selectedGroupScenes = useMemo(
+    () => scenes
+      .filter((scene) => groupSelectedSceneIdSet.has(String(scene.scene_id || "")))
+      .sort((a, b) => Number(a.start_sec || 0) - Number(b.start_sec || 0)),
+    [scenes, groupSelectedSceneIdSet]
+  );
+  const isGroupPhraseInspectorMode = selectedGroupScenes.length > 0;
   const warnings = useMemo(() => buildManualTimingWarnings(project), [project]);
   const compactWarningItems = useMemo(() => getCompactWarningItems(project, warnings), [project, warnings]);
   const readableTimingStatus = getReadableTimingStatus(project, audioPhrases, scenes, durationSec);
@@ -2173,8 +2251,15 @@ export default function ManualTimingEditorPage() {
     () => getManualTimingPhrasesForSceneInspector(audioPhrases, selectedScene),
     [audioPhrases, selectedScene]
   );
+  const selectedGroupInspectorPhrases = useMemo(
+    () => getManualTimingPhrasesForSceneGroupInspector(audioPhrases, selectedGroupScenes),
+    [audioPhrases, selectedGroupScenes]
+  );
+  const activeInspectorPhrases = isGroupPhraseInspectorMode
+    ? selectedGroupInspectorPhrases
+    : selectedSceneInspectorPhrases;
   const selectedScenePhraseInspectorRows = useMemo(
-    () => selectedSceneInspectorPhrases.map((phrase) => ({
+    () => activeInspectorPhrases.map((phrase) => ({
       phrase,
       phraseId: String(phrase?.phrase_id || "").trim(),
       timingLabel: `${formatTimingSec(phrase.start_sec)} → ${formatTimingSec(phrase.end_sec)}`,
@@ -2182,9 +2267,13 @@ export default function ManualTimingEditorPage() {
       ruText: pickManualTimingAudioPhraseRuText(phrase) || "перевод пока не заполнен",
       isPartial: phrase?.isPartial ?? isManualTimingPhrasePartialInScene(phrase, selectedScene),
     })),
-    [selectedSceneInspectorPhrases, selectedScene]
+    [activeInspectorPhrases, selectedScene]
   );
   const selectedSceneHasPartialPhrase = selectedScenePhraseInspectorRows.some((row) => row.isPartial);
+  const selectedGroupStartSec = selectedGroupScenes.length ? Math.min(...selectedGroupScenes.map((scene) => Number(scene?.start_sec || 0))) : 0;
+  const selectedGroupEndSec = selectedGroupScenes.length ? Math.max(...selectedGroupScenes.map((scene) => Number(scene?.end_sec || 0))) : 0;
+  const selectedGroupFirstSceneId = selectedGroupScenes[0]?.scene_id || "—";
+  const selectedGroupLastSceneId = selectedGroupScenes[selectedGroupScenes.length - 1]?.scene_id || "—";
   const selectedScenePhraseWarnings = useMemo(
     () => getScenePhraseAlignmentWarnings(selectedScene, selectedSceneAudioPhrases, audioPhrases, scenes, durationSec),
     [selectedScene, selectedSceneAudioPhrases, audioPhrases, scenes, durationSec]
@@ -5273,15 +5362,21 @@ export default function ManualTimingEditorPage() {
             <div><b>Главная шкала разметки</b></div>
             <div>верхняя полоса — story blocks · нижняя — сцены · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
-          <div className={`manualTimingSelectedPhraseInspector ${selectedSceneHasPartialPhrase ? "hasPartialPhrase" : ""}`}>
+          <div className={`manualTimingSelectedPhraseInspector ${isGroupPhraseInspectorMode ? "isGroupMode" : ""} ${selectedSceneHasPartialPhrase ? "hasPartialPhrase" : ""}`}>
             <div className="manualTimingSelectedPhraseMeta">
-              <span>scene_id</span>
-              <strong>{selectedScene?.scene_id || "—"}</strong>
-              <span>{selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
+              {isGroupPhraseInspectorMode ? <>
+                <span>Выбранный блок</span>
+                <strong>{selectedGroupScenes.length} сцен</strong>
+                <span>{selectedGroupFirstSceneId} → {selectedGroupLastSceneId} · {formatTimingSec(selectedGroupStartSec)} → {formatTimingSec(selectedGroupEndSec)}</span>
+              </> : <>
+                <span>scene_id</span>
+                <strong>{selectedScene?.scene_id || "—"}</strong>
+                <span>{selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
+              </>}
               {selectedSceneHasPartialPhrase ? <b className="manualTimingPartialBadge">частично</b> : null}
             </div>
             <div className="manualTimingSelectedPhraseRows">
-              {selectedScene ? (selectedScenePhraseInspectorRows.length ? selectedScenePhraseInspectorRows.map((row) => <div
+              {isGroupPhraseInspectorMode || selectedScene ? (selectedScenePhraseInspectorRows.length ? selectedScenePhraseInspectorRows.map((row) => <div
                 key={`selected-phrase-inspector-${row.phraseId || row.timingLabel}`}
                 className={`manualTimingSelectedPhraseRow ${row.isPartial ? "isPartial" : ""}`}
               >
@@ -5293,7 +5388,7 @@ export default function ManualTimingEditorPage() {
                   <span>RU</span>
                   <p>{row.ruText}</p>
                 </div>
-              </div>) : <div className="manualTimingSelectedPhraseEmpty">В выбранной сцене нет ASR-фразы.</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
+              </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
             </div>
             <div className="manualTimingSelectedPhraseActions">
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
