@@ -18999,6 +18999,7 @@ def clip_video_start(payload: ClipVideoIn):
 
 @router.get("/clip/video/status/{job_id}")
 def clip_video_status(job_id: str):
+    ensure_clip_video_queue_worker_started()
     try:
         safe_job_id = _safe_clip_video_job_id(job_id)
     except Exception:
