@@ -1961,7 +1961,7 @@ export default function ManualTimingEditorPage() {
     acc[stage.pass_type] = getManualTimingStageStatus(manualTimingWorkflow, stage.pass_type, scenes);
     return acc;
   }, {});
-  const semanticStoryCutReady = isManualTimingStageAvailable(manualTimingWorkflow, "semantic_story_cut", scenes) || audioPhrases.length > 0;
+  const semanticStoryCutReady = isManualTimingStageAvailable(manualTimingWorkflow, "semantic_story_cut", scenes);
   const storyBiblePassReady = isManualTimingStageAvailable(manualTimingWorkflow, "story_bible", scenes);
   const blockStoryboardPassReady = isManualTimingStageAvailable(manualTimingWorkflow, "block_storyboard", scenes);
   const storyBibleButtonTitle = storyBiblePassReady ? "Скопировать JSON для библии истории" : "Сначала примените этап: Смысловая нарезка";
