@@ -2538,7 +2538,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
       duration_sec: finalDuration || baseAudio.duration_sec || 0,
       duration_ms: Math.round((finalDuration || baseAudio.duration_sec || 0) * 1000),
     },
-    timing_status: String(safeRaw.timing_status || "draft"),
+    timing_status: String(safeRaw.timing_status || safeBase.timing_status || "draft"),
     manual_scene_edits: Boolean(safeRaw.manual_scene_edits ?? safeRaw.manualSceneEdits ?? safeBase.manual_scene_edits ?? safeBase.manualSceneEdits),
     manualSceneEdits: Boolean(safeRaw.manualSceneEdits ?? safeRaw.manual_scene_edits ?? safeBase.manualSceneEdits ?? safeBase.manual_scene_edits),
     lastManualEditReason: String(safeRaw.lastManualEditReason || safeRaw.last_manual_edit_reason || safeBase.lastManualEditReason || safeBase.last_manual_edit_reason || ""),
