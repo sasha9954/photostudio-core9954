@@ -887,9 +887,34 @@ function sanitizeManualTimingBackupFilenamePart(value = "manual_timing", maxLeng
   return safe || "manual_timing";
 }
 
+function sanitizeManualTimingPassFilenamePart(value = "project", maxLength = 48) {
+  const safe = String(value || "project")
+    .replace(/\.[a-z0-9]{2,5}$/i, "")
+    .replace(/[^a-z0-9а-яё]+/gi, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, maxLength)
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+  return safe || "project";
+}
+
 function formatManualTimingBackupTimestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
+function getManualTimingDownloadPassType(passType = "") {
+  if (passType === "music_clip") return "clip_pass";
+  if (passType === "podcast_dialogue") return "podcast_pass";
+  return sanitizeManualTimingPassFilenamePart(passType || "pass", 48);
+}
+
+function buildManualTimingPassDownloadFilename(passType = "", project = {}) {
+  const safePassType = getManualTimingDownloadPassType(passType);
+  const audioName = sanitizeManualTimingPassFilenamePart(getManualTimingCurrentProjectAudioName(project), 48);
+  const durationSec = Math.max(0, Math.round(getManualTimingCurrentProjectAudioDuration(project)));
+  return `manual_timing_${safePassType}_${audioName}_${durationSec}s_${formatManualTimingBackupTimestamp(new Date())}.json`;
 }
 
 function buildManualTimingCurrentProjectBackupFilename(project = {}, createdAt = new Date()) {
@@ -973,6 +998,18 @@ function validateManualTimingCurrentProjectBackupPayload(payload = {}, currentPr
     payloadStoryBlockCount,
     currentStoryBlockCount,
   };
+}
+
+function downloadManualTimingJsonFile(payload = {}, filename = "manual_timing_ai_pass.json") {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function downloadManualBoardBackupJson(project = {}, filename = "manual_clip_board_backup.json") {
@@ -4120,10 +4157,11 @@ export default function ManualTimingEditorPage() {
     window.setTimeout(() => setCopyStatus(""), 3200);
   };
 
-  const logManualTimingPassExport = (payload = {}, passType = "") => {
+  const logManualTimingPassExport = (payload = {}, passType = "", filename = "") => {
     const passMeta = MANUAL_TIMING_AI_PASS_BY_TYPE[passType] || {};
     console.info("[MANUAL TIMING PASS_EXPORT_BUILT]", {
       passType,
+      filename,
       passNameRu: passMeta.pass_name_ru || payload?.manual_timing_pass?.pass_name_ru || "",
       sceneCount: Array.isArray(payload?.scenes) ? payload.scenes.length : 0,
       storyBlockCount: Array.isArray(payload?.story_blocks) ? payload.story_blocks.length : 0,
@@ -4133,18 +4171,56 @@ export default function ManualTimingEditorPage() {
     });
   };
 
+  const getManualTimingPassCopySuccessStatus = (passType = "", passMeta = {}) => {
+    if (passType === "music_clip") return "JSON для Clip Pass скопирован и скачан";
+    if (passType === "podcast_dialogue") return "JSON для Podcast Pass скопирован и скачан";
+    return `JSON для этапа “${passMeta.pass_name_ru || passType}” скопирован и скачан`;
+  };
+
   const copyManualTimingPassJson = async (passType = "semantic_story_cut", buildPayload) => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const passMeta = MANUAL_TIMING_AI_PASS_BY_TYPE[passType] || {};
     const payload = buildPayload(project);
-    logManualTimingPassExport(payload, passType);
+    const filename = buildManualTimingPassDownloadFilename(passType, project);
+    const jsonText = JSON.stringify(payload, null, 2);
+    logManualTimingPassExport(payload, passType, filename);
+
+    const clipboardPromise = typeof navigator !== "undefined" && navigator.clipboard?.writeText
+      ? navigator.clipboard.writeText(jsonText).then(() => true).catch(() => false)
+      : Promise.resolve(false);
+
+    let downloaded = false;
     try {
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-      setCopyStatus(`JSON для этапа “${passMeta.pass_name_ru || passType}” скопирован`);
-      window.setTimeout(() => setCopyStatus(""), 1600);
-    } catch {
-      setCopyStatus(`Не удалось скопировать JSON для этапа “${passMeta.pass_name_ru || passType}”`);
+      downloadManualTimingJsonFile(payload, filename);
+      downloaded = true;
+      console.info("[MANUAL TIMING PASS_JSON_DOWNLOADED]", {
+        passType,
+        filename,
+        sceneCount: Array.isArray(payload?.scenes) ? payload.scenes.length : 0,
+        storyBlockCount: Array.isArray(payload?.story_blocks) ? payload.story_blocks.length : 0,
+        audioPhraseCount: Array.isArray(payload?.audio_phrases) ? payload.audio_phrases.length : 0,
+      });
+    } catch (error) {
+      console.warn("[MANUAL TIMING PASS_JSON_DOWNLOAD_FAILED]", { passType, filename, error });
     }
+
+    const clipboardOk = await clipboardPromise;
+    if (clipboardOk && downloaded) {
+      setCopyStatus(getManualTimingPassCopySuccessStatus(passType, passMeta));
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+    if (!clipboardOk && downloaded) {
+      setCopyStatus("Clipboard недоступен, но JSON скачан файлом");
+      window.setTimeout(() => setCopyStatus(""), 2600);
+      return;
+    }
+    if (clipboardOk && !downloaded) {
+      setCopyStatus("JSON скопирован, но не удалось скачать файл");
+      window.setTimeout(() => setCopyStatus(""), 2600);
+      return;
+    }
+    setCopyStatus("Не удалось скопировать или скачать JSON");
   };
 
   const buildManualTimingModePassJson = (sourceProject = {}) => {
