@@ -37,6 +37,8 @@ export const MANUAL_TIMING_AI_PASS_STAGES = [
     requires: [],
     unlocks: ["story_bible"],
     next_stage: "story_bible",
+    activation_phrase: "SEMANTIC_STORY_CUT_DONE",
+    result_field: "manual_timing_pass_result",
   },
   {
     pass_type: "story_bible",
@@ -47,6 +49,8 @@ export const MANUAL_TIMING_AI_PASS_STAGES = [
     requires: ["semantic_story_cut"],
     unlocks: ["block_storyboard"],
     next_stage: "block_storyboard",
+    activation_phrase: "STORY_BIBLE_DONE",
+    result_field: "manual_timing_pass_result",
   },
   {
     pass_type: "block_storyboard",
@@ -57,6 +61,8 @@ export const MANUAL_TIMING_AI_PASS_STAGES = [
     requires: ["semantic_story_cut", "story_bible"],
     unlocks: ["director_board"],
     next_stage: "director_board",
+    activation_phrase: "BLOCK_STORYBOARD_DONE",
+    result_field: "manual_timing_pass_result",
   },
 ];
 
@@ -64,6 +70,30 @@ export const MANUAL_TIMING_AI_PASS_BY_TYPE = MANUAL_TIMING_AI_PASS_STAGES.reduce
   acc[stage.pass_type] = stage;
   return acc;
 }, {});
+
+export function validateManualTimingPassResultActivation(importedObject = {}, clickedPassType = "") {
+  const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType];
+  if (!stage?.activation_phrase) return { ok: true, errors: [] };
+
+  const result = importedObject?.manual_timing_pass_result || importedObject?.manualTimingPassResult || {};
+  const completedPassType = String(result?.completed_pass_type || result?.completedPassType || "").trim();
+  const activationPhrase = String(result?.activation_phrase || result?.activationPhrase || "").trim();
+
+  const errors = [];
+
+  if (completedPassType !== clickedPassType) {
+    errors.push(`manual_timing_pass_result.completed_pass_type должен быть ${clickedPassType}`);
+  }
+
+  if (activationPhrase !== stage.activation_phrase) {
+    errors.push(`Нужен activation_phrase: ${stage.activation_phrase}`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
 
 export function normalizeManualTimingWorkflow(workflow = {}, completedFallback = []) {
   const rawCompleted = Array.isArray(workflow?.completed_stages) ? workflow.completed_stages : completedFallback;
@@ -1516,10 +1546,28 @@ video_prompt, negative_prompt, sound_prompt оставить пустыми до
 КРИТЕРИЙ КАЧЕСТВА:
 Если по сцене нельзя представить одну ясную фотографию — сцена нарезана неправильно.
 Если сцена содержит два разных кадра — её нужно разделить.
-Если блок не объясняет этап истории — блок сделан неправильно.`;
+Если блок не объясняет этап истории — блок сделан неправильно.
+
+В самом конце JSON обязательно верни:
+"manual_timing_pass_result": {
+  "completed_pass_type": "semantic_story_cut",
+  "unlock_next_stage": "story_bible",
+  "activation_phrase": "SEMANTIC_STORY_CUT_DONE"
+}
+
+Без этого следующий этап не откроется.`;
 
 
-export const MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU = "GLOBAL STORY BIBLE / ОБЩИЙ ПАСПОРТ ИСТОРИИ. Это не перевод и не переразбивка сцен. Нужно создать общий story bible для всей истории целиком. Не менять audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, story_blocks и scenes. Не менять количество сцен и блоков. Нужно заполнить только верхнеуровневые поля общего описания проекта: project_story_summary_ru, project_core_theme_ru, project_drama_arc_ru, project_visual_bible_ru, project_style_lock_ru, project_world_lock_ru, project_character_identity_lock_ru, project_location_lock_ru, project_time_progression_ru, project_atmosphere_lock_ru, project_camera_language_ru, project_color_progression_ru, project_continuity_rules_ru, project_must_keep_same_ru, project_allowed_variation_ru, project_reference_prompt_en. Это описание потом должно использоваться как глобальная подсказка для всех блоков и сцен, чтобы вся история держала единый стиль, атмосферу, мир и continuity от первого блока до последнего.";
+export const MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU = `GLOBAL STORY BIBLE / ОБЩИЙ ПАСПОРТ ИСТОРИИ. Это не перевод и не переразбивка сцен. Нужно создать общий story bible для всей истории целиком. Не менять audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, story_blocks и scenes. Не менять количество сцен и блоков. Нужно заполнить только верхнеуровневые поля общего описания проекта: project_story_summary_ru, project_core_theme_ru, project_drama_arc_ru, project_visual_bible_ru, project_style_lock_ru, project_world_lock_ru, project_character_identity_lock_ru, project_location_lock_ru, project_time_progression_ru, project_atmosphere_lock_ru, project_camera_language_ru, project_color_progression_ru, project_continuity_rules_ru, project_must_keep_same_ru, project_allowed_variation_ru, project_reference_prompt_en. Это описание потом должно использоваться как глобальная подсказка для всех блоков и сцен, чтобы вся история держала единый стиль, атмосферу, мир и continuity от первого блока до последнего.
+
+В самом конце JSON обязательно верни:
+"manual_timing_pass_result": {
+  "completed_pass_type": "story_bible",
+  "unlock_next_stage": "block_storyboard",
+  "activation_phrase": "STORY_BIBLE_DONE"
+}
+
+Без этого следующий этап не откроется.`;
 
 export const MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU = `BLOCK STORYBOARD PASS / РАСКАДРОВКА БЛОКОВ.
 Это не Story Pass, не перевод и не переразбивка. Не менять audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids, story_block_id, story_blocks structure, scenes structure, количество сцен и блоков. video_prompt, negative_prompt, sound_prompt оставить пустыми.
@@ -1530,7 +1578,16 @@ export const MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU = `BLOCK STORYBOARD PAS
 
 В story_blocks заполни/сохрани: block_visual_bible_ru, block_style_lock_ru, block_location_lock_ru, block_time_of_day_ru, block_color_palette_ru, block_camera_language_ru, block_continuity_rules_ru, block_storyboard_summary_ru, block_reference_frame_prompt_en.
 
-В scenes заполни/сохрани: storyboard_frame_role_ru, source_image_prompt_en, source_image_prompt_ru, source_image_negative_prompt_en, i2v_prompt_en, i2v_negative_prompt_en, composition_ru, camera_angle_ru, subject_lock_ru, background_lock_ru, continuity_from_previous_scene_ru, must_keep_same_ru, allowed_variation_ru.`;
+В scenes заполни/сохрани: storyboard_frame_role_ru, source_image_prompt_en, source_image_prompt_ru, source_image_negative_prompt_en, i2v_prompt_en, i2v_negative_prompt_en, composition_ru, camera_angle_ru, subject_lock_ru, background_lock_ru, continuity_from_previous_scene_ru, must_keep_same_ru, allowed_variation_ru.
+
+В самом конце JSON обязательно верни:
+"manual_timing_pass_result": {
+  "completed_pass_type": "block_storyboard",
+  "unlock_next_stage": "director_board",
+  "activation_phrase": "BLOCK_STORYBOARD_DONE"
+}
+
+Без этого следующий этап не откроется.`;
 
 export function buildManualTimingStoryBiblePassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
@@ -1542,6 +1599,12 @@ export function buildManualTimingStoryBiblePassJson(project = {}) {
     chatgpt_task: MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU,
     manual_timing_workflow: workflowMeta.workflow,
     manual_timing_pass: workflowMeta.pass,
+    manual_timing_pass_result_required: {
+      completed_pass_type: "story_bible",
+      unlock_next_stage: "block_storyboard",
+      activation_phrase: "STORY_BIBLE_DONE",
+      rule_ru: "Верни этот блок только после заполнения общего паспорта истории. Без него блочная раскадровка не откроется.",
+    },
     split_type: "manual_story_bible_pass",
     format: exportJson.format,
     aspect_ratio: exportJson.aspect_ratio,
@@ -1563,6 +1626,12 @@ export function buildManualTimingBlockStoryboardPassJson(project = {}) {
     chatgpt_task: MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU,
     manual_timing_workflow: workflowMeta.workflow,
     manual_timing_pass: workflowMeta.pass,
+    manual_timing_pass_result_required: {
+      completed_pass_type: "block_storyboard",
+      unlock_next_stage: "director_board",
+      activation_phrase: "BLOCK_STORYBOARD_DONE",
+      rule_ru: "Верни этот блок только после заполнения блочной раскадровки. Без него режиссёрская доска не откроется.",
+    },
     split_type: "manual_block_storyboard_pass",
     format: exportJson.format,
     aspect_ratio: exportJson.aspect_ratio,
@@ -1633,6 +1702,12 @@ export function buildManualTimingStoryPassJson(project = {}) {
     chatgpt_task: MANUAL_TIMING_STORY_PASS_TASK_RU,
     manual_timing_workflow: workflowMeta.workflow,
     manual_timing_pass: workflowMeta.pass,
+    manual_timing_pass_result_required: {
+      completed_pass_type: "semantic_story_cut",
+      unlock_next_stage: "story_bible",
+      activation_phrase: "SEMANTIC_STORY_CUT_DONE",
+      rule_ru: "Верни этот блок только после полного заполнения смысловой нарезки. Без него следующий этап не откроется.",
+    },
     semantic_cut_rules: MANUAL_TIMING_SEMANTIC_CUT_RULES,
     story_pass_mode: "semantic_story_cut",
     split_type: "semantic_story_cut_pass",
