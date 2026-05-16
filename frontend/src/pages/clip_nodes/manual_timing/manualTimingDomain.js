@@ -25,6 +25,7 @@ export const MANUAL_TIMING_ENERGY = ["soft", "mid", "high"];
 export const MANUAL_TIMING_AI_WORKFLOW_TYPE = "manual_timing_ai_pipeline";
 export const MANUAL_TIMING_AI_WORKFLOW_VERSION = "1.0";
 export const MANUAL_TIMING_AI_PASS_VERSION = "1.0";
+export const MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE = "photostudio_manual_timing_current_project_backup";
 
 export const MANUAL_TIMING_AI_PASS_STAGES = [
   {
@@ -1682,6 +1683,7 @@ function isManualTimingStoryPassPayload(raw = {}) {
 }
 
 function isSemanticManualTimingStoryPassPayload(raw = {}) {
+  if (String(raw?.backup_type || raw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) return false;
   const passType = String(raw?.manual_timing_pass?.pass_type || raw?.manualTimingPass?.passType || "");
   const splitType = String(raw?.split_type || raw?.splitType || "");
   const storyPassMode = String(raw?.story_pass_mode || raw?.storyPassMode || "");
@@ -2361,6 +2363,124 @@ export function buildManualTimingSampleJson(project = {}) {
   };
 }
 
+
+function manualTimingTextFilled(value) {
+  return String(value || "").trim().length > 0;
+}
+
+function getManualTimingSceneSourcePhraseIds(scene = {}) {
+  return normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds);
+}
+
+function manualTimingRangesOverlap(aStart = 0, aEnd = 0, bStart = 0, bEnd = 0) {
+  const start = Math.max(Number(aStart || 0), Number(bStart || 0));
+  const end = Math.min(Number(aEnd || 0), Number(bEnd || 0));
+  return end - start > 0.001;
+}
+
+export function repairManualTimingSourcePhraseIdsFromTiming(scenes = [], audioPhrases = []) {
+  const normalizedScenes = Array.isArray(scenes) ? scenes : [];
+  const normalizedPhrases = normalizeManualTimingAudioPhrases(audioPhrases);
+  if (!normalizedScenes.length || !normalizedPhrases.length) return { scenes: normalizedScenes, repaired: false };
+
+  let repairedCount = 0;
+  const repairedScenes = normalizedScenes.map((scene) => {
+    const currentIds = getManualTimingSceneSourcePhraseIds(scene);
+    if (currentIds.length) return scene;
+    const startSec = Number(scene?.start_sec ?? scene?.startSec ?? 0);
+    const endSec = Number(scene?.end_sec ?? scene?.endSec ?? 0);
+    if (!(endSec > startSec)) return scene;
+    const sourcePhraseIds = normalizedPhrases
+      .filter((phrase) => manualTimingRangesOverlap(startSec, endSec, phrase.start_sec, phrase.end_sec))
+      .map((phrase) => String(phrase.phrase_id || "").trim())
+      .filter(Boolean);
+    if (!sourcePhraseIds.length) return scene;
+    repairedCount += 1;
+    return { ...scene, source_phrase_ids: sourcePhraseIds };
+  });
+
+  if (repairedCount > 0) {
+    console.info("[MANUAL TIMING SOURCE_PHRASE_IDS_REPAIRED]", {
+      sceneCount: normalizedScenes.length,
+      repairedSceneCount: repairedCount,
+      audioPhraseCount: normalizedPhrases.length,
+    });
+  }
+
+  return { scenes: repairedScenes, repaired: repairedCount > 0 };
+}
+
+export function inferManualTimingCompletedStages(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const scenes = Array.isArray(safeProject.scenes) ? safeProject.scenes : [];
+  const storyBlocks = normalizeManualTimingStoryBlocks(safeProject.story_blocks);
+  const completedStages = [];
+  const knownBlockId = String(MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id || "block_unknown");
+  const hasRealBlocks = storyBlocks.some((block) => {
+    const blockId = String(block?.block_id || block?.id || "").trim();
+    return blockId && blockId !== knownBlockId;
+  });
+  const semanticFields = [
+    "translated_text_ru",
+    "meaning_hint_ru",
+    "scene_goal_ru",
+    "photo_prompt_hint_ru",
+    "prompt_hint_ru",
+    "scene_role_in_block_ru",
+  ];
+  const scenesWithMeaning = scenes.filter((scene) => semanticFields.some((key) => manualTimingTextFilled(scene?.[key])));
+  const scenesWithSource = scenes.filter((scene) => getManualTimingSceneSourcePhraseIds(scene).length || manualTimingTextFilled(scene?.source_phrase_id));
+  const majoritySceneCount = Math.max(1, Math.ceil(scenes.length * 0.7));
+  if (scenes.length > 0 && hasRealBlocks && scenesWithMeaning.length >= majoritySceneCount && scenesWithSource.length >= majoritySceneCount) {
+    completedStages.push("semantic_story_cut");
+  }
+
+  const storyBibleRequired = ["project_story_summary_ru", "project_visual_bible_ru", "project_continuity_rules_ru"];
+  const storyBibleOptional = ["project_style_lock_ru", "project_world_lock_ru"];
+  if (
+    storyBibleRequired.every((key) => manualTimingTextFilled(safeProject?.[key]))
+    && storyBibleOptional.some((key) => manualTimingTextFilled(safeProject?.[key]))
+  ) {
+    completedStages.push("story_bible");
+  }
+
+  const storyboardFields = [
+    "storyboard_frame_role_ru",
+    "i2v_prompt_en",
+    "composition_ru",
+    "camera_angle_ru",
+    "subject_lock_ru",
+    "background_lock_ru",
+  ];
+  const scenesWithStoryboard = scenes.filter((scene) => (
+    manualTimingTextFilled(scene?.storyboard_frame_role_ru)
+    && (manualTimingTextFilled(scene?.source_image_prompt_en) || manualTimingTextFilled(scene?.source_image_prompt_ru))
+    && manualTimingTextFilled(scene?.i2v_prompt_en)
+    && storyboardFields.some((key) => manualTimingTextFilled(scene?.[key]))
+  ));
+  const blocksWithStoryboard = storyBlocks.filter((block) => manualTimingTextFilled(block?.block_visual_bible_ru) || manualTimingTextFilled(block?.block_storyboard_summary_ru));
+  if (scenes.length > 0 && scenesWithStoryboard.length >= majoritySceneCount && blocksWithStoryboard.length > 0) {
+    completedStages.push("block_storyboard");
+  }
+
+  if (completedStages.length) {
+    console.info("[MANUAL TIMING WORKFLOW_INFERRED]", {
+      completedStages,
+      sceneCount: scenes.length,
+      storyBlockCount: storyBlocks.length,
+    });
+  }
+  return completedStages;
+}
+
+function normalizeManualTimingWorkflowWithInferredFallback(safeRaw = {}, safeBase = {}, projectForInference = {}) {
+  const isCurrentTimingBackupImport = String(safeRaw?.backup_type || safeRaw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE;
+  const rawWorkflow = safeRaw?.manual_timing_workflow || safeRaw?.manualTimingWorkflow || (isCurrentTimingBackupImport ? undefined : safeBase?.manual_timing_workflow);
+  const hasCompletedStages = Array.isArray(rawWorkflow?.completed_stages) && rawWorkflow.completed_stages.length > 0;
+  const inferredCompletedStages = hasCompletedStages ? [] : inferManualTimingCompletedStages(projectForInference);
+  return normalizeManualTimingWorkflow(rawWorkflow, inferredCompletedStages);
+}
+
 export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {}) {
   const safeRaw = unwrapManualProjectBackupJson(raw && typeof raw === "object" ? raw : {});
   const safeBase = baseProject && typeof baseProject === "object" ? baseProject : {};
@@ -2368,7 +2488,8 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   const baseAudio = normalizeManualTimingAudio(safeRaw.audio || safeRaw.audio_metadata || safeBase.audio);
   const rawDuration = Number(safeRaw.audio_duration_sec ?? safeRaw.audioDurationSec ?? safeRaw.duration_sec ?? safeRaw.durationSec ?? safeRaw.audio?.duration_sec ?? safeRaw.audio_metadata?.duration_sec ?? 0);
   const durationSec = roundTimingSec(baseAudio.duration_sec || rawDuration || 0);
-  const isSemanticStoryCutImport = isSemanticManualTimingStoryPassPayload(safeRaw);
+  const isCurrentTimingBackupImport = String(safeRaw?.backup_type || safeRaw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE;
+  const isSemanticStoryCutImport = !isCurrentTimingBackupImport && isSemanticManualTimingStoryPassPayload(safeRaw);
   const rawStoryBlocksForImport = Array.isArray(safeRaw.story_blocks) ? safeRaw.story_blocks : (isSemanticStoryCutImport ? [] : safeBase.story_blocks);
   const rawHasUnknownStoryBlock = Array.isArray(rawStoryBlocksForImport) && rawStoryBlocksForImport.some((block) => String(block?.block_id || block?.blockId || block?.id || "") === MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id);
   const normalizedStoryBlocks = normalizeManualTimingStoryBlocks(rawStoryBlocksForImport);
@@ -2394,12 +2515,14 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
   if (Array.isArray(safeRaw.markers)) markerValues.push(...safeRaw.markers);
   const markers = normalizeManualTimingMarkers(markerValues, durationSec || importedScenes[importedScenes.length - 1]?.end_sec || 0);
   const finalDuration = durationSec || markers[markers.length - 1] || 0;
-  const markerScenes = isSemanticStoryCutImport
+  const markerScenes = (isSemanticStoryCutImport || isCurrentTimingBackupImport)
     ? importedScenes
     : (markers.length >= 2
       ? buildManualTimingScenesFromMarkers(markers, importedScenes, { durationSec: finalDuration, preserveSceneIds: true })
       : importedScenes);
-  const scenes = hydrateManualTimingScenesWithStoryBlocks(markerScenes, storyBlocks);
+  const sourcePhraseRepair = repairManualTimingSourcePhraseIdsFromTiming(markerScenes, audioPhrases);
+  const scenes = hydrateManualTimingScenesWithStoryBlocks(sourcePhraseRepair.scenes, storyBlocks);
+  const inferenceProject = { ...safeBase, ...safeRaw, scenes, story_blocks: storyBlocks, audio_phrases: audioPhrases };
 
   return {
     ...getDefaultManualTimingNodeData(),
@@ -2427,7 +2550,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     audio_mode: String(safeRaw.audio_mode || safeBase.audio_mode || ""),
     audio_phrases: audioPhrases,
     scenes,
-    manual_timing_workflow: normalizeManualTimingWorkflow(safeRaw.manual_timing_workflow || safeRaw.manualTimingWorkflow || safeBase.manual_timing_workflow),
+    manual_timing_workflow: normalizeManualTimingWorkflowWithInferredFallback(safeRaw, safeBase, inferenceProject),
     selectedSceneId: String(safeRaw.selectedSceneId || scenes[0]?.scene_id || ""),
     updatedAt: safeRaw.updatedAt || Date.now(),
   };

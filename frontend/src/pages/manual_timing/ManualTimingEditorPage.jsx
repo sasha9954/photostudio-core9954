@@ -35,7 +35,9 @@ import {
   buildGapAwareScenesFromAudioPhrases,
   buildManualTimingAiSplitRequestJson,
   buildManualTimingBlockStoryboardPassJson,
+  buildManualTimingClipPassJson,
   buildManualTimingExportJson,
+  buildManualTimingPodcastPassJson,
   buildManualTimingStoryBiblePassJson,
   buildManualTimingStoryPassJson,
   buildManualTimingSampleJson,
@@ -46,6 +48,7 @@ import {
   formatTimingSec,
   getDefaultManualTimingNodeData,
   getManualTimingSceneDurationWarning,
+  inferManualTimingCompletedStages,
   getManualTimingAudioSignature,
   getManualTimingPhrasesForScene,
   hydrateManualTimingScenesWithStoryBlocks,
@@ -908,6 +911,8 @@ function buildManualTimingCurrentProjectBackupPayload(project = {}, createdAt = 
     format: project?.format,
     aspect_ratio: project?.aspect_ratio,
     format_locked: project?.format_locked,
+    timing_status: project?.timing_status,
+    manual_timing_workflow: normalizeManualTimingWorkflow(project?.manual_timing_workflow),
     audio: project?.audio,
     audio_metadata: project?.audio_metadata,
     audio_duration_sec: project?.audio_duration_sec ?? getManualTimingCurrentProjectAudioDuration(project),
@@ -1525,11 +1530,13 @@ const MANUAL_STORY_BIBLE_PROJECT_KEYS = [
 ];
 
 function getManualTimingPayloadPassType(rawObject = {}) {
+  if (String(rawObject?.backup_type || rawObject?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) return "";
   const object = unwrapManualProjectBackupJson(rawObject);
   return String(object?.manual_timing_pass?.pass_type || object?.manualTimingPass?.passType || "").trim();
 }
 
 function getManualTimingJsonPassType(rawObject = {}) {
+  if (String(rawObject?.backup_type || rawObject?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) return "timing_backup";
   const object = unwrapManualProjectBackupJson(rawObject);
   const payloadPassType = getManualTimingPayloadPassType(object);
   if (payloadPassType) return payloadPassType;
@@ -1928,12 +1935,14 @@ export default function ManualTimingEditorPage() {
   const isMusicClip = modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE;
   const isPodcastDialogue = modeConfig.mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE;
   const canRecoverPodcastProjectToStory = isPodcastDialogue && scenes.length > 0 && Boolean(audio.url || durationSec > 0);
-  const manualTimingWorkflow = normalizeManualTimingWorkflow(project.manual_timing_workflow);
+  const hasWorkflowCompletedStages = Array.isArray(project?.manual_timing_workflow?.completed_stages) && project.manual_timing_workflow.completed_stages.length > 0;
+  const inferredCompletedStages = hasWorkflowCompletedStages ? [] : inferManualTimingCompletedStages(project);
+  const manualTimingWorkflow = normalizeManualTimingWorkflow(project.manual_timing_workflow, inferredCompletedStages);
   const manualTimingStageStatuses = MANUAL_TIMING_AI_PASS_STAGES.reduce((acc, stage) => {
     acc[stage.pass_type] = getManualTimingStageStatus(manualTimingWorkflow, stage.pass_type, scenes);
     return acc;
   }, {});
-  const semanticStoryCutReady = isManualTimingStageAvailable(manualTimingWorkflow, "semantic_story_cut", scenes);
+  const semanticStoryCutReady = isManualTimingStageAvailable(manualTimingWorkflow, "semantic_story_cut", scenes) || audioPhrases.length > 0;
   const storyBiblePassReady = isManualTimingStageAvailable(manualTimingWorkflow, "story_bible", scenes);
   const blockStoryboardPassReady = isManualTimingStageAvailable(manualTimingWorkflow, "block_storyboard", scenes);
   const storyBibleButtonTitle = storyBiblePassReady ? "Скопировать JSON для библии истории" : "Сначала примените этап: Смысловая нарезка";
@@ -4119,7 +4128,19 @@ export default function ManualTimingEditorPage() {
     }
   };
 
-  const onCopyModePassJson = async () => copyManualTimingPassJson("semantic_story_cut", buildManualTimingStoryPassJson);
+  const buildManualTimingModePassJson = (sourceProject = {}) => {
+    const mode = String(sourceProject?.project_mode || sourceProject?.projectMode || "");
+    if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) return buildManualTimingClipPassJson(sourceProject);
+    if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return buildManualTimingPodcastPassJson(sourceProject);
+    return buildManualTimingStoryPassJson(sourceProject);
+  };
+
+  const onCopyModePassJson = async () => {
+    const mode = String(project?.project_mode || project?.projectMode || "");
+    if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) return copyManualTimingPassJson("music_clip", buildManualTimingModePassJson);
+    if (mode === MANUAL_TIMING_PODCAST_DIALOGUE_MODE) return copyManualTimingPassJson("podcast_dialogue", buildManualTimingModePassJson);
+    return copyManualTimingPassJson("semantic_story_cut", buildManualTimingModePassJson);
+  };
 
   const onCopyStoryBiblePassJson = async () => copyManualTimingPassJson("story_bible", buildManualTimingStoryBiblePassJson);
 
@@ -4145,6 +4166,9 @@ export default function ManualTimingEditorPage() {
   };
 
   const validateManualTimingClickedPass = (rawObject = {}, clickedPassType = "") => {
+    if (String(rawObject?.backup_type || rawObject?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
+      return { ok: true, importedObject: rawObject, payloadPassType: "timing_backup", isCurrentTimingBackup: true };
+    }
     const importedObject = unwrapManualProjectBackupJson(rawObject);
     const explicitPassType = getManualTimingPayloadPassType(importedObject);
     if (!explicitPassType) {
@@ -4226,6 +4250,10 @@ export default function ManualTimingEditorPage() {
   const onApplyStoryCutJson = () => {
     try {
       const raw = parseJsonImportText();
+      if (String(raw?.backup_type || raw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
+        applyImportedTimingJson(raw, "");
+        return;
+      }
       const passValidation = validateManualTimingClickedPass(raw, "semantic_story_cut");
       if (!passValidation.ok) return;
       applyImportedTimingJson(raw, "semantic_story_cut");
@@ -4237,6 +4265,10 @@ export default function ManualTimingEditorPage() {
   const onApplyStoryBibleJson = () => {
     try {
       const raw = parseJsonImportText();
+      if (String(raw?.backup_type || raw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
+        applyImportedTimingJson(raw, "");
+        return;
+      }
       applyImportedStoryBibleJson(raw);
     } catch (error) {
       setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
@@ -4246,6 +4278,10 @@ export default function ManualTimingEditorPage() {
   const onApplyBlockStoryboardJson = () => {
     try {
       const raw = parseJsonImportText();
+      if (String(raw?.backup_type || raw?.backupType || "") === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE) {
+        applyImportedTimingJson(raw, "");
+        return;
+      }
       const passValidation = validateManualTimingClickedPass(raw, "block_storyboard");
       if (!passValidation.ok) return;
       applyImportedTimingJson(raw, "block_storyboard");
@@ -4255,9 +4291,12 @@ export default function ManualTimingEditorPage() {
   };
 
   const applyImportedTimingJson = (rawObject, clickedPassType = "") => {
-    const isBackupImport = rawObject?.backup_type === "photostudio_manual_project_backup";
+    const backupType = String(rawObject?.backup_type || rawObject?.backupType || "");
+    const isCurrentTimingBackupImport = backupType === MANUAL_TIMING_CURRENT_PROJECT_BACKUP_TYPE;
+    const isBackupImport = backupType === "photostudio_manual_project_backup" || isCurrentTimingBackupImport;
+    const stageToComplete = isCurrentTimingBackupImport ? "" : clickedPassType;
     if (!isBackupImport && mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
-    const importedObject = unwrapManualProjectBackupJson(rawObject);
+    const importedObject = isCurrentTimingBackupImport ? rawObject : unwrapManualProjectBackupJson(rawObject);
     if (!isBackupImport) {
       let validations = [];
       if (clickedPassType === "semantic_story_cut") {
@@ -4301,13 +4340,31 @@ export default function ManualTimingEditorPage() {
       }
     }
     const importedProject = normalizeManualTimingProjectFromJson(importedObject, project);
-    const nextProject = clickedPassType ? buildProjectWithCompletedManualTimingStage(importedProject, clickedPassType) : importedProject;
+    const nextProject = stageToComplete ? buildProjectWithCompletedManualTimingStage(importedProject, stageToComplete) : importedProject;
     persist(nextProject);
-    if (clickedPassType) logManualTimingPassApplied(nextProject, clickedPassType);
+    if (stageToComplete) logManualTimingPassApplied(nextProject, stageToComplete);
+    if (isCurrentTimingBackupImport) {
+      console.info("[MANUAL TIMING BACKUP_RESTORED]", {
+        sceneCount: Array.isArray(nextProject?.scenes) ? nextProject.scenes.length : 0,
+        audioPhraseCount: Array.isArray(nextProject?.audio_phrases) ? nextProject.audio_phrases.length : 0,
+        completedStages: nextProject?.manual_timing_workflow?.completed_stages || [],
+      });
+    }
     setJsonImportText(JSON.stringify(buildManualTimingExportJson(nextProject), null, 2));
-    setCopyStatus(clickedPassType ? `Этап “${getManualTimingPassNameRu(clickedPassType)}” применён` : `JSON загружен: сцен ${nextProject.scenes?.length || 0}`);
-    window.setTimeout(() => setCopyStatus(""), 1800);
+    setCopyStatus(isCurrentTimingBackupImport
+      ? `Бэкап тайминга восстановлен: сцен ${nextProject.scenes?.length || 0}, ASR-фраз ${nextProject.audio_phrases?.length || 0}`
+      : (stageToComplete ? `Этап “${getManualTimingPassNameRu(stageToComplete)}” применён` : `JSON загружен: сцен ${nextProject.scenes?.length || 0}`));
+    window.setTimeout(() => setCopyStatus(""), isCurrentTimingBackupImport ? 2600 : 1800);
     setAudioTime(0, { pause: true, clearBound: true });
+  };
+
+  const applyImportedTimingJsonFromMode = () => {
+    try {
+      const raw = parseJsonImportText();
+      applyImportedTimingJson(raw, "");
+    } catch (error) {
+      setCopyStatus(`Ошибка JSON: ${error?.message || "неверный формат"}`);
+    }
   };
 
   const onImportTimingJson = onApplyStoryCutJson;
@@ -5167,21 +5224,27 @@ export default function ManualTimingEditorPage() {
               <input type="file" accept="application/json,.json,text/plain" onChange={onImportJsonFile} disabled={!isProjectModeSelected} />
             </label>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadCurrentTimingBackup}>Скачать бэкап тайминга</button>
-            <div className="manualTimingJsonPassGroup">
-              <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.semantic_story_cut}</b></span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
-            </div>
-            <div className="manualTimingJsonPassGroup">
-              <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.story_bible}</b></span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.copy_label_ru}</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.apply_label_ru}</button>
-            </div>
-            <div className="manualTimingJsonPassGroup">
-              <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.block_storyboard}</b></span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.copy_label_ru}</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.apply_label_ru}</button>
-            </div>
+            {isStoryVoiceover ? <>
+              <div className="manualTimingJsonPassGroup">
+                <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.semantic_story_cut}</b></span>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
+              </div>
+              <div className="manualTimingJsonPassGroup">
+                <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.story_bible}</b></span>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.copy_label_ru}</button>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.apply_label_ru}</button>
+              </div>
+              <div className="manualTimingJsonPassGroup">
+                <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.block_storyboard}</b></span>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.copy_label_ru}</button>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.apply_label_ru}</button>
+              </div>
+            </> : <div className="manualTimingJsonPassGroup">
+              <span>{workflowLabels.panelTitle}</span>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+              <button className="clipSB_btn clipSB_btnPrimary" onClick={applyImportedTimingJsonFromMode} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
+            </div>}
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
