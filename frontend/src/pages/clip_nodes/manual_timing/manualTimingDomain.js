@@ -21,6 +21,104 @@ export const MANUAL_TIMING_SECTIONS = ["intro", "verse", "chorus", "bridge", "in
 export const MANUAL_TIMING_ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text"];
 export const MANUAL_TIMING_ENERGY = ["soft", "mid", "high"];
 
+
+export const MANUAL_TIMING_AI_WORKFLOW_TYPE = "manual_timing_ai_pipeline";
+export const MANUAL_TIMING_AI_WORKFLOW_VERSION = "1.0";
+export const MANUAL_TIMING_AI_PASS_VERSION = "1.0";
+
+export const MANUAL_TIMING_AI_PASS_STAGES = [
+  {
+    pass_type: "semantic_story_cut",
+    pass_name_ru: "Смысловая нарезка",
+    stage_label_ru: "1 · Смысловая нарезка",
+    copy_label_ru: "Скопировать смысловую нарезку",
+    apply_label_ru: "Применить смысловую нарезку",
+    requires: [],
+    unlocks: ["story_bible"],
+    next_stage: "story_bible",
+  },
+  {
+    pass_type: "story_bible",
+    pass_name_ru: "Библия истории",
+    stage_label_ru: "2 · Библия истории",
+    copy_label_ru: "Скопировать библию истории",
+    apply_label_ru: "Применить библию истории",
+    requires: ["semantic_story_cut"],
+    unlocks: ["block_storyboard"],
+    next_stage: "block_storyboard",
+  },
+  {
+    pass_type: "block_storyboard",
+    pass_name_ru: "Блочная раскадровка",
+    stage_label_ru: "3 · Блочная раскадровка",
+    copy_label_ru: "Скопировать блочную раскадровку",
+    apply_label_ru: "Применить блочную раскадровку",
+    requires: ["semantic_story_cut", "story_bible"],
+    unlocks: ["director_board"],
+    next_stage: "director_board",
+  },
+];
+
+export const MANUAL_TIMING_AI_PASS_BY_TYPE = MANUAL_TIMING_AI_PASS_STAGES.reduce((acc, stage) => {
+  acc[stage.pass_type] = stage;
+  return acc;
+}, {});
+
+export function normalizeManualTimingWorkflow(workflow = {}, completedFallback = []) {
+  const rawCompleted = Array.isArray(workflow?.completed_stages) ? workflow.completed_stages : completedFallback;
+  const completedStages = [...new Set((Array.isArray(rawCompleted) ? rawCompleted : [])
+    .map((stage) => String(stage || "").trim())
+    .filter((stage) => Boolean(MANUAL_TIMING_AI_PASS_BY_TYPE[stage]))
+  )];
+  const currentStage = String(workflow?.current_stage || "").trim()
+    || (completedStages.includes("block_storyboard") ? "director_board"
+      : completedStages.includes("story_bible") ? "block_storyboard"
+        : completedStages.includes("semantic_story_cut") ? "story_bible"
+          : "semantic_story_cut");
+  const lockedStages = MANUAL_TIMING_AI_PASS_STAGES
+    .filter((stage) => !completedStages.includes(stage.pass_type)
+      && stage.requires.some((required) => !completedStages.includes(required)))
+    .map((stage) => stage.pass_type);
+  return {
+    workflow_type: MANUAL_TIMING_AI_WORKFLOW_TYPE,
+    workflow_version: MANUAL_TIMING_AI_WORKFLOW_VERSION,
+    current_stage: currentStage,
+    completed_stages: completedStages,
+    locked_stages: lockedStages,
+  };
+}
+
+export function buildManualTimingWorkflowForPass(project = {}, passType = "semantic_story_cut") {
+  const workflow = normalizeManualTimingWorkflow(project?.manual_timing_workflow);
+  const passMeta = MANUAL_TIMING_AI_PASS_BY_TYPE[passType] || MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut;
+  return {
+    workflow: {
+      ...workflow,
+      current_stage: workflow.current_stage || passMeta.pass_type,
+    },
+    pass: {
+      pass_type: passMeta.pass_type,
+      pass_name_ru: passMeta.pass_name_ru,
+      pass_version: MANUAL_TIMING_AI_PASS_VERSION,
+      status: "ready_for_ai",
+      requires: [...passMeta.requires],
+      unlocks: [...passMeta.unlocks],
+    },
+  };
+}
+
+export function completeManualTimingWorkflowStage(project = {}, passType = "") {
+  const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[passType];
+  const workflow = normalizeManualTimingWorkflow(project?.manual_timing_workflow);
+  if (!stage) return workflow;
+  const completedStages = [...new Set([...workflow.completed_stages, stage.pass_type])];
+  return normalizeManualTimingWorkflow({
+    ...workflow,
+    current_stage: stage.next_stage,
+    completed_stages: completedStages,
+  });
+}
+
 export const MANUAL_TIMING_UNKNOWN_STORY_BLOCK = {
   block_id: "block_unknown",
   title_ru: "Без блока",
@@ -190,6 +288,7 @@ export function getDefaultManualTimingNodeData() {
     story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
     audio_phrases: [],
     scenes: [],
+    manual_timing_workflow: normalizeManualTimingWorkflow(),
     manual_scene_edits: false,
     manualSceneEdits: false,
     lastManualEditReason: "",
@@ -1185,6 +1284,7 @@ export function buildManualTimingAiSplitRequestJson(project = {}) {
       normalizeManualTimingAudioPhrases(safeProject.audio_phrases).some((phrase) => String(phrase.status || "") === "asr_raw" || String(phrase.source || "") === "asr")
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
+    manual_timing_workflow: normalizeManualTimingWorkflow(safeProject.manual_timing_workflow),
     mode: "manual_clip_board",
     project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
     project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
@@ -1435,9 +1535,12 @@ export function buildManualTimingStoryBiblePassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
   const exportJson = buildManualTimingExportJson(safeProject);
+  const workflowMeta = buildManualTimingWorkflowForPass(safeProject, "story_bible");
 
   return {
     chatgpt_task: MANUAL_TIMING_STORY_BIBLE_PASS_TASK_RU,
+    manual_timing_workflow: workflowMeta.workflow,
+    manual_timing_pass: workflowMeta.pass,
     split_type: "manual_story_bible_pass",
     format: exportJson.format,
     aspect_ratio: exportJson.aspect_ratio,
@@ -1454,8 +1557,11 @@ export function buildManualTimingBlockStoryboardPassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
   const exportJson = buildManualTimingExportJson(safeProject);
+  const workflowMeta = buildManualTimingWorkflowForPass(safeProject, "block_storyboard");
   return {
     chatgpt_task: MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU,
+    manual_timing_workflow: workflowMeta.workflow,
+    manual_timing_pass: workflowMeta.pass,
     split_type: "manual_block_storyboard_pass",
     format: exportJson.format,
     aspect_ratio: exportJson.aspect_ratio,
@@ -1520,9 +1626,12 @@ export function buildManualTimingStoryPassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
   const exportJson = buildManualTimingExportJson(safeProject);
+  const workflowMeta = buildManualTimingWorkflowForPass(safeProject, "semantic_story_cut");
 
   return {
     chatgpt_task: MANUAL_TIMING_STORY_PASS_TASK_RU,
+    manual_timing_workflow: workflowMeta.workflow,
+    manual_timing_pass: workflowMeta.pass,
     semantic_cut_rules: MANUAL_TIMING_SEMANTIC_CUT_RULES,
     story_pass_mode: "semantic_story_cut",
     split_type: "semantic_story_cut_pass",
@@ -1557,11 +1666,13 @@ function sameManualTimingJson(a, b) {
 }
 
 function isManualTimingStoryPassPayload(raw = {}) {
+  const passType = String(raw?.manual_timing_pass?.pass_type || raw?.manualTimingPass?.passType || "");
   const splitType = String(raw?.split_type || raw?.splitType || "");
   const task = typeof raw?.chatgpt_task === "string"
     ? raw.chatgpt_task
     : JSON.stringify(raw?.chatgpt_task || "");
-  return splitType === "asr_gap_aware_story_pass"
+  return passType === "semantic_story_cut"
+    || splitType === "asr_gap_aware_story_pass"
     || splitType === "semantic_story_cut_pass"
     || String(raw?.story_pass_mode || raw?.storyPassMode || "") === "semantic_story_cut"
     || task.includes("SEMANTIC STORY CUT PASS")
@@ -1571,12 +1682,14 @@ function isManualTimingStoryPassPayload(raw = {}) {
 }
 
 function isSemanticManualTimingStoryPassPayload(raw = {}) {
+  const passType = String(raw?.manual_timing_pass?.pass_type || raw?.manualTimingPass?.passType || "");
   const splitType = String(raw?.split_type || raw?.splitType || "");
   const storyPassMode = String(raw?.story_pass_mode || raw?.storyPassMode || "");
   const task = typeof raw?.chatgpt_task === "string"
     ? raw.chatgpt_task
     : JSON.stringify(raw?.chatgpt_task || "");
-  return splitType === "semantic_story_cut_pass"
+  return passType === "semantic_story_cut"
+    || splitType === "semantic_story_cut_pass"
     || storyPassMode === "semantic_story_cut"
     || task.includes("SEMANTIC STORY CUT PASS")
     || task.includes("СМЫСЛОВАЯ НАРЕЗКА ИСТОРИИ");
@@ -1623,17 +1736,20 @@ function isManualTimingSilentBrollScene(scene = {}, rawScene = {}) {
 }
 
 function isManualTimingStoryBiblePassPayload(raw = {}) {
+  const passType = String(raw?.manual_timing_pass?.pass_type || raw?.manualTimingPass?.passType || "");
   const splitType = String(raw?.split_type || raw?.splitType || "");
   const task = typeof raw?.chatgpt_task === "string"
     ? raw.chatgpt_task
     : JSON.stringify(raw?.chatgpt_task || "");
-  return splitType === "manual_story_bible_pass"
+  return passType === "story_bible"
+    || splitType === "manual_story_bible_pass"
     || task.includes("GLOBAL STORY BIBLE")
     || task.includes("ОБЩИЙ ПАСПОРТ ИСТОРИИ");
 }
 
 function isManualTimingBlockStoryboardPassPayload(raw = {}) {
-  return String(raw?.split_type || raw?.splitType || "") === "manual_block_storyboard_pass";
+  const passType = String(raw?.manual_timing_pass?.pass_type || raw?.manualTimingPass?.passType || "");
+  return passType === "block_storyboard" || String(raw?.split_type || raw?.splitType || "") === "manual_block_storyboard_pass";
 }
 
 export function validateManualTimingStoryBiblePassImport(raw = {}, baseProject = {}) {
@@ -2229,6 +2345,7 @@ export function buildManualTimingSampleJson(project = {}) {
       audioPhrases.some((phrase) => String(phrase.status || "") === "asr_raw" || String(phrase.source || "") === "asr")
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
+    manual_timing_workflow: normalizeManualTimingWorkflow(safeProject.manual_timing_workflow),
     mode: "manual_clip_board",
     project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
     project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
@@ -2310,6 +2427,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     audio_mode: String(safeRaw.audio_mode || safeBase.audio_mode || ""),
     audio_phrases: audioPhrases,
     scenes,
+    manual_timing_workflow: normalizeManualTimingWorkflow(safeRaw.manual_timing_workflow || safeRaw.manualTimingWorkflow || safeBase.manual_timing_workflow),
     selectedSceneId: String(safeRaw.selectedSceneId || scenes[0]?.scene_id || ""),
     updatedAt: safeRaw.updatedAt || Date.now(),
   };
@@ -2595,6 +2713,7 @@ export function buildManualTimingExportJson(project = {}) {
       audio_phrases.some((phrase) => String(phrase.status || "") === "asr_raw" || String(phrase.source || "") === "asr")
     ),
     prep_template_meta: STORY_PREP_TEMPLATE_META,
+    manual_timing_workflow: normalizeManualTimingWorkflow(safeProject.manual_timing_workflow),
     mode: "manual_clip_board",
     project_mode: String(safeProject.project_mode || safeProject.projectMode || ""),
     project_kind: String(safeProject.project_kind || safeProject.projectKind || ""),
