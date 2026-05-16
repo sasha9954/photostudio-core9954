@@ -1505,7 +1505,7 @@ function getManualTimingWorkflowLabels(mode = "") {
     applyPass: "Применить смысловую нарезку",
     insertPass: "Вставить смысловую нарезку",
     panelTitle: "AI JSON workflow",
-    panelHint: "Вставь JSON нужного этапа: смысловая нарезка, библия истории или блочная раскадровка. video_prompt/negative_prompt/sound_prompt остаются пустыми до отдельного video-pass.",
+    panelHint: "Вставь JSON нужного этапа: смысловая нарезка, библия истории или блочная раскадровка. video_prompt / negative_prompt / sound_prompt остаются пустыми до отдельного video-pass.",
     placeholder: "Вставь сюда JSON нужного этапа Manual Timing с manual_timing_pass.pass_type...",
   };
 }
@@ -1557,14 +1557,20 @@ function getManualTimingPassNameRu(passType = "") {
 function getManualTimingStageStatus(workflow = {}, passType = "", scenes = []) {
   const completedStages = Array.isArray(workflow?.completed_stages) ? workflow.completed_stages : [];
   if (completedStages.includes(passType)) return "применён";
-  if (passType === "semantic_story_cut") return scenes.length ? "готов" : "заблокирован";
+  if (passType === "semantic_story_cut") return scenes.length ? "готов к AI" : "заблокирован";
   const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[passType];
   const ready = stage?.requires?.every((required) => completedStages.includes(required));
-  return ready ? "готов" : "заблокирован";
+  return ready ? "готов к AI" : "заблокирован";
 }
 
 function isManualTimingStageAvailable(workflow = {}, passType = "", scenes = []) {
   return getManualTimingStageStatus(workflow, passType, scenes) !== "заблокирован";
+}
+
+function getManualTimingStageStatusClass(status = "") {
+  if (status === "применён") return "manualTimingAiStageDone";
+  if (status === "готов к AI") return "manualTimingAiStageReady";
+  return "manualTimingAiStageLocked";
 }
 
 function getCompactWarningItems(project = {}, warnings = []) {
@@ -5196,68 +5202,93 @@ export default function ManualTimingEditorPage() {
             <span>{workflowLabels.panelHint}</span>
             {canRecoverPodcastProjectToStory ? <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onRecoverPodcastProjectToStory}>Вернуть режим: История</button> : null}
           </div>
-          <details className="manualTimingJsonHelpBox">
-            <summary>Как пользоваться JSON-проходами по порядку</summary>
-            <div className="manualTimingJsonHelpGrid">
+          <details className="manualTimingJsonHelpBox manualTimingAiHelpBox">
+            <summary>Как пользоваться AI JSON workflow</summary>
+            <div className="manualTimingAiHelpIntro">
+              Этот workflow нужен, чтобы поэтапно подготовить историю для режиссёрской доски. Каждый этап делается отдельно: сначала смысл сцен, потом общий паспорт истории, потом блочная раскадровка.
+            </div>
+            <div className="manualTimingJsonHelpGrid manualTimingAiHelpGrid">
               <div className="manualTimingJsonHelpStep">
                 <b>1 · Audio Phrase Map</b>
-                <span>Запусти ASR. Он создаёт audio_phrases с таймкодами речи. Это техническая карта речи, её не отправляем в доску.</span>
+                <span>Сначала загрузи аудио и запусти ASR. Это создаёт audio_phrases — техническую карту речи с таймкодами.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
                 <b>2 · Собрать сцены</b>
-                <span>Локально собираются черновые scenes из ASR с паузами. После этого копируй JSON “Смысловая нарезка” и скидывай мне/Gemini.</span>
+                <span>Собери черновые сцены из ASR. После этого у тебя появляется база для AI-этапов.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
                 <b>3 · Смысловая нарезка</b>
-                <span>Я/Gemini заполняю смысл сцен и story_blocks. Вставь ответ в это же поле и нажми “Применить смысловую нарезку”.</span>
+                <span>Нажми “Скопировать смысловую нарезку”, отправь JSON в ChatGPT/Gemini, затем вставь Semantic Story Cut JSON и нажми “Применить смысловую нарезку”. Этап заполняет смысл сцен, story_blocks, translated_text_ru, meaning_hint_ru, scene_goal_ru, photo_prompt_hint_ru, prompt_hint_ru и другие смысловые поля. video_prompt / negative_prompt / sound_prompt здесь ещё не заполняются.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
                 <b>4 · Библия истории</b>
-                <span>После смысловой нарезки копируй JSON “Библия истории” и скидывай мне/Gemini. Вставь готовый паспорт и нажми “Применить библию истории”. Он обновляет только project_* поля.</span>
+                <span>После смысловой нарезки станет доступна “Библия истории”. Скопируй JSON, отправь в ChatGPT/Gemini, затем вставь ответ и нажми “Применить библию истории”. Этап обновляет только project_* поля: project_story_summary_ru, visual/style/world/continuity lock и общий паспорт истории. Сцены, тайминги и ASR-фразы он не меняет.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
-                <b>5 · Подтвердить</b>
-                <span>Когда Story Cut и Story Bible применены, нажми “Подтвердить”. Так ты фиксируешь тайминг перед созданием доски.</span>
+                <b>5 · Блочная раскадровка</b>
+                <span>После библии истории станет доступна “Блочная раскадровка”. Скопируй JSON, отправь в ChatGPT/Gemini, затем вставь ответ и нажми “Применить блочную раскадровку”. Этап готовит block_visual_bible_ru, block_storyboard_summary_ru, storyboard_frame_role_ru, source_image_prompt_en/ru, i2v_prompt_en, composition_ru, camera_angle_ru, subject/background lock и другие storyboard-поля.</span>
               </div>
               <div className="manualTimingJsonHelpStep">
-                <b>6 · Создать доску</b>
-                <span>Нажми “Создать доску”. В доску уходят готовые смысловые сцены, блоки, общий стиль и world/continuity-паспорт.</span>
+                <b>6 · Подтвердить тайминг</b>
+                <span>Когда нужные этапы применены и всё выглядит правильно — подтверди тайминг.</span>
+              </div>
+              <div className="manualTimingJsonHelpStep">
+                <b>7 · Открыть режиссёрскую доску</b>
+                <span>После блочной раскадровки и подтверждения тайминга можно переходить в Director Board / Storyboard.</span>
               </div>
             </div>
-            <div className="manualTimingJsonHelpNote">
-              <b>Важно:</b> “Смысловая нарезка” заполняет смысл сцен и story_blocks. “Библия истории” не трогает сцены, тайминги, audio_phrases и story_blocks — только верхние project_* поля. “Блочная раскадровка” — отдельный проход подготовки доски.
+            <div className="manualTimingJsonHelpNote manualTimingAiHelpNote">
+              <b>Важно:</b> Current timing backup — это не AI-pass, а резервная копия для восстановления проекта. AI JSON этапы применяются только через соответствующие кнопки этапов. Если вставлен JSON не того этапа, нужно нажимать правильную кнопку применения.
             </div>
           </details>
-          <div className="manualTimingJsonActions manualTimingJsonActionsV21">
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)} disabled={!isProjectModeSelected}>
-              {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить / показать JSON"}
-            </button>
-            <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!isProjectModeSelected ? "isDisabled" : ""}`}>
-              Импорт файла JSON
-              <input type="file" accept="application/json,.json,text/plain" onChange={onImportJsonFile} disabled={!isProjectModeSelected} />
-            </label>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadCurrentTimingBackup}>Скачать бэкап тайминга</button>
-            {isStoryVoiceover ? <>
-              <div className="manualTimingJsonPassGroup">
-                <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.semantic_story_cut}</b></span>
-                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
-                <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
+          <div className="manualTimingAiWorkflow">
+            <div className="manualTimingJsonActions manualTimingJsonActionsV21 manualTimingAiWorkflowTopActions">
+              <button className="clipSB_btn clipSB_btnSecondary" onClick={() => setIsJsonImportOpen((value) => !value)} disabled={!isProjectModeSelected}>
+                {isJsonImportOpen ? "Скрыть поле JSON" : "Вставить / показать JSON"}
+              </button>
+              <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!isProjectModeSelected ? "isDisabled" : ""}`}>
+                Импорт файла JSON
+                <input type="file" accept="application/json,.json,text/plain" onChange={onImportJsonFile} disabled={!isProjectModeSelected} />
+              </label>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadCurrentTimingBackup}>Скачать бэкап тайминга</button>
+              {!isStoryVoiceover ? <div className="manualTimingJsonPassGroup">
+                <span>{workflowLabels.panelTitle}</span>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
+                <button className="clipSB_btn clipSB_btnPrimary" onClick={applyImportedTimingJsonFromMode} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
+              </div> : null}
+            </div>
+            {isStoryVoiceover ? <div className="manualTimingAiStages">
+              <div className={`manualTimingAiStageCard ${getManualTimingStageStatusClass(manualTimingStageStatuses.semantic_story_cut)}`}>
+                <div className="manualTimingAiStageHeader">
+                  <span className="manualTimingAiStageTitle">{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.stage_label_ru}</span>
+                  <span className="manualTimingAiStageStatus">{manualTimingStageStatuses.semantic_story_cut}</span>
+                </div>
+                <div className="manualTimingAiStageActions">
+                  <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
+                  <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
+                </div>
               </div>
-              <div className="manualTimingJsonPassGroup">
-                <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.story_bible}</b></span>
-                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.copy_label_ru}</button>
-                <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.apply_label_ru}</button>
+              <div className={`manualTimingAiStageCard ${getManualTimingStageStatusClass(manualTimingStageStatuses.story_bible)}`}>
+                <div className="manualTimingAiStageHeader">
+                  <span className="manualTimingAiStageTitle">{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.stage_label_ru}</span>
+                  <span className="manualTimingAiStageStatus">{manualTimingStageStatuses.story_bible}</span>
+                </div>
+                <div className="manualTimingAiStageActions">
+                  <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onCopyStoryBiblePassJson} disabled={mainActionsDisabled || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.copy_label_ru}</button>
+                  <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onApplyStoryBibleJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !storyBiblePassReady} title={storyBibleButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.story_bible.apply_label_ru}</button>
+                </div>
               </div>
-              <div className="manualTimingJsonPassGroup">
-                <span>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.stage_label_ru} <b className="manualTimingJsonPassStatus">{manualTimingStageStatuses.block_storyboard}</b></span>
-                <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.copy_label_ru}</button>
-                <button className="clipSB_btn clipSB_btnPrimary" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.apply_label_ru}</button>
+              <div className={`manualTimingAiStageCard ${getManualTimingStageStatusClass(manualTimingStageStatuses.block_storyboard)}`}>
+                <div className="manualTimingAiStageHeader">
+                  <span className="manualTimingAiStageTitle">{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.stage_label_ru}</span>
+                  <span className="manualTimingAiStageStatus">{manualTimingStageStatuses.block_storyboard}</span>
+                </div>
+                <div className="manualTimingAiStageActions">
+                  <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onCopyBlockStoryboardPassJson} disabled={mainActionsDisabled || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.copy_label_ru}</button>
+                  <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onApplyBlockStoryboardJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !blockStoryboardPassReady} title={blockStoryboardButtonTitle}>{MANUAL_TIMING_AI_PASS_BY_TYPE.block_storyboard.apply_label_ru}</button>
+                </div>
               </div>
-            </> : <div className="manualTimingJsonPassGroup">
-              <span>{workflowLabels.panelTitle}</span>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
-              <button className="clipSB_btn clipSB_btnPrimary" onClick={applyImportedTimingJsonFromMode} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
-            </div>}
+            </div> : null}
           </div>
           {isJsonImportOpen ? <textarea
             className="manualTimingJsonTextarea"
