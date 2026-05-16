@@ -1935,14 +1935,25 @@ function buildManualTimingAsrTranslationPassJson(project = {}) {
   };
 }
 
+function pickManualTimingAudioPhraseImportId(phrase = {}) {
+  return String(phrase?.phrase_id || phrase?.phraseId || phrase?.id || "").trim();
+}
+
 function mergeManualTimingAsrTranslationPhrases(currentPhrases = [], importedPhrases = []) {
   const normalizedCurrent = normalizeManualTimingAudioPhrases(currentPhrases);
-  const importedById = new Map(normalizeManualTimingAudioPhrases(importedPhrases).map((phrase) => [String(phrase.phrase_id || ""), phrase]));
+  const importedById = new Map();
+  if (Array.isArray(importedPhrases)) {
+    importedPhrases.forEach((phrase) => {
+      if (!phrase || typeof phrase !== "object") return;
+      const phraseId = pickManualTimingAudioPhraseImportId(phrase);
+      const importedRu = pickManualTimingAudioPhraseRuText(phrase);
+      if (!phraseId || !importedRu) return;
+      importedById.set(phraseId, importedRu);
+    });
+  }
   let updatedCount = 0;
   const nextPhrases = normalizedCurrent.map((phrase) => {
-    const importedPhrase = importedById.get(String(phrase.phrase_id || ""));
-    if (!importedPhrase) return phrase;
-    const importedRu = pickManualTimingAudioPhraseRuText(importedPhrase);
+    const importedRu = importedById.get(String(phrase.phrase_id || "").trim());
     if (!importedRu) return phrase;
     const currentRu = pickManualTimingAudioPhraseRuText(phrase);
     if (currentRu === importedRu) return phrase;
@@ -4072,7 +4083,9 @@ export default function ManualTimingEditorPage() {
   };
 
   const applyAsrTranslationJson = (rawObject = {}) => {
-    const importedPhrases = Array.isArray(rawObject?.audio_phrases) ? rawObject.audio_phrases : [];
+    const importedPhrases = Array.isArray(rawObject)
+      ? rawObject
+      : (Array.isArray(rawObject?.audio_phrases) ? rawObject.audio_phrases : []);
     if (!importedPhrases.length) {
       setCopyStatus("В JSON нет audio_phrases для импорта перевода");
       window.setTimeout(() => setCopyStatus(""), 2200);

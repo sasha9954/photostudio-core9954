@@ -3928,6 +3928,8 @@
 .manualTimingSelectedPhraseInspector {
   display: grid;
   gap: 8px;
+  max-height: 190px;
+  overflow: hidden;
   padding: 9px;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.72);
@@ -3971,6 +3973,9 @@
 .manualTimingSelectedPhraseRows {
   display: grid;
   gap: 6px;
+  max-height: 115px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .manualTimingSelectedPhraseRow {
