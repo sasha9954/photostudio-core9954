@@ -71,6 +71,14 @@ export const MANUAL_TIMING_AI_PASS_BY_TYPE = MANUAL_TIMING_AI_PASS_STAGES.reduce
   return acc;
 }, {});
 
+
+export function isManualTimingAiRequestJson(raw = {}) {
+  const passStatus = String(raw?.manual_timing_pass?.status || "").trim();
+  const hasRequiredResult = Boolean(raw?.manual_timing_pass_result_required);
+  const hasActualResult = Boolean(raw?.manual_timing_pass_result || raw?.manualTimingPassResult);
+  return passStatus === "ready_for_ai" && hasRequiredResult && !hasActualResult;
+}
+
 export function validateManualTimingPassResultActivation(importedObject = {}, clickedPassType = "") {
   const stage = MANUAL_TIMING_AI_PASS_BY_TYPE[clickedPassType];
   if (!stage?.activation_phrase) return { ok: true, errors: [] };
@@ -1589,10 +1597,42 @@ export const MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU = `BLOCK STORYBOARD PAS
 
 Без этого следующий этап не откроется.`;
 
+
+function logManualTimingExportSourcePhraseIdsRepair(passType = "", sourcePhraseRepair = {}, sceneCount = 0, audioPhraseCount = 0) {
+  if (!sourcePhraseRepair?.repaired) return;
+  const repairedSceneCount = (Array.isArray(sourcePhraseRepair.scenes) ? sourcePhraseRepair.scenes : [])
+    .filter((scene, index) => {
+      const originalScene = sourcePhraseRepair.originalScenes?.[index];
+      const originalIds = getManualTimingSceneSourcePhraseIds(originalScene);
+      const repairedIds = getManualTimingSceneSourcePhraseIds(scene);
+      return !originalIds.length && repairedIds.length;
+    }).length;
+  console.info("[MANUAL TIMING EXPORT_SOURCE_PHRASE_IDS_REPAIRED]", {
+    passType,
+    repairedSceneCount,
+    sceneCount,
+    audioPhraseCount,
+  });
+}
+
+function repairManualTimingExportScenesSourcePhraseIds(passType = "", exportJson = {}) {
+  const originalScenes = Array.isArray(exportJson?.scenes) ? exportJson.scenes : [];
+  const audioPhrases = Array.isArray(exportJson?.audio_phrases) ? exportJson.audio_phrases : [];
+  const sourcePhraseRepair = repairManualTimingSourcePhraseIdsFromTiming(originalScenes, audioPhrases);
+  logManualTimingExportSourcePhraseIdsRepair(
+    passType,
+    { ...sourcePhraseRepair, originalScenes },
+    originalScenes.length,
+    audioPhrases.length
+  );
+  return Array.isArray(sourcePhraseRepair?.scenes) ? sourcePhraseRepair.scenes : originalScenes;
+}
+
 export function buildManualTimingStoryBiblePassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
   const exportJson = buildManualTimingExportJson(safeProject);
+  const exportScenes = repairManualTimingExportScenesSourcePhraseIds("story_bible", exportJson);
   const workflowMeta = buildManualTimingWorkflowForPass(safeProject, "story_bible");
 
   return {
@@ -1613,7 +1653,7 @@ export function buildManualTimingStoryBiblePassJson(project = {}) {
     ...pickManualTimingProjectStoryBibleFields(safeProject),
     audio_phrases: exportJson.audio_phrases,
     story_blocks: exportJson.story_blocks,
-    scenes: exportJson.scenes,
+    scenes: exportScenes,
   };
 }
 
@@ -1621,6 +1661,7 @@ export function buildManualTimingBlockStoryboardPassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
   const exportJson = buildManualTimingExportJson(safeProject);
+  const exportScenes = repairManualTimingExportScenesSourcePhraseIds("block_storyboard", exportJson);
   const workflowMeta = buildManualTimingWorkflowForPass(safeProject, "block_storyboard");
   return {
     chatgpt_task: MANUAL_TIMING_BLOCK_STORYBOARD_PASS_TASK_RU,
@@ -1679,7 +1720,7 @@ export function buildManualTimingBlockStoryboardPassJson(project = {}) {
       block_storyboard_summary_ru: String(block?.block_storyboard_summary_ru || ""),
       block_reference_frame_prompt_en: String(block?.block_reference_frame_prompt_en || ""),
     })),
-    scenes: exportJson.scenes.map((scene) => ({
+    scenes: exportScenes.map((scene) => ({
       ...scene,
       scene_global_context_ru: String(scene?.scene_global_context_ru || ""),
       continuity_anchor_ru: String(scene?.continuity_anchor_ru || ""),
@@ -1696,6 +1737,7 @@ export function buildManualTimingStoryPassJson(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const audio = normalizeManualTimingAudio(safeProject.audio);
   const exportJson = buildManualTimingExportJson(safeProject);
+  const exportScenes = repairManualTimingExportScenesSourcePhraseIds("semantic_story_cut", exportJson);
   const workflowMeta = buildManualTimingWorkflowForPass(safeProject, "semantic_story_cut");
 
   return {
@@ -1716,7 +1758,7 @@ export function buildManualTimingStoryPassJson(project = {}) {
     format_locked: exportJson.format_locked,
     audio_duration_sec: Number(audio.duration_sec || exportJson.audio_duration_sec || 0),
     audio_phrases: exportJson.audio_phrases,
-    scenes: exportJson.scenes.map((scene) => ({
+    scenes: exportScenes.map((scene) => ({
       ...scene,
       video_prompt: "",
       negative_prompt: "",
