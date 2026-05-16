@@ -660,6 +660,19 @@ async function startManualSceneVideo(payload) {
   return fetchJson("/api/clip/video/start", { method: "POST", timeoutMs: 60000, body: payload });
 }
 
+async function resumeManualSceneVideoJob(jobId) {
+  return fetchJson(`/api/clip/video/resume/${encodeURIComponent(jobId)}`, { method: "POST", timeoutMs: 60000 });
+}
+
+function isManualVideoInterruptedError(scene = {}) {
+  const message = String(scene?.video_error || scene?.videoError || scene?.error || "").toLowerCase();
+  return Boolean(
+    scene?.video_job_id
+    && String(scene?.status || "").toLowerCase() === "video_error"
+    && (message.includes("backend_restarted") || message.includes("interrupted") || message.includes("прерван"))
+  );
+}
+
 function resolveManualSceneVideoStatusEndpoint(jobId, statusEndpoint = "") {
   const rawEndpoint = String(statusEndpoint || "").trim();
   if (rawEndpoint) {
@@ -3138,10 +3151,40 @@ export default function ManualClipDirectorBoardEditor({
         return;
       }
 
+      if (status === "interrupted") {
+        videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        terminalVideoJobsRef.current.add(pollKey);
+        const interruptedMessage = "Генерация прервана после рестарта backend. Можно перезапустить job. backend_restarted_while_job_running interrupted";
+        updateScene(sceneId, {
+          status: "video_error",
+          video_job_id: safeJobId,
+          videoJobId: safeJobId,
+          video_status_endpoint: endpoint,
+          videoStatusEndpoint: endpoint,
+          video_error: interruptedMessage,
+          videoError: interruptedMessage,
+          error: interruptedMessage,
+        }, { reason: "video_poll_interrupted" });
+        flushManualBoardAutosave("video_poll_interrupted", { skipSignatureCheck: true });
+        return;
+      }
+
       if (status === "error" || status === "stopped" || status === "not_found") {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
         terminalVideoJobsRef.current.add(pollKey);
-        updateScene(sceneId, { status: "video_error", video_job_id: jobId, videoJobId: jobId, video_error: String(statusOut?.error || statusOut?.hint || "video_job_failed"), videoError: String(statusOut?.error || statusOut?.hint || "video_job_failed"), error: String(statusOut?.error || statusOut?.hint || "video_job_failed") }, { reason: "video_poll_terminal_error" });
+        const terminalError = status === "not_found"
+          ? "job не найден в памяти/backend disk. Возможно backend был перезапущен до durable save."
+          : String(statusOut?.error || statusOut?.hint || "video_job_failed");
+        updateScene(sceneId, {
+          status: "video_error",
+          video_job_id: jobId,
+          videoJobId: jobId,
+          video_status_endpoint: endpoint,
+          videoStatusEndpoint: endpoint,
+          video_error: terminalError,
+          videoError: terminalError,
+          error: terminalError,
+        }, { reason: "video_poll_terminal_error" });
         return;
       }
       if (status === "queued" || status === "running") {
@@ -3404,6 +3447,7 @@ export default function ManualClipDirectorBoardEditor({
           speakerTextPreview: String(payload.speakerText || "").slice(0, 180),
         },
       });
+      flushManualBoardAutosave("video_job_started", { skipSignatureCheck: true });
       if (runningKey) videoStartInFlightRef.current.delete(runningKey);
       const resumedKey = `${scene.scene_id}:${jobId}`;
       resumedVideoJobsRef.current.add(resumedKey);
@@ -3411,6 +3455,45 @@ export default function ManualClipDirectorBoardEditor({
     } catch (err) {
       if (runningKey) videoStartInFlightRef.current.delete(runningKey);
       updateScene(scene.scene_id, { status: "video_error", video_error: String(err?.message || "video_start_failed"), error: String(err?.message || "video_start_failed") });
+    }
+  };
+
+  const onResumeVideoJob = async (scene) => {
+    const sceneId = String(scene?.scene_id || scene?.id || "").trim();
+    const jobId = String(scene?.video_job_id || scene?.videoJobId || "").trim();
+    if (!sceneId || !jobId) return;
+    try {
+      const out = await resumeManualSceneVideoJob(jobId);
+      if (out?.ok === false) throw new Error(String(out?.hint || out?.error || out?.code || "video_job_resume_failed"));
+      const nextJobId = resolveVideoStartJobId(out) || jobId;
+      const statusEndpoint = resolveManualSceneVideoStatusEndpoint(nextJobId, out?.statusEndpoint || out?.status_endpoint || scene?.video_status_endpoint || scene?.videoStatusEndpoint || "");
+      const pollKey = `${sceneId}:${nextJobId}`;
+      terminalVideoJobsRef.current.delete(pollKey);
+      videoPollErrorCountRef.current.delete(pollKey);
+      updateScene(sceneId, {
+        status: "video_queued",
+        video_status: "queued",
+        videoStatus: "queued",
+        video_job_id: nextJobId,
+        videoJobId: nextJobId,
+        video_status_endpoint: statusEndpoint,
+        videoStatusEndpoint: statusEndpoint,
+        video_error: "",
+        videoError: "",
+        error: "",
+      }, { reason: "video_job_resumed" });
+      flushManualBoardAutosave("video_job_resumed", { skipSignatureCheck: true });
+      pollManualSceneVideo(sceneId, nextJobId, 0, statusEndpoint);
+    } catch (err) {
+      const message = String(err?.message || "video_job_resume_failed");
+      updateScene(sceneId, {
+        status: "video_error",
+        video_job_id: jobId,
+        videoJobId: jobId,
+        video_error: message,
+        videoError: message,
+        error: message,
+      }, { reason: "video_job_resume_failed" });
     }
   };
 
@@ -3913,7 +3996,9 @@ export default function ManualClipDirectorBoardEditor({
           <button className="clipSB_btn" disabled={!selectedMMAudioSourceVideoUrl} onClick={() => onDeleteSceneVideo(selectedScene)}>{selectedMMAudioSourceVideoUrl ? "Удалить видео" : "Видео нет"}</button>
         </div>
         {selectedScene.error ? <div className="manualError">{selectedScene.error}</div> : null}
-        {(["video_queued", "video_running", "video_error"].includes(selectedScene.status)) ? <div className="manualVideoDebug">job: {selectedScene.video_job_id || "—"} · route: {selectedScene.route} · workflow: {selectedScene.video_request_payload_preview?.resolvedWorkflowKey || "—"} · audioSlice: {selectedScene.video_request_payload_preview?.hasAudioSliceUrl ? "yes" : "no"} · keepAudio: {selectedScene.video_request_payload_preview?.keepGeneratedAudio ? "yes" : "no"} · gain: {selectedScene.video_request_payload_preview?.generatedAudioGainDb ?? selectedScene.generated_audio_gain_db ?? "—"} dB</div> : null}
+        {isManualVideoInterruptedError(selectedScene) ? <div className="manualVideoInfo">job прерван после рестарта backend — можно возобновить</div> : null}
+        {isManualVideoInterruptedError(selectedScene) ? <button type="button" className="clipSB_btn" onClick={() => onResumeVideoJob(selectedScene)}>Возобновить job</button> : null}
+        {(["video_queued", "video_running", "video_error"].includes(selectedScene.status)) ? <div className="manualVideoDebug">job: {selectedScene.video_job_id || "—"} · route: {selectedScene.route} · workflow: {selectedScene.video_request_payload_preview?.resolvedWorkflowKey || "—"} · audioSlice: {selectedScene.video_request_payload_preview?.hasAudioSliceUrl ? "yes" : "no"} · keepAudio: {selectedScene.video_request_payload_preview?.keepGeneratedAudio ? "yes" : "no"} · gain: {selectedScene.video_request_payload_preview?.generatedAudioGainDb ?? selectedScene.generated_audio_gain_db ?? "—"} dB{isManualVideoInterruptedError(selectedScene) ? " · job прерван после рестарта backend — можно возобновить" : ""}</div> : null}
       </section> : null}
 
       {selectedScene ? <section className="manualDirectorMedia"><h3>Media preview</h3>
