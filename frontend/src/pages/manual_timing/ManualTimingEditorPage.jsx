@@ -2151,6 +2151,8 @@ export default function ManualTimingEditorPage() {
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
   const playStartGuardRef = useRef(null);
+  const manualTimingPlaybackModeRef = useRef("");
+  const [manualTimingPlaybackMode, setManualTimingPlaybackMode] = useState("");
 
   const audio = normalizeManualTimingAudio(project.audio);
   const durationSec = Number(audio.duration_sec || 0);
@@ -2579,6 +2581,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const undoLastManualTimingAction = () => {
+    stopManualTimingPlayback();
     const last = undoStack[undoStack.length - 1];
     if (!last) {
       setCopyStatus("Нет действия для отмены");
@@ -2594,6 +2597,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const redoLastManualTimingAction = () => {
+    stopManualTimingPlayback();
     const next = redoStack[redoStack.length - 1];
     if (!next) {
       setCopyStatus("Нет действия для повтора");
@@ -2760,18 +2764,16 @@ export default function ManualTimingEditorPage() {
     const audioEl = audioRef.current;
     const endSec = Number(playUntilRef.current);
     if (!audioEl || !Number.isFinite(endSec)) return false;
-    const safeEnd = roundTimingSec(clampTime(endSec, durationSecRef.current || durationSec));
+    const activeDuration = durationSecRef.current || durationSec;
+    const safeEnd = roundTimingSec(clampTime(endSec, activeDuration));
     const nextTime = Number.isFinite(Number(timeValue)) ? Number(timeValue) : Number(audioEl.currentTime || currentTimeRef.current || 0);
-    if (nextTime < safeEnd - 0.012) return false;
+    const isFullTimeline = manualTimingPlaybackModeRef.current === "full_timeline";
+    const endTolerance = isFullTimeline ? 0.025 : 0.012;
+    if (nextTime < safeEnd - endTolerance) return false;
 
-    playUntilRef.current = null;
-    playStartGuardRef.current = null;
-    stopSilencePlayback();
-    audioEl.pause();
+    stopManualTimingPlayback();
     setAudioElementTime(safeEnd);
-    setPlayingState(false);
     setDisplayTime(safeEnd);
-    stopRafLoop();
     return true;
   };
 
@@ -2820,8 +2822,11 @@ export default function ManualTimingEditorPage() {
     if (audioEl) {
       if (pause) {
         audioEl.pause();
+        manualTimingPlaybackModeRef.current = "";
+        setManualTimingPlaybackMode("");
         setPlayingState(false);
         stopRafLoop();
+        stopSilencePlayback();
       }
       setAudioElementTime(time);
     }
@@ -2836,6 +2841,23 @@ export default function ManualTimingEditorPage() {
       silenceRafRef.current = null;
     }
   };
+
+  function stopManualTimingPlayback() {
+    const audioEl = audioRef.current;
+    playUntilRef.current = null;
+    playStartGuardRef.current = null;
+    manualTimingPlaybackModeRef.current = "";
+    setManualTimingPlaybackMode("");
+    setPlayingState(false);
+    stopRafLoop();
+    stopSilencePlayback();
+
+    if (audioEl) {
+      try {
+        audioEl.pause();
+      } catch {}
+    }
+  }
 
   const continuePlaybackFromTimeline = (timelineTimeValue, endValue = null) => {
     const audioEl = audioRef.current;
@@ -2873,8 +2895,8 @@ export default function ManualTimingEditorPage() {
         if (nextTime >= silenceEnd - 0.012) {
           silenceRafRef.current = null;
           if (end !== null && nextTime >= end - 0.012) {
-            playUntilRef.current = null;
-            setPlayingState(false);
+            stopManualTimingPlayback();
+            setDisplayTime(end);
             return;
           }
           continuePlaybackFromTimeline(silenceEnd, end);
@@ -2905,7 +2927,7 @@ export default function ManualTimingEditorPage() {
     }, 30);
   };
 
-  const playRange = (startValue, endValue = null) => {
+  const playRange = (startValue, endValue = null, playbackMode = "cursor") => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
 
@@ -2916,8 +2938,9 @@ export default function ManualTimingEditorPage() {
 
     if (end !== null && end <= start + 0.02) return;
 
-    stopRafLoop();
-    stopSilencePlayback();
+    stopManualTimingPlayback();
+    manualTimingPlaybackModeRef.current = playbackMode;
+    setManualTimingPlaybackMode(playbackMode);
     playUntilRef.current = end;
 
     try {
@@ -2927,6 +2950,35 @@ export default function ManualTimingEditorPage() {
     setDisplayTime(start);
     continuePlaybackFromTimeline(start, end);
   };
+
+  function playFullManualTiming() {
+    const audioEl = audioRef.current;
+    if (!audioEl || !audio.url) return;
+
+    const startSec = 0;
+    const endSec = durationSec || audio.duration_sec || audioEl.duration || 0;
+    if (!(endSec > 0)) return;
+
+    stopManualTimingPlayback();
+
+    manualTimingPlaybackModeRef.current = "full_timeline";
+    setManualTimingPlaybackMode("full_timeline");
+    playUntilRef.current = endSec;
+
+    try {
+      audioEl.currentTime = startSec;
+    } catch {}
+
+    setCurrentTime(startSec);
+    setDisplayTime(startSec);
+
+    try {
+      continuePlaybackFromTimeline(startSec, endSec);
+    } catch (error) {
+      console.warn("[MANUAL TIMING PLAY_FULL_FAILED]", error);
+      stopManualTimingPlayback();
+    }
+  }
 
   const buildHydratedScenesForDuration = (nextMarkers, existingScenes = scenes, nextDurationSec = durationSec, silenceRanges = [], options = {}) => {
     const safeMarkers = normalizeManualTimingMarkers(nextMarkers, nextDurationSec);
@@ -3061,18 +3113,16 @@ export default function ManualTimingEditorPage() {
     if (!audioEl) return;
 
     if (!audioEl.paused || isPlayingRef.current) {
-      playUntilRef.current = null;
-      stopSilencePlayback();
       const rawTime = Number(audioEl.currentTime);
-      const trustedTime = Number.isFinite(rawTime) && rawTime > 0.03
-        ? rawTime
-        : Number(currentTimeRef.current || 0);
+      const trustedTime = audioEl.paused
+        ? Number(currentTimeRef.current || 0)
+        : (Number.isFinite(rawTime) && rawTime > 0.03
+          ? rawTime
+          : Number(currentTimeRef.current || 0));
       const pausedAt = roundTimingSec(clampTime(trustedTime, durationSecRef.current || durationSec));
-      audioEl.pause();
+      stopManualTimingPlayback();
       setAudioElementTime(pausedAt);
       setDisplayTime(pausedAt);
-      setPlayingState(false);
-      stopRafLoop();
       return;
     }
 
@@ -3081,11 +3131,11 @@ export default function ManualTimingEditorPage() {
       const cursor = Number(currentTimeRef.current || 0);
       const isInsideSelected = cursor >= bounds.start - 0.035 && cursor < bounds.end - 0.035;
       const startFrom = isInsideSelected ? cursor : bounds.start;
-      playRange(startFrom, bounds.end);
+      playRange(startFrom, bounds.end, "selected_scene");
       return;
     }
 
-    playRange(currentTimeRef.current || 0, durationSec);
+    playRange(currentTimeRef.current || 0, durationSec, "cursor");
   };
 
   const onStartOver = () => {
@@ -3094,14 +3144,14 @@ export default function ManualTimingEditorPage() {
   };
 
   const onPlayFromLastCut = () => {
-    playRange(lastCutSec, durationSec);
+    playRange(lastCutSec, durationSec, "cursor");
   };
 
   const onPlayAroundCursor = () => {
     const center = Number(currentTimeRef.current || currentTime || 0);
     const start = roundTimingSec(Math.max(0, center - 1));
     const end = roundTimingSec(Math.min(durationSecRef.current || durationSec, center + 1));
-    playRange(start, end);
+    playRange(start, end, "cursor");
   };
 
   const onJumpToTime = () => {
@@ -3202,9 +3252,13 @@ export default function ManualTimingEditorPage() {
     setAudioTime(time, { pause: true, clearBound: true });
   };
 
-  const onAddMarker = () => addMarkerAt(currentTimeRef.current ?? currentTime);
+  const onAddMarker = () => {
+    stopManualTimingPlayback();
+    addMarkerAt(currentTimeRef.current ?? currentTime);
+  };
 
   const mergeSelectedSceneWithNext = () => {
+    stopManualTimingPlayback();
     if (!canMergeSelectedWithNext) return;
 
     const current = scenes[selectedSceneIndex];
@@ -3424,6 +3478,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onDeleteLastCut = () => {
+    stopManualTimingPlayback();
     if (markers.length <= 2) return;
     const nextMarkers = markers.filter((_, idx) => idx !== markers.length - 2);
     const selectedSceneId = getSceneIdForIndex(Math.max(0, nextMarkers.length - 3));
@@ -3432,6 +3487,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const nudgeSelectedSilenceDuration = (delta) => {
+    stopManualTimingPlayback();
     if (!selectedScene || !selectedSceneIsSilence || selectedSceneIndex < 0) {
       setCopyStatus("Выберите блок тишины");
       window.setTimeout(() => setCopyStatus(""), 1600);
@@ -3492,6 +3548,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const nudgeSelectedBoundary = (delta) => {
+    stopManualTimingPlayback();
     if (selectedSceneIsSilence) {
       nudgeSelectedSilenceDuration(delta);
       return;
@@ -3520,6 +3577,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const insertSilenceAtCursor = () => {
+    stopManualTimingPlayback();
     const activeDuration = durationSecRef.current || durationSec;
     if (!(activeDuration > 0)) return;
 
@@ -3631,7 +3689,7 @@ export default function ManualTimingEditorPage() {
     if (!(endSec > startSec + 0.02)) return;
 
     persist({ ...project, selectedSceneId: scene.scene_id });
-    playRange(startSec, endSec);
+    playRange(startSec, endSec, "selected_scene");
   };
 
   const splitSegmentAtCurrentTime = (scene) => {
@@ -4931,6 +4989,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const onReset = () => {
+    stopManualTimingPlayback();
     const nextMarkers = durationSec > 0 ? [0, durationSec] : [];
     const nextStoryBlocks = [MANUAL_TIMING_UNKNOWN_STORY_BLOCK];
     const nextScenes = nextMarkers.length ? hydrateManualTimingScenesWithStoryBlocks(buildManualTimingScenesFromMarkers(nextMarkers, [], { durationSec }), nextStoryBlocks) : [];
@@ -5101,6 +5160,7 @@ export default function ManualTimingEditorPage() {
   };
 
   const clearManualStoryBlocks = () => {
+    stopManualTimingPlayback();
     const confirmed = window.confirm("Очистить старые смысловые блоки? Сцены и разрезы останутся.");
     if (!confirmed) return;
 
@@ -5386,11 +5446,9 @@ export default function ManualTimingEditorPage() {
           onPlay={() => { setPlayingState(true); startRafLoop(); }}
           onPause={() => { setPlayingState(false); stopRafLoop(); }}
           onEnded={() => {
-            playUntilRef.current = null;
-            playStartGuardRef.current = null;
-            setPlayingState(false);
-            stopRafLoop();
-            setDisplayTime(durationSecRef.current || durationSec);
+            const endTime = durationSecRef.current || durationSec;
+            stopManualTimingPlayback();
+            setDisplayTime(endTime);
           }}
         /> : <div className="manualTimingNoAudio">Аудио не выбрано. Подключите AUDIO-ноду или загрузите аудио в ноде “Тайминг песни”.</div>}
 
@@ -5537,6 +5595,21 @@ export default function ManualTimingEditorPage() {
               title={isPlaying ? "Пауза" : "Слушать с текущего места"}
             >
               {isPlaying ? "⏸" : "▶"}
+            </button>
+            <button
+              className="clipSB_btn clipSB_btnSecondary manualTimingFullPlaybackButton"
+              type="button"
+              onClick={() => {
+                if (manualTimingPlaybackMode === "full_timeline") {
+                  stopManualTimingPlayback();
+                } else {
+                  playFullManualTiming();
+                }
+              }}
+              disabled={!audio.url}
+              title="Прослушать весь основной тайминг с начала до конца"
+            >
+              {manualTimingPlaybackMode === "full_timeline" ? "■ стоп тайминг" : "▶ весь тайминг"}
             </button>
 
             <div className="manualTimingTrackNudgeBox" aria-label="Микро-доводчик конца выбранной сцены">
