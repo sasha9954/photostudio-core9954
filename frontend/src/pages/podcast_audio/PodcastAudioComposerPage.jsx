@@ -1998,6 +1998,27 @@ export default function PodcastAudioComposerPage() {
     setIsPlaying(false);
   }
 
+  function resetPlaybackForBlockSelection() {
+    sequenceTransitionRef.current = false;
+
+    stopMainPlaybackGuard();
+    stopSilencePlayback();
+    stopFragmentPlayback();
+    stopPhrasePreview({ pause: false });
+    stopActorPlayback({ pause: false });
+
+    activeMainPlaybackRef.current = null;
+    activeActorPlaybackRef.current = null;
+
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+      } catch {}
+    }
+
+    setIsPlaying(false);
+  }
+
   function startMainPlaybackGuard() {
     stopMainPlaybackGuard();
 
@@ -2049,18 +2070,41 @@ export default function PodcastAudioComposerPage() {
     }
   };
 
-  const selectBlock = (blockId, startSec) => {
-    setSelectedBlockId(blockId);
-    seekOnTimeline(startSec, blocksRef.current);
+  const selectBlockAndSeekStart = (blockId) => {
+    const safeBlocks = blocksRef.current || blocks;
+    const index = safeBlocks.findIndex((block) => String(block.id) === String(blockId));
+    if (index < 0) return;
+
+    resetPlaybackForBlockSelection();
+
+    const start = getBlockVirtualStart(safeBlocks, index);
+    const block = safeBlocks[index];
+
+    currentBlockIndexRef.current = index;
+    selectedBlockIdRef.current = block.id;
+
+    setSelectedBlockId(block.id);
+    setCurrentTimeSec(roundSeconds(start));
+
+    console.info("[PAC BLOCK SELECT RESET]", {
+      blockId: block.id,
+      index,
+      timelineStart: start,
+      type: normalizeComposerPlaybackBlock(block, index, start).type,
+    });
+  };
+
+  const selectBlock = (blockId) => {
+    selectBlockAndSeekStart(blockId);
     setMessage("Выбран блок. Жёлтая линия — только прицел разреза. Доводчик меняет конец выбранного блока: ← отдаёт часть правому соседу, → забирает часть у правого соседа.");
   };
 
   const openBlockMenu = (blockId, startSec, point = {}) => {
+    void startSec;
     const clickX = Number.isFinite(point.x) ? point.x : 220;
     const clickY = Number.isFinite(point.y) ? point.y : 220;
     const safePosition = getSafeBlockMenuPosition(clickX, clickY);
-    setSelectedBlockId(blockId);
-    seekOnTimeline(startSec, blocksRef.current);
+    selectBlockAndSeekStart(blockId);
     setBlockMenu({
       blockId,
       clickX,
@@ -2184,8 +2228,7 @@ export default function PodcastAudioComposerPage() {
       return;
     }
     const startSec = getBlockVirtualStart(blocks, index);
-    setSelectedBlockId(blocks[index].id);
-    seekOnTimeline(startSec, blocks);
+    selectBlockAndSeekStart(blocks[index].id);
     setBlockMenu(null);
     setMessage(`Найдена сломанная фраза “${getBrokenPhraseLabel(item)}” на ${formatTimer(startSec)}.`);
   };
@@ -2807,6 +2850,10 @@ export default function PodcastAudioComposerPage() {
     if (isPlaying) {
       stopMainPlayback();
       return;
+    }
+
+    if (!isPlaying && activeMainPlaybackRef.current) {
+      activeMainPlaybackRef.current = null;
     }
 
     stopPhrasePreview({ pause: false });
