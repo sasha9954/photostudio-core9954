@@ -5706,15 +5706,15 @@ export default function ManualTimingEditorPage() {
                 type="button"
                 onClick={insertSilenceAtCursor}
                 disabled={!audio.url || !(durationSec > 0)}
-                title="Вставить 0.5 сек тишины по текущему курсору"
-              >тишина</button>
+                title="Вставить 0.5 сек тишины по текущему курсору / после выбранного места"
+              >тишина после</button>
               <button
                 className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
                 type="button"
                 onClick={insertSilenceBeforeSelectedScene}
                 disabled={!audio.url || !(durationSec > 0)}
                 title="Вставить 1 сек тишины перед выбранной сценой"
-              >тишина перед сценой</button>
+              >тишина до</button>
               <button
                 className="clipSB_btn clipSB_btnDanger manualTimingResetMiniButton"
                 onClick={onReset}
