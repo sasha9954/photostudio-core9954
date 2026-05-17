@@ -2752,11 +2752,29 @@ export default function ManualTimingEditorPage() {
     };
   }
 
-  function buildManualTimingPlaybackQueue(sceneQueue = []) {
+  function getAccumulatedVirtualSilenceBeforeTimelineTime(timeSec, sceneList = scenes) {
+    const target = roundTimingSec(Number(timeSec || 0));
+    return (Array.isArray(sceneList) ? sceneList : []).reduce((total, scene) => {
+      if (!isManualTimingSilenceScene(scene)) return total;
+
+      const start = roundTimingSec(Number(scene.start_sec || 0));
+      const end = roundTimingSec(Number(scene.end_sec || start));
+      if (end <= start + 0.001) return total;
+
+      if (end <= target + 0.001) {
+        return roundTimingSec(total + (end - start));
+      }
+
+      return total;
+    }, 0);
+  }
+
+  function buildManualTimingPlaybackQueue(sceneQueue = [], contextScenes = scenes) {
     const rawScenes = (Array.isArray(sceneQueue) ? sceneQueue : [])
       .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001);
+    const isFullContextQueue = Array.isArray(sceneQueue) && sceneQueue === contextScenes;
 
-    let silenceOffset = 0;
+    let localSilenceOffset = 0;
 
     return rawScenes.map((scene) => {
       const start = roundTimingSec(Number(scene.start_sec || 0));
@@ -2764,11 +2782,24 @@ export default function ManualTimingEditorPage() {
       const duration = roundTimingSec(Math.max(0.01, end - start));
 
       if (isManualTimingSilenceScene(scene)) {
-        silenceOffset = roundTimingSec(silenceOffset + duration);
+        localSilenceOffset = roundTimingSec(localSilenceOffset + duration);
         return decorateManualTimingSilenceScene(scene);
       }
 
-      const sourceRange = getSceneAudioSourceRangeSafe(scene, silenceOffset);
+      const contextSilenceOffset = isFullContextQueue
+        ? localSilenceOffset
+        : getAccumulatedVirtualSilenceBeforeTimelineTime(scene.start_sec, contextScenes);
+      const effectiveSilenceOffset = Math.max(localSilenceOffset, contextSilenceOffset);
+      const sourceRange = getSceneAudioSourceRangeSafe(scene, effectiveSilenceOffset);
+
+      console.info("[MANUAL TIMING PLAYBACK QUEUE SOURCE]", {
+        scene_id: scene.scene_id,
+        timeline_start: scene.start_sec,
+        timeline_end: scene.end_sec,
+        source_start: sourceRange?.start,
+        source_end: sourceRange?.end,
+        effectiveSilenceOffset,
+      });
 
       return {
         ...scene,
@@ -3273,7 +3304,7 @@ export default function ManualTimingEditorPage() {
   }
 
   function playManualTimingSceneQueue(sceneQueue = [], mode = "scene") {
-    const safeScenes = buildManualTimingPlaybackQueue(sceneQueue);
+    const safeScenes = buildManualTimingPlaybackQueue(sceneQueue, scenes);
 
     if (!safeScenes.length) return;
 
