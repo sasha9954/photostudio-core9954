@@ -2436,8 +2436,7 @@ export default function ManualTimingEditorPage() {
   const playheadPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(currentTime || 0) / durationSec) * 100)) : 0;
   const lastCutPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(lastCutSec || 0) / durationSec) * 100)) : 0;
   const candidateWidthPercent = durationSec > 0 ? Math.max(0, Math.min(100 - lastCutPercent, ((Number(currentTime || 0) - Number(lastCutSec || 0)) / durationSec) * 100)) : 0;
-  const isAnyManualTimingPlaybackActive = Boolean(isPlaying || manualTimingPlaybackMode);
-  const shouldShowCandidateRange = !isAnyManualTimingPlaybackActive && candidateWidthPercent > 0.1;
+  const shouldShowCandidateRange = false;
   const openTailSceneId = project.timing_status === "confirmed" ? "" : scenes[scenes.length - 1]?.scene_id || "";
   const candidateDurationLabel = candidateDurationSec > 0.001 ? formatTimingSec(candidateDurationSec) : "—";
   const storyBlockSummaries = useMemo(() => storyBlocks.map((block) => {
@@ -2453,20 +2452,29 @@ export default function ManualTimingEditorPage() {
     if (!(durationSec > 0)) return [];
     return audioPhrases
       .filter(isUnresolvedAudioPhrase)
-      .map((phrase) => {
-        const start = clampTime(phrase.start_sec, durationSec);
-        const end = clampTime(phrase.end_sec, durationSec);
-        if (!(end > start)) return null;
-        return {
-          ...phrase,
-          start_sec: start,
-          end_sec: end,
-          left: `${Math.max(0, Math.min(100, (start / durationSec) * 100))}%`,
-          width: `${Math.max(0.35, Math.min(100, ((end - start) / durationSec) * 100))}%`,
-          timing_scene_id: getTimingSceneIdForAudioPhrase(phrase, scenes),
-        };
-      })
-      .filter(Boolean);
+      .flatMap((phrase) => {
+        const ranges = mapSourceRangeToTimelineRanges(phrase.start_sec, phrase.end_sec, scenes);
+        if (!ranges.length) return [];
+
+        return ranges.map((range, rangeIndex) => {
+          const start = clampTime(range.start_sec, durationSec);
+          const end = clampTime(range.end_sec, durationSec);
+          if (!(end > start)) return null;
+          return {
+            ...phrase,
+            marker_id: `${phrase.phrase_id || "missing"}_${rangeIndex}_${range.scene_id || "scene"}`,
+            start_sec: start,
+            end_sec: end,
+            timeline_start_sec: start,
+            timeline_end_sec: end,
+            source_start_sec: range.source_start_sec,
+            source_end_sec: range.source_end_sec,
+            left: `${Math.max(0, Math.min(100, (start / durationSec) * 100))}%`,
+            width: `${Math.max(0.35, Math.min(100, ((end - start) / durationSec) * 100))}%`,
+            timing_scene_id: range.scene_id,
+          };
+        }).filter(Boolean);
+      });
   }, [audioPhrases, durationSec, scenes]);
 
   const timelineBlockRanges = useMemo(() => {
@@ -3752,7 +3760,15 @@ export default function ManualTimingEditorPage() {
   }
 
   const rebuildFromMarkers = (nextMarkers, existingScenes = scenes, extraPatch = {}, options = {}) => {
-    warnManualTimingSourceMappedRebuildBlocked(options.rebuildAction || "nudge/merge/rebuild");
+    const sourceMappedRebuild = hasManualTimingVirtualSilenceOrSourceMap(existingScenes, project);
+    const allowSourceMappedRebuild = Boolean(options.allowSourceMappedRebuild);
+    if (sourceMappedRebuild && !allowSourceMappedRebuild) {
+      warnManualTimingSourceMappedRebuildBlocked(options.rebuildAction || "marker-only rebuild");
+      setCopyStatus("Source-map сохранён: это действие выполняется без пересборки только по маркерам");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return null;
+    }
+
     const safeMarkers = normalizeManualTimingMarkers(nextMarkers, durationSec);
     const nextRawScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, {
       durationSec,
@@ -4035,7 +4051,8 @@ export default function ManualTimingEditorPage() {
       manual_scene_edits: true,
       manualSceneEdits: true,
       lastManualEditReason: "cut_scene",
-    });
+    }, { rebuildAction: "cut_scene marker rebuild" });
+    if (!nextProject) return;
     console.info("[MANUAL TIMING MANUAL CUT APPLIED]", {
       timeSec: time,
       selectedSceneId,
@@ -4046,18 +4063,13 @@ export default function ManualTimingEditorPage() {
     setAudioTime(time, { pause: true, clearBound: true });
   };
 
-  const onAddMarker = () => {
-    stopManualTimingPlayback();
-    addMarkerAt(currentTimeRef.current ?? currentTime);
-  };
+  const mergeManualTimingScenesAtIndexPreserveSource = (sceneIndex, reason = "merge_scene") => {
+    const index = Number(sceneIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= scenes.length - 1) return false;
 
-  const mergeSelectedSceneWithNext = () => {
-    stopManualTimingPlayback();
-    if (!canMergeSelectedWithNext) return;
-
-    const current = scenes[selectedSceneIndex];
-    const next = scenes[selectedSceneIndex + 1];
-    if (!current || !next) return;
+    const current = scenes[index];
+    const next = scenes[index + 1];
+    if (!current || !next) return false;
 
     const currentSceneId = String(current.scene_id || "").trim();
     const nextSceneId = String(next.scene_id || "").trim();
@@ -4067,10 +4079,21 @@ export default function ManualTimingEditorPage() {
     const mergedSourcePhraseIds = mergeManualTimingSourcePhraseIds(current.source_phrase_ids, next.source_phrase_ids);
     const sameStoryBlock = String(current.story_block_id || "").trim()
       && String(current.story_block_id || "").trim() === String(next.story_block_id || "").trim();
+    const currentIsSilence = isManualTimingSilenceScene(current);
+    const nextIsSilence = isManualTimingSilenceScene(next);
 
-    const mergedScene = {
+    const hasFiniteSourceValue = (value) => value !== null && value !== undefined && value !== "" && Number.isFinite(Number(value));
+    const currentSourceStart = current.source_start_sec ?? current.sourceStartSec ?? getManualTimingSceneSourceStartSec(current);
+    const currentSourceEnd = current.source_end_sec ?? current.sourceEndSec ?? getManualTimingSceneSourceEndSec(current);
+    const nextSourceStart = next.source_start_sec ?? next.sourceStartSec ?? getManualTimingSceneSourceStartSec(next);
+    const nextSourceEnd = next.source_end_sec ?? next.sourceEndSec ?? getManualTimingSceneSourceEndSec(next);
+    const mergedSourceKind = currentIsSilence && nextIsSilence ? "silence" : String(current.source_kind || current.sourceKind || next.source_kind || next.sourceKind || "audio");
+    const mergedAudioSourceStart = currentIsSilence ? nextSourceStart : currentSourceStart;
+    const mergedAudioSourceEnd = nextIsSilence ? currentSourceEnd : nextSourceEnd;
+
+    let mergedScene = {
       ...current,
-      scene_id: currentSceneId || nextSceneId || getSceneIdForIndex(selectedSceneIndex),
+      scene_id: currentSceneId || nextSceneId || getSceneIdForIndex(index),
       start_sec: startSec,
       end_sec: endSec,
       duration_sec: duration,
@@ -4084,6 +4107,16 @@ export default function ManualTimingEditorPage() {
       )),
       post_silence_sec: Number(next.post_silence_sec ?? current.post_silence_sec ?? 0),
       source_phrase_ids: mergedSourcePhraseIds,
+      source_kind: mergedSourceKind,
+      source_start_sec: currentIsSilence && nextIsSilence ? null : (hasFiniteSourceValue(mergedAudioSourceStart) ? roundTimingSec(Number(mergedAudioSourceStart)) : null),
+      source_end_sec: currentIsSilence && nextIsSilence
+        ? null
+        : (hasFiniteSourceValue(mergedAudioSourceEnd)
+          ? roundTimingSec(Number(mergedAudioSourceEnd))
+          : (hasFiniteSourceValue(currentSourceEnd) ? roundTimingSec(Number(currentSourceEnd)) : null)),
+      is_silence: currentIsSilence && nextIsSilence,
+      is_virtual_silence: currentIsSilence && nextIsSilence,
+      scene_type: currentIsSilence && nextIsSilence ? "manual_silence" : (current.scene_type === "manual_silence" ? "" : current.scene_type),
       route: getMergedManualTimingRoute(current.route, next.route),
       text: mergeManualTimingTextValue(current.text, next.text),
       text_ru: mergeManualTimingTextValue(current.text_ru, next.text_ru),
@@ -4100,46 +4133,70 @@ export default function ManualTimingEditorPage() {
       story_block_color: String(current.story_block_color || ""),
     };
 
+    if (hasFiniteSourceValue(nextSourceStart) && hasFiniteSourceValue(currentSourceEnd)
+      && Math.abs(roundTimingSec(Number(nextSourceStart)) - roundTimingSec(Number(currentSourceEnd))) > 0.01) {
+      mergedScene.source_map_note = "Merged across a source gap; original neighbouring scene source ranges were preserved on project history.";
+    }
+
     if (sameStoryBlock) {
       mergedScene.story_block_id = String(current.story_block_id || "").trim();
       mergedScene.story_block_title_ru = String(current.story_block_title_ru || next.story_block_title_ru || "");
       mergedScene.story_block_color = String(current.story_block_color || next.story_block_color || "");
     }
 
-    const nextScenes = [
-      ...scenes.slice(0, selectedSceneIndex),
+    if (currentIsSilence && nextIsSilence) {
+      mergedScene = decorateManualTimingSilenceScene(mergedScene);
+    }
+
+    const nextScenes = reindexManualTimingTimelineScenes([
+      ...scenes.slice(0, index),
       mergedScene,
-      ...scenes.slice(selectedSceneIndex + 2),
-    ];
-    const nextMarkers = normalizeManualTimingMarkers(
-      nextScenes.flatMap((scene) => [scene.start_sec, scene.end_sec]),
-      durationSec
-    );
+      ...scenes.slice(index + 2),
+    ]);
+    const persistedMergedScene = nextScenes[index] || mergedScene;
+    const nextMarkers = buildManualTimingMarkersFromScenesList(nextScenes, durationSec);
     const nextStoryBlocks = rebuildManualTimingStoryBlocksForScenes(project.story_blocks, nextScenes);
 
-    rememberManualTimingAction("соединить сцены");
+    rememberManualTimingAction(reason === "delete_last_cut" ? "удалить последний разрез" : "соединить сцены");
     persist({
       ...project,
       scenes: nextScenes,
       markers: nextMarkers,
       story_blocks: nextStoryBlocks,
-      selectedSceneId: mergedScene.scene_id,
+      virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
+      selectedSceneId: persistedMergedScene.scene_id,
       timing_status: "draft",
       manual_scene_edits: true,
       manualSceneEdits: true,
-      lastManualEditReason: "merge_scene",
+      lastManualEditReason: reason,
     });
 
-    console.info("[MANUAL TIMING SCENES_MERGED]", {
+    console.info("[MANUAL TIMING SCENES_MERGED_PRESERVE_SOURCE]", {
       selectedSceneId: currentSceneId,
       nextSceneId,
       startSec,
       endSec,
+      sourceKind: persistedMergedScene.source_kind,
+      sourceStart: persistedMergedScene.source_start_sec,
+      sourceEnd: persistedMergedScene.source_end_sec,
+      currentWasSilence: currentIsSilence,
+      nextWasSilence: nextIsSilence,
       sceneCountBefore: scenes.length,
       sceneCountAfter: nextScenes.length,
-      manualSceneEdits: true,
     });
     setAudioTime(startSec, { pause: true, clearBound: true });
+    return true;
+  };
+
+  const onAddMarker = () => {
+    stopManualTimingPlayback();
+    addMarkerAt(currentTimeRef.current ?? currentTime);
+  };
+
+  const mergeSelectedSceneWithNext = () => {
+    stopManualTimingPlayback();
+    if (!canMergeSelectedWithNext) return;
+    mergeManualTimingScenesAtIndexPreserveSource(selectedSceneIndex, "merge_scene");
   };
 
   const getNextMissingPhraseId = (phrases = []) => {
@@ -4274,9 +4331,21 @@ export default function ManualTimingEditorPage() {
   const onDeleteLastCut = () => {
     stopManualTimingPlayback();
     if (markers.length <= 2) return;
+
+    if (hasManualTimingVirtualSilenceOrSourceMap(scenes, project)) {
+      const mergeIndex = Math.max(0, Math.min(scenes.length - 2, markers.length - 3));
+      const merged = mergeManualTimingScenesAtIndexPreserveSource(mergeIndex, "delete_last_cut");
+      if (!merged) {
+        setCopyStatus("Удаление разреза после тишины пока только через Соединить");
+        window.setTimeout(() => setCopyStatus(""), 2200);
+      }
+      return;
+    }
+
     const nextMarkers = markers.filter((_, idx) => idx !== markers.length - 2);
     const selectedSceneId = getSceneIdForIndex(Math.max(0, nextMarkers.length - 3));
-    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId, timing_status: "draft" });
+    const nextProject = rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId, timing_status: "draft" }, { rebuildAction: "deleteLastCut marker rebuild" });
+    if (!nextProject) return;
     setAudioTime(getLastInternalMarker(nextMarkers), { pause: true, clearBound: true });
   };
 
@@ -4365,7 +4434,7 @@ export default function ManualTimingEditorPage() {
     const nextMarkers = shiftMarkersFromBoundary(markers, markerIndex, nextTime);
     const actualTime = Number(nextMarkers[markerIndex] || currentMarker);
     rememberManualTimingAction("микродоводчик");
-    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: selectedScene.scene_id, timing_status: "draft" }, { allowIdFallback: true });
+    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: selectedScene.scene_id, timing_status: "draft" }, { allowIdFallback: true, allowSourceMappedRebuild: true, rebuildAction: "nudgeSelectedBoundary" });
     setAudioTime(actualTime, { pause: true, clearBound: true });
   };
 
@@ -4555,13 +4624,19 @@ export default function ManualTimingEditorPage() {
 
   const mergeWithNext = (scene) => {
     if (!scene) return;
+    const sceneIndex = scenes.findIndex((item) => String(item?.scene_id || "") === String(scene.scene_id || ""));
+    if (hasManualTimingVirtualSilenceOrSourceMap(scenes, project)) {
+      mergeManualTimingScenesAtIndexPreserveSource(sceneIndex, "merge_scene");
+      return;
+    }
+
     const end = roundTimingSec(scene.end_sec);
     const safeMarkers = normalizeManualTimingMarkers(project.markers, durationSec);
     const boundaryIndex = safeMarkers.findIndex((marker) => Math.abs(Number(marker) - end) < 0.001);
     if (boundaryIndex <= 0 || boundaryIndex >= safeMarkers.length - 1) return;
     // Удаляем только выбранную границу, остальные последующие разрезы остаются.
     const nextMarkers = safeMarkers.filter((marker) => Math.abs(Number(marker) - end) > 0.001);
-    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: scene.scene_id, timing_status: "draft" });
+    rebuildFromMarkers(nextMarkers, scenes, { selectedSceneId: scene.scene_id, timing_status: "draft" }, { rebuildAction: "mergeWithNext marker rebuild" });
   };
 
   const deleteCutAfterScene = (scene) => {
