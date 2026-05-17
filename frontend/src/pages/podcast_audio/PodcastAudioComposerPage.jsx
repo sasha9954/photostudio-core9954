@@ -1644,6 +1644,7 @@ export default function PodcastAudioComposerPage() {
   const activeActorPlaybackRef = useRef(null);
   const activeMainPlaybackRef = useRef(null);
   const playbackGuardRafRef = useRef(null);
+  const sequenceTransitionRef = useRef(false);
   const selectedBlockIdRef = useRef("");
   const blocksRef = useRef([]);
   const currentBlockIndexRef = useRef(0);
@@ -1934,6 +1935,13 @@ export default function PodcastAudioComposerPage() {
   }
 
   function playNextSequenceBlock(fromIndex, toIndex) {
+    if (sequenceTransitionRef.current) {
+      console.info("[PAC PLAY NEXT SKIPPED_DUPLICATE]", { fromIndex, toIndex });
+      return;
+    }
+
+    sequenceTransitionRef.current = true;
+
     const nextBlock = blocksRef.current?.[toIndex];
     const nextStart = nextBlock ? getBlockVirtualStart(blocksRef.current, toIndex) : getTimelineDuration(blocksRef.current);
     const nextItem = nextBlock ? normalizeComposerPlaybackBlock(nextBlock, toIndex, nextStart) : null;
@@ -1942,11 +1950,17 @@ export default function PodcastAudioComposerPage() {
       toIndex,
       nextType: nextItem?.type || "end",
     });
+
+    window.setTimeout(() => {
+      sequenceTransitionRef.current = false;
+    }, 80);
+
     void playSequenceBlock(toIndex, 0);
   }
 
   function stopSelectedBlockPlaybackAtEnd(reason = "selected_block_end") {
     void reason;
+    sequenceTransitionRef.current = false;
     const element = audioRef.current;
     const session = activeMainPlaybackRef.current;
     stopMainPlaybackGuard();
@@ -1970,6 +1984,7 @@ export default function PodcastAudioComposerPage() {
   }
 
   function stopMainPlayback() {
+    sequenceTransitionRef.current = false;
     const element = audioRef.current;
     stopMainPlaybackGuard();
     stopSilencePlayback();
@@ -2593,7 +2608,10 @@ export default function PodcastAudioComposerPage() {
     setIsPlaying(true);
 
     let startedAt = performance.now();
+    let finished = false;
     const finish = () => {
+      if (finished) return;
+      finished = true;
       if (fragmentAudioRef.current !== fragmentElement) return;
       stopFragmentPlayback();
       setCurrentTimeSec(roundSeconds(blockStartSec + duration));
