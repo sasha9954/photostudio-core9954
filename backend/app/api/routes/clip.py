@@ -539,8 +539,13 @@ class ClipVideoIn(BaseModel):
     endImageUrl: str | None = None
     transitionActionPrompt: str | None = None
     sceneHumanVisualAnchors: list[str] | None = None
-    format: str | None = "9:16"
+    format: str | None = None
     aspect_ratio: str | None = None
+    aspectRatio: str | None = None
+    projectFormat: str | None = None
+    project_format: str | None = None
+    projectAspectRatio: str | None = None
+    project_aspect_ratio: str | None = None
     width: int | None = None
     height: int | None = None
     lipSync: bool | None = False
@@ -3051,8 +3056,51 @@ def _validate_continuation_source(
 
 
 
+def _normalize_clip_video_aspect(value: Any) -> str:
+    normalized = str(value or "").strip()
+    return normalized if normalized in {"16:9", "9:16", "1:1"} else ""
+
+
+def _is_manual_clip_board_story_project(payload: ClipVideoIn) -> bool:
+    source = str(getattr(payload, "source", "") or "").strip().lower()
+    project_kind = str(getattr(payload, "project_kind", "") or "").strip().lower()
+    scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    route_payload = payload.routePayload if isinstance(payload.routePayload, dict) else (payload.route_payload if isinstance(payload.route_payload, dict) else {})
+    contract_kind = str(scene_contract.get("project_kind") or scene_contract.get("projectKind") or route_payload.get("project_kind") or route_payload.get("projectKind") or "").strip().lower()
+    return bool(source == "manual_clip_board" and (project_kind in {"story", "clip", ""} or contract_kind in {"story", "clip"}))
+
+
+def _resolve_clip_video_output_format(payload: ClipVideoIn) -> tuple[str, str]:
+    scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
+    route_payload = payload.routePayload if isinstance(payload.routePayload, dict) else (payload.route_payload if isinstance(payload.route_payload, dict) else {})
+    candidates = [
+        ("payload.aspect_ratio", getattr(payload, "aspect_ratio", None)),
+        ("payload.aspectRatio", getattr(payload, "aspectRatio", None)),
+        ("payload.format", getattr(payload, "format", None)),
+        ("payload.projectAspectRatio", getattr(payload, "projectAspectRatio", None)),
+        ("payload.project_aspect_ratio", getattr(payload, "project_aspect_ratio", None)),
+        ("payload.projectFormat", getattr(payload, "projectFormat", None)),
+        ("payload.project_format", getattr(payload, "project_format", None)),
+        ("sceneContract.aspect_ratio", scene_contract.get("aspect_ratio")),
+        ("sceneContract.aspectRatio", scene_contract.get("aspectRatio")),
+        ("sceneContract.format", scene_contract.get("format")),
+        ("sceneContract.project_format", scene_contract.get("project_format")),
+        ("sceneContract.projectFormat", scene_contract.get("projectFormat")),
+        ("routePayload.aspect_ratio", route_payload.get("aspect_ratio")),
+        ("routePayload.format", route_payload.get("format")),
+        ("routePayload.projectFormat", route_payload.get("projectFormat")),
+    ]
+    for source, value in candidates:
+        normalized = _normalize_clip_video_aspect(value)
+        if normalized:
+            return normalized, source
+    if _is_manual_clip_board_story_project(payload):
+        return "16:9", "manual_clip_board_story_fallback"
+    return "9:16", "legacy_default"
+
+
 def _resolve_clip_video_dimensions(output_format: str | None) -> tuple[int, int]:
-    normalized = str(output_format or "9:16").strip() or "9:16"
+    normalized = _normalize_clip_video_aspect(output_format) or "16:9"
     if normalized == "16:9":
         return 1280, 720
     if normalized == "1:1":
@@ -18332,7 +18380,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         response_obj = clip_video(payload)
         out, status_code = _normalize_clip_video_response_payload(response_obj)
         status = "done" if status_code < 400 and bool(out.get("ok")) else ("error_aspect_ratio" if str(out.get("status") or out.get("code") or "").lower() in {"error_aspect_ratio", "lip_sync_aspect_ratio_mismatch"} else "error")
-        video_url = str(out.get("videoUrl") or "").strip()
+        video_url = str(out.get("videoUrl") or "").strip() if status == "done" else ""
         provider_name = str(out.get("provider") or payload.provider or "").strip().lower()
         if status == "done" and not video_url:
             status = "error"
@@ -18902,6 +18950,28 @@ def clip_video_start(payload: ClipVideoIn):
     provider = str(payload.provider or settings.VIDEO_PROVIDER_DEFAULT or "kie").strip().lower() or "kie"
     resolved_workflow_hint = _normalize_ltx_workflow_key(str(payload.resolvedWorkflowKey or payload.ltxMode or "").strip()) or "auto"
     request_signature = _clip_video_payload_signature(payload, resolved_workflow_key=resolved_workflow_hint)
+    start_output_format, start_output_format_source = _resolve_clip_video_output_format(payload)
+    start_width = int(getattr(payload, "width", None) or 0) or None
+    start_height = int(getattr(payload, "height", None) or 0) or None
+    if not (start_width and start_height):
+        start_width, start_height = _resolve_clip_video_dimensions(start_output_format)
+    print(
+        "[CLIP VIDEO START ASPECT] "
+        + json.dumps(
+            {
+                "sceneId": scene_id,
+                "route": str(getattr(payload, "renderMode", "") or getattr(payload, "ltxMode", "") or ""),
+                "workflowKey": resolved_workflow_hint,
+                "format": start_output_format,
+                "formatSource": start_output_format_source,
+                "aspect_ratio": start_output_format,
+                "width": start_width,
+                "height": start_height,
+                "sourceImageSize": None,
+            },
+            ensure_ascii=False,
+        )
+    )
     resolved_duration_sec, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
     with CLIP_VIDEO_JOBS_LOCK:
         for existing_job_id, existing_job in reversed(list(CLIP_VIDEO_JOBS.items())):
@@ -19214,7 +19284,7 @@ def clip_video(payload: ClipVideoIn):
         "audioSliceUrl": audio_slice_url,
         "continuationSourceAssetUrl": continuation_source_asset_url,
     }
-    output_format = str(payload.format or payload.aspect_ratio or "9:16").strip() or "9:16"
+    output_format, output_format_source = _resolve_clip_video_output_format(payload)
     explicit_model = str(payload.resolvedModelKey or "").strip().lower()
     explicit_model_override = _resolve_model_key_from_override(payload.modelFileOverride)
     if explicit_model_override:
@@ -19497,6 +19567,8 @@ def clip_video(payload: ClipVideoIn):
                 },
             )
 
+        source_image_width = None
+        source_image_height = None
         width, height = _resolve_clip_video_dimensions(output_format)
         payload_width = int(payload.width or 0) if getattr(payload, "width", None) else 0
         payload_height = int(payload.height or 0) if getattr(payload, "height", None) else 0
@@ -19516,7 +19588,9 @@ def clip_video(payload: ClipVideoIn):
                     "payloadHeight": payload_height,
                     "width": width,
                     "height": height,
-                    "format": str(payload.format or ""),
+                    "format": output_format,
+                    "formatSource": output_format_source,
+                    "sourceImageSize": {"width": source_image_width, "height": source_image_height},
                 },
                 ensure_ascii=False,
             )
@@ -19800,6 +19874,14 @@ def clip_video(payload: ClipVideoIn):
                 )
             )
             image_bytes, image_ext = _download_image_from_source(source_image_url)
+            source_image_width = None
+            source_image_height = None
+            try:
+                with Image.open(io.BytesIO(image_bytes or b"")) as source_img:
+                    source_image_width, source_image_height = source_img.size
+            except Exception:
+                source_image_width = None
+                source_image_height = None
             print(
                 "[CLIP VIDEO DOWNLOAD] "
                 + json.dumps(
@@ -19811,6 +19893,24 @@ def clip_video(payload: ClipVideoIn):
                         "sourceUrl": source_image_url,
                         "status": "success",
                         "bytes": len(image_bytes or b""),
+                        "sourceImageSize": {"width": source_image_width, "height": source_image_height},
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            print(
+                "[CLIP VIDEO START RESOLVED ASPECT] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "route": str(getattr(payload, "video_generation_route", "") or getattr(payload, "renderMode", "") or ""),
+                        "workflowKey": final_workflow_key,
+                        "format": output_format,
+                        "formatSource": output_format_source,
+                        "aspect_ratio": output_format,
+                        "width": width,
+                        "height": height,
+                        "sourceImageSize": {"width": source_image_width, "height": source_image_height},
                     },
                     ensure_ascii=False,
                 )
@@ -20292,9 +20392,19 @@ def clip_video(payload: ClipVideoIn):
             video_url = normalized_url
             if normalized_duration_sec and normalized_duration_sec > 0:
                 source_video_duration_sec = normalized_duration_sec
+        comfy_debug = comfy_out.get("debug") if isinstance(comfy_out, dict) and isinstance(comfy_out.get("debug"), dict) else {}
         aspect_probe_width = None
         aspect_probe_height = None
         aspect_probe_diag = {}
+        width_height_debug = {
+            "patchedWidthHeightNodeIds": comfy_debug.get("patchedWidthHeightNodeIds") or [],
+            "expectedWidth": width,
+            "expectedHeight": height,
+            "actualWidth": None,
+            "actualHeight": None,
+            "widthNodeValue": comfy_debug.get("widthNodeValue"),
+            "heightNodeValue": comfy_debug.get("heightNodeValue"),
+        }
         if final_workflow_key in {"lip_sync", "lip_sync_music"} and output_format == "16:9" and video_url:
             aspect_probe_width, aspect_probe_height, aspect_probe_diag = _probe_video_dimensions_for_aspect_check(video_url)
             print(
@@ -20308,27 +20418,30 @@ def clip_video(payload: ClipVideoIn):
                         "expectedHeight": height,
                         "actualWidth": aspect_probe_width,
                         "actualHeight": aspect_probe_height,
+                        "patchedWidthHeightNodeIds": comfy_debug.get("patchedWidthHeightNodeIds") or [],
+                        "widthNodeValue": comfy_debug.get("widthNodeValue"),
+                        "heightNodeValue": comfy_debug.get("heightNodeValue"),
                         "diagnostic": aspect_probe_diag,
                     },
                     ensure_ascii=False,
                 )
             )
+            width_height_debug.update({"actualWidth": aspect_probe_width, "actualHeight": aspect_probe_height})
             if aspect_probe_width and aspect_probe_height and aspect_probe_height > aspect_probe_width:
                 return JSONResponse(
                     status_code=422,
                     content={
                         "ok": False,
                         "status": "error_aspect_ratio",
-                        "code": "LIP_SYNC_ASPECT_RATIO_MISMATCH",
-                        "hint": "lip_sync returned vertical video, expected 16:9",
-                        "details": "lip_sync returned vertical video, expected 16:9",
+                        "code": "lip_sync_aspect_ratio_mismatch",
+                        "hint": "lip_sync вернул vertical, ожидался 16:9",
+                        "details": "lip_sync вернул vertical, ожидался 16:9",
                         "actualWidth": aspect_probe_width,
                         "actualHeight": aspect_probe_height,
                         "expectedWidth": width,
                         "expectedHeight": height,
                         "expectedFormat": output_format,
-                        "videoUrl": video_url,
-                        "debug": {"aspectProbe": aspect_probe_diag, "workflow_key": final_workflow_key, "workflow_file": workflow_path},
+                        "debug": {**comfy_debug, **width_height_debug, "aspectProbe": aspect_probe_diag, "workflow_key": final_workflow_key, "workflow_file": workflow_path},
                     },
                 )
 
@@ -20352,7 +20465,6 @@ def clip_video(payload: ClipVideoIn):
             )
         )
         prompt_id = str(comfy_out.get("taskId") or "").strip()
-        comfy_debug = comfy_out.get("debug") if isinstance(comfy_out, dict) and isinstance(comfy_out.get("debug"), dict) else {}
         if final_workflow_key == "lip_sync":
             scene_contract = payload.sceneContract if isinstance(payload.sceneContract, dict) else {}
             print(
@@ -20405,6 +20517,11 @@ def clip_video(payload: ClipVideoIn):
             "targetDurationSec": round(float(target_duration_sec), 3),
             "generationDurationSec": round(float(generation_duration_sec), 3),
             "providerDurationSec": round(float(source_video_duration_sec or comfy_out.get("providerDurationSec") or comfy_out.get("requestedDurationSec") or generation_duration_sec), 3),
+            "expectedWidth": width,
+            "expectedHeight": height,
+            "actualWidth": aspect_probe_width,
+            "actualHeight": aspect_probe_height,
+            "expectedFormat": output_format,
             "videoHasAudio": bool(final_workflow_key in {"i2v_sound", "ltx23_i2v_sound_clean", "first_last_sound_clean"} and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
             "hasAudio": bool(final_workflow_key in {"i2v_sound", "ltx23_i2v_sound_clean", "first_last_sound_clean"} and (getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False))),
             "keepGeneratedAudio": bool(getattr(payload, "keepGeneratedAudio", False) or getattr(payload, "keep_generated_audio", False)),
@@ -20420,6 +20537,7 @@ def clip_video(payload: ClipVideoIn):
                 "targetDurationSec": float(target_duration_sec),
                 "generationDurationSec": float(generation_duration_sec),
                 "trimResult": trim_result_debug,
+                **width_height_debug,
                 "requestedPromptPreview": prompt_debug.get("requestedPromptPreview"),
                 "effectivePromptPreview": prompt_debug.get("effectivePromptPreview"),
                 "effectivePromptLength": prompt_debug.get("effectivePromptLength"),
