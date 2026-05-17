@@ -540,6 +540,9 @@ class ClipVideoIn(BaseModel):
     transitionActionPrompt: str | None = None
     sceneHumanVisualAnchors: list[str] | None = None
     format: str | None = "9:16"
+    aspect_ratio: str | None = None
+    width: int | None = None
+    height: int | None = None
     lipSync: bool | None = False
     renderMode: str | None = None
     sceneType: str | None = None
@@ -676,6 +679,10 @@ def _clip_video_payload_signature(payload: ClipVideoIn, *, resolved_workflow_key
         "ambience_hint": str(getattr(payload, "ambience_hint", None) or ""),
         "ambientSoundPrompt": str(getattr(payload, "ambientSoundPrompt", None) or ""),
         "ambient_sound_prompt": str(getattr(payload, "ambient_sound_prompt", None) or ""),
+        "format": str(payload.format or ""),
+        "aspect_ratio": str(getattr(payload, "aspect_ratio", None) or ""),
+        "width": int(getattr(payload, "width", None) or 0),
+        "height": int(getattr(payload, "height", None) or 0),
         "requestedDurationSec": float(_safe_positive_float(payload.requestedDurationSec) or 0),
         "targetDurationSec": float(_safe_positive_float(payload.targetDurationSec) or 0),
         "keepGeneratedAudio": bool(payload.keepGeneratedAudio or payload.keep_generated_audio),
@@ -18324,7 +18331,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
         )
         response_obj = clip_video(payload)
         out, status_code = _normalize_clip_video_response_payload(response_obj)
-        status = "done" if status_code < 400 and bool(out.get("ok")) else "error"
+        status = "done" if status_code < 400 and bool(out.get("ok")) else ("error_aspect_ratio" if str(out.get("status") or out.get("code") or "").lower() in {"error_aspect_ratio", "lip_sync_aspect_ratio_mismatch"} else "error")
         video_url = str(out.get("videoUrl") or "").strip()
         provider_name = str(out.get("provider") or payload.provider or "").strip().lower()
         if status == "done" and not video_url:
@@ -18398,6 +18405,11 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "sceneEndSec": out.get("sceneEndSec", scene_end_sec),
                 "sceneDurationSec": out.get("sceneDurationSec", scene_duration_sec),
                 "error": None if status == "done" else str(out.get("details") or out.get("hint") or out.get("code") or f"HTTP_{status_code}"),
+                "actualWidth": out.get("actualWidth"),
+                "actualHeight": out.get("actualHeight"),
+                "expectedWidth": out.get("expectedWidth"),
+                "expectedHeight": out.get("expectedHeight"),
+                "expectedFormat": out.get("expectedFormat"),
                 "requestedPromptPreview": str(((out.get("debug") or {}).get("requestedPromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
                 "effectivePromptPreview": str(((out.get("debug") or {}).get("effectivePromptPreview") if isinstance(out.get("debug"), dict) else "") or ""),
                 "effectivePromptLength": int(((out.get("debug") or {}).get("effectivePromptLength") if isinstance(out.get("debug"), dict) else 0) or 0),
@@ -18442,7 +18454,7 @@ def _run_clip_video_job(job_id: str, payload: ClipVideoIn):
                 "negativeAudioPromptPreview": str(((out.get("debug") or {}).get("payloadNegativeAudioPromptPreview") if isinstance(out.get("debug"), dict) else "") or str(getattr(payload, "negativeAudioPrompt", None) or getattr(payload, "negative_audio_prompt", None) or "")[:300]),
                 "queueStatus": status,
                 "updatedAt": time.time(),
-                "completedAt": time.time() if status in {"done", "error"} else None,
+                "completedAt": time.time() if status in {"done", "error", "error_aspect_ratio"} else None,
             })
         if status == "done":
             debug_payload = out.get("debug") if isinstance(out.get("debug"), dict) else {}
@@ -18828,6 +18840,62 @@ def clip_video_extract_last_frame(payload: ClipExtractLastFrameIn):
                 pass
 
 
+def _probe_video_dimensions_for_aspect_check(path_or_url: str) -> tuple[int | None, int | None, dict[str, Any]]:
+    temp_files: list[str] = []
+    diagnostic: dict[str, Any] = {"source": str(path_or_url or ""), "resolvedPath": "", "warning": None}
+    try:
+        resolved_path = str(path_or_url or "").strip()
+        if not resolved_path:
+            diagnostic["warning"] = "empty_video_path_or_url"
+            return None, None, diagnostic
+        if resolved_path.startswith("http://") or resolved_path.startswith("https://") or resolved_path.startswith("/"):
+            maybe_path, resolve_err = _resolve_media_input(resolved_path, temp_files)
+            if resolve_err or not maybe_path:
+                diagnostic["warning"] = f"resolve_media_failed:{resolve_err or 'unknown'}"
+                return None, None, diagnostic
+            resolved_path = maybe_path
+        diagnostic["resolvedPath"] = resolved_path
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "json",
+                resolved_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            diagnostic["warning"] = (proc.stderr or proc.stdout or "ffprobe_failed").strip()[:500]
+            return None, None, diagnostic
+        parsed = json.loads(proc.stdout or "{}")
+        streams = parsed.get("streams") if isinstance(parsed, dict) else []
+        stream0 = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+        width = int(stream0.get("width") or 0) or None
+        height = int(stream0.get("height") or 0) or None
+        diagnostic.update({"width": width, "height": height})
+        return width, height, diagnostic
+    except FileNotFoundError:
+        diagnostic["warning"] = "ffprobe_missing_install_and_add_to_PATH"
+        return None, None, diagnostic
+    except Exception as exc:
+        diagnostic["warning"] = str(exc)[:500]
+        return None, None, diagnostic
+    finally:
+        for path in temp_files:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+
 @router.post("/clip/video/start")
 def clip_video_start(payload: ClipVideoIn):
     scene_id = str(payload.sceneId or "").strip() or "scene"
@@ -19146,7 +19214,7 @@ def clip_video(payload: ClipVideoIn):
         "audioSliceUrl": audio_slice_url,
         "continuationSourceAssetUrl": continuation_source_asset_url,
     }
-    output_format = str(payload.format or "9:16").strip() or "9:16"
+    output_format = str(payload.format or payload.aspect_ratio or "9:16").strip() or "9:16"
     explicit_model = str(payload.resolvedModelKey or "").strip().lower()
     explicit_model_override = _resolve_model_key_from_override(payload.modelFileOverride)
     if explicit_model_override:
@@ -19430,6 +19498,29 @@ def clip_video(payload: ClipVideoIn):
             )
 
         width, height = _resolve_clip_video_dimensions(output_format)
+        payload_width = int(payload.width or 0) if getattr(payload, "width", None) else 0
+        payload_height = int(payload.height or 0) if getattr(payload, "height", None) else 0
+        if payload_width > 0 and payload_height > 0:
+            width, height = payload_width, payload_height
+        if final_workflow_key in {"lip_sync", "lip_sync_music"} and output_format == "16:9" and height >= width:
+            width, height = 1280, 720
+        print(
+            "[CLIP VIDEO ASPECT PAYLOAD] "
+            + json.dumps(
+                {
+                    "sceneId": scene_id,
+                    "route": str(getattr(payload, "video_generation_route", "") or getattr(payload, "renderMode", "") or ""),
+                    "workflowKey": final_workflow_key,
+                    "aspect_ratio": output_format,
+                    "payloadWidth": payload_width,
+                    "payloadHeight": payload_height,
+                    "width": width,
+                    "height": height,
+                    "format": str(payload.format or ""),
+                },
+                ensure_ascii=False,
+            )
+        )
         requested_duration, scene_start_sec, scene_end_sec, scene_duration_sec = _resolve_video_timeframe(payload)
         generation_duration_sec, target_duration_sec, overgenerate_reason, trim_plan_reason = _resolve_generation_and_target_duration(payload, final_workflow_key)
         requested_duration = float(requested_duration)
@@ -20201,6 +20292,46 @@ def clip_video(payload: ClipVideoIn):
             video_url = normalized_url
             if normalized_duration_sec and normalized_duration_sec > 0:
                 source_video_duration_sec = normalized_duration_sec
+        aspect_probe_width = None
+        aspect_probe_height = None
+        aspect_probe_diag = {}
+        if final_workflow_key in {"lip_sync", "lip_sync_music"} and output_format == "16:9" and video_url:
+            aspect_probe_width, aspect_probe_height, aspect_probe_diag = _probe_video_dimensions_for_aspect_check(video_url)
+            print(
+                "[LIP_SYNC ASPECT CHECK] "
+                + json.dumps(
+                    {
+                        "sceneId": scene_id,
+                        "workflowKey": final_workflow_key,
+                        "expectedFormat": output_format,
+                        "expectedWidth": width,
+                        "expectedHeight": height,
+                        "actualWidth": aspect_probe_width,
+                        "actualHeight": aspect_probe_height,
+                        "diagnostic": aspect_probe_diag,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            if aspect_probe_width and aspect_probe_height and aspect_probe_height > aspect_probe_width:
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "ok": False,
+                        "status": "error_aspect_ratio",
+                        "code": "LIP_SYNC_ASPECT_RATIO_MISMATCH",
+                        "hint": "lip_sync returned vertical video, expected 16:9",
+                        "details": "lip_sync returned vertical video, expected 16:9",
+                        "actualWidth": aspect_probe_width,
+                        "actualHeight": aspect_probe_height,
+                        "expectedWidth": width,
+                        "expectedHeight": height,
+                        "expectedFormat": output_format,
+                        "videoUrl": video_url,
+                        "debug": {"aspectProbe": aspect_probe_diag, "workflow_key": final_workflow_key, "workflow_file": workflow_path},
+                    },
+                )
+
         print("[SCENARIO VIDEO TRIM RESULT] " + json.dumps(trim_result_debug, ensure_ascii=False))
         print(
             "[SCENARIO VIDEO DURATION TRACE] "
