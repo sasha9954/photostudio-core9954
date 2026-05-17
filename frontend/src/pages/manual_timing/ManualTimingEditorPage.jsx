@@ -1128,6 +1128,42 @@ function decorateManualTimingSilenceScene(scene = {}) {
   };
 }
 
+
+function materializeManualTimingSceneSourceMap(scene = {}) {
+  if (isManualTimingSilenceScene(scene)) return decorateManualTimingSilenceScene(scene);
+
+  const start = roundTimingSec(Number(scene.start_sec || 0));
+  const end = roundTimingSec(Number(scene.end_sec || start));
+  const sourceStart = Number.isFinite(Number(scene.source_start_sec))
+    ? roundTimingSec(Number(scene.source_start_sec))
+    : start;
+  const sourceEnd = Number.isFinite(Number(scene.source_end_sec))
+    ? roundTimingSec(Number(scene.source_end_sec))
+    : roundTimingSec(sourceStart + Math.max(0, end - start));
+
+  return {
+    ...scene,
+    source_kind: scene.source_kind || "audio",
+    source_start_sec: sourceStart,
+    source_end_sec: sourceEnd,
+  };
+}
+
+function getManualTimingSceneSourceStartSec(scene = {}) {
+  if (isManualTimingSilenceScene(scene)) return null;
+  const explicit = Number(scene.source_start_sec ?? scene.sourceStartSec);
+  if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+  return roundTimingSec(scene.start_sec);
+}
+
+function getManualTimingSceneSourceEndSec(scene = {}) {
+  if (isManualTimingSilenceScene(scene)) return null;
+  const explicit = Number(scene.source_end_sec ?? scene.sourceEndSec);
+  if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+  const sourceStart = getManualTimingSceneSourceStartSec(scene);
+  return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
+}
+
 function buildManualTimingSilenceBlocksFromScenes(scenes = []) {
   return (Array.isArray(scenes) ? scenes : [])
     .filter((scene) => isManualTimingSilenceScene(scene))
@@ -1328,23 +1364,6 @@ function repairManualTimingSilenceTimelineProject(project = {}) {
     virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(rebuilt.scenes),
     timing_status: "draft",
   };
-}
-
-function shiftManualTimingAudioPhrasesAfter(audioPhrases = [], cursorSec = 0, deltaSec = 0) {
-  const cursor = roundTimingSec(cursorSec);
-  const delta = roundTimingSec(deltaSec);
-  if (Math.abs(delta) < 0.0005) return normalizeManualTimingAudioPhrases(audioPhrases);
-  return normalizeManualTimingAudioPhrases(audioPhrases).map((phrase) => {
-    const start = roundTimingSec(phrase.start_sec);
-    const end = roundTimingSec(phrase.end_sec);
-    if (start >= cursor - 0.001) {
-      return { ...phrase, start_sec: roundTimingSec(start + delta), end_sec: roundTimingSec(end + delta) };
-    }
-    if (end > cursor + 0.001) {
-      return { ...phrase, end_sec: roundTimingSec(end + delta) };
-    }
-    return phrase;
-  });
 }
 
 function getSceneIdForIndex(index) {
@@ -1852,7 +1871,7 @@ function getAsrPhraseStyle(phrase, durationSec) {
 }
 
 function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = [], allAudioPhrases = [], allScenes = [], audioDurationSec = 0) {
-  if (!scene) return [];
+  if (!scene || isManualTimingSilenceScene(scene)) return [];
   const warnings = [];
   const sceneStart = Number(scene.start_sec || 0);
   const sceneEnd = Number(scene.end_sec || 0);
@@ -1872,8 +1891,10 @@ function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = [], allAud
   if (preSilence > 1.25) warnings.push(`${scene.scene_id}: большая pre-silence ${preSilence.toFixed(2)} сек.`);
   if (postSilence > 1.25) warnings.push(`${scene.scene_id}: большая post-silence ${postSilence.toFixed(2)} сек.`);
 
+  const sceneSourceStart = Number(getManualTimingSceneSourceStartSec(scene));
+  const sceneSourceEnd = Number(getManualTimingSceneSourceEndSec(scene));
   const phraseIdsInsideScene = normalizeManualTimingAudioPhrases(allAudioPhrases)
-    .filter((phrase) => Number(phrase.start_sec || 0) < sceneEnd - 0.001 && Number(phrase.end_sec || 0) > sceneStart + 0.001)
+    .filter((phrase) => Number(phrase.start_sec || 0) < sceneSourceEnd - 0.001 && Number(phrase.end_sec || 0) > sceneSourceStart + 0.001)
     .map((phrase) => String(phrase.phrase_id || ""))
     .filter(Boolean);
   const missingInsideSource = phraseIdsInsideScene.filter((phraseId) => !sourceIds.includes(phraseId));
@@ -1932,9 +1953,9 @@ function pickManualTimingAudioPhraseRuText(phrase = {}) {
 }
 
 function isManualTimingPhrasePartialInScene(phrase = {}, scene = null) {
-  if (!scene) return false;
-  const sceneStart = Number(scene?.start_sec || 0);
-  const sceneEnd = Number(scene?.end_sec || 0);
+  if (!scene || isManualTimingSilenceScene(scene)) return false;
+  const sceneStart = Number(getManualTimingSceneSourceStartSec(scene));
+  const sceneEnd = Number(getManualTimingSceneSourceEndSec(scene));
   const phraseStart = Number(phrase?.start_sec || 0);
   const phraseEnd = Number(phrase?.end_sec || 0);
   if (!(sceneEnd > sceneStart) || !(phraseEnd > phraseStart)) return false;
@@ -1942,9 +1963,9 @@ function isManualTimingPhrasePartialInScene(phrase = {}, scene = null) {
 }
 
 function getManualTimingPhrasesForSceneInspector(audioPhrases = [], scene = null) {
-  if (!scene || !Array.isArray(audioPhrases)) return [];
-  const sceneStart = Number(scene?.start_sec || 0);
-  const sceneEnd = Number(scene?.end_sec || 0);
+  if (!scene || !Array.isArray(audioPhrases) || isManualTimingSilenceScene(scene)) return [];
+  const sceneStart = Number(getManualTimingSceneSourceStartSec(scene));
+  const sceneEnd = Number(getManualTimingSceneSourceEndSec(scene));
   if (!(sceneEnd > sceneStart)) return [];
 
   return audioPhrases.reduce((inspectorPhrases, phrase) => {
@@ -1983,8 +2004,9 @@ function getManualTimingPhraseGroupCoverage(phrase = {}, groupScenes = []) {
 
   const overlaps = groupScenes
     .map((scene) => {
-      const sceneStart = Number(scene?.start_sec || 0);
-      const sceneEnd = Number(scene?.end_sec || 0);
+      if (isManualTimingSilenceScene(scene)) return null;
+      const sceneStart = Number(getManualTimingSceneSourceStartSec(scene));
+      const sceneEnd = Number(getManualTimingSceneSourceEndSec(scene));
       const overlapStart = Math.max(sceneStart, phraseStart);
       const overlapEnd = Math.min(sceneEnd, phraseEnd);
       return overlapEnd > overlapStart ? [overlapStart, overlapEnd] : null;
@@ -3510,7 +3532,6 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
-    const oldEnd = end;
     const nextEnd = roundTimingSec(start + nextSilenceDuration);
     const nextDuration = roundTimingSec(Math.max(0.01, activeDuration + appliedDelta));
     rememberManualTimingAction("доводчик тишины");
@@ -3536,7 +3557,7 @@ export default function ManualTimingEditorPage() {
       },
       markers: nextMarkers,
       story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
-      audio_phrases: shiftManualTimingAudioPhrasesAfter(project.audio_phrases, oldEnd, appliedDelta),
+      audio_phrases: project.audio_phrases,
       virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
       scenes: nextScenes,
       selectedSceneId: nextSelectedScene?.scene_id || selectedScene.scene_id,
@@ -3591,18 +3612,19 @@ export default function ManualTimingEditorPage() {
         buildManualTimingScenesFromMarkers(project.markers?.length ? project.markers : [0, activeDuration], [], { durationSec: activeDuration }),
         project.story_blocks
       );
+    const sourceMappedScenes = safeScenes.map(materializeManualTimingSceneSourceMap);
     const epsilon = 0.001;
-    const sourceIndex = safeScenes.findIndex((scene, index) => {
+    const sourceIndex = sourceMappedScenes.findIndex((scene, index) => {
       const start = roundTimingSec(scene.start_sec);
       const end = roundTimingSec(scene.end_sec);
-      const isLast = index === safeScenes.length - 1;
+      const isLast = index === sourceMappedScenes.length - 1;
       return cursor >= start - epsilon && (cursor < end - epsilon || (isLast && cursor <= end + epsilon));
     });
-    const insertAtIndex = sourceIndex >= 0 ? sourceIndex : safeScenes.length - 1;
+    const insertAtIndex = sourceIndex >= 0 ? sourceIndex : sourceMappedScenes.length - 1;
     const nextSceneDrafts = [];
     let selectedSilenceOrderIndex = 0;
 
-    safeScenes.forEach((scene, index) => {
+    sourceMappedScenes.forEach((scene, index) => {
       if (index < insertAtIndex) {
         nextSceneDrafts.push(scene);
         return;
@@ -3635,8 +3657,8 @@ export default function ManualTimingEditorPage() {
         index: nextSceneDrafts.length + 1,
         start_sec: cursor,
         end_sec: roundTimingSec(cursor + silenceDuration),
-        source_start_sec: null,
-        source_end_sec: null,
+        source_start_sec: 0,
+        source_end_sec: silenceDuration,
         silence_block_id: `silence_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       });
       selectedSilenceOrderIndex = nextSceneDrafts.length;
@@ -3657,7 +3679,13 @@ export default function ManualTimingEditorPage() {
 
     const nextScenes = reindexManualTimingTimelineScenes(nextSceneDrafts);
     const nextSelectedScene = nextScenes[selectedSilenceOrderIndex] || nextScenes.find((scene) => isManualTimingSilenceScene(scene));
-    const nextMarkers = buildManualTimingMarkersFromScenesList(nextScenes, nextDuration);
+    const nextMarkers = normalizeManualTimingMarkers(
+      [
+        0,
+        ...nextScenes.map((scene) => Number(scene.end_sec || 0)),
+      ],
+      nextDuration
+    );
 
     rememberManualTimingAction("вставка тишины");
     persist({
@@ -3672,7 +3700,7 @@ export default function ManualTimingEditorPage() {
       },
       markers: nextMarkers,
       story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
-      audio_phrases: shiftManualTimingAudioPhrasesAfter(project.audio_phrases, cursor, silenceDuration),
+      audio_phrases: project.audio_phrases,
       virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
       scenes: nextScenes,
       selectedSceneId: nextSelectedScene?.scene_id || nextScenes[0]?.scene_id || "",
