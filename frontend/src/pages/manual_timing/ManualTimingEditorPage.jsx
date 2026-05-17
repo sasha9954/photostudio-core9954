@@ -2190,6 +2190,8 @@ export default function ManualTimingEditorPage() {
   const isPlayingRef = useRef(false);
   const durationSecRef = useRef(0);
   const playStartGuardRef = useRef(null);
+  const manualTimingPlaybackSessionRef = useRef(null);
+  const manualTimingInternalSwitchRef = useRef(false);
   const manualTimingPlaybackModeRef = useRef("");
   const [manualTimingPlaybackMode, setManualTimingPlaybackMode] = useState("");
 
@@ -2707,6 +2709,24 @@ export default function ManualTimingEditorPage() {
     return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
   };
 
+  function setManualTimingPlaybackSessionFromPosition(position, mode, rangeEndSec = null) {
+    if (!position || position.isSilence) {
+      manualTimingPlaybackSessionRef.current = null;
+      return;
+    }
+
+    manualTimingPlaybackSessionRef.current = {
+      mode,
+      sceneIndex: position.index,
+      sceneId: position.scene?.scene_id || "",
+      timelineStartSec: position.sceneStartSec,
+      timelineEndSec: position.sceneEndSec,
+      sourceStartSec: position.sourceStartSec,
+      sourceEndSec: position.sourceEndSec,
+      rangeEndSec: Number.isFinite(Number(rangeEndSec)) ? Number(rangeEndSec) : null,
+    };
+  }
+
   function findManualTimingTimelinePosition(timeSec, sceneList = scenes) {
     const timelineTime = roundTimingSec(clampTime(timeSec, durationSecRef.current || durationSec));
     const safeScenes = Array.isArray(sceneList) ? sceneList : [];
@@ -2791,6 +2811,29 @@ export default function ManualTimingEditorPage() {
   const syncCurrentTimeFromAudio = ({ force = false } = {}) => {
     const audioEl = audioRef.current;
     if (!audioEl) return currentTimeRef.current;
+
+    const session = manualTimingPlaybackSessionRef.current;
+
+    if (session && !audioEl.paused) {
+      const sourceTime = roundTimingSec(
+        Math.max(session.sourceStartSec, Math.min(session.sourceEndSec, Number(audioEl.currentTime || 0)))
+      );
+
+      const nextTime = roundTimingSec(
+        session.timelineStartSec + Math.max(0, sourceTime - session.sourceStartSec)
+      );
+
+      const guard = playStartGuardRef.current;
+      if (!force && guard && Date.now() < guard.until && nextTime < Number(guard.start || 0) - 0.12) {
+        return currentTimeRef.current;
+      }
+
+      if (guard && Date.now() >= guard.until) {
+        playStartGuardRef.current = null;
+      }
+
+      return setDisplayTime(nextTime);
+    }
 
     // Главное правило: когда audio на паузе, DOM-события pause/seeked/timeupdate
     // не имеют права двигать UI-курсор. Ручной переход уже сам обновляет курсор.
@@ -2880,6 +2923,7 @@ export default function ManualTimingEditorPage() {
 
     if (audioEl) {
       if (pause) {
+        manualTimingPlaybackSessionRef.current = null;
         audioEl.pause();
         manualTimingPlaybackModeRef.current = "";
         setManualTimingPlaybackMode("");
@@ -2905,6 +2949,8 @@ export default function ManualTimingEditorPage() {
     const audioEl = audioRef.current;
     playUntilRef.current = null;
     playStartGuardRef.current = null;
+    manualTimingPlaybackSessionRef.current = null;
+    manualTimingInternalSwitchRef.current = false;
     manualTimingPlaybackModeRef.current = "";
     setManualTimingPlaybackMode("");
     setPlayingState(false);
@@ -2938,10 +2984,15 @@ export default function ManualTimingEditorPage() {
     const scene = position.scene;
 
     if (position.isSilence) {
+      manualTimingPlaybackSessionRef.current = null;
       const silenceStart = position.timelineTime;
       const silenceEnd = Math.min(Number(scene.end_sec || 0), end ?? activeDuration);
       const startedAt = performance.now();
+      manualTimingInternalSwitchRef.current = true;
       try { audioEl.pause(); } catch {}
+      window.setTimeout(() => {
+        manualTimingInternalSwitchRef.current = false;
+      }, 0);
       stopRafLoop();
       stopSilencePlayback();
       setDisplayTime(silenceStart);
@@ -2968,19 +3019,28 @@ export default function ManualTimingEditorPage() {
     }
 
     stopSilencePlayback();
+    setManualTimingPlaybackSessionFromPosition(position, manualTimingPlaybackModeRef.current || "cursor", end);
     playStartGuardRef.current = { start: position.timelineTime, until: Date.now() + 700 };
+    manualTimingInternalSwitchRef.current = true;
     setAudioElementTime(position.sourceTimeSec);
     setDisplayTime(position.timelineTime);
     window.setTimeout(() => {
       const activeAudio = audioRef.current;
-      if (!activeAudio) return;
+      if (!activeAudio) {
+        manualTimingInternalSwitchRef.current = false;
+        return;
+      }
+      setManualTimingPlaybackSessionFromPosition(position, manualTimingPlaybackModeRef.current || "cursor", end);
       playStartGuardRef.current = { start: position.timelineTime, until: Date.now() + 700 };
       setAudioElementTime(position.sourceTimeSec);
       setDisplayTime(position.timelineTime);
       activeAudio.play().then(() => {
+        manualTimingInternalSwitchRef.current = false;
         setPlayingState(true);
         startRafLoop();
       }).catch(() => {
+        manualTimingInternalSwitchRef.current = false;
+        manualTimingPlaybackSessionRef.current = null;
         setPlayingState(false);
       });
     }, 30);
@@ -3025,7 +3085,6 @@ export default function ManualTimingEditorPage() {
     playUntilRef.current = endSec;
 
     setAudioElementTimeForTimelineTime(startSec);
-    setCurrentTime(startSec);
     setDisplayTime(startSec);
 
     try {
@@ -3140,6 +3199,7 @@ export default function ManualTimingEditorPage() {
     // Не принимаем timeupdate от audio, когда он на паузе: именно это
     // сбрасывало курсор назад после ручного перехода и pause.
     if (audioEl.paused) {
+      if (manualTimingInternalSwitchRef.current) return;
       setPlayingState(false);
       return;
     }
@@ -5550,8 +5610,16 @@ export default function ManualTimingEditorPage() {
             const audioEl = audioRef.current;
             if (audioEl && !audioEl.paused) syncCurrentTimeFromAudio();
           }}
-          onPlay={() => { setPlayingState(true); startRafLoop(); }}
-          onPause={() => { setPlayingState(false); stopRafLoop(); }}
+          onPlay={() => {
+            setPlayingState(true);
+            if (!rafRef.current) startRafLoop();
+          }}
+          onPause={() => {
+            if (manualTimingInternalSwitchRef.current) return;
+            setPlayingState(false);
+            stopRafLoop();
+            manualTimingPlaybackSessionRef.current = null;
+          }}
           onEnded={() => {
             const endTime = durationSecRef.current || durationSec;
             stopManualTimingPlayback();
