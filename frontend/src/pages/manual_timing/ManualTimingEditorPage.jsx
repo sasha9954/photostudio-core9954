@@ -2960,13 +2960,18 @@ export default function ManualTimingEditorPage() {
     }
   };
 
-  function stopManualTimingQueuePlayback() {
+  function stopManualTimingQueuePlayback({ keepDisplayTime = true } = {}) {
     if (manualTimingQueueRafRef.current) {
       window.cancelAnimationFrame(manualTimingQueueRafRef.current);
       manualTimingQueueRafRef.current = null;
     }
 
     manualTimingQueuePlaybackRef.current = null;
+    manualTimingPlaybackSessionRef.current = null;
+    manualTimingInternalSwitchRef.current = false;
+
+    manualTimingPlaybackModeRef.current = "";
+    setManualTimingPlaybackMode("");
 
     try {
       audioRef.current?.pause();
@@ -3108,7 +3113,11 @@ export default function ManualTimingEditorPage() {
 
     const scene = session.scenes[index];
     if (!scene) {
+      const lastScene = session.scenes[session.scenes.length - 1];
+      const lastEnd = Number(lastScene?.end_sec || currentTimeRef.current || 0);
+
       stopManualTimingQueuePlayback();
+      if (lastEnd > 0) setDisplayTime(roundTimingSec(lastEnd));
       return;
     }
 
@@ -3144,7 +3153,10 @@ export default function ManualTimingEditorPage() {
         manualTimingQueueRafRef.current = window.requestAnimationFrame(tick);
       };
 
-      if (manualTimingQueueRafRef.current) window.cancelAnimationFrame(manualTimingQueueRafRef.current);
+      if (manualTimingQueueRafRef.current) {
+        window.cancelAnimationFrame(manualTimingQueueRafRef.current);
+        manualTimingQueueRafRef.current = null;
+      }
       manualTimingQueueRafRef.current = window.requestAnimationFrame(tick);
       return;
     }
@@ -3185,7 +3197,10 @@ export default function ManualTimingEditorPage() {
         manualTimingQueueRafRef.current = window.requestAnimationFrame(tick);
       };
 
-      if (manualTimingQueueRafRef.current) window.cancelAnimationFrame(manualTimingQueueRafRef.current);
+      if (manualTimingQueueRafRef.current) {
+        window.cancelAnimationFrame(manualTimingQueueRafRef.current);
+        manualTimingQueueRafRef.current = null;
+      }
       manualTimingQueueRafRef.current = window.requestAnimationFrame(tick);
     }).catch((error) => {
       console.warn("[MANUAL TIMING QUEUE PLAY_FAILED]", error);
@@ -3359,7 +3374,7 @@ export default function ManualTimingEditorPage() {
     const audioEl = audioRef.current;
     if (!audioEl) return;
 
-    if (!audioEl.paused || isPlayingRef.current) {
+    if (manualTimingQueuePlaybackRef.current || !audioEl.paused || isPlayingRef.current) {
       stopManualTimingPlayback();
       return;
     }
@@ -5753,10 +5768,14 @@ export default function ManualTimingEditorPage() {
           }}
           onEnded={() => {
             const queueSession = manualTimingQueuePlaybackRef.current;
+
             if (queueSession) {
-              playManualTimingQueueItem(queueSession, Number(queueSession.index || 0) + 1);
+              if (!manualTimingQueueRafRef.current) {
+                playManualTimingQueueItem(queueSession, Number(queueSession.index || 0) + 1);
+              }
               return;
             }
+
             const endTime = durationSecRef.current || durationSec;
             stopManualTimingPlayback();
             setDisplayTime(endTime);
