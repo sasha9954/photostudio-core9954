@@ -3576,13 +3576,14 @@ export default function ManualTimingEditorPage() {
     setAudioTime(actualTime, { pause: true, clearBound: true });
   };
 
-  const insertSilenceAtCursor = () => {
-    stopManualTimingPlayback();
+  const insertSilenceAtTimelineTime = (insertTimeSec, silenceDurationSec = MANUAL_TIMING_INSERT_SILENCE_SEC) => {
     const activeDuration = durationSecRef.current || durationSec;
     if (!(activeDuration > 0)) return;
 
-    const silenceDuration = MANUAL_TIMING_INSERT_SILENCE_SEC;
-    const cursor = roundTimingSec(clampTime(currentTimeRef.current ?? currentTime, activeDuration));
+    const silenceDuration = roundTimingSec(Math.max(0.01, Number(silenceDurationSec || MANUAL_TIMING_INSERT_SILENCE_SEC)));
+    const cursor = roundTimingSec(clampTime(Number(insertTimeSec || 0), activeDuration));
+
+    stopManualTimingPlayback();
     const nextDuration = roundTimingSec(activeDuration + silenceDuration);
     const safeScenes = Array.isArray(scenes) && scenes.length
       ? scenes
@@ -3680,6 +3681,30 @@ export default function ManualTimingEditorPage() {
     setAudioTime(cursor, { pause: true, clearBound: true });
     setCopyStatus(`Вставлена тишина ${formatTimingSec(silenceDuration)} в ${formatTimingSec(cursor)}. Аудио разрезано, правая часть сдвинута.`);
     window.setTimeout(() => setCopyStatus(""), 2200);
+  };
+
+  const insertSilenceAtCursor = () => {
+    const activeDuration = durationSecRef.current || durationSec;
+    if (!(activeDuration > 0)) return;
+
+    const audioEl = audioRef.current;
+    const liveAudioTime = Number(audioEl?.currentTime);
+    const rawCursor = Number.isFinite(liveAudioTime) && liveAudioTime > 0
+      ? liveAudioTime
+      : Number(currentTimeRef.current ?? currentTime ?? 0);
+    const cursor = roundTimingSec(clampTime(rawCursor, activeDuration));
+
+    insertSilenceAtTimelineTime(cursor);
+  };
+
+  const insertSilenceBeforeSelectedScene = () => {
+    if (!selectedScene) {
+      insertSilenceAtCursor();
+      return;
+    }
+
+    const insertTime = roundTimingSec(clampTime(Number(selectedScene.start_sec || 0), durationSecRef.current || durationSec));
+    insertSilenceAtTimelineTime(insertTime, 1);
   };
 
   const playSegment = (scene) => {
@@ -5675,10 +5700,18 @@ export default function ManualTimingEditorPage() {
               </div>
               <button
                 className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
+                type="button"
                 onClick={insertSilenceAtCursor}
                 disabled={!audio.url || !(durationSec > 0)}
                 title="Вставить 0.5 сек тишины по текущему курсору"
               >тишина</button>
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
+                type="button"
+                onClick={insertSilenceBeforeSelectedScene}
+                disabled={!audio.url || !(durationSec > 0)}
+                title="Вставить 1 сек тишины перед выбранной сценой"
+              >тишина перед сценой</button>
               <button
                 className="clipSB_btn clipSB_btnDanger manualTimingResetMiniButton"
                 onClick={onReset}
