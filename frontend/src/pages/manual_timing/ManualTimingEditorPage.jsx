@@ -1216,6 +1216,23 @@ function shiftManualTimingScene(scene = {}, deltaSec = 0) {
   };
 }
 
+function shiftManualTimingTimelineScenePreserveSource(scene = {}, deltaSec = 0) {
+  const oldSourceStart = scene.source_start_sec ?? scene.sourceStartSec ?? getManualTimingSceneSourceStartSec(scene);
+  const oldSourceEnd = scene.source_end_sec ?? scene.sourceEndSec ?? getManualTimingSceneSourceEndSec(scene);
+  const shifted = shiftManualTimingScene(scene, deltaSec);
+
+  if (isManualTimingSilenceScene(scene)) {
+    return decorateManualTimingSilenceScene(shifted);
+  }
+
+  return {
+    ...shifted,
+    source_kind: scene.source_kind || "audio",
+    source_start_sec: oldSourceStart,
+    source_end_sec: oldSourceEnd,
+  };
+}
+
 function reindexManualTimingTimelineScenes(scenes = []) {
   return (Array.isArray(scenes) ? scenes : [])
     .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001)
@@ -2728,27 +2745,86 @@ export default function ManualTimingEditorPage() {
     return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
   };
 
-  const getSourceTimeForTimelineTime = (timeValue = 0) => {
-    const index = findSceneIndexForTimelineTime(timeValue);
-    const scene = index >= 0 ? scenes[index] : null;
-    if (!scene || isManualTimingSilenceScene(scene)) return null;
-    const timelineStart = roundTimingSec(scene.start_sec);
-    const timelineEnd = roundTimingSec(scene.end_sec);
-    const sourceStart = getSceneSourceStartSec(scene);
-    const sourceEnd = getSceneSourceEndSec(scene);
-    const offset = roundTimingSec(clampTime(timeValue, timelineEnd) - timelineStart);
-    return roundTimingSec(Math.max(sourceStart, Math.min(sourceEnd, sourceStart + offset)));
-  };
+  function findManualTimingTimelinePosition(timeSec, sceneList = scenes) {
+    const timelineTime = roundTimingSec(clampTime(timeSec, durationSecRef.current || durationSec));
+    const safeScenes = Array.isArray(sceneList) ? sceneList : [];
+    const epsilon = 0.001;
+
+    const index = safeScenes.findIndex((scene, idx) => {
+      const start = roundTimingSec(scene.start_sec);
+      const end = roundTimingSec(scene.end_sec);
+      const isLast = idx === safeScenes.length - 1;
+      return timelineTime >= start - epsilon && (timelineTime < end - epsilon || (isLast && timelineTime <= end + epsilon));
+    });
+
+    const scene = index >= 0 ? safeScenes[index] : null;
+    if (!scene) return null;
+
+    const sceneStart = roundTimingSec(scene.start_sec);
+    const sceneEnd = roundTimingSec(scene.end_sec);
+    const offsetSec = roundTimingSec(Math.max(0, timelineTime - sceneStart));
+
+    if (isManualTimingSilenceScene(scene)) {
+      return {
+        index,
+        scene,
+        isSilence: true,
+        timelineTime,
+        offsetSec,
+        sourceTimeSec: null,
+        sceneStartSec: sceneStart,
+        sceneEndSec: sceneEnd,
+      };
+    }
+
+    const sourceStart = getManualTimingSceneSourceStartSec(scene);
+    const sourceEnd = getManualTimingSceneSourceEndSec(scene);
+    const sourceTimeSec = roundTimingSec(Math.min(sourceEnd, Math.max(sourceStart, sourceStart + offsetSec)));
+
+    return {
+      index,
+      scene,
+      isSilence: false,
+      timelineTime,
+      offsetSec,
+      sourceTimeSec,
+      sourceStartSec: sourceStart,
+      sourceEndSec: sourceEnd,
+      sceneStartSec: sceneStart,
+      sceneEndSec: sceneEnd,
+    };
+  }
 
   const setAudioElementTime = (timeValue) => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
-    const sourceTime = getSourceTimeForTimelineTime(timeValue);
-    if (sourceTime === null) return;
+    const sourceTime = roundTimingSec(Math.max(0, Number(timeValue || 0)));
     try {
       audioEl.currentTime = sourceTime;
     } catch {}
   };
+
+  function setAudioElementTimeForTimelineTime(timelineTime) {
+    const audioEl = audioRef.current;
+    const position = findManualTimingTimelinePosition(timelineTime, scenes);
+
+    if (!position) {
+      setAudioElementTime(timelineTime);
+      return timelineTime;
+    }
+
+    if (position.isSilence) {
+      if (audioEl) {
+        try { audioEl.pause(); } catch {}
+      }
+      setDisplayTime(position.timelineTime);
+      return position.timelineTime;
+    }
+
+    setAudioElementTime(position.sourceTimeSec);
+    setDisplayTime(position.timelineTime);
+    return position.timelineTime;
+  }
 
   const syncCurrentTimeFromAudio = ({ force = false } = {}) => {
     const audioEl = audioRef.current;
@@ -2794,8 +2870,7 @@ export default function ManualTimingEditorPage() {
     if (nextTime < safeEnd - endTolerance) return false;
 
     stopManualTimingPlayback();
-    setAudioElementTime(safeEnd);
-    setDisplayTime(safeEnd);
+    setAudioElementTimeForTimelineTime(safeEnd);
     return true;
   };
 
@@ -2850,7 +2925,7 @@ export default function ManualTimingEditorPage() {
         stopRafLoop();
         stopSilencePlayback();
       }
-      setAudioElementTime(time);
+      return setAudioElementTimeForTimelineTime(time);
     }
 
     setDisplayTime(time);
@@ -2896,12 +2971,12 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
-    const sceneIndex = findSceneIndexForTimelineTime(timelineTime);
-    const scene = sceneIndex >= 0 ? scenes[sceneIndex] : null;
-    if (!scene) return;
+    const position = findManualTimingTimelinePosition(timelineTime, scenes);
+    if (!position) return;
+    const scene = position.scene;
 
-    if (isManualTimingSilenceScene(scene)) {
-      const silenceStart = timelineTime;
+    if (position.isSilence) {
+      const silenceStart = position.timelineTime;
       const silenceEnd = Math.min(Number(scene.end_sec || 0), end ?? activeDuration);
       const startedAt = performance.now();
       try { audioEl.pause(); } catch {}
@@ -2931,15 +3006,15 @@ export default function ManualTimingEditorPage() {
     }
 
     stopSilencePlayback();
-    playStartGuardRef.current = { start: timelineTime, until: Date.now() + 700 };
-    setAudioElementTime(timelineTime);
-    setDisplayTime(timelineTime);
+    playStartGuardRef.current = { start: position.timelineTime, until: Date.now() + 700 };
+    setAudioElementTime(position.sourceTimeSec);
+    setDisplayTime(position.timelineTime);
     window.setTimeout(() => {
       const activeAudio = audioRef.current;
       if (!activeAudio) return;
-      playStartGuardRef.current = { start: timelineTime, until: Date.now() + 700 };
-      setAudioElementTime(timelineTime);
-      setDisplayTime(timelineTime);
+      playStartGuardRef.current = { start: position.timelineTime, until: Date.now() + 700 };
+      setAudioElementTime(position.sourceTimeSec);
+      setDisplayTime(position.timelineTime);
       activeAudio.play().then(() => {
         setPlayingState(true);
         startRafLoop();
@@ -2987,10 +3062,7 @@ export default function ManualTimingEditorPage() {
     setManualTimingPlaybackMode("full_timeline");
     playUntilRef.current = endSec;
 
-    try {
-      audioEl.currentTime = startSec;
-    } catch {}
-
+    setAudioElementTimeForTimelineTime(startSec);
     setCurrentTime(startSec);
     setDisplayTime(startSec);
 
@@ -3135,16 +3207,9 @@ export default function ManualTimingEditorPage() {
     if (!audioEl) return;
 
     if (!audioEl.paused || isPlayingRef.current) {
-      const rawTime = Number(audioEl.currentTime);
-      const trustedTime = audioEl.paused
-        ? Number(currentTimeRef.current || 0)
-        : (Number.isFinite(rawTime) && rawTime > 0.03
-          ? rawTime
-          : Number(currentTimeRef.current || 0));
-      const pausedAt = roundTimingSec(clampTime(trustedTime, durationSecRef.current || durationSec));
+      const pausedAt = roundTimingSec(clampTime(syncCurrentTimeFromAudio({ force: true }), durationSecRef.current || durationSec));
       stopManualTimingPlayback();
-      setAudioElementTime(pausedAt);
-      setDisplayTime(pausedAt);
+      setAudioElementTimeForTimelineTime(pausedAt);
       return;
     }
 
@@ -3540,7 +3605,7 @@ export default function ManualTimingEditorPage() {
       if (index === selectedSceneIndex) {
         return decorateManualTimingSilenceScene(retimeManualTimingScene(scene, start, nextEnd));
       }
-      return shiftManualTimingScene(scene, appliedDelta);
+      return shiftManualTimingTimelineScenePreserveSource(scene, appliedDelta);
     }));
     const nextSelectedScene = nextScenes[selectedSceneIndex] || nextScenes.find((scene) => isManualTimingSilenceScene(scene)) || nextScenes[0];
     const nextMarkers = buildManualTimingMarkersFromScenesList(nextScenes, nextDuration);
@@ -3631,7 +3696,7 @@ export default function ManualTimingEditorPage() {
       }
 
       if (index > insertAtIndex) {
-        nextSceneDrafts.push(shiftManualTimingScene(scene, silenceDuration));
+        nextSceneDrafts.push(shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration));
         return;
       }
 
@@ -3665,7 +3730,7 @@ export default function ManualTimingEditorPage() {
       nextSceneDrafts.push(silenceScene);
 
       if (cursor < sceneEnd - epsilon) {
-        const shiftedRight = shiftManualTimingScene(scene, silenceDuration);
+        const shiftedRight = shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration);
         nextSceneDrafts.push(retimeManualTimingScene(shiftedRight, roundTimingSec(cursor + silenceDuration), sceneAfterEnd, {
           source_kind: "audio",
           source_start_sec: leftSourceEnd,
