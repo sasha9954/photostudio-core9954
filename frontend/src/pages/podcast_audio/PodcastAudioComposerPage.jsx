@@ -933,6 +933,102 @@ function getItemSourceUrl(item = {}, mainAudio = {}, actorAudios = []) {
   return getAudioUrlForSourceId(sourceId, mainAudio, actorAudios);
 }
 
+function isSilenceBlock(block = {}) {
+  return Boolean(block?.type === "silence" || block?.source_kind === "silence" || block?.source_audio_id === "silence" || block?.is_silence);
+}
+
+function getInsertedAudioUrl(block = {}) {
+  const keys = ["audio_url", "fragment_url", "asset_url", "assetUrl", "src", "source_url", "server_url", "public_url", "publicUrl", "url"];
+  for (const key of keys) {
+    const value = String(block?.[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function isInsertedAudioBlock(block = {}) {
+  if (!block || typeof block !== "object" || isSilenceBlock(block)) return false;
+  const explicitKind = String(block?.source_kind || block?.block_type || block?.block_kind || "").trim().toLowerCase();
+  if (["inserted_audio", "fragment_audio", "tts_audio", "saved_chunk", "phrase"].includes(explicitKind)) return true;
+  if (block?.is_phrase || block?.type === "phrase" || hasPhraseIdentity(block)) return true;
+  const sourceId = String(block?.source_audio_id || "main").trim() || "main";
+  return sourceId !== "main" && Boolean(getInsertedAudioUrl(block));
+}
+
+function hasInsertedAudioUrl(block = {}) {
+  return isInsertedAudioBlock(block) && Boolean(getInsertedAudioUrl(block));
+}
+
+function normalizeComposerPlaybackBlock(block = {}, index = 0, timelineStartSec = 0) {
+  const timelineStart = roundSeconds(block?.timeline_start_sec ?? timelineStartSec);
+  const durationSec = roundSeconds(block?.duration_sec || getBlockDuration(block));
+  const timelineEnd = roundSeconds(block?.timeline_end_sec ?? (timelineStart + durationSec));
+  const blockId = String(block?.id || block?.block_id || `block_${index}`);
+
+  if (isSilenceBlock(block)) {
+    return {
+      type: "silence",
+      blockId,
+      block,
+      index,
+      timelineStartSec: timelineStart,
+      timelineEndSec: timelineEnd,
+      durationSec,
+      sourceStartSec: 0,
+      sourceEndSec: durationSec,
+      audioUrl: "",
+    };
+  }
+
+  if (isInsertedAudioBlock(block)) {
+    const audioUrl = getInsertedAudioUrl(block);
+    if (!audioUrl) console.warn("[PAC INSERTED_AUDIO_MISSING_URL]", block);
+    return {
+      type: "inserted_audio",
+      blockId,
+      block,
+      index,
+      timelineStartSec: timelineStart,
+      timelineEndSec: timelineEnd,
+      startSec: 0,
+      endSec: durationSec,
+      durationSec,
+      sourceStartSec: 0,
+      sourceEndSec: durationSec,
+      audioUrl,
+    };
+  }
+
+  const sourceStartSec = roundSeconds(block?.source_start_sec);
+  const sourceEndSec = roundSeconds(block?.source_end_sec ?? (sourceStartSec + durationSec));
+  return {
+    type: "main_audio",
+    blockId,
+    block,
+    index,
+    timelineStartSec: timelineStart,
+    timelineEndSec: timelineEnd,
+    sourceStartSec,
+    sourceEndSec,
+    durationSec: durationSec || Math.max(0, sourceEndSec - sourceStartSec),
+    audioUrl: "",
+  };
+}
+
+function logComposerQueueBlock(item = {}) {
+  console.info("[PAC QUEUE BLOCK]", {
+    index: item.index,
+    blockId: item.blockId,
+    type: item.type,
+    timelineStart: item.timelineStartSec,
+    timelineEnd: item.timelineEndSec,
+    sourceStart: item.sourceStartSec,
+    sourceEnd: item.sourceEndSec,
+    audioUrl: item.audioUrl,
+    durationSec: item.durationSec,
+  });
+}
+
 function inferActorLabelFromFilename(filename = "") {
   const base = String(filename || "").replace(/\.[^.]+$/, "").trim().toLowerCase();
   if (base.includes("дед") || base.includes("ded")) return "ДЕД";
@@ -1013,10 +1109,20 @@ function normalizeBlocks(blocks = [], fallbackDurationSec = 0, savedClipsForMigr
         type,
         block_kind: phraseIdentity ? "phrase" : undefined,
         source_audio_id: block?.source_audio_id || (type === "silence" ? "silence" : "main"),
+        source_kind: type === "silence" ? "silence" : (phraseIdentity ? "inserted_audio" : (block?.source_kind || "main_audio")),
+        block_type: type === "silence" ? "silence" : (phraseIdentity ? "inserted_audio" : (block?.block_type || "main_audio")),
         source_url: typeof block?.source_url === "string" && block.source_url.trim() ? block.source_url.trim() : undefined,
+        audio_url: typeof block?.audio_url === "string" && block.audio_url.trim() ? block.audio_url.trim() : undefined,
+        fragment_url: typeof block?.fragment_url === "string" && block.fragment_url.trim() ? block.fragment_url.trim() : undefined,
+        asset_url: typeof block?.asset_url === "string" && block.asset_url.trim() ? block.asset_url.trim() : undefined,
+        assetUrl: typeof block?.assetUrl === "string" && block.assetUrl.trim() ? block.assetUrl.trim() : undefined,
+        server_url: typeof block?.server_url === "string" && block.server_url.trim() ? block.server_url.trim() : undefined,
+        publicUrl: typeof block?.publicUrl === "string" && block.publicUrl.trim() ? block.publicUrl.trim() : undefined,
+        src: typeof block?.src === "string" && block.src.trim() ? block.src.trim() : undefined,
         source_name: typeof block?.source_name === "string" && block.source_name.trim() ? block.source_name.trim() : undefined,
-        source_start_sec: type === "silence" ? 0 : start,
-        source_end_sec: type === "silence" ? roundSeconds(end - start) : end,
+        duration_sec: phraseIdentity ? roundSeconds(block?.duration_sec || end - start) : undefined,
+        source_start_sec: type === "silence" ? 0 : (phraseIdentity ? 0 : start),
+        source_end_sec: type === "silence" ? roundSeconds(end - start) : (phraseIdentity ? roundSeconds(block?.duration_sec || end - start) : end),
         color_index: Number.isInteger(block?.color_index) ? block.color_index : index,
         color: typeof block?.color === "string" && block.color.trim() ? block.color.trim() : undefined,
         block_label: migratedLabel || undefined,
@@ -1177,8 +1283,18 @@ function buildContiguousBlocksFromDurations(blocks = [], durations = []) {
       type,
       block_kind: isPhraseBlock ? "phrase" : undefined,
       source_audio_id: type === "silence" ? "silence" : (baseBlock.source_audio_id || "main"),
+      source_kind: type === "silence" ? "silence" : (isPhraseBlock ? "inserted_audio" : (baseBlock.source_kind || "main_audio")),
+      block_type: type === "silence" ? "silence" : (isPhraseBlock ? "inserted_audio" : (baseBlock.block_type || "main_audio")),
       source_url: typeof baseBlock.source_url === "string" && baseBlock.source_url.trim() ? baseBlock.source_url.trim() : undefined,
+      audio_url: typeof baseBlock.audio_url === "string" && baseBlock.audio_url.trim() ? baseBlock.audio_url.trim() : undefined,
+      fragment_url: typeof baseBlock.fragment_url === "string" && baseBlock.fragment_url.trim() ? baseBlock.fragment_url.trim() : undefined,
+      asset_url: typeof baseBlock.asset_url === "string" && baseBlock.asset_url.trim() ? baseBlock.asset_url.trim() : undefined,
+      assetUrl: typeof baseBlock.assetUrl === "string" && baseBlock.assetUrl.trim() ? baseBlock.assetUrl.trim() : undefined,
+      server_url: typeof baseBlock.server_url === "string" && baseBlock.server_url.trim() ? baseBlock.server_url.trim() : undefined,
+      publicUrl: typeof baseBlock.publicUrl === "string" && baseBlock.publicUrl.trim() ? baseBlock.publicUrl.trim() : undefined,
+      src: typeof baseBlock.src === "string" && baseBlock.src.trim() ? baseBlock.src.trim() : undefined,
       source_name: typeof baseBlock.source_name === "string" && baseBlock.source_name.trim() ? baseBlock.source_name.trim() : undefined,
+      duration_sec: isPhraseBlock ? duration : undefined,
       source_start_sec: sourceStart,
       source_end_sec: sourceEnd,
       color_index: Number.isInteger(baseBlock.color_index) ? baseBlock.color_index : index,
@@ -1519,6 +1635,8 @@ export default function PodcastAudioComposerPage() {
   }, [stateAudio, storedManualTimingProject]);
 
   const audioRef = useRef(null);
+  const fragmentAudioRef = useRef(null);
+  const fragmentPlaybackRafRef = useRef(null);
   const silenceFrameRef = useRef(null);
   const phrasePreviewRef = useRef(null);
   const actorAudioInputRef = useRef(null);
@@ -1800,15 +1918,43 @@ export default function PodcastAudioComposerPage() {
     }
   }
 
+  function stopFragmentPlayback({ pause = true } = {}) {
+    if (fragmentPlaybackRafRef.current) {
+      cancelAnimationFrame(fragmentPlaybackRafRef.current);
+      fragmentPlaybackRafRef.current = null;
+    }
+    const fragmentElement = fragmentAudioRef.current;
+    if (pause && fragmentElement) {
+      try {
+        fragmentElement.pause();
+        fragmentElement.src = "";
+      } catch {}
+    }
+    fragmentAudioRef.current = null;
+  }
+
+  function playNextSequenceBlock(fromIndex, toIndex) {
+    const nextBlock = blocksRef.current?.[toIndex];
+    const nextStart = nextBlock ? getBlockVirtualStart(blocksRef.current, toIndex) : getTimelineDuration(blocksRef.current);
+    const nextItem = nextBlock ? normalizeComposerPlaybackBlock(nextBlock, toIndex, nextStart) : null;
+    console.info("[PAC PLAY NEXT]", {
+      fromIndex,
+      toIndex,
+      nextType: nextItem?.type || "end",
+    });
+    void playSequenceBlock(toIndex, 0);
+  }
+
   function stopSelectedBlockPlaybackAtEnd(reason = "selected_block_end") {
     void reason;
     const element = audioRef.current;
     const session = activeMainPlaybackRef.current;
     stopMainPlaybackGuard();
+    stopFragmentPlayback();
 
     if (element) {
       try {
-        if (session?.sourceEndSec != null) {
+        if (session?.sourceEndSec != null && session?.type !== "inserted_audio") {
           element.currentTime = roundSeconds(session.sourceEndSec);
         }
         element.pause();
@@ -1827,6 +1973,7 @@ export default function PodcastAudioComposerPage() {
     const element = audioRef.current;
     stopMainPlaybackGuard();
     stopSilencePlayback();
+    stopFragmentPlayback();
     activeMainPlaybackRef.current = null;
     if (element) {
       try {
@@ -1852,7 +1999,7 @@ export default function PodcastAudioComposerPage() {
 
       if (sourceTime >= sourceEnd - 0.015) {
         if (session.mode === "sequence") {
-          void playSequenceBlock(session.blockIndex + 1, 0);
+          playNextSequenceBlock(session.blockIndex, session.blockIndex + 1);
         } else {
           stopSelectedBlockPlaybackAtEnd("raf_guard_end");
         }
@@ -2122,12 +2269,17 @@ export default function PodcastAudioComposerPage() {
           ...block,
           type: "phrase",
           block_kind: "phrase",
+          source_kind: "inserted_audio",
+          block_type: "inserted_audio",
           source_audio_id: converted.id,
           source_url: sourceUrl,
+          audio_url: sourceUrl,
+          fragment_url: sourceUrl,
           asset_url: converted.asset_url || sourceUrl,
           assetUrl: converted.assetUrl || sourceUrl,
           server_url: converted.server_url || sourceUrl,
           publicUrl: converted.publicUrl || sourceUrl,
+          src: sourceUrl,
           source_name: converted.source_name || converted.filename || label,
           source_start_sec: 0,
           source_end_sec: newDuration,
@@ -2158,6 +2310,17 @@ export default function PodcastAudioComposerPage() {
     stopMainPlayback();
     const snapshot = getSelectedBlockSnapshot();
     if (!snapshot || !clip) return;
+    const clipAudioUrl = getItemSourceUrl(clip, audio, actorAudios);
+    if (!clipAudioUrl) {
+      console.warn("[PAC INSERTED_AUDIO_MISSING_URL]", clip);
+      setMessage("У вставки нет audio_url, блок не может проигрываться");
+      return;
+    }
+    const clipDuration = roundSeconds(clip.duration_sec || Math.max(0, roundSeconds(clip.source_end_sec) - roundSeconds(clip.source_start_sec)));
+    if (clipDuration <= 0) {
+      setMessage("У вставки нулевая длительность, блок не может проигрываться");
+      return;
+    }
     pushHistory("replace_with_saved_clip");
     const nextBlocks = [...blocks];
     nextBlocks[snapshot.index] = {
@@ -2165,11 +2328,21 @@ export default function PodcastAudioComposerPage() {
       id: createId("block"),
       type: "phrase",
       block_kind: "phrase",
-      source_audio_id: clip.source_audio_id || "main",
-      source_url: getItemSourceUrl(clip, audio, actorAudios),
-      source_name: clip.source_name || getAudioNameForSourceId(clip.source_audio_id || "main", audio, actorAudios),
-      source_start_sec: roundSeconds(clip.source_start_sec),
-      source_end_sec: roundSeconds(clip.source_end_sec),
+      source_kind: "inserted_audio",
+      block_type: "inserted_audio",
+      source_audio_id: clip.id || clip.source_audio_id || "inserted_audio",
+      source_url: clipAudioUrl,
+      audio_url: clipAudioUrl,
+      fragment_url: clipAudioUrl,
+      asset_url: clip.asset_url || clipAudioUrl,
+      assetUrl: clip.assetUrl || clipAudioUrl,
+      server_url: clip.server_url || clipAudioUrl,
+      publicUrl: clip.publicUrl || clipAudioUrl,
+      src: clipAudioUrl,
+      source_name: clip.source_name || clip.filename || getAudioNameForSourceId(clip.source_audio_id || "main", audio, actorAudios),
+      source_start_sec: 0,
+      source_end_sec: clipDuration,
+      duration_sec: clipDuration,
       color_index: Number.isInteger(clip.color_index) ? clip.color_index : snapshot.block.color_index,
       color: typeof clip.color === "string" && clip.color.trim() ? clip.color.trim() : undefined,
       block_label: String(clip.label || "Фраза").trim() || "Фраза",
@@ -2190,16 +2363,37 @@ export default function PodcastAudioComposerPage() {
     stopMainPlayback();
     const snapshot = getSelectedBlockSnapshot();
     if (!snapshot || !clip) return;
+    const clipAudioUrl = getItemSourceUrl(clip, audio, actorAudios);
+    if (!clipAudioUrl) {
+      console.warn("[PAC INSERTED_AUDIO_MISSING_URL]", clip);
+      setMessage("У вставки нет audio_url, блок не может проигрываться");
+      return;
+    }
+    const clipDuration = roundSeconds(clip.duration_sec || Math.max(0, roundSeconds(clip.source_end_sec) - roundSeconds(clip.source_start_sec)));
+    if (clipDuration <= 0) {
+      setMessage("У вставки нулевая длительность, блок не может проигрываться");
+      return;
+    }
     pushHistory("insert_saved_clip_after");
     const insertedBlock = {
       id: createId("block"),
       type: "phrase",
       block_kind: "phrase",
-      source_audio_id: clip.source_audio_id || "main",
-      source_url: getItemSourceUrl(clip, audio, actorAudios),
-      source_name: clip.source_name || getAudioNameForSourceId(clip.source_audio_id || "main", audio, actorAudios),
-      source_start_sec: roundSeconds(clip.source_start_sec),
-      source_end_sec: roundSeconds(clip.source_end_sec),
+      source_kind: "inserted_audio",
+      block_type: "inserted_audio",
+      source_audio_id: clip.id || clip.source_audio_id || "inserted_audio",
+      source_url: clipAudioUrl,
+      audio_url: clipAudioUrl,
+      fragment_url: clipAudioUrl,
+      asset_url: clip.asset_url || clipAudioUrl,
+      assetUrl: clip.assetUrl || clipAudioUrl,
+      server_url: clip.server_url || clipAudioUrl,
+      publicUrl: clip.publicUrl || clipAudioUrl,
+      src: clipAudioUrl,
+      source_name: clip.source_name || clip.filename || getAudioNameForSourceId(clip.source_audio_id || "main", audio, actorAudios),
+      source_start_sec: 0,
+      source_end_sec: clipDuration,
+      duration_sec: clipDuration,
       color_index: Number.isInteger(clip.color_index) ? clip.color_index : (snapshot.index + 1),
       color: typeof clip.color === "string" && clip.color.trim() ? clip.color.trim() : undefined,
       block_label: String(clip.label || "Фраза").trim() || "Фраза",
@@ -2337,7 +2531,7 @@ export default function PodcastAudioComposerPage() {
       if (elapsed >= duration) {
         silenceFrameRef.current = null;
         if (mode === "sequence") {
-          void playSequenceBlock(blockIndex + 1, 0);
+          playNextSequenceBlock(blockIndex, blockIndex + 1);
         } else {
           activeMainPlaybackRef.current = null;
           setIsPlaying(false);
@@ -2348,6 +2542,107 @@ export default function PodcastAudioComposerPage() {
     };
 
     silenceFrameRef.current = requestAnimationFrame(tick);
+  };
+
+  const playFragmentAudioBlock = async (blockIndex, startOffsetSec = 0, mode = "selected_block") => {
+    const safeBlocks = blocksRef.current;
+    const block = safeBlocks[blockIndex];
+    if (!block) return;
+    const blockStartSec = getBlockVirtualStart(safeBlocks, blockIndex);
+    const item = normalizeComposerPlaybackBlock(block, blockIndex, blockStartSec);
+    logComposerQueueBlock(item);
+    const duration = roundSeconds(item.durationSec || getBlockDuration(block));
+    const startOffset = clampSeconds(startOffsetSec, 0, duration);
+
+    if (!item.audioUrl) {
+      console.warn("[PAC INSERTED_AUDIO_MISSING_URL]", block);
+      setMessage("У вставки нет audio_url, блок не может проигрываться");
+      if (mode === "sequence") {
+        playNextSequenceBlock(blockIndex, blockIndex + 1);
+      } else {
+        activeMainPlaybackRef.current = null;
+        setIsPlaying(false);
+      }
+      return;
+    }
+
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+      } catch {}
+    }
+    stopMainPlaybackGuard();
+    stopSilencePlayback();
+    stopFragmentPlayback();
+
+    const fragmentElement = new Audio(item.audioUrl);
+    fragmentAudioRef.current = fragmentElement;
+    activeMainPlaybackRef.current = {
+      mode,
+      type: "inserted_audio",
+      blockId: item.blockId,
+      blockIndex,
+      sourceStartSec: 0,
+      sourceEndSec: duration,
+      virtualStartSec: blockStartSec,
+      durationSec: duration,
+    };
+    currentBlockIndexRef.current = blockIndex;
+    setSelectedBlockId(block.id);
+    setCurrentTimeSec(roundSeconds(blockStartSec + startOffset));
+    setIsPlaying(true);
+
+    let startedAt = performance.now();
+    const finish = () => {
+      if (fragmentAudioRef.current !== fragmentElement) return;
+      stopFragmentPlayback();
+      setCurrentTimeSec(roundSeconds(blockStartSec + duration));
+      if (mode === "sequence") {
+        playNextSequenceBlock(blockIndex, blockIndex + 1);
+      } else {
+        activeMainPlaybackRef.current = null;
+        setIsPlaying(false);
+      }
+    };
+
+    const tick = () => {
+      const session = activeMainPlaybackRef.current;
+      if (!session || session.blockId !== item.blockId || session.mode !== mode || fragmentAudioRef.current !== fragmentElement) {
+        fragmentPlaybackRafRef.current = null;
+        return;
+      }
+      const elementTime = Number.isFinite(fragmentElement.currentTime) ? fragmentElement.currentTime : 0;
+      const elapsed = Math.max(startOffset + (performance.now() - startedAt) / 1000, elementTime);
+      setCurrentTimeSec(roundSeconds(blockStartSec + Math.min(duration, elapsed)));
+      if (elapsed >= duration - 0.015) {
+        finish();
+        return;
+      }
+      fragmentPlaybackRafRef.current = requestAnimationFrame(tick);
+    };
+
+    fragmentElement.addEventListener("ended", finish, { once: true });
+    fragmentElement.addEventListener("error", () => {
+      console.warn("[PAC INSERTED_AUDIO_MISSING_URL]", block);
+      setMessage("У вставки нет audio_url, блок не может проигрываться");
+      if (mode === "sequence") playNextSequenceBlock(blockIndex, blockIndex + 1);
+      else stopMainPlayback();
+    }, { once: true });
+
+    try {
+      await waitForAudioReady(fragmentElement);
+      try {
+        fragmentElement.currentTime = startOffset;
+      } catch {}
+      startedAt = performance.now();
+      await fragmentElement.play();
+      fragmentPlaybackRafRef.current = requestAnimationFrame(tick);
+    } catch {
+      stopFragmentPlayback();
+      setMessage("Не удалось открыть вставленный аудио-фрагмент.");
+      if (mode === "sequence") playNextSequenceBlock(blockIndex, blockIndex + 1);
+      else stopMainPlayback();
+    }
   };
 
   async function playSequenceBlock(blockIndex, startOffsetSec = 0) {
@@ -2362,26 +2657,30 @@ export default function PodcastAudioComposerPage() {
     const safeIndex = Math.max(0, blockIndex);
     const block = safeBlocks[safeIndex];
     const blockStartSec = getBlockVirtualStart(safeBlocks, safeIndex);
-    const duration = getBlockDuration(block);
+    const item = normalizeComposerPlaybackBlock(block, safeIndex, blockStartSec);
+    logComposerQueueBlock(item);
+    const duration = roundSeconds(item.durationSec || getBlockDuration(block));
     const offset = clampSeconds(startOffsetSec, 0, duration);
-    const sourceTime = roundSeconds(roundSeconds(block.source_start_sec) + offset);
+    const sourceTime = roundSeconds(item.sourceStartSec + offset);
     currentBlockIndexRef.current = safeIndex;
     setSelectedBlockId(block.id);
     setCurrentTimeSec(roundSeconds(blockStartSec + offset));
     stopMainPlaybackGuard();
     stopSilencePlayback();
+    stopFragmentPlayback();
 
     activeMainPlaybackRef.current = {
       mode: "sequence",
-      blockId: block.id,
+      type: item.type,
+      blockId: item.blockId,
       blockIndex: safeIndex,
-      sourceStartSec: roundSeconds(block.source_start_sec),
-      sourceEndSec: roundSeconds(block.source_end_sec),
+      sourceStartSec: item.sourceStartSec,
+      sourceEndSec: item.sourceEndSec,
       virtualStartSec: blockStartSec,
       durationSec: duration,
     };
 
-    if (block.type === "silence") {
+    if (item.type === "silence") {
       if (element) {
         try {
           element.pause();
@@ -2391,12 +2690,17 @@ export default function PodcastAudioComposerPage() {
       return;
     }
 
+    if (item.type === "inserted_audio") {
+      await playFragmentAudioBlock(safeIndex, offset, "sequence");
+      return;
+    }
+
     if (!element) {
       stopMainPlayback();
       return;
     }
 
-    const ready = await prepareBlockAudio(block, sourceTime);
+    const ready = await prepareAudioElement(audio.url || getItemSourceUrl(block, audio, actorAudios), sourceTime);
     if (!ready) {
       stopMainPlayback();
       setMessage("Не удалось открыть источник блока монтажа.");
@@ -2503,25 +2807,32 @@ export default function PodcastAudioComposerPage() {
     const playVirtualTime = roundSeconds(blockStartSec + playOffset);
 
     if (block) {
+      const item = normalizeComposerPlaybackBlock(block, selectedIndex, blockStartSec);
+      logComposerQueueBlock(item);
       currentBlockIndexRef.current = selectedIndex;
       setSelectedBlockId(block.id);
       setCurrentTimeSec(playVirtualTime);
-      if (block.type === "silence") {
+      if (item.type === "silence") {
         element.pause();
-        playSilenceBlock(selectedIndex, playOffset);
+        playSilenceBlock(selectedIndex, playOffset, "selected_block");
         return;
       }
-      const ready = await prepareBlockAudio(block, roundSeconds(roundSeconds(block.source_start_sec) + playOffset));
+      if (item.type === "inserted_audio") {
+        await playFragmentAudioBlock(selectedIndex, playOffset, "selected_block");
+        return;
+      }
+      const ready = await prepareAudioElement(audio.url || getItemSourceUrl(block, audio, actorAudios), roundSeconds(item.sourceStartSec + playOffset));
       if (!ready) {
         setMessage("Не удалось открыть источник выбранного блока.");
         return;
       }
       activeMainPlaybackRef.current = {
         mode: "selected_block",
-        blockId: block.id,
+        type: item.type,
+        blockId: item.blockId,
         blockIndex: selectedIndex,
-        sourceStartSec: roundSeconds(block.source_start_sec),
-        sourceEndSec: roundSeconds(block.source_end_sec),
+        sourceStartSec: item.sourceStartSec,
+        sourceEndSec: item.sourceEndSec,
         virtualStartSec: blockStartSec,
         durationSec: blockDuration,
       };
@@ -2603,7 +2914,7 @@ export default function PodcastAudioComposerPage() {
     if (sourceTime >= roundSeconds(block.source_end_sec) - 0.025) {
       setCurrentTimeSec(roundSeconds(blockVirtualStart + getBlockDuration(block)));
       if (mainPlayback?.mode === "sequence") {
-        void playSequenceBlock(index + 1, 0);
+        playNextSequenceBlock(index, index + 1);
       } else {
         element.pause();
         stopMainPlaybackGuard();
@@ -3015,12 +3326,19 @@ export default function PodcastAudioComposerPage() {
         const duration = roundSeconds(converted?.duration_sec || getBlockDuration(block));
         return {
           ...block,
+          type: converted ? "phrase" : block.type,
+          block_kind: converted ? "phrase" : block.block_kind,
+          source_kind: converted ? "inserted_audio" : block.source_kind,
+          block_type: converted ? "inserted_audio" : block.block_type,
           source_audio_id: converted?.id || block.source_audio_id,
           source_url: sourceUrl || block.source_url,
+          audio_url: sourceUrl || block.audio_url,
+          fragment_url: sourceUrl || block.fragment_url,
           asset_url: sourceUrl || block.asset_url,
           assetUrl: sourceUrl || block.assetUrl,
           server_url: sourceUrl || block.server_url,
           publicUrl: sourceUrl || block.publicUrl,
+          src: sourceUrl || block.src,
           source_start_sec: converted ? 0 : block.source_start_sec,
           source_end_sec: converted ? duration : block.source_end_sec,
           duration_sec: duration || block.duration_sec,
@@ -4414,7 +4732,7 @@ export default function PodcastAudioComposerPage() {
             preload="metadata"
             onEnded={() => {
               if (activeMainPlaybackRef.current?.mode === "sequence") {
-                void playSequenceBlock((activeMainPlaybackRef.current?.blockIndex || 0) + 1, 0);
+                playNextSequenceBlock(activeMainPlaybackRef.current?.blockIndex || 0, (activeMainPlaybackRef.current?.blockIndex || 0) + 1);
               } else {
                 stopMainPlayback();
               }

@@ -40,17 +40,17 @@
 
 .podcastBlockTimelineWrap{ padding:18px 0 10px; }
 .podcastBlockTimeline{
-  position:relative; height:120px; overflow:hidden; border:1px solid rgba(125,211,252,.26); border-radius:20px;
+  position:relative; height:120px; overflow:visible; border:1px solid rgba(125,211,252,.26); border-radius:20px;
   background:linear-gradient(180deg, rgba(30,41,59,.72), rgba(15,23,42,.72)), linear-gradient(90deg, rgba(56,189,248,.18), rgba(59,130,246,.08));
   cursor:pointer;
 }
 .podcastAudioBlock{
-  position:absolute; top:26px; bottom:26px; border:1px solid rgba(255,255,255,.12); background:var(--block-color, #93c5fd);
+  position:absolute; z-index:2; top:26px; bottom:26px; border:1px solid rgba(255,255,255,.12); background:var(--block-color, #93c5fd);
   opacity:.74; transition:transform .15s ease, box-shadow .15s ease, opacity .15s ease, filter .15s ease;
 }
 .podcastAudioBlock + .podcastAudioBlock{ box-shadow:inset 1px 0 0 rgba(15,23,42,.65); }
 .podcastAudioBlock.selected{
-  opacity:1; filter:saturate(1.15); box-shadow:0 0 0 2px rgba(255,255,255,.6), 0 0 18px color-mix(in srgb, var(--block-color) 70%, white 30%);
+  z-index:3; opacity:1; filter:saturate(1.15); box-shadow:0 0 0 2px rgba(255,255,255,.6), 0 0 18px color-mix(in srgb, var(--block-color) 70%, white 30%);
 }
 
 .podcastAudioBlock.selected::after{
@@ -104,7 +104,7 @@
 }
 
 .podcastDeleteCutMark{ position:absolute; top:18px; bottom:18px; width:2px; background:#f97316; box-shadow:0 0 12px rgba(249,115,22,.8); transform:translateX(-50%); z-index:4; pointer-events:none; }
-.podcastPlayhead{ position:absolute; top:10px; bottom:10px; width:3px; background:#fde047; box-shadow:0 0 18px rgba(250,204,21,.95); transform:translateX(-50%); z-index:5; pointer-events:none; }
+.podcastPlayhead{ position:absolute; top:10px; bottom:10px; width:3px; background:#fde047; box-shadow:0 0 18px rgba(250,204,21,.95); transform:translateX(-50%); z-index:10; pointer-events:none; }
 .podcastPlayhead span{
   position:absolute; top:10px; left:10px; border:1px solid rgba(254,240,138,.56); border-radius:999px; padding:4px 8px; color:#422006; background:#fef08a;
   font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12px; font-weight:900; white-space:nowrap;
