@@ -3296,6 +3296,19 @@ export default function ManualTimingEditorPage() {
     return true;
   }
 
+  function finishManualTimingQueueItem(session, index, timelineEnd) {
+    const mode = String(session?.mode || "");
+
+    if (mode === "scene") {
+      const end = roundTimingSec(Number(timelineEnd || currentTimeRef.current || 0));
+      stopManualTimingQueuePlayback();
+      setDisplayTime(end);
+      return;
+    }
+
+    playManualTimingQueueItem(session, index + 1);
+  }
+
   function playManualTimingQueueItem(session, index, startTimelineOverrideSec = null) {
     const audioEl = audioRef.current;
     if (!audioEl || !session) return;
@@ -3341,7 +3354,7 @@ export default function ManualTimingEditorPage() {
 
         if (nextTimeline >= silenceEnd - 0.012) {
           manualTimingQueueRafRef.current = null;
-          playManualTimingQueueItem(session, index + 1);
+          finishManualTimingQueueItem(session, index, silenceEnd);
           return;
         }
 
@@ -3368,7 +3381,7 @@ export default function ManualTimingEditorPage() {
         sourceStart,
         sourceEnd,
       });
-      playManualTimingQueueItem(session, index + 1);
+      finishManualTimingQueueItem(session, index, timelineEnd);
       return;
     }
 
@@ -3398,7 +3411,7 @@ export default function ManualTimingEditorPage() {
         if (clampedSource >= sourceEnd - 0.018) {
           try { audioEl.pause(); } catch {}
           manualTimingQueueRafRef.current = null;
-          playManualTimingQueueItem(session, index + 1);
+          finishManualTimingQueueItem(session, index, timelineEnd);
           return;
         }
 
@@ -3417,7 +3430,11 @@ export default function ManualTimingEditorPage() {
   }
 
   function playManualTimingSceneQueue(sceneQueue = [], mode = "scene") {
-    const safeScenes = buildManualTimingPlaybackQueue(sceneQueue, scenes);
+    let safeScenes = buildManualTimingPlaybackQueue(sceneQueue, scenes);
+
+    if (mode === "scene") {
+      safeScenes = safeScenes.slice(0, 1);
+    }
 
     if (!safeScenes.length) return;
 
@@ -3764,8 +3781,16 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
-    if (manualTimingPausedQueueRef.current) {
+    const paused = manualTimingPausedQueueRef.current;
+
+    if (paused?.mode === "scene") {
       if (resumeManualTimingPausedQueue()) return;
+    }
+
+    if (paused?.mode === "all") {
+      // Большая Play управляет только сценой.
+      // Продолжение всего тайминга делает только кнопка “▶ всё”.
+      manualTimingPausedQueueRef.current = null;
     }
 
     const position = findManualTimingTimelinePosition(currentTimeRef.current || currentTime || 0, scenes);
@@ -6164,7 +6189,9 @@ export default function ManualTimingEditorPage() {
 
             if (queueSession) {
               if (!manualTimingQueueRafRef.current) {
-                playManualTimingQueueItem(queueSession, Number(queueSession.index || 0) + 1);
+                const scene = queueSession.scenes?.[queueSession.index];
+                const timelineEnd = Number(scene?.end_sec || currentTimeRef.current || 0);
+                finishManualTimingQueueItem(queueSession, Number(queueSession.index || 0), timelineEnd);
               }
               return;
             }
