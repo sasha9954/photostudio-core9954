@@ -19569,13 +19569,22 @@ def clip_video(payload: ClipVideoIn):
 
         source_image_width = None
         source_image_height = None
-        width, height = _resolve_clip_video_dimensions(output_format)
+        format_width, format_height = _resolve_clip_video_dimensions(output_format)
+        width, height = format_width, format_height
         payload_width = int(payload.width or 0) if getattr(payload, "width", None) else 0
         payload_height = int(payload.height or 0) if getattr(payload, "height", None) else 0
         if payload_width > 0 and payload_height > 0:
             width, height = payload_width, payload_height
-        if final_workflow_key in {"lip_sync", "lip_sync_music"} and output_format == "16:9" and height >= width:
-            width, height = 1280, 720
+        ia2v_format_lock_applied = False
+        if final_workflow_key in {"lip_sync", "lip_sync_music"}:
+            payload_matches_format = (
+                (output_format == "16:9" and payload_width > payload_height > 0)
+                or (output_format == "9:16" and payload_height > payload_width > 0)
+                or (output_format == "1:1" and payload_width == payload_height and payload_width > 0)
+            )
+            if not payload_matches_format:
+                width, height = format_width, format_height
+                ia2v_format_lock_applied = True
         print(
             "[CLIP VIDEO ASPECT PAYLOAD] "
             + json.dumps(
@@ -19588,6 +19597,9 @@ def clip_video(payload: ClipVideoIn):
                     "payloadHeight": payload_height,
                     "width": width,
                     "height": height,
+                    "formatWidth": format_width,
+                    "formatHeight": format_height,
+                    "ia2vFormatLockApplied": ia2v_format_lock_applied,
                     "format": output_format,
                     "formatSource": output_format_source,
                     "sourceImageSize": {"width": source_image_width, "height": source_image_height},
