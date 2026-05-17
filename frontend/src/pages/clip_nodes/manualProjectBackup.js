@@ -101,8 +101,6 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "video_has_audio",
   "videoHasAudio",
   "hasAudio",
-  "video_request_payload_preview",
-  "videoRequestPayloadPreview",
   "deleted_media_revision",
   "deletedMediaRevision",
   "video_deleted_at",
@@ -132,6 +130,24 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "manualRoute",
   "manualPrompt",
 ]);
+
+const MANUAL_STORAGE_SCENE_LIGHTWEIGHT_KEYS = new Set([
+  "scene_id", "id", "index",
+  "start_sec", "end_sec", "duration_sec", "speech_start_sec", "speech_end_sec", "timing",
+  "route", "renderMode", "lipSync", "format", "aspect_ratio",
+  "source_image_prompt_en", "source_image_prompt_ru", "i2v_prompt_en", "i2v_negative_prompt_en",
+  "video_prompt", "negative_prompt", "sound_prompt", "negative_audio_prompt",
+  "speech_text", "voice_profile", "voice_mode", "voice_language", "delivery_style",
+  "image_url", "imageUrl", "start_image_url", "startImageUrl", "end_image_url", "endImageUrl",
+  "video_url", "videoUrl", "result_video_url", "resultVideoUrl", "generated_video_url", "generatedVideoUrl",
+  "final_video_url", "finalVideoUrl", "video_status", "videoStatus", "video_job_id", "videoJobId",
+  "status", "updatedAt", "updated_at", "video_has_audio", "videoHasAudio", "hasAudio",
+  "generated_audio_policy", "generatedAudioPolicy", "generated_audio_gain_db", "generatedAudioGainDb",
+  "keep_generated_audio", "keepGeneratedAudio", "audio_slice_url", "audio_slice_duration_sec",
+  "mmaudio_status", "mmaudio_job_id", "mmaudio_video_url", "mmaudioVideoUrl",
+  "deleted_media_revision", "deletedMediaRevision", "video_deleted_at", "photo_deleted_at",
+]);
+
 const MANUAL_STORAGE_TOP_LEVEL_DROP_KEYS = new Set([
   "rawScenarioResponse",
   "pendingRawResponse",
@@ -377,7 +393,9 @@ function isQuotaExceededError(err) {
 function isBadPersistentUrlString(value = "") {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized.startsWith("data:")
-    || normalized.startsWith("blob:");
+    || normalized.startsWith("blob:")
+    || normalized.includes(";base64,")
+    || /^data[a-z0-9_/-]*:/i.test(normalized);
 }
 
 function isFileLikeManualStorageObject(value) {
@@ -425,16 +443,11 @@ function sanitizeManualClipBoardSceneForStorage(scene = {}, index = 0) {
   const compact = {};
   Object.entries(scene).forEach(([key, value]) => {
     const safeKey = String(key || "");
-    if (MANUAL_STORAGE_DANGEROUS_KEY_RE.test(safeKey) && !MANUAL_STORAGE_SCENE_ALLOWED_KEYS.has(safeKey)) return;
+    if (!MANUAL_STORAGE_SCENE_LIGHTWEIGHT_KEYS.has(safeKey)) return;
+    if (MANUAL_STORAGE_DANGEROUS_KEY_RE.test(safeKey) && !MANUAL_STORAGE_SCENE_LIGHTWEIGHT_KEYS.has(safeKey)) return;
     const stripped = stripLargeManualStorageValue(value, `scenes[${index}].${safeKey}`);
     if (stripped === undefined) return;
-    if (MANUAL_STORAGE_SCENE_ALLOWED_KEYS.has(safeKey)) {
-      compact[safeKey] = stripped;
-      return;
-    }
-    if (stripped === null || typeof stripped === "string" || typeof stripped === "number" || typeof stripped === "boolean") {
-      compact[safeKey] = stripped;
-    }
+    compact[safeKey] = stripped;
   });
   return compact;
 }
@@ -939,9 +952,6 @@ function logManualClipBoardNewerRevisionPick(winner, olderRicherCandidates = [])
 }
 
 function manualClipBoardProjectSort(a, b) {
-  if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) {
-    return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
-  }
   if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
     return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
   }
@@ -968,6 +978,9 @@ function manualClipBoardProjectSort(a, b) {
   }
   if (b.scoreData.updatedAt !== a.scoreData.updatedAt) {
     return b.scoreData.updatedAt - a.scoreData.updatedAt;
+  }
+  if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) {
+    return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
   }
   if (b.scoreData.stats.mmaudioJobs !== a.scoreData.stats.mmaudioJobs) {
     return b.scoreData.stats.mmaudioJobs - a.scoreData.stats.mmaudioJobs;
@@ -1421,6 +1434,50 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
   }
 }
 
+function buildEmergencyManualClipBoardProjectForStorage(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const base = sanitizeManualClipBoardProjectForStorage(safeProject);
+  return {
+    project_mode: String(base.project_mode || base.projectMode || "manual_clip_board"),
+    project_kind: String(base.project_kind || base.projectKind || "clip"),
+    format: String(base.format || base.aspect_ratio || ""),
+    aspect_ratio: String(base.aspect_ratio || base.format || ""),
+    nodeId: String(base.nodeId || base.sourceNodeId || ""),
+    sourceNodeId: String(base.sourceNodeId || base.nodeId || ""),
+    ownerNodeId: String(base.ownerNodeId || base.sourceNodeId || base.nodeId || ""),
+    project_id: String(base.project_id || base.projectId || ""),
+    projectId: String(base.projectId || base.project_id || ""),
+    input_signature: String(base.input_signature || base.inputSignature || ""),
+    audio_signature: String(base.audio_signature || base.audioSignature || ""),
+    revision: Number(base.revision || 0) || 0,
+    selectedSceneId: String(base.selectedSceneId || ""),
+    updatedAt: Date.now(),
+    lastPersistReason: "emergency_lightweight_snapshot",
+    audio: base.audio && typeof base.audio === "object" ? { url: String(base.audio.url || ""), name: String(base.audio.name || base.audio.filename || ""), duration_sec: Number(base.audio.duration_sec || 0) || 0 } : undefined,
+    scenes: (Array.isArray(base.scenes) ? base.scenes : []).map((scene, index) => sanitizeManualClipBoardSceneForStorage(scene, index)),
+  };
+}
+
+function writeEmergencyManualClipBoardSnapshot(project = {}, nodeId = "") {
+  try {
+    const safeNodeId = String(nodeId || project?.nodeId || project?.sourceNodeId || "").trim();
+    const emergencyProject = buildEmergencyManualClipBoardProjectForStorage(project);
+    const serialized = JSON.stringify(emergencyProject);
+    const emergencyKey = getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:${safeNodeId || "default"}`);
+    localStorage.setItem(emergencyKey, serialized);
+    if (safeNodeId) {
+      localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(safeNodeId)), serialized);
+    }
+    localStorage.setItem(getManualClipBoardCanonicalStorageKey(), serialized);
+    rememberLastGoodManualClipBoardProject(emergencyProject);
+    console.warn("[manual board emergency snapshot] wrote lightweight fallback", { nodeId: safeNodeId, serializedKb: Math.round(serialized.length / 1024), stats: getManualClipBoardMaterialStats(emergencyProject) });
+    return true;
+  } catch (error) {
+    console.error("[manual board emergency snapshot] write failed", { nodeId, errorName: error?.name, errorMessage: error?.message });
+    return false;
+  }
+}
+
 export function persistManualClipBoardProject(project = {}, options = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
   const forceReplace = Boolean(options?.forceReplace);
@@ -1597,9 +1654,11 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       localStorageApproxBytes: getLocalStorageApproxBytes(),
       nodeId,
     };
+    const emergencySaved = writeEmergencyManualClipBoardSnapshot(storageProject, nodeId);
+    errorInfo.emergencySaved = emergencySaved;
     rememberManualClipBoardStorageError(errorInfo);
     console.error("[manual board persist] write failed", errorInfo);
-    return false;
+    return emergencySaved;
   }
 }
 
@@ -1909,9 +1968,11 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
         }
       })(),
     };
+    const emergencySaved = writeEmergencyManualClipBoardSnapshot(storageProject, nodeId);
+    errorInfo.emergencySaved = emergencySaved;
     rememberManualClipBoardStorageError(errorInfo);
     console.error("[manual board force write node-scoped] write failed", errorInfo);
-    return false;
+    return emergencySaved;
   }
 }
 

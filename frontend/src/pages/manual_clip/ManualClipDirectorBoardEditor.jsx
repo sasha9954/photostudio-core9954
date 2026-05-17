@@ -335,11 +335,15 @@ function pickNewestManualBoardCandidate(candidates = [], openState = {}) {
     }))
     .sort((a, b) => {
       if (Number(b.openStateMatch) !== Number(a.openStateMatch)) return Number(b.openStateMatch) - Number(a.openStateMatch);
-      if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
+      if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
+      if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
+      if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
+      if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
+      if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
+      if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
       if (b.scoreData.revision !== a.scoreData.revision) return b.scoreData.revision - a.scoreData.revision;
       if (b.scoreData.updatedAt !== a.scoreData.updatedAt) return b.scoreData.updatedAt - a.scoreData.updatedAt;
-      if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
-      if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
+      if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
       return b.scoreData.score - a.scoreData.score;
     });
   return ranked[0] || null;
@@ -1339,6 +1343,12 @@ const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "resultVideoUrl",
   "generated_video_url",
   "generatedVideoUrl",
+  "final_video_url",
+  "finalVideoUrl",
+  "output_video_url",
+  "outputVideoUrl",
+  "video_status",
+  "videoStatus",
   "video_job_id",
   "videoJobId",
   "video_has_audio",
@@ -1349,11 +1359,12 @@ const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
   "audio_slice_duration_sec",
   "audio_extracted",
   "video_error",
-  "video_request_payload_preview",
-  "videoRequestPayloadPreview",
   "generated_audio_policy",
+  "generatedAudioPolicy",
   "generated_audio_gain_db",
+  "generatedAudioGainDb",
   "keep_generated_audio",
+  "keepGeneratedAudio",
   "video_prompt",
   "positive_prompt",
   "negative_prompt",
@@ -2633,7 +2644,15 @@ export default function ManualClipDirectorBoardEditor({
     setProject(nextProject);
 
     if (didHydrateRef.current && hasMeaningfulManualProject(nextProject) && !isManualPollLocalOnlyReason(persistReason) && options?.autosave !== false) {
-      scheduleManualBoardAutosave(persistReason);
+      if (options?.forcePersist) {
+        const saved = flushManualBoardAutosave(persistReason, { skipSignatureCheck: true });
+        if (!saved) {
+          setAutosaveStatus("Ошибка autosave");
+          setShowEmergencyBackupButton(true);
+        }
+      } else {
+        scheduleManualBoardAutosave(persistReason);
+      }
       const savedScene = nextScenes.find((s) => s.scene_id === sceneId);
       console.debug("[manual director updateScene autosave scheduled]", {
         sceneId,
@@ -3221,7 +3240,7 @@ export default function ManualClipDirectorBoardEditor({
       if (status === "error_aspect_ratio") {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
         terminalVideoJobsRef.current.add(pollKey);
-        const aspectError = String(statusOut?.error || statusOut?.hint || "lip_sync returned vertical video, expected 16:9");
+        const aspectError = "lip_sync вернул vertical, ожидался 16:9";
         updateScene(sceneId, {
           status: "error_aspect_ratio",
           video_status: "error_aspect_ratio",
