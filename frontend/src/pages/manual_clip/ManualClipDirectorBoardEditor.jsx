@@ -9,7 +9,9 @@ import {
   buildManualBlockVideoPromptContextJson,
 } from "./manualBlockStoryboardDomain.js";
 import {
+  buildEmergencyManualClipBoardProjectForStorage,
   buildManualProjectBackupJson,
+  cleanupManualClipBoardStorageAggressive,
   computeManualProjectInputSignature,
   forceWriteManualClipBoardProjectForNode,
   getLastManualClipBoardStorageError,
@@ -2139,9 +2141,28 @@ export default function ManualClipDirectorBoardEditor({
     const fallbackProject = hasMeaningfulManualProject(currentProject) ? currentProject : (lastGoodBoardRef.current || readLastGoodManualClipBoardProject() || {});
     const currentSelectedSceneId = selectedSceneIdRef.current || fallbackProject.selectedSceneId || selectedSceneId || "";
     downloadJsonPayload(
-      buildManualProjectBackupJson({ ...fallbackProject, selectedSceneId: currentSelectedSceneId }, { source }),
+      {
+        backup_type: "photostudio_manual_project_emergency_backup",
+        backup_schema_version: 1,
+        createdAt: new Date().toISOString(),
+        source,
+        project: buildEmergencyManualClipBoardProjectForStorage({ ...fallbackProject, selectedSceneId: currentSelectedSceneId }),
+      },
       `manual_director_emergency_backup_${Date.now()}.json`,
     );
+  };
+
+  const onCleanupOldBrowserBackups = () => {
+    const currentProject = projectRef.current || project || {};
+    const ownerNodeId = String(getProjectOwnerNodeId(currentProject) || "").trim();
+    const removedKeys = cleanupManualClipBoardStorageAggressive({
+      currentNodeId: ownerNodeId,
+      activeProjectId: currentProject.project_id || currentProject.projectId || "",
+    });
+    setBackupStatus(removedKeys.length
+      ? `Очищено старых backup: ${removedKeys.length}`
+      : "Старых backup для очистки не найдено");
+    window.setTimeout(() => setBackupStatus(""), 2200);
   };
 
   const onDownloadProjectBackup = () => {
@@ -3771,6 +3792,7 @@ export default function ManualClipDirectorBoardEditor({
       }}>Прослушать сцены</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
       <span className={`manualDirectorAutosaveStatus ${autosaveStatus === "Ошибка autosave" ? "isError" : ""}`} title={autosaveError || undefined} aria-live="polite">{autosaveStatus}</span>
+      {autosaveStatus === "Ошибка autosave" ? <button className="clipSB_btn" onClick={onCleanupOldBrowserBackups}>Очистить старые backup в браузере</button> : null}
       {showEmergencyBackupButton ? <button className="clipSB_btn clipSB_btnDanger" onClick={() => downloadEmergencyBoardBackup("manual_director_board_emergency_button")}>Скачать аварийный backup</button> : null}
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>

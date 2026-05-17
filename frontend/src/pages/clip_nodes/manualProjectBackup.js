@@ -8,6 +8,9 @@ export const MANUAL_CLIP_BOARD_LAST_GOOD_SESSION_KEY = "photostudio_manual_direc
 
 
 const MANUAL_STORAGE_MAX_STRING_LENGTH = 200000;
+// TODO(manual-board-storage): move durable Manual Director Board saves from
+// localStorage to IndexedDB or a backend file/db store. localStorage remains a
+// compatibility layer and emergency fallback until that migration lands.
 const MANUAL_STORAGE_DANGEROUS_KEY_RE = /(raw|debug|blob|base64|binary|provider|response|payload|(^|[_-])file($|[_-]))/i;
 const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "scene_id",
@@ -610,6 +613,9 @@ export function buildManualProjectBackupJson(project = {}, { source = "manual_pr
 
 export function unwrapManualProjectBackupJson(raw = {}) {
   const safeRaw = raw && typeof raw === "object" ? raw : {};
+  if (safeRaw.backup_type === "photostudio_manual_project_emergency_backup") {
+    return safeRaw.project && typeof safeRaw.project === "object" ? safeRaw.project : safeRaw;
+  }
   if (safeRaw.backup_type !== "photostudio_manual_project_backup") return safeRaw;
   const audio = normalizeAudioMetadata(safeRaw);
   return {
@@ -1365,7 +1371,7 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
   const activeIdKey = getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY);
   const nodeScopedKey = getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(safeNodeId));
 
-  try {
+  const writeReplacementProject = () => {
     clearManualClipBoardProjectForNode(safeNodeId, { clearActive: true, clearCanonical: true });
     localStorage.setItem(canonicalKey, serialized);
     localStorage.setItem(activeKey, serialized);
@@ -1377,6 +1383,10 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
       localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, safeNodeId);
       localStorage.setItem(getManualClipBoardProjectStorageKey(safeNodeId), serialized);
     }
+  };
+
+  try {
+    writeReplacementProject();
 
     const openRoutePath = options?.routePath || "/studio/storyboard";
     writeManualClipBoardOpenState({
@@ -1419,61 +1429,149 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
     });
     return storageProject;
   } catch (err) {
+    const quotaExceeded = isQuotaExceededError(err);
+    let quotaCleanupRemovedKeys = [];
+    if (quotaExceeded) {
+      quotaCleanupRemovedKeys = cleanupManualClipBoardStorageAggressive({ currentNodeId: safeNodeId, activeProjectId: storageProject.project_id || storageProject.projectId || "" });
+      try {
+        writeReplacementProject();
+        rememberManualClipBoardStorageError(null);
+        console.warn("[MANUAL BOARD NEW PROJECT REPLACE] saved after quota cleanup", {
+          nodeId: safeNodeId,
+          reason,
+          removedKeysCount: quotaCleanupRemovedKeys.length,
+          serializedKb: Math.round(serialized.length / 1024),
+        });
+        return storageProject;
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
+
     const errorInfo = {
-      reason: isQuotaExceededError(err) ? "quota_exceeded" : "replace_failed",
+      reason: quotaExceeded ? "quota_exceeded" : "replace_failed",
       errorName: err?.name,
       errorMessage: err?.message,
       errorCode: err?.code,
       serializedLength: serialized.length,
       serializedKb: Math.round(serialized.length / 1024),
+      quotaCleanupRemovedKeysCount: quotaCleanupRemovedKeys.length,
+      quotaCleanupRemovedKeys,
       nodeId: safeNodeId,
     };
     rememberManualClipBoardStorageError(errorInfo);
-    console.error("[MANUAL BOARD NEW PROJECT REPLACE] failed", errorInfo);
+    console.warn("[MANUAL BOARD NEW PROJECT REPLACE] failed", errorInfo);
     return false;
   }
 }
 
-function buildEmergencyManualClipBoardProjectForStorage(project = {}) {
-  const safeProject = project && typeof project === "object" ? project : {};
-  const base = sanitizeManualClipBoardProjectForStorage(safeProject);
-  return {
-    project_mode: String(base.project_mode || base.projectMode || "manual_clip_board"),
-    project_kind: String(base.project_kind || base.projectKind || "clip"),
-    format: String(base.format || base.aspect_ratio || ""),
-    aspect_ratio: String(base.aspect_ratio || base.format || ""),
-    nodeId: String(base.nodeId || base.sourceNodeId || ""),
-    sourceNodeId: String(base.sourceNodeId || base.nodeId || ""),
-    ownerNodeId: String(base.ownerNodeId || base.sourceNodeId || base.nodeId || ""),
-    project_id: String(base.project_id || base.projectId || ""),
-    projectId: String(base.projectId || base.project_id || ""),
-    input_signature: String(base.input_signature || base.inputSignature || ""),
-    audio_signature: String(base.audio_signature || base.audioSignature || ""),
-    revision: Number(base.revision || 0) || 0,
-    selectedSceneId: String(base.selectedSceneId || ""),
-    updatedAt: Date.now(),
-    lastPersistReason: "emergency_lightweight_snapshot",
-    audio: base.audio && typeof base.audio === "object" ? { url: String(base.audio.url || ""), name: String(base.audio.name || base.audio.filename || ""), duration_sec: Number(base.audio.duration_sec || 0) || 0 } : undefined,
-    scenes: (Array.isArray(base.scenes) ? base.scenes : []).map((scene, index) => sanitizeManualClipBoardSceneForStorage(scene, index)),
+function firstManualString(...values) {
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function buildEmergencyManualClipBoardSceneForStorage(scene = {}) {
+  const safeScene = scene && typeof scene === "object" ? scene : {};
+  const timing = safeScene.timing && typeof safeScene.timing === "object"
+    ? stripLargeManualStorageValue(safeScene.timing, "scenes[].timing")
+    : {
+      start_sec: Number(safeScene.start_sec ?? safeScene.startSec ?? 0) || 0,
+      end_sec: Number(safeScene.end_sec ?? safeScene.endSec ?? 0) || 0,
+      duration_sec: Number(safeScene.duration_sec ?? safeScene.durationSec ?? 0) || 0,
+      speech_start_sec: Number(safeScene.speech_start_sec ?? safeScene.speechStartSec ?? 0) || 0,
+      speech_end_sec: Number(safeScene.speech_end_sec ?? safeScene.speechEndSec ?? 0) || 0,
+    };
+  const prompts = {
+    source_image_prompt_en: firstManualString(safeScene.source_image_prompt_en, safeScene.sourceImagePromptEn, safeScene.image_prompt, safeScene.imagePrompt),
+    source_image_prompt_ru: firstManualString(safeScene.source_image_prompt_ru, safeScene.sourceImagePromptRu),
+    i2v_prompt_en: firstManualString(safeScene.i2v_prompt_en, safeScene.i2vPromptEn, safeScene.video_prompt, safeScene.videoPrompt),
+    i2v_negative_prompt_en: firstManualString(safeScene.i2v_negative_prompt_en, safeScene.i2vNegativePromptEn, safeScene.negative_prompt, safeScene.negativePrompt),
+    video_prompt: firstManualString(safeScene.video_prompt, safeScene.videoPrompt, safeScene.i2v_prompt_en, safeScene.i2vPromptEn),
+    negative_prompt: firstManualString(safeScene.negative_prompt, safeScene.negativePrompt, safeScene.i2v_negative_prompt_en, safeScene.i2vNegativePromptEn),
+    sound_prompt: firstManualString(safeScene.sound_prompt, safeScene.soundPrompt, safeScene.mmaudio_prompt, safeScene.mmaudioPrompt),
   };
+  return stripLargeManualStorageValue({
+    scene_id: firstManualString(safeScene.scene_id, safeScene.id),
+    timing,
+    route: firstManualString(safeScene.route, safeScene.manualRoute, safeScene.renderMode),
+    prompts,
+    source_image_prompt_en: prompts.source_image_prompt_en,
+    source_image_prompt_ru: prompts.source_image_prompt_ru,
+    i2v_prompt_en: prompts.i2v_prompt_en,
+    i2v_negative_prompt_en: prompts.i2v_negative_prompt_en,
+    video_prompt: prompts.video_prompt,
+    negative_prompt: prompts.negative_prompt,
+    sound_prompt: prompts.sound_prompt,
+    image_url: firstManualString(safeScene.image_url, safeScene.imageUrl, safeScene.generated_image_url, safeScene.generatedImageUrl),
+    start_image_url: firstManualString(safeScene.start_image_url, safeScene.startImageUrl),
+    end_image_url: firstManualString(safeScene.end_image_url, safeScene.endImageUrl),
+    video_url: firstManualString(safeScene.video_url, safeScene.videoUrl, safeScene.result_video_url, safeScene.resultVideoUrl, safeScene.generated_video_url, safeScene.generatedVideoUrl, safeScene.final_video_url, safeScene.finalVideoUrl),
+    video_status: firstManualString(safeScene.video_status, safeScene.videoStatus, safeScene.status),
+    video_job_id: firstManualString(safeScene.video_job_id, safeScene.videoJobId),
+    status: firstManualString(safeScene.status, safeScene.video_status, safeScene.videoStatus),
+  }, "emergency.scenes[]");
+}
+
+export function buildEmergencyManualClipBoardProjectForStorage(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const audio = safeProject.audio && typeof safeProject.audio === "object" ? safeProject.audio : {};
+  const audioMetadata = safeProject.audio_metadata && typeof safeProject.audio_metadata === "object" ? safeProject.audio_metadata : {};
+  return stripLargeManualStorageValue({
+    project_id: firstManualString(safeProject.project_id, safeProject.projectId),
+    nodeId: firstManualString(safeProject.nodeId, safeProject.sourceNodeId, safeProject.ownerNodeId),
+    format: firstManualString(safeProject.format, safeProject.aspect_ratio),
+    audio: {
+      url: firstManualString(audio.url, audioMetadata.url, safeProject.audio_url, safeProject.audioUrl),
+    },
+    story_blocks: Array.isArray(safeProject.story_blocks)
+      ? stripLargeManualStorageValue(safeProject.story_blocks, "emergency.story_blocks")
+      : [],
+    scenes: (Array.isArray(safeProject.scenes) ? safeProject.scenes : []).map((scene) => buildEmergencyManualClipBoardSceneForStorage(scene)),
+    updatedAt: Date.now(),
+    lastPersistReason: "emergency_ultra_light_snapshot",
+  }, "emergency");
 }
 
 function writeEmergencyManualClipBoardSnapshot(project = {}, nodeId = "") {
-  try {
-    const safeNodeId = String(nodeId || project?.nodeId || project?.sourceNodeId || "").trim();
-    const emergencyProject = buildEmergencyManualClipBoardProjectForStorage(project);
-    const serialized = JSON.stringify(emergencyProject);
-    const emergencyKey = getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:${safeNodeId || "default"}`);
+  const safeNodeId = String(nodeId || project?.nodeId || project?.sourceNodeId || "").trim();
+  const emergencyProject = buildEmergencyManualClipBoardProjectForStorage({
+    ...(project && typeof project === "object" ? project : {}),
+    nodeId: safeNodeId || project?.nodeId || project?.sourceNodeId || "",
+  });
+  const serialized = JSON.stringify(emergencyProject);
+  const emergencyKey = getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:${safeNodeId || "default"}`);
+  const writeEmergency = () => {
     localStorage.setItem(emergencyKey, serialized);
     if (safeNodeId) {
       localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(safeNodeId)), serialized);
+      localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), safeNodeId);
     }
+    localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
     localStorage.setItem(getManualClipBoardCanonicalStorageKey(), serialized);
+  };
+
+  try {
+    writeEmergency();
     rememberLastGoodManualClipBoardProject(emergencyProject);
-    console.warn("[manual board emergency snapshot] wrote lightweight fallback", { nodeId: safeNodeId, serializedKb: Math.round(serialized.length / 1024), stats: getManualClipBoardMaterialStats(emergencyProject) });
+    console.warn("[manual board emergency snapshot] wrote ultra-light fallback", { nodeId: safeNodeId, serializedKb: Math.round(serialized.length / 1024), stats: getManualClipBoardMaterialStats(emergencyProject) });
     return true;
   } catch (error) {
-    console.error("[manual board emergency snapshot] write failed", { nodeId, errorName: error?.name, errorMessage: error?.message });
+    if (isQuotaExceededError(error)) {
+      const removedKeys = cleanupManualClipBoardStorageAggressive({ currentNodeId: safeNodeId, activeProjectId: emergencyProject.project_id });
+      try {
+        writeEmergency();
+        rememberLastGoodManualClipBoardProject(emergencyProject);
+        console.warn("[manual board emergency snapshot] wrote ultra-light fallback after cleanup", { nodeId: safeNodeId, removedKeysCount: removedKeys.length, serializedKb: Math.round(serialized.length / 1024), stats: getManualClipBoardMaterialStats(emergencyProject) });
+        return true;
+      } catch (retryError) {
+        console.warn("[manual board emergency snapshot] browser storage still full after cleanup; automatic JSON download required", { nodeId: safeNodeId, errorName: retryError?.name, errorCode: retryError?.code, removedKeysCount: removedKeys.length, serializedKb: Math.round(serialized.length / 1024) });
+        return false;
+      }
+    }
+    console.warn("[manual board emergency snapshot] write failed", { nodeId: safeNodeId, errorName: error?.name, errorMessage: error?.message });
     return false;
   }
 }
@@ -1633,8 +1731,45 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     });
     return true;
   } catch (err) {
+    const quotaExceeded = isQuotaExceededError(err);
+    let quotaCleanupRemovedKeys = [];
+
+    if (quotaExceeded) {
+      quotaCleanupRemovedKeys = cleanupManualClipBoardStorageAggressive({
+        currentNodeId: nodeId,
+        activeProjectId: safeProject.project_id || safeProject.projectId || "",
+      });
+      try {
+        writeCanonicalManualClipBoardProject(storageProject);
+        localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), serialized);
+        if (nodeId) {
+          localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
+          localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), serialized);
+        }
+        if (canUseLegacyManualProjectStorage()) {
+          localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, serialized);
+          if (nodeId) {
+            localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
+            localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), serialized);
+          }
+        }
+        rememberManualClipBoardStorageError(null);
+        rememberLastGoodManualClipBoardProject(storageProject);
+        console.warn("[MANUAL BOARD PERSIST WRITE] saved after quota cleanup", {
+          reason,
+          nodeId,
+          removedKeysCount: quotaCleanupRemovedKeys.length,
+          storageSerializedKb: Math.round(serialized.length / 1024),
+          storageStats,
+        });
+        return true;
+      } catch (retryErr) {
+        err = retryErr;
+      }
+    }
+
     const errorInfo = {
-      reason: isQuotaExceededError(err) ? "quota_exceeded" : "write_failed",
+      reason: quotaExceeded ? "quota_exceeded" : "write_failed",
       errorName: err?.name,
       errorMessage: err?.message,
       errorStack: err?.stack,
@@ -1652,16 +1787,110 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       incomingStats: nextStats,
       storageStats,
       localStorageApproxBytes: getLocalStorageApproxBytes(),
+      quotaCleanupRemovedKeysCount: quotaCleanupRemovedKeys.length,
+      quotaCleanupRemovedKeys,
       nodeId,
     };
     const emergencySaved = writeEmergencyManualClipBoardSnapshot(storageProject, nodeId);
     errorInfo.emergencySaved = emergencySaved;
     rememberManualClipBoardStorageError(errorInfo);
-    console.error("[manual board persist] write failed", errorInfo);
+    console.warn("[manual board persist] primary write failed; emergency fallback status recorded", errorInfo);
     return emergencySaved;
   }
 }
 
+
+function getManualClipBoardStorageProjectIdentityForKey(key = "") {
+  const project = readManualProjectJsonStorage(key);
+  return {
+    project,
+    nodeId: getManualProjectOwnerId(project),
+    projectId: String(project?.project_id || project?.projectId || "").trim(),
+    updatedAt: Number(project?.updatedAt || project?.updated_at || 0) || 0,
+  };
+}
+
+export function cleanupManualClipBoardStorageAggressive(options = {}) {
+  const safeNodeId = String(options?.currentNodeId || options?.nodeId || "").trim();
+  const activeProjectId = String(options?.activeProjectId || options?.project_id || options?.projectId || "").trim();
+  const accountScopeId = getManualProjectAccountScopeId();
+  const currentScopedNodeKey = safeNodeId ? getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(safeNodeId)) : "";
+  const currentLegacyNodeKey = safeNodeId ? getManualClipBoardProjectStorageKey(safeNodeId) : "";
+  const activeIdKeys = new Set([
+    getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY),
+    MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY,
+  ].filter(Boolean));
+  const currentNodeKeys = new Set([
+    currentScopedNodeKey,
+    currentLegacyNodeKey,
+  ].filter(Boolean));
+  const removedKeys = [];
+  const keptKeys = [];
+
+  const shouldKeepKey = (key = "") => {
+    if (!key || !key.includes("manual_clip_board")) return true;
+    if (currentNodeKeys.has(key)) return true;
+    if (activeIdKeys.has(key)) {
+      try {
+        return String(localStorage.getItem(key) || "").trim() === safeNodeId;
+      } catch {
+        return false;
+      }
+    }
+    const { nodeId, projectId } = getManualClipBoardStorageProjectIdentityForKey(key);
+    if (safeNodeId && nodeId === safeNodeId) return true;
+    if (activeProjectId && projectId === activeProjectId) return true;
+    return false;
+  };
+
+  try {
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key) keys.push(key);
+    }
+
+    keys
+      .filter((key) => key.includes("manual_clip_board"))
+      .sort((a, b) => {
+        const aInfo = getManualClipBoardStorageProjectIdentityForKey(a);
+        const bInfo = getManualClipBoardStorageProjectIdentityForKey(b);
+        return aInfo.updatedAt - bInfo.updatedAt;
+      })
+      .forEach((key) => {
+        if (shouldKeepKey(key)) {
+          keptKeys.push(key);
+          return;
+        }
+        try {
+          localStorage.removeItem(key);
+          removedKeys.push(key);
+        } catch {}
+      });
+
+    if (removedKeys.length) {
+      console.warn("[manual board quota cleanup aggressive]", {
+        currentNodeId: safeNodeId,
+        activeProjectId,
+        accountScopeId,
+        removedKeysCount: removedKeys.length,
+        keptKeysCount: keptKeys.length,
+        removedKeys,
+        localStorageApproxBytes: getLocalStorageApproxBytes(),
+      });
+    }
+  } catch (err) {
+    console.warn("[manual board quota cleanup aggressive] failed", {
+      currentNodeId: safeNodeId,
+      activeProjectId,
+      accountScopeId,
+      errorName: err?.name,
+      errorMessage: err?.message,
+    });
+  }
+
+  return removedKeys;
+}
 
 function cleanupOldManualClipBoardStorageForQuota(currentNodeId = "") {
   const safeNodeId = String(currentNodeId || "").trim();
@@ -1916,7 +2145,7 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
     const quotaExceeded = isQuotaExceededError(err);
 
     if (quotaExceeded && serialized) {
-      removedKeys = cleanupOldManualClipBoardStorageForQuota(nodeId);
+      removedKeys = cleanupManualClipBoardStorageAggressive({ currentNodeId: nodeId, activeProjectId: safeProject.project_id || safeProject.projectId || "" });
       removedKeys.push(...removeForceWriteTargetKeys());
       try {
         retryWrote = writeAndVerify();
@@ -1971,7 +2200,7 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
     const emergencySaved = writeEmergencyManualClipBoardSnapshot(storageProject, nodeId);
     errorInfo.emergencySaved = emergencySaved;
     rememberManualClipBoardStorageError(errorInfo);
-    console.error("[manual board force write node-scoped] write failed", errorInfo);
+    console.warn("[manual board force write node-scoped] primary write failed; emergency fallback status recorded", errorInfo);
     return emergencySaved;
   }
 }
