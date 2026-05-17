@@ -5613,29 +5613,32 @@ export default function ManualTimingEditorPage() {
             {SHOW_MISSING_PHRASE_TOOLS && audioPhrases.length ? <span><i className="legendMissingPhrase" /> пропущенная фраза</span> : null}
           </div>
           <div className="manualTimingTrackToolbox">
-            <button
-              className="clipSB_btn clipSB_btnSecondary manualTimingMiniPlayButton"
-              onClick={onPlayPause}
-              disabled={!audio.url}
-              title={isPlaying ? "Пауза" : "Слушать с текущего места"}
-            >
-              {isPlaying ? "⏸" : "▶"}
-            </button>
-            <button
-              className="clipSB_btn clipSB_btnSecondary manualTimingFullPlaybackButton"
-              type="button"
-              onClick={() => {
-                if (manualTimingPlaybackMode === "full_timeline") {
-                  stopManualTimingPlayback();
-                } else {
-                  playFullManualTiming();
-                }
-              }}
-              disabled={!audio.url}
-              title="Прослушать весь основной тайминг с начала до конца"
-            >
-              {manualTimingPlaybackMode === "full_timeline" ? "■ стоп тайминг" : "▶ весь тайминг"}
-            </button>
+            <div className="manualTimingPlayStack">
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingMiniPlayButton"
+                onClick={onPlayPause}
+                disabled={!audio.url}
+                title={isPlaying ? "Пауза" : "Слушать выбранную сцену / с текущего места"}
+              >
+                {isPlaying && manualTimingPlaybackMode !== "full_timeline" ? "⏸" : "▶"}
+              </button>
+
+              <button
+                className="clipSB_btn clipSB_btnSecondary manualTimingFullPlaybackButton"
+                type="button"
+                onClick={() => {
+                  if (manualTimingPlaybackMode === "full_timeline") {
+                    stopManualTimingPlayback();
+                  } else {
+                    playFullManualTiming();
+                  }
+                }}
+                disabled={!audio.url}
+                title="Прослушать весь тайминг с начала"
+              >
+                {manualTimingPlaybackMode === "full_timeline" ? "■ всё" : "▶ всё"}
+              </button>
+            </div>
 
             <div className="manualTimingTrackNudgeBox" aria-label="Микро-доводчик конца выбранной сцены">
               <button
