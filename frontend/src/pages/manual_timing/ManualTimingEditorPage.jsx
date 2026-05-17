@@ -2653,46 +2653,8 @@ export default function ManualTimingEditorPage() {
 
 
   useEffect(() => {
-    const rawScenes = Array.isArray(project?.scenes) ? project.scenes : [];
-    const currentSignature = JSON.stringify({
-      audioDuration: roundTimingSec(Number(project?.audio?.duration_sec || 0)),
-      scenes: rawScenes.map((scene) => ({
-        id: scene?.scene_id,
-        start: roundTimingSec(scene?.start_sec),
-        end: roundTimingSec(scene?.end_sec),
-        sourceKind: scene?.source_kind,
-        sourceStart: Number.isFinite(Number(scene?.source_start_sec)) ? roundTimingSec(scene?.source_start_sec) : null,
-        sourceEnd: Number.isFinite(Number(scene?.source_end_sec)) ? roundTimingSec(scene?.source_end_sec) : null,
-        isSilence: Boolean(scene?.is_silence || scene?.scene_type === "manual_silence"),
-      })),
-    });
-
-    if (silenceRepairSignatureRef.current === currentSignature) return;
-
-    const repairedProject = repairManualTimingSilenceTimelineProject(project);
-    if (!repairedProject) {
-      silenceRepairSignatureRef.current = currentSignature;
-      return;
-    }
-
-    const repairedScenes = Array.isArray(repairedProject?.scenes) ? repairedProject.scenes : [];
-    silenceRepairSignatureRef.current = JSON.stringify({
-      audioDuration: roundTimingSec(Number(repairedProject?.audio?.duration_sec || 0)),
-      scenes: repairedScenes.map((scene) => ({
-        id: scene?.scene_id,
-        start: roundTimingSec(scene?.start_sec),
-        end: roundTimingSec(scene?.end_sec),
-        sourceKind: scene?.source_kind,
-        sourceStart: Number.isFinite(Number(scene?.source_start_sec)) ? roundTimingSec(scene?.source_start_sec) : null,
-        sourceEnd: Number.isFinite(Number(scene?.source_end_sec)) ? roundTimingSec(scene?.source_end_sec) : null,
-        isSilence: Boolean(scene?.is_silence || scene?.scene_type === "manual_silence"),
-      })),
-    });
-
-    persist(repairedProject);
-    durationSecRef.current = Number(repairedProject.audio?.duration_sec || 0);
-    setCopyStatus("Таймлайн тишины пересобран: длительность аудио расширена, source-поля восстановлены.");
-    window.setTimeout(() => setCopyStatus(""), 2200);
+    // Virtual silence now uses explicit source-mapped scene insertion. Auto repair is disabled to avoid overwriting manual insert result.
+    return;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.scenes, project?.audio?.duration_sec]);
 
@@ -3662,11 +3624,11 @@ export default function ManualTimingEditorPage() {
     setAudioTime(actualTime, { pause: true, clearBound: true });
   };
 
-  const insertSilenceAtTimelineTime = (insertTimeSec, silenceDurationSec = MANUAL_TIMING_INSERT_SILENCE_SEC) => {
+  const insertSilenceAtTimelineTime = (insertTimeSec) => {
     const activeDuration = durationSecRef.current || durationSec;
     if (!(activeDuration > 0)) return;
 
-    const silenceDuration = roundTimingSec(Math.max(0.01, Number(silenceDurationSec || MANUAL_TIMING_INSERT_SILENCE_SEC)));
+    const silenceDuration = roundTimingSec(MANUAL_TIMING_INSERT_SILENCE_SEC);
     const cursor = roundTimingSec(clampTime(Number(insertTimeSec || 0), activeDuration));
 
     stopManualTimingPlayback();
@@ -3679,71 +3641,100 @@ export default function ManualTimingEditorPage() {
       );
     const sourceMappedScenes = safeScenes.map(materializeManualTimingSceneSourceMap);
     const epsilon = 0.001;
-    const sourceIndex = sourceMappedScenes.findIndex((scene, index) => {
-      const start = roundTimingSec(scene.start_sec);
-      const end = roundTimingSec(scene.end_sec);
-      const isLast = index === sourceMappedScenes.length - 1;
-      return cursor >= start - epsilon && (cursor < end - epsilon || (isLast && cursor <= end + epsilon));
-    });
-    const insertAtIndex = sourceIndex >= 0 ? sourceIndex : sourceMappedScenes.length - 1;
+    const boundaryAfterIndex = sourceMappedScenes.findIndex((scene) => Math.abs(roundTimingSec(scene.end_sec) - cursor) <= epsilon);
+    const boundaryBeforeIndex = sourceMappedScenes.findIndex((scene) => Math.abs(roundTimingSec(scene.start_sec) - cursor) <= epsilon);
+    const insertAtIndex = boundaryAfterIndex >= 0
+      ? boundaryAfterIndex + 1
+      : boundaryBeforeIndex >= 0
+        ? boundaryBeforeIndex
+        : sourceMappedScenes.findIndex((scene, index) => {
+          const start = roundTimingSec(scene.start_sec);
+          const end = roundTimingSec(scene.end_sec);
+          const isLast = index === sourceMappedScenes.length - 1;
+          return cursor >= start - epsilon && (cursor < end - epsilon || (isLast && cursor <= end + epsilon));
+        });
+    const effectiveInsertIndex = insertAtIndex >= 0 ? insertAtIndex : sourceMappedScenes.length;
     const nextSceneDrafts = [];
     let selectedSilenceOrderIndex = 0;
-
-    sourceMappedScenes.forEach((scene, index) => {
-      if (index < insertAtIndex) {
-        nextSceneDrafts.push(scene);
-        return;
-      }
-
-      if (index > insertAtIndex) {
-        nextSceneDrafts.push(shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration));
-        return;
-      }
-
-      const sceneStart = roundTimingSec(scene.start_sec);
-      const sceneEnd = roundTimingSec(scene.end_sec);
-      const sceneAfterEnd = roundTimingSec(sceneEnd + silenceDuration);
-      const sourceStart = Number.isFinite(Number(scene.source_start_sec)) ? roundTimingSec(scene.source_start_sec) : sceneStart;
-      const sourceEnd = Number.isFinite(Number(scene.source_end_sec)) ? roundTimingSec(scene.source_end_sec) : roundTimingSec(sourceStart + Math.max(0, sceneEnd - sceneStart));
-      const leftSourceEnd = roundTimingSec(sourceStart + Math.max(0, cursor - sceneStart));
-
-      if (cursor > sceneStart + epsilon) {
-        nextSceneDrafts.push(retimeManualTimingScene(scene, sceneStart, cursor, {
-          source_kind: "audio",
-          source_start_sec: sourceStart,
-          source_end_sec: leftSourceEnd,
-          user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || "") || "Часть сцены до вставленной тишины.",
-        }));
-      }
-
-      const silenceScene = decorateManualTimingSilenceScene({
-        ...scene,
-        scene_id: `silence_${Date.now()}`,
-        index: nextSceneDrafts.length + 1,
-        start_sec: cursor,
-        end_sec: roundTimingSec(cursor + silenceDuration),
-        source_start_sec: 0,
-        source_end_sec: silenceDuration,
-        silence_block_id: `silence_${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      });
-      selectedSilenceOrderIndex = nextSceneDrafts.length;
-      nextSceneDrafts.push(silenceScene);
-
-      if (cursor < sceneEnd - epsilon) {
-        const shiftedRight = shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration);
-        nextSceneDrafts.push(retimeManualTimingScene(shiftedRight, roundTimingSec(cursor + silenceDuration), sceneAfterEnd, {
-          source_kind: "audio",
-          source_start_sec: leftSourceEnd,
-          source_end_sec: sourceEnd,
-          user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || "") || "Часть сцены после вставленной тишины.",
-        }));
-      }
+    const silenceId = `silence_${Date.now()}`;
+    const silenceBlockId = `${silenceId}_${Math.random().toString(16).slice(2)}`;
+    const makeSilenceScene = (orderIndex) => decorateManualTimingSilenceScene({
+      scene_id: silenceId,
+      index: orderIndex + 1,
+      start_sec: cursor,
+      end_sec: roundTimingSec(cursor + silenceDuration),
+      source_start_sec: 0,
+      source_end_sec: silenceDuration,
+      silence_block_id: silenceBlockId,
     });
+
+    if (Math.abs(cursor - activeDuration) <= epsilon && effectiveInsertIndex >= sourceMappedScenes.length) {
+      nextSceneDrafts.push(...sourceMappedScenes);
+      selectedSilenceOrderIndex = nextSceneDrafts.length;
+      nextSceneDrafts.push(makeSilenceScene(selectedSilenceOrderIndex));
+    } else if (boundaryAfterIndex >= 0 || boundaryBeforeIndex >= 0 || effectiveInsertIndex >= sourceMappedScenes.length) {
+      sourceMappedScenes.forEach((scene, index) => {
+        if (index === effectiveInsertIndex) {
+          selectedSilenceOrderIndex = nextSceneDrafts.length;
+          nextSceneDrafts.push(makeSilenceScene(selectedSilenceOrderIndex));
+        }
+
+        nextSceneDrafts.push(index >= effectiveInsertIndex
+          ? shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration)
+          : scene);
+      });
+
+      if (effectiveInsertIndex >= sourceMappedScenes.length) {
+        selectedSilenceOrderIndex = nextSceneDrafts.length;
+        nextSceneDrafts.push(makeSilenceScene(selectedSilenceOrderIndex));
+      }
+    } else {
+      sourceMappedScenes.forEach((scene, index) => {
+        if (index < effectiveInsertIndex) {
+          nextSceneDrafts.push(scene);
+          return;
+        }
+
+        if (index > effectiveInsertIndex) {
+          nextSceneDrafts.push(shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration));
+          return;
+        }
+
+        const sceneStart = roundTimingSec(scene.start_sec);
+        const sceneEnd = roundTimingSec(scene.end_sec);
+        const sceneAfterEnd = roundTimingSec(sceneEnd + silenceDuration);
+        const sourceStart = Number.isFinite(Number(scene.source_start_sec)) ? roundTimingSec(scene.source_start_sec) : sceneStart;
+        const sourceEnd = Number.isFinite(Number(scene.source_end_sec)) ? roundTimingSec(scene.source_end_sec) : roundTimingSec(sourceStart + Math.max(0, sceneEnd - sceneStart));
+        const leftSourceEnd = roundTimingSec(sourceStart + Math.max(0, cursor - sceneStart));
+
+        if (cursor > sceneStart + epsilon) {
+          nextSceneDrafts.push(retimeManualTimingScene(scene, sceneStart, cursor, {
+            source_kind: "audio",
+            source_start_sec: sourceStart,
+            source_end_sec: leftSourceEnd,
+            user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || "") || "Часть сцены до вставленной тишины.",
+          }));
+        }
+
+        selectedSilenceOrderIndex = nextSceneDrafts.length;
+        nextSceneDrafts.push(makeSilenceScene(selectedSilenceOrderIndex));
+
+        if (cursor < sceneEnd - epsilon) {
+          const shiftedRight = shiftManualTimingTimelineScenePreserveSource(scene, silenceDuration);
+          nextSceneDrafts.push(retimeManualTimingScene(shiftedRight, roundTimingSec(cursor + silenceDuration), sceneAfterEnd, {
+            source_kind: "audio",
+            source_start_sec: leftSourceEnd,
+            source_end_sec: sourceEnd,
+            user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || "") || "Часть сцены после вставленной тишины.",
+          }));
+        }
+      });
+    }
 
     if (!nextSceneDrafts.some((scene) => isManualTimingSilenceScene(scene))) return;
 
     const nextScenes = reindexManualTimingTimelineScenes(nextSceneDrafts);
-    const nextSelectedScene = nextScenes[selectedSilenceOrderIndex] || nextScenes.find((scene) => isManualTimingSilenceScene(scene));
+    const nextSelectedScene = nextScenes[selectedSilenceOrderIndex] || nextScenes.find((scene) => scene.scene_id === silenceId) || nextScenes.find((scene) => isManualTimingSilenceScene(scene));
     const nextMarkers = normalizeManualTimingMarkers(
       [
         0,
@@ -3768,36 +3759,34 @@ export default function ManualTimingEditorPage() {
       audio_phrases: project.audio_phrases,
       virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
       scenes: nextScenes,
-      selectedSceneId: nextSelectedScene?.scene_id || nextScenes[0]?.scene_id || "",
+      selectedSceneId: nextSelectedScene?.scene_id || silenceId,
       timing_status: "draft",
     });
     setAudioTime(cursor, { pause: true, clearBound: true });
-    setCopyStatus(`Вставлена тишина ${formatTimingSec(silenceDuration)} в ${formatTimingSec(cursor)}. Аудио разрезано, правая часть сдвинута.`);
+    setCopyStatus(`Вставлена тишина ${formatTimingSec(silenceDuration)} в ${formatTimingSec(cursor)}. Правая часть таймлайна сдвинута.`);
     window.setTimeout(() => setCopyStatus(""), 2200);
   };
 
-  const insertSilenceAtCursor = () => {
-    const activeDuration = durationSecRef.current || durationSec;
-    if (!(activeDuration > 0)) return;
+  const insertSilenceAfterSelectedScene = () => {
+    if (!selectedScene) {
+      setCopyStatus("Выберите сцену, после которой вставить тишину");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+      return;
+    }
 
-    const audioEl = audioRef.current;
-    const liveAudioTime = Number(audioEl?.currentTime);
-    const rawCursor = Number.isFinite(liveAudioTime) && liveAudioTime > 0
-      ? liveAudioTime
-      : Number(currentTimeRef.current ?? currentTime ?? 0);
-    const cursor = roundTimingSec(clampTime(rawCursor, activeDuration));
-
-    insertSilenceAtTimelineTime(cursor);
+    const insertTime = roundTimingSec(Number(selectedScene.end_sec || 0));
+    insertSilenceAtTimelineTime(insertTime, 0.5);
   };
 
   const insertSilenceBeforeSelectedScene = () => {
     if (!selectedScene) {
-      insertSilenceAtCursor();
+      setCopyStatus("Выберите сцену, перед которой вставить тишину");
+      window.setTimeout(() => setCopyStatus(""), 1600);
       return;
     }
 
-    const insertTime = roundTimingSec(clampTime(Number(selectedScene.start_sec || 0), durationSecRef.current || durationSec));
-    insertSilenceAtTimelineTime(insertTime, 1);
+    const insertTime = roundTimingSec(Number(selectedScene.start_sec || 0));
+    insertSilenceAtTimelineTime(insertTime, 0.5);
   };
 
   const playSegment = (scene) => {
@@ -5797,16 +5786,16 @@ export default function ManualTimingEditorPage() {
               <button
                 className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
                 type="button"
-                onClick={insertSilenceAtCursor}
+                onClick={insertSilenceAfterSelectedScene}
                 disabled={!audio.url || !(durationSec > 0)}
-                title="Вставить 0.5 сек тишины по текущему курсору / после выбранного места"
+                title="Вставить 0.5 сек тишины после выбранной сцены"
               >тишина после</button>
               <button
                 className="clipSB_btn clipSB_btnSecondary manualTimingSilenceButton"
                 type="button"
                 onClick={insertSilenceBeforeSelectedScene}
                 disabled={!audio.url || !(durationSec > 0)}
-                title="Вставить 1 сек тишины перед выбранной сценой"
+                title="Вставить 0.5 сек тишины перед выбранной сценой"
               >тишина до</button>
               <button
                 className="clipSB_btn clipSB_btnDanger manualTimingResetMiniButton"
