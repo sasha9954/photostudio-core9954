@@ -14,7 +14,7 @@ import {
 } from "../clip_nodes/manual_timing/manualTimingDomain.js";
 import "./PodcastAudioComposerPage.css";
 
-const BUILD_ID = "blocks-v45-broken-phrase-repair";
+const BUILD_ID = "blocks-v46-separated-playback";
 const COMPOSER_STORAGE_VERSION = 44;
 const RESTORABLE_STORAGE_VERSIONS = new Set([30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44]);
 const ACTOR_AUDIO_DB_NAME = "podcast_audio_composer_assets_v1";
@@ -1637,8 +1637,7 @@ export default function PodcastAudioComposerPage() {
 
   useEffect(() => {
     return () => {
-      if (silenceFrameRef.current) cancelAnimationFrame(silenceFrameRef.current);
-      stopMainPlaybackGuard();
+      stopMainPlayback();
     };
   }, []);
 
@@ -1646,10 +1645,7 @@ export default function PodcastAudioComposerPage() {
     const safeDuration = normalizeNumber(audio.duration_sec, 0);
     setDurationSec(safeDuration);
     setCurrentTimeSec(0);
-    stopSilencePlayback();
-    stopMainPlaybackGuard();
-    activeMainPlaybackRef.current = null;
-    setIsPlaying(false);
+    stopMainPlayback();
     setBlocks([]);
     setSelectedBlockId("");
     setDeletionMarkers([]);
@@ -1827,6 +1823,19 @@ export default function PodcastAudioComposerPage() {
     activeMainPlaybackRef.current = null;
   }
 
+  function stopMainPlayback() {
+    const element = audioRef.current;
+    stopMainPlaybackGuard();
+    stopSilencePlayback();
+    activeMainPlaybackRef.current = null;
+    if (element) {
+      try {
+        element.pause();
+      } catch {}
+    }
+    setIsPlaying(false);
+  }
+
   function startMainPlaybackGuard() {
     stopMainPlaybackGuard();
 
@@ -1842,7 +1851,11 @@ export default function PodcastAudioComposerPage() {
       const sourceEnd = roundSeconds(session.sourceEndSec);
 
       if (sourceTime >= sourceEnd - 0.015) {
-        stopSelectedBlockPlaybackAtEnd("raf_guard_end");
+        if (session.mode === "sequence") {
+          void playSequenceBlock(session.blockIndex + 1, 0);
+        } else {
+          stopSelectedBlockPlaybackAtEnd("raf_guard_end");
+        }
         return;
       }
 
@@ -1967,6 +1980,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const replaceSelectedWithSilence = () => {
+    stopMainPlayback();
     const snapshot = getSelectedBlockSnapshot();
     if (!snapshot) return;
     pushHistory("replace_with_silence");
@@ -2015,6 +2029,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const deleteBrokenPhraseInsertion = (item = {}) => {
+    stopMainPlayback();
     const blockId = String(item?.blockId || "").trim();
     if (!blockId) return;
     const result = deleteBlockAndMark(blocks, blockId, deletionMarkers);
@@ -2041,6 +2056,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const replaceBrokenPhraseWithActorBlock = async (item = {}) => {
+    stopMainPlayback();
     const key = getBrokenPhraseRepairKey(item);
     const optionValue = getSelectedRepairOptionValue(item);
     const option = repairOptions.find((candidate) => candidate.value === optionValue);
@@ -2139,6 +2155,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const replaceSelectedWithSavedClip = (clip) => {
+    stopMainPlayback();
     const snapshot = getSelectedBlockSnapshot();
     if (!snapshot || !clip) return;
     pushHistory("replace_with_saved_clip");
@@ -2170,6 +2187,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const insertSavedClipAfterSelected = (clip) => {
+    stopMainPlayback();
     const snapshot = getSelectedBlockSnapshot();
     if (!snapshot || !clip) return;
     pushHistory("insert_saved_clip_after");
@@ -2279,31 +2297,51 @@ export default function PodcastAudioComposerPage() {
     }
   };
 
-  const stopSilencePlayback = () => {
+  function stopSilencePlayback() {
     if (silenceFrameRef.current) {
       cancelAnimationFrame(silenceFrameRef.current);
       silenceFrameRef.current = null;
     }
-  };
+  }
 
-  const playSilenceBlock = (blockIndex, startOffsetSec = 0) => {
-    const block = blocks[blockIndex];
+  const playSilenceBlock = (blockIndex, startOffsetSec = 0, mode = "selected_block") => {
+    const safeBlocks = blocksRef.current;
+    const block = safeBlocks[blockIndex];
     if (!block) return;
-    const blockStartSec = getBlockVirtualStart(blocks, blockIndex);
+    const blockStartSec = getBlockVirtualStart(safeBlocks, blockIndex);
     const duration = getBlockDuration(block);
     const startOffset = clampSeconds(startOffsetSec, 0, duration);
     const startedAt = performance.now();
     stopSilencePlayback();
+    activeMainPlaybackRef.current = {
+      mode,
+      blockId: block.id,
+      blockIndex,
+      sourceStartSec: roundSeconds(block.source_start_sec),
+      sourceEndSec: roundSeconds(block.source_end_sec),
+      virtualStartSec: blockStartSec,
+      durationSec: duration,
+    };
     setCurrentTimeSec(roundSeconds(blockStartSec + startOffset));
     setIsPlaying(true);
 
     const tick = () => {
+      const session = activeMainPlaybackRef.current;
+      if (!session || session.blockId !== block.id || session.mode !== mode) {
+        silenceFrameRef.current = null;
+        return;
+      }
       const elapsed = startOffset + (performance.now() - startedAt) / 1000;
       const nextTime = roundSeconds(blockStartSec + Math.min(duration, elapsed));
       setCurrentTimeSec(nextTime);
       if (elapsed >= duration) {
         silenceFrameRef.current = null;
-        setIsPlaying(false);
+        if (mode === "sequence") {
+          void playSequenceBlock(blockIndex + 1, 0);
+        } else {
+          activeMainPlaybackRef.current = null;
+          setIsPlaying(false);
+        }
         return;
       }
       silenceFrameRef.current = requestAnimationFrame(tick);
@@ -2312,7 +2350,83 @@ export default function PodcastAudioComposerPage() {
     silenceFrameRef.current = requestAnimationFrame(tick);
   };
 
+  async function playSequenceBlock(blockIndex, startOffsetSec = 0) {
+    const safeBlocks = blocksRef.current;
+    const element = audioRef.current;
+    if (!safeBlocks.length || blockIndex >= safeBlocks.length) {
+      stopMainPlayback();
+      setCurrentTimeSec(getTimelineDuration(safeBlocks));
+      return;
+    }
+
+    const safeIndex = Math.max(0, blockIndex);
+    const block = safeBlocks[safeIndex];
+    const blockStartSec = getBlockVirtualStart(safeBlocks, safeIndex);
+    const duration = getBlockDuration(block);
+    const offset = clampSeconds(startOffsetSec, 0, duration);
+    const sourceTime = roundSeconds(roundSeconds(block.source_start_sec) + offset);
+    currentBlockIndexRef.current = safeIndex;
+    setSelectedBlockId(block.id);
+    setCurrentTimeSec(roundSeconds(blockStartSec + offset));
+    stopMainPlaybackGuard();
+    stopSilencePlayback();
+
+    activeMainPlaybackRef.current = {
+      mode: "sequence",
+      blockId: block.id,
+      blockIndex: safeIndex,
+      sourceStartSec: roundSeconds(block.source_start_sec),
+      sourceEndSec: roundSeconds(block.source_end_sec),
+      virtualStartSec: blockStartSec,
+      durationSec: duration,
+    };
+
+    if (block.type === "silence") {
+      if (element) {
+        try {
+          element.pause();
+        } catch {}
+      }
+      playSilenceBlock(safeIndex, offset, "sequence");
+      return;
+    }
+
+    if (!element) {
+      stopMainPlayback();
+      return;
+    }
+
+    const ready = await prepareBlockAudio(block, sourceTime);
+    if (!ready) {
+      stopMainPlayback();
+      setMessage("Не удалось открыть источник блока монтажа.");
+      return;
+    }
+
+    try {
+      await element.play();
+      setIsPlaying(true);
+      startMainPlaybackGuard();
+    } catch {
+      stopMainPlayback();
+    }
+  }
+
+  const playFullMontageFrom = (timeSec = 0) => {
+    const safeBlocks = blocksRef.current;
+    if (!safeBlocks.length) return;
+    const nextDuration = getTimelineDuration(safeBlocks);
+    if (nextDuration <= 0) return;
+    const startTime = clampSeconds(timeSec, 0, nextDuration);
+    const position = findTimelinePosition(safeBlocks, startTime) || { index: 0, offset_sec: 0 };
+    stopPhrasePreview({ pause: false });
+    stopActorPlayback({ pause: false });
+    stopMainPlayback();
+    void playSequenceBlock(position.index, position.offset_sec || 0);
+  };
+
   const insertSilenceAtCursor = () => {
+    stopMainPlayback();
     if (!blocks.length) return;
     const silenceDuration = clampSeconds(DEFAULT_MICRO_STEP_SEC, 0.01, 30);
     const cursorTime = clampSeconds(currentTimeSec, 0, totalDurationSec || durationSec || audio.duration_sec);
@@ -2369,19 +2483,13 @@ export default function PodcastAudioComposerPage() {
     if (!element || !blocks.length || totalDurationSec <= 0) return;
 
     if (isPlaying) {
-      stopPhrasePreview({ pause: false });
-      stopSilencePlayback();
-      stopMainPlaybackGuard();
-      activeMainPlaybackRef.current = null;
-      element.pause();
-      setIsPlaying(false);
+      stopMainPlayback();
       return;
     }
 
     stopPhrasePreview({ pause: false });
     stopActorPlayback({ pause: false });
-    stopMainPlaybackGuard();
-    activeMainPlaybackRef.current = null;
+    stopMainPlayback();
 
     let selectedIndex = blocks.findIndex((block) => block.id === selectedBlockId);
     if (selectedIndex < 0) selectedIndex = 0;
@@ -2494,8 +2602,14 @@ export default function PodcastAudioComposerPage() {
 
     if (sourceTime >= roundSeconds(block.source_end_sec) - 0.025) {
       setCurrentTimeSec(roundSeconds(blockVirtualStart + getBlockDuration(block)));
-      setIsPlaying(false);
-      element.pause();
+      if (mainPlayback?.mode === "sequence") {
+        void playSequenceBlock(index + 1, 0);
+      } else {
+        element.pause();
+        stopMainPlaybackGuard();
+        activeMainPlaybackRef.current = null;
+        setIsPlaying(false);
+      }
       return;
     }
 
@@ -2929,6 +3043,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const splitCurrentBlock = () => {
+    stopMainPlayback();
     if (!blocks.length || totalDurationSec <= 0) return;
 
     // ВАЖНО: режем именно по зелёному бегунку/currentTimeSec.
@@ -2945,8 +3060,6 @@ export default function PodcastAudioComposerPage() {
     pushHistory("split_block");
     setBlocks(result.blocks);
     setSelectedBlockId(result.selectedBlockId);
-    activeMainPlaybackRef.current = null;
-    stopMainPlaybackGuard();
     seekOnTimeline(result.selectedBlockStart, result.blocks);
     setMessage("Разрезано по жёлтому прицелу. Левая часть выбрана автоматически, плеер поставлен в начало выбранного блока.");
   };
@@ -3005,6 +3118,7 @@ export default function PodcastAudioComposerPage() {
   };
 
   const deleteSelectedBlock = () => {
+    stopMainPlayback();
     if (!selectedBlockId) {
       setMessage("Сначала выбери блок.");
       return;
@@ -3112,10 +3226,8 @@ export default function PodcastAudioComposerPage() {
       return;
     }
     pushHistory("apply_guide_json");
-    stopSilencePlayback();
     stopPhrasePreview({ pause: true });
-    if (audioRef.current) audioRef.current.pause();
-    setIsPlaying(false);
+    stopMainPlayback();
     setBlocks(nextBlocks);
     setSelectedBlockId(nextBlocks[0]?.id || "");
     setDeletionMarkers([]);
@@ -3946,6 +4058,8 @@ export default function PodcastAudioComposerPage() {
   const selectedBoundaryAvailable = selectedIndex >= 0;
   const canMoveSelectedRightBoundary = selectedIndex >= 0;
   const selectedRightEdgeSec = selectedBoundaryAvailable ? getBlockVirtualEnd(blocks, selectedIndex) : 0;
+  const activeMainMode = activeMainPlaybackRef.current?.mode || "";
+  const isSequencePlaying = isPlaying && activeMainMode === "sequence";
 
   return (
     <div className="podcastComposerPage" data-build={BUILD_ID}>
@@ -3989,7 +4103,8 @@ export default function PodcastAudioComposerPage() {
           <div className="podcastComposerHint">Жёлтая линия = прицел разреза. “Тишина” вставляет отдельный блок 0.5 сек по прицелу и сдвигает основное аудио вправо. Доводчик ← / → меняет конец выбранного блока; для тишины лимит до 30 сек. Двойной клик по блоку открывает меню: удалить, сохранить, цвет блока, аудио-фразы. JSON-кнопки нужны только для монтажной карты внутри композера: актёрские блоки — места для будущих вставок, не найденные голоса. Тишину JSON не размечает — паузы ставятся вручную.</div>
 
           <div className="podcastComposerControls">
-            <button className="podcastComposerPlayButton" type="button" onClick={togglePlayback}>{isPlaying ? "■ Stop" : "▶ Play блок"}</button>
+            <button className="podcastComposerPlayButton" type="button" onClick={togglePlayback} disabled={isSequencePlaying}>{isPlaying && activeMainMode !== "sequence" ? "■ стоп" : "▶ блок"}</button>
+            <button className="podcastComposerPlayButton" type="button" onClick={() => isSequencePlaying ? stopMainPlayback() : playFullMontageFrom(0)}>{isSequencePlaying ? "■ стоп montage" : "▶ весь монтаж"}</button>
             <span className="podcastComposerTimer">{formatTimer(currentTimeSec)}</span>
             <div className="podcastJsonMiniActions" aria-label="JSON-план подсказок">
               <button type="button" title="Скопировать образец JSON" onClick={copyGuideJsonSample}>⧉ JSON</button>
@@ -4298,15 +4413,19 @@ export default function PodcastAudioComposerPage() {
             ref={audioRef}
             preload="metadata"
             onEnded={() => {
-              stopMainPlaybackGuard();
-              activeMainPlaybackRef.current = null;
-              setIsPlaying(false);
+              if (activeMainPlaybackRef.current?.mode === "sequence") {
+                void playSequenceBlock((activeMainPlaybackRef.current?.blockIndex || 0) + 1, 0);
+              } else {
+                stopMainPlayback();
+              }
             }}
             onLoadedMetadata={onLoadedMetadata}
             onPause={() => {
-              stopMainPlaybackGuard();
-              activeMainPlaybackRef.current = null;
-              setIsPlaying(false);
+              if (activeMainPlaybackRef.current?.mode !== "sequence") {
+                stopMainPlaybackGuard();
+                activeMainPlaybackRef.current = null;
+                setIsPlaying(false);
+              }
             }}
             onPlay={() => setIsPlaying(true)}
             onTimeUpdate={onTimeUpdate}
