@@ -2724,6 +2724,61 @@ export default function ManualTimingEditorPage() {
     return { start, end };
   }
 
+  function getSceneAudioSourceRangeSafe(scene = {}, timelineSilenceOffsetSec = 0) {
+    if (!scene || isManualTimingSilenceScene(scene)) return null;
+
+    const timelineStart = roundTimingSec(Number(scene.start_sec || 0));
+    const timelineEnd = roundTimingSec(Number(scene.end_sec || timelineStart));
+    const timelineDuration = roundTimingSec(Math.max(0.01, timelineEnd - timelineStart));
+
+    let sourceStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+    let sourceEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+
+    // Если source-map уже есть и валидный — используем его.
+    if (Number.isFinite(sourceStart) && Number.isFinite(sourceEnd) && sourceEnd > sourceStart + 0.001) {
+      return {
+        start: roundTimingSec(sourceStart),
+        end: roundTimingSec(sourceEnd),
+      };
+    }
+
+    // Если source-map отсутствует, восстанавливаем его из timeline минус уже накопленная virtual silence.
+    sourceStart = roundTimingSec(Math.max(0, timelineStart - Number(timelineSilenceOffsetSec || 0)));
+    sourceEnd = roundTimingSec(sourceStart + timelineDuration);
+
+    return {
+      start: sourceStart,
+      end: sourceEnd,
+    };
+  }
+
+  function buildManualTimingPlaybackQueue(sceneQueue = []) {
+    const rawScenes = (Array.isArray(sceneQueue) ? sceneQueue : [])
+      .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001);
+
+    let silenceOffset = 0;
+
+    return rawScenes.map((scene) => {
+      const start = roundTimingSec(Number(scene.start_sec || 0));
+      const end = roundTimingSec(Number(scene.end_sec || start));
+      const duration = roundTimingSec(Math.max(0.01, end - start));
+
+      if (isManualTimingSilenceScene(scene)) {
+        silenceOffset = roundTimingSec(silenceOffset + duration);
+        return decorateManualTimingSilenceScene(scene);
+      }
+
+      const sourceRange = getSceneAudioSourceRangeSafe(scene, silenceOffset);
+
+      return {
+        ...scene,
+        source_kind: scene.source_kind || "audio",
+        source_start_sec: sourceRange?.start,
+        source_end_sec: sourceRange?.end,
+      };
+    });
+  }
+
   function setManualTimingPlaybackSessionFromPosition(position, mode, rangeEndSec = null) {
     if (!position || position.isSilence) {
       manualTimingPlaybackSessionRef.current = null;
@@ -3161,9 +3216,18 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
-    const { start: sourceStart, end: sourceEnd } = getSceneAudioSourceRange(scene);
+    const { start: sourceStart, end: sourceEnd } = getSceneAudioSourceRangeSafe(scene, 0) || getSceneAudioSourceRange(scene);
 
     if (!(sourceEnd > sourceStart)) {
+      console.warn("[MANUAL TIMING QUEUE SKIP_INVALID_SOURCE_RANGE]", {
+        scene_id: scene?.scene_id,
+        start_sec: scene?.start_sec,
+        end_sec: scene?.end_sec,
+        source_start_sec: scene?.source_start_sec,
+        source_end_sec: scene?.source_end_sec,
+        sourceStart,
+        sourceEnd,
+      });
       playManualTimingQueueItem(session, index + 1);
       return;
     }
@@ -3209,8 +3273,7 @@ export default function ManualTimingEditorPage() {
   }
 
   function playManualTimingSceneQueue(sceneQueue = [], mode = "scene") {
-    const safeScenes = (Array.isArray(sceneQueue) ? sceneQueue : [])
-      .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001);
+    const safeScenes = buildManualTimingPlaybackQueue(sceneQueue);
 
     if (!safeScenes.length) return;
 
@@ -3379,15 +3442,13 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
-    if (selectedScene) {
-      playManualTimingSceneQueue([selectedScene], "scene");
-      return;
-    }
+    const position = findManualTimingTimelinePosition(currentTimeRef.current || currentTime || 0, scenes);
+    const sceneUnderCursor = position?.scene || null;
 
-    const position = findManualTimingTimelinePosition(currentTimeRef.current || 0, scenes);
-    const scene = position?.scene || scenes[findSceneIndexForTimelineTime(currentTimeRef.current || 0)];
-    if (scene) {
-      playManualTimingSceneQueue([scene], "scene");
+    const sceneToPlay = sceneUnderCursor || selectedScene || scenes[0];
+
+    if (sceneToPlay) {
+      playManualTimingSceneQueue([sceneToPlay], "scene");
     }
   };
 
