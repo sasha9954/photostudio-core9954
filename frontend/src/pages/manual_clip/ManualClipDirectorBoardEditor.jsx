@@ -1879,12 +1879,18 @@ export default function ManualClipDirectorBoardEditor({
       const storageError = getLastManualClipBoardStorageError();
       const errorMessage = String(storageError?.errorMessage || storageError?.reason || error?.message || error || "autosave_failed");
       if (updateStatus) {
-        setAutosaveStatus("Ошибка autosave");
-        setAutosaveError(errorMessage);
-        setShowEmergencyBackupButton(true);
-        if (!emergencyBackupDownloadedRef.current) {
-          emergencyBackupDownloadedRef.current = true;
-          downloadEmergencyBoardBackup("manual_director_board_autosave_failed");
+        if (storageError?.emergencySaved === true) {
+          setAutosaveStatus("Сохранён аварийный backup");
+          setAutosaveError(errorMessage);
+          setShowEmergencyBackupButton(false);
+        } else {
+          setAutosaveStatus("Ошибка autosave");
+          setAutosaveError(errorMessage);
+          setShowEmergencyBackupButton(true);
+          if (!emergencyBackupDownloadedRef.current) {
+            emergencyBackupDownloadedRef.current = true;
+            downloadEmergencyBoardBackup("manual_director_board_autosave_failed");
+          }
         }
       }
       console.error("[MANUAL BOARD AUTOSAVE FAILED]", {
@@ -3433,6 +3439,9 @@ export default function ManualClipDirectorBoardEditor({
       error: "",
     }, { reason: "video_queued_clear_old_media", explicitReset: true });
     try {
+      const expectedDimensions = expectedFormat === "16:9"
+        ? { width: 1280, height: 720 }
+        : (expectedFormat === "1:1" ? { width: 1024, height: 1024 } : { width: 720, height: 1280 });
       const payload = {
         sceneId: scene.scene_id,
         imageUrl: safeImageUrl,
@@ -3472,12 +3481,17 @@ export default function ManualClipDirectorBoardEditor({
         sceneStartSec: Number(scene.start_sec || 0),
         sceneEndSec: Number(scene.end_sec || 0),
         sceneDurationSec: Number(scene.duration_sec || requestedDurationSec),
-        format: expectedFormat,
-        aspect_ratio: expectedFormat,
-        width: expectedFormat === "16:9" ? 1280 : (expectedFormat === "1:1" ? 1024 : 720),
-        height: expectedFormat === "16:9" ? 720 : (expectedFormat === "1:1" ? 1024 : 1280),
         provider: "comfy_remote",
         ...routePayload,
+        format: expectedFormat,
+        aspect_ratio: expectedFormat,
+        aspectRatio: expectedFormat,
+        projectFormat: expectedFormat,
+        project_format: expectedFormat,
+        projectAspectRatio: expectedFormat,
+        project_aspect_ratio: expectedFormat,
+        width: expectedDimensions.width,
+        height: expectedDimensions.height,
         manualClip: true,
         manual_clip: true,
         source: "manual_clip_board",
