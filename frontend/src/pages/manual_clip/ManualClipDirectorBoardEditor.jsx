@@ -14,7 +14,10 @@ import {
   forceWriteManualClipBoardProjectForNode,
   getLastManualClipBoardStorageError,
   getManualClipBoardMaterialStats,
+  getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
+  readLastGoodManualClipBoardProject,
+  rememberLastGoodManualClipBoardProject,
   getManualProjectOwnerId,
   hasMeaningfulManualProject,
   persistManualClipBoardProject,
@@ -1441,6 +1444,8 @@ export default function ManualClipDirectorBoardEditor({
   const autosaveTimerRef = useRef(null);
   const lastAutosaveSignatureRef = useRef("");
   const lastPersistedProjectRef = useRef(null);
+  const lastGoodBoardRef = useRef(null);
+  const emergencyBackupDownloadedRef = useRef(false);
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
@@ -1467,6 +1472,7 @@ export default function ManualClipDirectorBoardEditor({
   const [mmaudioModalError, setMMAudioModalError] = useState("");
   const [autosaveStatus, setAutosaveStatus] = useState("Сохранено");
   const [autosaveError, setAutosaveError] = useState("");
+  const [showEmergencyBackupButton, setShowEmergencyBackupButton] = useState(false);
 
   const isManualTimingProjectSource = (candidateProject = projectRef.current || project || {}) => {
     const ownerNodeType = String(candidateProject?.ownerNodeType || location.state?.ownerNodeType || "").trim().toLowerCase();
@@ -1841,9 +1847,11 @@ export default function ManualClipDirectorBoardEditor({
       if (!saved) throw new Error(getLastManualClipBoardStorageError()?.reason || "autosave_verify_failed");
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
       lastPersistedProjectRef.current = safeProject;
+      rememberManualBoardLastGood(safeProject);
       if (updateStatus) {
         setProject(safeProject);
         setAutosaveStatus("Сохранено");
+        setShowEmergencyBackupButton(false);
       }
       const diagnostics = getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId);
       console.info("[MANUAL BOARD AUTOSAVE DONE]", {
@@ -1855,14 +1863,29 @@ export default function ManualClipDirectorBoardEditor({
       });
       return true;
     } catch (error) {
+      const storageError = getLastManualClipBoardStorageError();
+      const errorMessage = String(storageError?.errorMessage || storageError?.reason || error?.message || error || "autosave_failed");
       if (updateStatus) {
         setAutosaveStatus("Ошибка autosave");
-        setAutosaveError(String(error?.message || error || "autosave_failed"));
+        setAutosaveError(errorMessage);
+        setShowEmergencyBackupButton(true);
+        if (!emergencyBackupDownloadedRef.current) {
+          emergencyBackupDownloadedRef.current = true;
+          downloadEmergencyBoardBackup("manual_director_board_autosave_failed");
+        }
       }
       console.error("[MANUAL BOARD AUTOSAVE FAILED]", {
         reason,
-        project_id: safeProject.project_id || safeProject.projectId || "",
-        error: String(error?.message || error || "autosave_failed"),
+        errorName: error?.name || storageError?.errorName || "",
+        errorMessage,
+        errorStack: error?.stack || storageError?.errorStack || "",
+        storageBackend: storageError?.storageBackend || "localStorage",
+        projectId: safeProject.project_id || safeProject.projectId || "",
+        activeProjectId: storageError?.activeProjectId || "",
+        snapshotSize: storageError?.snapshotSize || getManualClipBoardSnapshotSize(safeProject),
+        sceneCount: Array.isArray(safeProject.scenes) ? safeProject.scenes.length : 0,
+        materialCount: getManualClipBoardMaterialStats(safeProject).materialTotal || 0,
+        storageError,
       });
       return false;
     }
@@ -1955,9 +1978,13 @@ export default function ManualClipDirectorBoardEditor({
       lastPersistedProjectRef.current = safeProject;
       setAutosaveStatus("Сохранено");
       setAutosaveError("");
+      setShowEmergencyBackupButton(false);
+      rememberManualBoardLastGood(safeProject);
     } else {
       setAutosaveStatus("Ошибка autosave");
-      setAutosaveError(String(storageError?.reason || "manual_force_save_failed"));
+      setAutosaveError(String(storageError?.errorMessage || storageError?.reason || "manual_force_save_failed"));
+      setShowEmergencyBackupButton(true);
+      downloadEmergencyBoardBackup("manual_director_board_manual_save_failed");
     }
     logStorageVerify(ownerNodeId);
     setBackupStatus(readbackOk
@@ -2088,6 +2115,22 @@ export default function ManualClipDirectorBoardEditor({
     } catch {
       setBackupStatus("Не удалось скачать backup проекта");
     }
+  };
+
+  const rememberManualBoardLastGood = (candidateProject = projectRef.current || project || {}) => {
+    if (!hasMeaningfulManualProject(candidateProject)) return false;
+    lastGoodBoardRef.current = candidateProject;
+    return rememberLastGoodManualClipBoardProject(candidateProject);
+  };
+
+  const downloadEmergencyBoardBackup = (source = "manual_director_board_emergency") => {
+    const currentProject = projectRef.current || project || readLastGoodManualClipBoardProject() || lastGoodBoardRef.current || {};
+    const fallbackProject = hasMeaningfulManualProject(currentProject) ? currentProject : (lastGoodBoardRef.current || readLastGoodManualClipBoardProject() || {});
+    const currentSelectedSceneId = selectedSceneIdRef.current || fallbackProject.selectedSceneId || selectedSceneId || "";
+    downloadJsonPayload(
+      buildManualProjectBackupJson({ ...fallbackProject, selectedSceneId: currentSelectedSceneId }, { source }),
+      `manual_director_emergency_backup_${Date.now()}.json`,
+    );
   };
 
   const onDownloadProjectBackup = () => {
@@ -3077,12 +3120,16 @@ export default function ManualClipDirectorBoardEditor({
 
         updateScene(targetSceneId, (currentScene = {}) => ({
           status: "video_ready",
+          video_status: "video_ready",
+          videoStatus: "video_ready",
           video_url: doneVideoUrl,
           videoUrl: doneVideoUrl,
           result_video_url: doneVideoUrl,
           resultVideoUrl: doneVideoUrl,
           generated_video_url: doneVideoUrl,
           generatedVideoUrl: doneVideoUrl,
+          output_video_url: doneVideoUrl,
+          outputVideoUrl: doneVideoUrl,
           final_video_url: doneVideoUrl,
           finalVideoUrl: doneVideoUrl,
           video_job_id: safeJobId,
@@ -3092,6 +3139,8 @@ export default function ManualClipDirectorBoardEditor({
           video_error: "",
           videoError: "",
           error: "",
+          updated_at: Date.now(),
+          updatedAt: Date.now(),
           video_has_audio: videoHasAudio,
           videoHasAudio: videoHasAudio,
           hasAudio: videoHasAudio,
@@ -3119,7 +3168,7 @@ export default function ManualClipDirectorBoardEditor({
             videoUrl: doneVideoUrl,
             videoHasAudio,
           },
-        }), { reason: "video_done_apply_result" });
+        }), { reason: "video_done_apply_result", forcePersist: true });
         terminalVideoJobsRef.current.add(pollKey);
         flushManualBoardAutosave("video_done_apply_result", { skipSignatureCheck: true });
         console.info("[MANUAL BOARD VIDEO RESULT APPLY]", {
@@ -3166,6 +3215,26 @@ export default function ManualClipDirectorBoardEditor({
           error: interruptedMessage,
         }, { reason: "video_poll_interrupted" });
         flushManualBoardAutosave("video_poll_interrupted", { skipSignatureCheck: true });
+        return;
+      }
+
+      if (status === "error_aspect_ratio") {
+        videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        terminalVideoJobsRef.current.add(pollKey);
+        const aspectError = String(statusOut?.error || statusOut?.hint || "lip_sync returned vertical video, expected 16:9");
+        updateScene(sceneId, {
+          status: "error_aspect_ratio",
+          video_status: "error_aspect_ratio",
+          videoStatus: "error_aspect_ratio",
+          video_job_id: jobId,
+          videoJobId: jobId,
+          video_status_endpoint: endpoint,
+          videoStatusEndpoint: endpoint,
+          video_error: aspectError,
+          videoError: aspectError,
+          error: aspectError,
+        }, { reason: "video_poll_error_aspect_ratio" });
+        flushManualBoardAutosave("video_poll_error_aspect_ratio", { skipSignatureCheck: true });
         return;
       }
 
@@ -3363,7 +3432,10 @@ export default function ManualClipDirectorBoardEditor({
         sceneStartSec: Number(scene.start_sec || 0),
         sceneEndSec: Number(scene.end_sec || 0),
         sceneDurationSec: Number(scene.duration_sec || requestedDurationSec),
-        format: resolveLockedProjectFormat(projectRef.current || project),
+        format: expectedFormat,
+        aspect_ratio: expectedFormat,
+        width: expectedFormat === "16:9" ? 1280 : (expectedFormat === "1:1" ? 1024 : 720),
+        height: expectedFormat === "16:9" ? 720 : (expectedFormat === "1:1" ? 1024 : 1280),
         provider: "comfy_remote",
         ...routePayload,
         manualClip: true,
@@ -3405,6 +3477,9 @@ export default function ManualClipDirectorBoardEditor({
           route: scene.route,
           resolvedWorkflowKey: payload.resolvedWorkflowKey,
           renderMode: payload.renderMode,
+          aspectRatio: payload.aspect_ratio,
+          width: payload.width,
+          height: payload.height,
           lipSync: payload.lipSync,
           hasAudioSliceUrl: Boolean(payload.audioSliceUrl),
           hasStartImageUrl: Boolean(payload.startImageUrl),
@@ -3428,6 +3503,9 @@ export default function ManualClipDirectorBoardEditor({
           route: scene.route,
           resolvedWorkflowKey: payload.resolvedWorkflowKey,
           renderMode: payload.renderMode,
+          aspectRatio: payload.aspect_ratio,
+          width: payload.width,
+          height: payload.height,
           lipSync: payload.lipSync,
           hasAudioSliceUrl: Boolean(payload.audioSliceUrl),
           hasStartImageUrl: Boolean(payload.startImageUrl),
@@ -3674,6 +3752,7 @@ export default function ManualClipDirectorBoardEditor({
       }}>Прослушать сцены</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
       <span className={`manualDirectorAutosaveStatus ${autosaveStatus === "Ошибка autosave" ? "isError" : ""}`} title={autosaveError || undefined} aria-live="polite">{autosaveStatus}</span>
+      {showEmergencyBackupButton ? <button className="clipSB_btn clipSB_btnDanger" onClick={() => downloadEmergencyBoardBackup("manual_director_board_emergency_button")}>Скачать аварийный backup</button> : null}
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
       <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}

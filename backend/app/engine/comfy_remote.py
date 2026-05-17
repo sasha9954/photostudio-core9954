@@ -1559,6 +1559,8 @@ LIPSYNC_PRIMARY_NODE_IDS = {
     "prompt": "340:319",
     "duration": "340:331",
     "fps": "340:323",
+    "width": "267:257",
+    "height": "267:258",
 }
 FIXED_NEGATIVE_PROMPT_PATCH_NODE_IDS = ["267:247", "340:314"]
 
@@ -3213,6 +3215,8 @@ def _patch_workflow_inputs(
             class_types={"primitiveint"},
             required_input_key="value",
         )
+        resolved_width_node_id = str(discovery.get("width_node_id") or LIPSYNC_PRIMARY_NODE_IDS["width"]).strip()
+        resolved_height_node_id = str(discovery.get("height_node_id") or LIPSYNC_PRIMARY_NODE_IDS["height"]).strip()
         if not resolved_image_node_id:
             return None, "missing_lipsync_image_node", None, None, {}
         if not resolved_prompt_node_id:
@@ -3225,12 +3229,18 @@ def _patch_workflow_inputs(
         patch_values.append((resolved_prompt_node_id, "value", prompt))
         patch_values.append((resolved_duration_node_id, "value", float(requested_duration_sec)))
         patch_values.append((resolved_fps_node_id, "value", int(fps)))
+        if resolved_width_node_id:
+            patch_values.append((resolved_width_node_id, "value", int(width)))
+        if resolved_height_node_id:
+            patch_values.append((resolved_height_node_id, "value", int(height)))
         used_legacy_fallback_ids = any(
             [
                 resolved_image_node_id != LIPSYNC_PRIMARY_NODE_IDS["image"],
                 resolved_prompt_node_id != LIPSYNC_PRIMARY_NODE_IDS["prompt"],
                 resolved_duration_node_id != LIPSYNC_PRIMARY_NODE_IDS["duration"],
                 resolved_fps_node_id != LIPSYNC_PRIMARY_NODE_IDS["fps"],
+                resolved_width_node_id != LIPSYNC_PRIMARY_NODE_IDS["width"],
+                resolved_height_node_id != LIPSYNC_PRIMARY_NODE_IDS["height"],
             ]
         )
         if used_legacy_fallback_ids:
@@ -3243,6 +3253,8 @@ def _patch_workflow_inputs(
                         "prompt": resolved_prompt_node_id,
                         "duration": resolved_duration_node_id,
                         "fps": resolved_fps_node_id,
+                        "width": resolved_width_node_id,
+                        "height": resolved_height_node_id,
                     },
                 },
             )
@@ -3479,8 +3491,10 @@ def _patch_workflow_inputs(
 
     patched_length_node_ids_for_debug = [str(item) for item in (timing_patch_debug.get("patched_length_node_ids") or []) if str(item).strip()]
     patched_fps_node_ids_for_debug = [str(item) for item in (timing_patch_debug.get("patched_fps_node_ids") or []) if str(item).strip()]
-    patched_width_node_ids_for_debug = [str(node_id) for node_id, key, _ in patch_values if str(key) == "value" and str(node_id) == FIXED_IMAGE_VIDEO_NODES["width"][0]]
-    patched_height_node_ids_for_debug = [str(node_id) for node_id, key, _ in patch_values if str(key) == "value" and str(node_id) == FIXED_IMAGE_VIDEO_NODES["height"][0]]
+    width_patch_node_candidates = {str(FIXED_IMAGE_VIDEO_NODES["width"][0]), str(discovery.get("width_node_id") or ""), str(LIPSYNC_PRIMARY_NODE_IDS.get("width") or "")}
+    height_patch_node_candidates = {str(FIXED_IMAGE_VIDEO_NODES["height"][0]), str(discovery.get("height_node_id") or ""), str(LIPSYNC_PRIMARY_NODE_IDS.get("height") or "")}
+    patched_width_node_ids_for_debug = [str(node_id) for node_id, key, _ in patch_values if str(key) == "value" and str(node_id) in width_patch_node_candidates]
+    patched_height_node_ids_for_debug = [str(node_id) for node_id, key, _ in patch_values if str(key) == "value" and str(node_id) in height_patch_node_candidates]
     resolved_image_node_id_for_debug = str(patched_node_by_key.get("image") or (first_last_discovery.get("image_node_ids") or [FIXED_IMAGE_VIDEO_NODES["image"][0]])[0])
     resolved_prompt_node_id_for_debug = str(f_l_positive_prompt_node_id if normalized_workflow_key in F_L_WORKFLOW_KEYS else (patched_node_by_key.get("value") or first_last_discovery.get("prompt_node_id") or FIXED_IMAGE_VIDEO_NODES["prompt"][0]))
     resolved_negative_prompt_node_id_for_debug = str(resolved_negative_prompt_node_id or "")

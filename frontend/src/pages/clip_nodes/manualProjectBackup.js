@@ -4,6 +4,7 @@ export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY = "manual_clip_board_active_pr
 export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY = "manual_clip_board_active_project_id";
 export const MANUAL_CLIP_BOARD_CANONICAL_PROJECT_KEY = "manual_clip_board_canonical_project";
 export const MANUAL_CLIP_BOARD_OPEN_STATE_KEY = "photostudio_manual_director_open_state";
+export const MANUAL_CLIP_BOARD_LAST_GOOD_SESSION_KEY = "photostudio_manual_director_last_good_board";
 
 
 const MANUAL_STORAGE_MAX_STRING_LENGTH = 200000;
@@ -353,6 +354,14 @@ export function getLocalStorageApproxBytes() {
   }
 }
 
+export function getManualClipBoardSnapshotSize(project = {}) {
+  try {
+    return JSON.stringify(sanitizeManualClipBoardProjectForStorage(project && typeof project === "object" ? project : {})).length;
+  } catch {
+    return 0;
+  }
+}
+
 function isQuotaExceededError(err) {
   return Boolean(
     err
@@ -568,7 +577,7 @@ export function buildManualProjectBackupJson(project = {}, { source = "manual_pr
     song_blocks: compactArray(safeProject.song_blocks),
     topic_blocks: compactArray(safeProject.topic_blocks),
     speakers: compactArray(safeProject.speakers),
-    scenes: compactArray(safeProject.scenes),
+    scenes: compactArray(safeProject.scenes).map((scene, index) => sanitizeManualClipBoardSceneForStorage(scene, index)),
     selectedSceneId: String(safeProject.selectedSceneId || ""),
     timing_status: String(safeProject.timing_status || ""),
     project_id: String(safeProject.project_id || safeProject.projectId || ""),
@@ -837,8 +846,7 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
 
   if (sameIdentity && (
     nextDeletionRevision > existingDeletionRevision
-    || nextRevision > existingRevision
-    || (nextUpdatedAt > existingUpdatedAt && isRealUserMaterialUpdate)
+    || (isRealUserMaterialUpdate && (nextRevision > existingRevision || nextUpdatedAt > existingUpdatedAt))
   )) {
     logManualBoardPersistDecision("[MANUAL BOARD PERSIST ALLOW NEWER]", nextProject, existingProject, { reason });
     return false;
@@ -934,11 +942,20 @@ function manualClipBoardProjectSort(a, b) {
   if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) {
     return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
   }
-  if (b.scoreData.revision !== a.scoreData.revision) {
-    return b.scoreData.revision - a.scoreData.revision;
+  if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
+    return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
   }
-  if (b.scoreData.updatedAt !== a.scoreData.updatedAt) {
-    return b.scoreData.updatedAt - a.scoreData.updatedAt;
+  if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) {
+    return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
+  }
+  if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) {
+    return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
+  }
+  if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
+    return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
+  }
+  if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
+    return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
   }
   if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) {
     return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
@@ -946,23 +963,14 @@ function manualClipBoardProjectSort(a, b) {
   if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) {
     return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
   }
-  if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
-    return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
+  if (b.scoreData.revision !== a.scoreData.revision) {
+    return b.scoreData.revision - a.scoreData.revision;
   }
-  if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) {
-    return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
-  }
-  if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
-    return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
+  if (b.scoreData.updatedAt !== a.scoreData.updatedAt) {
+    return b.scoreData.updatedAt - a.scoreData.updatedAt;
   }
   if (b.scoreData.stats.mmaudioJobs !== a.scoreData.stats.mmaudioJobs) {
     return b.scoreData.stats.mmaudioJobs - a.scoreData.stats.mmaudioJobs;
-  }
-  if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
-    return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
-  }
-  if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) {
-    return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
   }
   if (b.scoreData.stats.audioSlices !== a.scoreData.stats.audioSlices) {
     return b.scoreData.stats.audioSlices - a.scoreData.stats.audioSlices;
@@ -1098,6 +1106,26 @@ function readActiveProjectPair(activeKey, activeIdKey, projectKeyFactory) {
   return null;
 }
 
+
+export function rememberLastGoodManualClipBoardProject(project = {}) {
+  if (!hasMeaningfulManualProject(project)) return false;
+  try {
+    const storageProject = sanitizeManualClipBoardProjectForStorage(project);
+    sessionStorage.setItem(MANUAL_CLIP_BOARD_LAST_GOOD_SESSION_KEY, JSON.stringify(storageProject));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readLastGoodManualClipBoardProject() {
+  try {
+    const raw = sessionStorage.getItem(MANUAL_CLIP_BOARD_LAST_GOOD_SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
 
 function writeManualClipBoardProjectStorage(project = {}) {
   const storageProject = sanitizeManualClipBoardProjectForStorage(project);
@@ -1525,6 +1553,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       }
     }
     rememberManualClipBoardStorageError(null);
+    rememberLastGoodManualClipBoardProject(storageProject);
     console.info("[MANUAL BOARD PERSIST WRITE]", {
       target: "canonical+active+node",
       canonicalKey: getManualClipBoardCanonicalStorageKey(),
@@ -1551,7 +1580,14 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
       reason: isQuotaExceededError(err) ? "quota_exceeded" : "write_failed",
       errorName: err?.name,
       errorMessage: err?.message,
+      errorStack: err?.stack,
       errorCode: err?.code,
+      storageBackend: "localStorage",
+      projectId: safeProject.project_id || safeProject.projectId || "",
+      activeProjectId: (() => { try { return readActiveManualClipBoardProject()?.project_id || readActiveManualClipBoardProject()?.projectId || ""; } catch { return ""; } })(),
+      snapshotSize: serialized.length,
+      sceneCount: Array.isArray(safeProject.scenes) ? safeProject.scenes.length : 0,
+      materialCount: nextStats.materialTotal || 0,
       serializedLength: serialized.length,
       serializedKb: Math.round(serialized.length / 1024),
       safeProjectScenesLength: Array.isArray(safeProject.scenes) ? safeProject.scenes.length : 0,
@@ -1810,7 +1846,10 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
     serialized = JSON.stringify(storageProject);
     removeForceWriteTargetKeys();
     const wrote = writeAndVerify();
-    if (wrote) rememberManualClipBoardStorageError(null);
+    if (wrote) {
+      rememberManualClipBoardStorageError(null);
+      rememberLastGoodManualClipBoardProject(storageProject);
+    }
     return wrote;
   } catch (err) {
     let retryWrote = false;
@@ -1829,6 +1868,7 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
 
     if (retryWrote) {
       rememberManualClipBoardStorageError(null);
+      rememberLastGoodManualClipBoardProject(storageProject);
       return true;
     }
 
@@ -1836,7 +1876,14 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
       reason: quotaExceeded ? "quota_exceeded" : "write_failed",
       errorName: err?.name,
       errorMessage: err?.message,
+      errorStack: err?.stack,
       errorCode: err?.code,
+      storageBackend: "localStorage",
+      projectId: safeProject.project_id || safeProject.projectId || "",
+      activeProjectId: (() => { try { return readActiveManualClipBoardProject()?.project_id || readActiveManualClipBoardProject()?.projectId || ""; } catch { return ""; } })(),
+      snapshotSize: serialized.length,
+      sceneCount: Array.isArray(safeProject.scenes) ? safeProject.scenes.length : 0,
+      materialCount: stats.materialTotal || 0,
       serializedLength: serialized.length,
       serializedKb: Math.round(serialized.length / 1024),
       safeProjectScenesLength: Array.isArray(safeProject.scenes) ? safeProject.scenes.length : 0,
