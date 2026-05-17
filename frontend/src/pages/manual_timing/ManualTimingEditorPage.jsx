@@ -3470,7 +3470,185 @@ export default function ManualTimingEditorPage() {
     });
   };
 
+  function hasManualTimingVirtualSilenceOrSourceMap(sceneList = scenes, projectValue = project) {
+    const safeScenes = Array.isArray(sceneList) ? sceneList : [];
+    const hasSilence = safeScenes.some((scene) => isManualTimingSilenceScene(scene));
+    const hasSourceMap = safeScenes.some((scene) => (
+      !isManualTimingSilenceScene(scene)
+      && Number.isFinite(Number(scene?.source_start_sec ?? scene?.sourceStartSec))
+      && Number.isFinite(Number(scene?.source_end_sec ?? scene?.sourceEndSec))
+    ));
+
+    const audioValue = projectValue?.audio || {};
+    const sourceDuration = Number(audioValue.source_duration_sec || audioValue.original_duration_sec || 0);
+    const timelineDuration = Number(audioValue.timeline_duration_sec || audioValue.duration_sec || 0);
+    const durationDiffers = sourceDuration > 0 && timelineDuration > sourceDuration + 0.001;
+
+    return hasSilence || hasSourceMap || durationDiffers;
+  }
+
+  function warnManualTimingSourceMappedRebuildBlocked(action = "nudge/merge/rebuild") {
+    if (!hasManualTimingVirtualSilenceOrSourceMap(scenes, project)) return;
+    console.warn("[MANUAL TIMING SOURCE_MAPPED_REBUILD_BLOCKED]", {
+      action,
+    });
+  }
+
+  function splitManualTimingScenePreserveSource(scene = {}, cutTimeSec = 0) {
+    const cut = roundTimingSec(Number(cutTimeSec || 0));
+    const start = roundTimingSec(Number(scene.start_sec || 0));
+    const end = roundTimingSec(Number(scene.end_sec || start));
+
+    if (!(cut > start + 0.001 && cut < end - 0.001)) {
+      return [scene];
+    }
+
+    if (isManualTimingSilenceScene(scene)) {
+      const left = decorateManualTimingSilenceScene({
+        ...scene,
+        start_sec: start,
+        end_sec: cut,
+        source_start_sec: 0,
+        source_end_sec: roundTimingSec(cut - start),
+        silence_block_id: `${scene.silence_block_id || "silence"}_a_${Date.now()}`,
+      });
+
+      const right = decorateManualTimingSilenceScene({
+        ...scene,
+        start_sec: cut,
+        end_sec: end,
+        source_start_sec: 0,
+        source_end_sec: roundTimingSec(end - cut),
+        silence_block_id: `${scene.silence_block_id || "silence"}_b_${Date.now()}`,
+      });
+
+      return [left, right];
+    }
+
+    const sourceStart = Number.isFinite(Number(scene.source_start_sec ?? scene.sourceStartSec))
+      ? roundTimingSec(Number(scene.source_start_sec ?? scene.sourceStartSec))
+      : start;
+
+    const sourceEnd = Number.isFinite(Number(scene.source_end_sec ?? scene.sourceEndSec))
+      ? roundTimingSec(Number(scene.source_end_sec ?? scene.sourceEndSec))
+      : roundTimingSec(sourceStart + Math.max(0, end - start));
+
+    const leftDuration = roundTimingSec(cut - start);
+    const sourceCut = roundTimingSec(Math.min(sourceEnd, Math.max(sourceStart, sourceStart + leftDuration)));
+
+    const left = retimeManualTimingScene(scene, start, cut, {
+      source_kind: "audio",
+      source_start_sec: sourceStart,
+      source_end_sec: sourceCut,
+      user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || ""),
+    });
+
+    const right = retimeManualTimingScene(scene, cut, end, {
+      source_kind: "audio",
+      source_start_sec: sourceCut,
+      source_end_sec: sourceEnd,
+      user_note_ru: String(scene.user_note_ru || scene.user_notes_ru || ""),
+    });
+
+    return [left, right];
+  }
+
+  function splitManualTimingTimelineAtPreserveSource(cutTimeSec = 0, selectedSceneId = "") {
+    const activeDuration = durationSecRef.current || durationSec;
+    const cut = roundTimingSec(clampTime(Number(cutTimeSec || 0), activeDuration));
+    const safeScenes = (Array.isArray(scenes) && scenes.length ? scenes : [])
+      .map(materializeManualTimingSceneSourceMap);
+
+    const epsilon = 0.001;
+
+    const splitIndex = safeScenes.findIndex((scene) => {
+      const start = roundTimingSec(Number(scene.start_sec || 0));
+      const end = roundTimingSec(Number(scene.end_sec || start));
+      return cut > start + epsilon && cut < end - epsilon;
+    });
+
+    if (splitIndex < 0) {
+      setCopyStatus("Разрез должен быть внутри сцены");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+      return false;
+    }
+
+    stopManualTimingPlayback();
+    rememberManualTimingAction("разрез");
+
+    const nextDrafts = [];
+    safeScenes.forEach((scene, index) => {
+      if (index !== splitIndex) {
+        nextDrafts.push(scene);
+        return;
+      }
+
+      const parts = splitManualTimingScenePreserveSource(scene, cut);
+      nextDrafts.push(...parts);
+    });
+
+    const nextScenes = reindexManualTimingTimelineScenes(nextDrafts);
+    const selectedAfterCut = nextScenes.find((scene) => (
+      cut >= Number(scene.start_sec || 0) - 0.001
+      && cut < Number(scene.end_sec || 0) - 0.001
+    )) || nextScenes[splitIndex + 1] || nextScenes[splitIndex] || nextScenes[0];
+
+    const nextDuration = roundTimingSec(Math.max(
+      activeDuration,
+      ...nextScenes.map((scene) => Number(scene.end_sec || 0))
+    ));
+
+    const nextMarkers = normalizeManualTimingMarkers(
+      [
+        0,
+        ...nextScenes.map((scene) => Number(scene.end_sec || 0)),
+      ],
+      nextDuration
+    );
+
+    persist({
+      ...project,
+      audio: {
+        ...audio,
+        source_duration_sec: Number(audio.source_duration_sec || audio.original_duration_sec || audio.duration_sec || activeDuration),
+        original_duration_sec: Number(audio.original_duration_sec || audio.source_duration_sec || audio.duration_sec || activeDuration),
+        timeline_duration_sec: nextDuration,
+        duration_sec: nextDuration,
+        duration_ms: Math.round(nextDuration * 1000),
+      },
+      markers: nextMarkers,
+      scenes: nextScenes,
+      virtual_silence_blocks: buildManualTimingSilenceBlocksFromScenes(nextScenes),
+      story_blocks: normalizeManualTimingStoryBlocks(project.story_blocks),
+      audio_phrases: project.audio_phrases,
+      selectedSceneId: selectedAfterCut?.scene_id || selectedSceneId || "",
+      timing_status: "draft",
+    });
+
+    setAudioTime(cut, { pause: true, clearBound: true });
+    setCopyStatus(`Разрез: ${formatTimingSec(cut)}. Source-map сохранён.`);
+    window.setTimeout(() => setCopyStatus(""), 1800);
+
+    console.info("[MANUAL TIMING SPLIT PRESERVE SOURCE]", {
+      cut,
+      splitIndex,
+      nextSceneCount: nextScenes.length,
+      selectedSceneId: selectedAfterCut?.scene_id,
+      parts: nextScenes.slice(Math.max(0, splitIndex - 1), splitIndex + 3).map((scene) => ({
+        scene_id: scene.scene_id,
+        start_sec: scene.start_sec,
+        end_sec: scene.end_sec,
+        source_start_sec: scene.source_start_sec,
+        source_end_sec: scene.source_end_sec,
+        is_silence: isManualTimingSilenceScene(scene),
+      })),
+    });
+
+    return true;
+  }
+
   const rebuildFromMarkers = (nextMarkers, existingScenes = scenes, extraPatch = {}, options = {}) => {
+    warnManualTimingSourceMappedRebuildBlocked(options.rebuildAction || "nudge/merge/rebuild");
     const safeMarkers = normalizeManualTimingMarkers(nextMarkers, durationSec);
     const nextRawScenes = buildManualTimingScenesFromMarkers(safeMarkers, existingScenes, {
       durationSec,
@@ -3681,6 +3859,12 @@ export default function ManualTimingEditorPage() {
       window.setTimeout(() => setCopyStatus(""), 1600);
       return;
     }
+
+    if (hasManualTimingVirtualSilenceOrSourceMap(scenes, project)) {
+      const didSplit = splitManualTimingTimelineAtPreserveSource(time, project.selectedSceneId);
+      if (didSplit) return;
+    }
+
     const safeMarkers = normalizeManualTimingMarkers(project.markers, durationSec);
     const tooClose = safeMarkers.some((marker) => Math.abs(Number(marker) - time) < 0.15);
     if (tooClose) {
