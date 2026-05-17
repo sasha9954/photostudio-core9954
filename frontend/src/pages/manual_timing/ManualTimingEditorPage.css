@@ -3965,6 +3965,48 @@
   background: rgba(38, 18, 30, 0.64);
 }
 
+.manualTimingPhraseInspectorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.manualTimingPhraseInspectorTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: rgba(219, 234, 254, 0.82);
+  font-size: 12px;
+}
+
+.manualTimingPhraseInspectorTitle strong {
+  color: #f8fafc;
+  font-size: 13px;
+}
+
+.manualTimingPhraseInspectorTitle em {
+  color: rgba(191, 219, 254, 0.68);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.manualTimingPhraseInspectorToggle {
+  flex: 0 0 auto;
+  width: auto !important;
+  min-width: 0 !important;
+  padding: 5px 10px !important;
+  border-radius: 999px;
+  font-size: 12px !important;
+  white-space: nowrap;
+}
+
+.manualTimingSelectedPhraseInspector.isCollapsed {
+  max-height: none;
+  padding: 7px 9px;
+}
+
 .manualTimingSelectedPhraseMeta,
 .manualTimingSelectedPhraseActions {
   display: flex;

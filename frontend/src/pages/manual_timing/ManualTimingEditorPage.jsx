@@ -2174,6 +2174,7 @@ export default function ManualTimingEditorPage() {
   });
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
   const [groupSelectedSceneIds, setGroupSelectedSceneIds] = useState([]);
+  const [isPhraseInspectorCollapsed, setIsPhraseInspectorCollapsed] = useState(false);
   const [storyBlockDialog, setStoryBlockDialog] = useState({
     isOpen: false,
     selectedSceneIds: [],
@@ -6179,54 +6180,80 @@ export default function ManualTimingEditorPage() {
             <div><b>Главная шкала разметки</b></div>
             <div>верхняя полоса — story blocks · нижняя — сцены · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
-          <div className={`manualTimingSelectedPhraseInspector ${isGroupPhraseInspectorMode ? "isGroupMode" : ""} ${selectedSceneHasPartialPhrase ? "hasPartialPhrase" : ""}`}>
-            <div className="manualTimingSelectedPhraseMeta">
-              {isGroupPhraseInspectorMode ? <>
-                <span>Выбранный блок</span>
-                <strong>{selectedGroupScenes.length} сцен</strong>
-                <span>{selectedGroupFirstSceneId} → {selectedGroupLastSceneId} · {formatTimingSec(selectedGroupStartSec)} → {formatTimingSec(selectedGroupEndSec)}</span>
-              </> : <>
-                <span>scene_id</span>
-                <strong>{selectedScene?.scene_id || "—"}</strong>
-                <span>{selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
-              </>}
-              {selectedSceneHasPartialPhrase ? <b className="manualTimingPartialBadge">частично</b> : null}
-            </div>
-            <div className="manualTimingSelectedPhraseRows">
-              {isGroupPhraseInspectorMode || selectedScene ? (selectedScenePhraseInspectorRows.length ? selectedScenePhraseInspectorRows.map((row) => <div
-                key={`selected-phrase-inspector-${row.phraseId || row.timingLabel}`}
-                className={`manualTimingSelectedPhraseRow ${row.isPartial ? "isPartial" : ""}`}
+          <div className={`manualTimingSelectedPhraseInspector ${isGroupPhraseInspectorMode ? "isGroupMode" : ""} ${selectedSceneHasPartialPhrase ? "hasPartialPhrase" : ""} ${isPhraseInspectorCollapsed ? "isCollapsed" : ""}`}>
+            <div className="manualTimingPhraseInspectorHeader">
+              <div className="manualTimingPhraseInspectorTitle">
+                <span>ASR / перевод</span>
+                {isGroupPhraseInspectorMode ? <>
+                  <span>·</span>
+                  <strong>выбранный блок</strong>
+                  <em>{selectedGroupScenes.length} сцен</em>
+                </> : <>
+                  <span>·</span>
+                  <strong>{selectedScene?.scene_id || "—"}</strong>
+                  {selectedScene ? <em>{formatTimingSec(selectedSceneStartSec)} → {formatTimingSec(selectedSceneEndSec)}</em> : null}
+                </>}
+              </div>
+
+              <button
+                type="button"
+                className="clipSB_btn clipSB_btnSecondary manualTimingPhraseInspectorToggle"
+                onClick={() => setIsPhraseInspectorCollapsed((value) => !value)}
+                title={isPhraseInspectorCollapsed ? "Показать ASR-фразы и перевод" : "Скрыть ASR-фразы и перевод"}
               >
-                <div className="manualTimingSelectedPhraseOriginal">
-                  <span>{row.phraseId || "audio_phrase"} · {row.timingLabel}</span>
-                  <p>{row.originalText}</p>
-                </div>
-                <div className="manualTimingSelectedPhraseRu">
-                  <div className="manualTimingSelectedPhraseRuHeader">
-                    <span>RU</span>
-                    <button
-                      className="clipSB_btn clipSB_btnSecondary manualTimingSelectedPhraseSpeakBtn"
-                      type="button"
-                      onClick={() => speakManualTimingRuText(row.ruText)}
-                      disabled={!row.hasRuText}
-                    >
-                      ▶ RU
-                    </button>
+                {isPhraseInspectorCollapsed ? "показать перевод" : "скрыть перевод"}
+              </button>
+            </div>
+
+            {!isPhraseInspectorCollapsed ? <>
+              <div className="manualTimingSelectedPhraseMeta">
+                {isGroupPhraseInspectorMode ? <>
+                  <span>Выбранный блок</span>
+                  <strong>{selectedGroupScenes.length} сцен</strong>
+                  <span>{selectedGroupFirstSceneId} → {selectedGroupLastSceneId} · {formatTimingSec(selectedGroupStartSec)} → {formatTimingSec(selectedGroupEndSec)}</span>
+                </> : <>
+                  <span>scene_id</span>
+                  <strong>{selectedScene?.scene_id || "—"}</strong>
+                  <span>{selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
+                </>}
+                {selectedSceneHasPartialPhrase ? <b className="manualTimingPartialBadge">частично</b> : null}
+              </div>
+              <div className="manualTimingSelectedPhraseRows">
+                {isGroupPhraseInspectorMode || selectedScene ? (selectedScenePhraseInspectorRows.length ? selectedScenePhraseInspectorRows.map((row) => <div
+                  key={`selected-phrase-inspector-${row.phraseId || row.timingLabel}`}
+                  className={`manualTimingSelectedPhraseRow ${row.isPartial ? "isPartial" : ""}`}
+                >
+                  <div className="manualTimingSelectedPhraseOriginal">
+                    <span>{row.phraseId || "audio_phrase"} · {row.timingLabel}</span>
+                    <p>{row.originalText}</p>
                   </div>
-                  <p>{row.ruText}</p>
-                </div>
-              </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
-            </div>
-            <div className="manualTimingSelectedPhraseActions">
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneFullRuText)} disabled={!selectedSceneHasRuText}>▶ весь перевод</button>
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={stopManualTimingSpeech}>■ стоп</button>
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
-              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
-              <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!audioPhrases.length ? "isDisabled" : ""}`}>
-                Импорт ASR text_ru
-                <input type="file" accept="application/json,.json,text/plain" onChange={onImportAsrTranslationJsonFile} disabled={!audioPhrases.length} />
-              </label>
-            </div>
+                  <div className="manualTimingSelectedPhraseRu">
+                    <div className="manualTimingSelectedPhraseRuHeader">
+                      <span>RU</span>
+                      <button
+                        className="clipSB_btn clipSB_btnSecondary manualTimingSelectedPhraseSpeakBtn"
+                        type="button"
+                        onClick={() => speakManualTimingRuText(row.ruText)}
+                        disabled={!row.hasRuText}
+                      >
+                        ▶ RU
+                      </button>
+                    </div>
+                    <p>{row.ruText}</p>
+                  </div>
+                </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
+              </div>
+              <div className="manualTimingSelectedPhraseActions">
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneFullRuText)} disabled={!selectedSceneHasRuText}>▶ весь перевод</button>
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={stopManualTimingSpeech}>■ стоп</button>
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
+                <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!audioPhrases.length ? "isDisabled" : ""}`}>
+                  Импорт ASR text_ru
+                  <input type="file" accept="application/json,.json,text/plain" onChange={onImportAsrTranslationJsonFile} disabled={!audioPhrases.length} />
+                </label>
+              </div>
+            </> : null}
           </div>
           <div
             className="manualTimingTimelineViewport"
