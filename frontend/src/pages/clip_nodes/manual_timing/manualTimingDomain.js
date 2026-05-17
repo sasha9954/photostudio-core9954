@@ -573,10 +573,29 @@ function rangesIntersect(aStart, aEnd, bStart, bEnd) {
   return Number(aStart) < Number(bEnd) - 0.001 && Number(aEnd) > Number(bStart) + 0.001;
 }
 
+function isManualTimingSilenceSceneLike(scene = {}) {
+  return Boolean(scene?.is_silence || scene?.isSilence || scene?.is_virtual_silence || scene?.isVirtualSilence || scene?.scene_type === "manual_silence" || scene?.source_kind === "silence" || scene?.sourceKind === "silence");
+}
+
+function getManualTimingSceneSourceStartSec(scene = {}) {
+  if (isManualTimingSilenceSceneLike(scene)) return null;
+  const explicit = Number(scene?.source_start_sec ?? scene?.sourceStartSec);
+  if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+  return roundTimingSec(scene?.start_sec);
+}
+
+function getManualTimingSceneSourceEndSec(scene = {}) {
+  if (isManualTimingSilenceSceneLike(scene)) return null;
+  const explicit = Number(scene?.source_end_sec ?? scene?.sourceEndSec);
+  if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+  const sourceStart = getManualTimingSceneSourceStartSec(scene);
+  return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene?.end_sec || 0) - Number(scene?.start_sec || 0)));
+}
+
 export function getManualTimingPhrasesForScene(audioPhrases = [], scene = null) {
-  if (!scene) return [];
-  const sceneStart = Number(scene?.start_sec || 0);
-  const sceneEnd = Number(scene?.end_sec || 0);
+  if (!scene || isManualTimingSilenceSceneLike(scene)) return [];
+  const sceneStart = Number(getManualTimingSceneSourceStartSec(scene));
+  const sceneEnd = Number(getManualTimingSceneSourceEndSec(scene));
   if (!(sceneEnd > sceneStart)) return [];
   return normalizeManualTimingAudioPhrases(audioPhrases).filter((phrase) => rangesIntersect(phrase.start_sec, phrase.end_sec, sceneStart, sceneEnd));
 }
