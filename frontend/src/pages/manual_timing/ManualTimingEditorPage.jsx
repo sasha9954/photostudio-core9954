@@ -1887,6 +1887,37 @@ function getAsrPhraseStyle(phrase, durationSec) {
   };
 }
 
+function mapSourceRangeToTimelineRanges(sourceStartValue, sourceEndValue, scenes = []) {
+  const sourceStart = roundTimingSec(Number(sourceStartValue));
+  const sourceEnd = roundTimingSec(Number(sourceEndValue));
+  if (!Number.isFinite(sourceStart) || !Number.isFinite(sourceEnd) || sourceEnd <= sourceStart) return [];
+
+  return (Array.isArray(scenes) ? scenes : [])
+    .filter((scene) => scene && !isManualTimingSilenceScene(scene))
+    .map((scene) => {
+      const sceneSourceStart = getManualTimingSceneSourceStartSec(scene);
+      const sceneSourceEnd = getManualTimingSceneSourceEndSec(scene);
+      if (!Number.isFinite(sceneSourceStart) || !Number.isFinite(sceneSourceEnd) || sceneSourceEnd <= sceneSourceStart) return null;
+
+      const overlapStart = Math.max(sourceStart, sceneSourceStart);
+      const overlapEnd = Math.min(sourceEnd, sceneSourceEnd);
+      if (overlapEnd <= overlapStart + 0.001) return null;
+
+      const timelineStart = roundTimingSec(Number(scene.start_sec || 0) + (overlapStart - sceneSourceStart));
+      const timelineEnd = roundTimingSec(Number(scene.start_sec || 0) + (overlapEnd - sceneSourceStart));
+      if (timelineEnd <= timelineStart + 0.001) return null;
+
+      return {
+        scene_id: scene.scene_id,
+        start_sec: timelineStart,
+        end_sec: timelineEnd,
+        source_start_sec: roundTimingSec(overlapStart),
+        source_end_sec: roundTimingSec(overlapEnd),
+      };
+    })
+    .filter(Boolean);
+}
+
 function getScenePhraseAlignmentWarnings(scene = null, scenePhrases = [], allAudioPhrases = [], allScenes = [], audioDurationSec = 0) {
   if (!scene || isManualTimingSilenceScene(scene)) return [];
   const warnings = [];
@@ -2363,8 +2394,23 @@ export default function ManualTimingEditorPage() {
   );
   const asrPhraseMarkers = useMemo(() => {
     if (!(durationSec > 0)) return [];
-    return audioPhrases.map((phrase) => ({ ...phrase, style: getAsrPhraseStyle(phrase, durationSec) }));
-  }, [audioPhrases, durationSec]);
+
+    return audioPhrases.flatMap((phrase) => {
+      const ranges = mapSourceRangeToTimelineRanges(phrase.start_sec, phrase.end_sec, scenes);
+      if (!ranges.length) return [];
+
+      return ranges.map((range, rangeIndex) => ({
+        ...phrase,
+        marker_id: `${phrase.phrase_id || "phrase"}_${rangeIndex}_${range.scene_id || "scene"}`,
+        timeline_start_sec: range.start_sec,
+        timeline_end_sec: range.end_sec,
+        source_start_sec: range.source_start_sec,
+        source_end_sec: range.source_end_sec,
+        timing_scene_id: range.scene_id,
+        style: getAsrPhraseStyle({ start_sec: range.start_sec, end_sec: range.end_sec }, durationSec),
+      }));
+    });
+  }, [audioPhrases, durationSec, scenes]);
   const selectedMissingPhrase = useMemo(
     () => audioPhrases.find((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhraseId || "")) || null,
     [audioPhrases, selectedMissingPhraseId]
@@ -2390,6 +2436,8 @@ export default function ManualTimingEditorPage() {
   const playheadPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(currentTime || 0) / durationSec) * 100)) : 0;
   const lastCutPercent = durationSec > 0 ? Math.max(0, Math.min(100, (Number(lastCutSec || 0) / durationSec) * 100)) : 0;
   const candidateWidthPercent = durationSec > 0 ? Math.max(0, Math.min(100 - lastCutPercent, ((Number(currentTime || 0) - Number(lastCutSec || 0)) / durationSec) * 100)) : 0;
+  const isAnyManualTimingPlaybackActive = Boolean(isPlaying || manualTimingPlaybackMode);
+  const shouldShowCandidateRange = !isAnyManualTimingPlaybackActive && candidateWidthPercent > 0.1;
   const openTailSceneId = project.timing_status === "confirmed" ? "" : scenes[scenes.length - 1]?.scene_id || "";
   const candidateDurationLabel = candidateDurationSec > 0.001 ? formatTimingSec(candidateDurationSec) : "—";
   const storyBlockSummaries = useMemo(() => storyBlocks.map((block) => {
@@ -2794,7 +2842,7 @@ export default function ManualTimingEditorPage() {
       const effectiveSilenceOffset = Math.max(localSilenceOffset, contextSilenceOffset);
       const sourceRange = getSceneAudioSourceRangeSafe(scene, effectiveSilenceOffset);
 
-      console.info("[MANUAL TIMING PLAYBACK QUEUE SOURCE]", {
+      console.info("[MT SOURCE MAP]", {
         scene_id: scene.scene_id,
         timeline_start: scene.start_sec,
         timeline_end: scene.end_sec,
@@ -3229,11 +3277,29 @@ export default function ManualTimingEditorPage() {
   function pauseManualTimingQueuePlayback() {
     const session = manualTimingQueuePlaybackRef.current;
     if (!session) {
+      console.info("[MT PLAY PAUSE]", {
+        scene_id: manualTimingPlaybackSessionRef.current?.sceneId || "",
+        mode: manualTimingPlaybackModeRef.current || "cursor",
+        timelineStart: manualTimingPlaybackSessionRef.current?.timelineStartSec,
+        timelineEnd: manualTimingPlaybackSessionRef.current?.timelineEndSec,
+        sourceStart: manualTimingPlaybackSessionRef.current?.sourceStartSec,
+        sourceEnd: manualTimingPlaybackSessionRef.current?.sourceEndSec,
+      });
       stopManualTimingPlayback();
       return;
     }
 
     const pausedTimelineTime = getCurrentQueueTimelineTime();
+
+    const activeScene = session.scenes?.[session.index] || null;
+    console.info("[MT PLAY PAUSE]", {
+      scene_id: activeScene?.scene_id || "",
+      mode: session.mode || "scene",
+      timelineStart: activeScene?.start_sec,
+      timelineEnd: activeScene?.end_sec,
+      sourceStart: activeScene?.source_start_sec,
+      sourceEnd: activeScene?.source_end_sec,
+    });
 
     manualTimingPausedQueueRef.current = {
       mode: session.mode || "scene",
@@ -3291,6 +3357,16 @@ export default function ManualTimingEditorPage() {
 
     manualTimingPlaybackModeRef.current = session.mode === "all" ? "full_timeline" : "selected_scene";
     setManualTimingPlaybackMode(session.mode === "all" ? "full_timeline" : "selected_scene");
+
+    const resumeScene = safeScenes[resumeIndex] || null;
+    console.info("[MT PLAY RESUME]", {
+      scene_id: resumeScene?.scene_id || paused.sceneId || "",
+      mode: session.mode,
+      timelineStart: resumeScene?.start_sec,
+      timelineEnd: resumeScene?.end_sec,
+      sourceStart: resumeScene?.source_start_sec,
+      sourceEnd: resumeScene?.source_end_sec,
+    });
 
     playManualTimingQueueItem(session, resumeIndex, paused.timelineTimeSec);
     return true;
@@ -3429,7 +3505,7 @@ export default function ManualTimingEditorPage() {
     });
   }
 
-  function playManualTimingSceneQueue(sceneQueue = [], mode = "scene") {
+  function playManualTimingSceneQueue(sceneQueue = [], mode = "scene", startTimelineOverrideSec = null) {
     let safeScenes = buildManualTimingPlaybackQueue(sceneQueue, scenes);
 
     if (mode === "scene") {
@@ -3454,7 +3530,17 @@ export default function ManualTimingEditorPage() {
     manualTimingPlaybackModeRef.current = mode === "all" ? "full_timeline" : "selected_scene";
     setManualTimingPlaybackMode(mode === "all" ? "full_timeline" : "selected_scene");
 
-    playManualTimingQueueItem(session, 0);
+    const firstScene = safeScenes[0] || null;
+    console.info(mode === "all" ? "[MT PLAY FULL]" : "[MT PLAY SELECTED]", {
+      scene_id: firstScene?.scene_id || "",
+      mode,
+      timelineStart: firstScene?.start_sec,
+      timelineEnd: firstScene?.end_sec,
+      sourceStart: firstScene?.source_start_sec,
+      sourceEnd: firstScene?.source_end_sec,
+    });
+
+    playManualTimingQueueItem(session, 0, startTimelineOverrideSec);
   }
 
   function playFullManualTiming() {
@@ -3677,8 +3763,23 @@ export default function ManualTimingEditorPage() {
       ? hydratedScenes.map((scene) => {
         const oldScene = (Array.isArray(existingScenes) ? existingScenes : []).find((item) => String(item?.scene_id || "") === String(scene?.scene_id || ""));
         if (!oldScene) return scene;
+        const oldIsSilence = isManualTimingSilenceScene(oldScene);
+        const oldTimelineStart = roundTimingSec(Number(oldScene.start_sec || 0));
+        const oldTimelineEnd = roundTimingSec(Number(oldScene.end_sec || oldTimelineStart));
+        const newTimelineStart = roundTimingSec(Number(scene.start_sec || 0));
+        const newTimelineEnd = roundTimingSec(Number(scene.end_sec || newTimelineStart));
+        const oldSourceStart = oldScene.source_start_sec ?? oldScene.sourceStartSec ?? getManualTimingSceneSourceStartSec(oldScene);
+        const oldSourceEnd = oldScene.source_end_sec ?? oldScene.sourceEndSec ?? getManualTimingSceneSourceEndSec(oldScene);
+        const sourceStart = oldIsSilence ? null : roundTimingSec(Number(oldSourceStart || 0) + (newTimelineStart - oldTimelineStart));
+        const sourceEnd = oldIsSilence ? null : roundTimingSec(Number(oldSourceEnd || oldSourceStart || 0) + (newTimelineEnd - oldTimelineEnd));
         return {
           ...scene,
+          source_kind: oldIsSilence ? "silence" : (oldScene.source_kind || oldScene.sourceKind || "audio"),
+          source_start_sec: sourceStart,
+          source_end_sec: sourceEnd,
+          is_silence: oldIsSilence,
+          is_virtual_silence: Boolean(oldScene.is_virtual_silence || oldScene.isVirtualSilence || oldIsSilence),
+          scene_type: oldIsSilence ? "manual_silence" : (scene.scene_type || oldScene.scene_type),
           story_time: String(oldScene.story_time || ""),
           drama_hint: String(oldScene.drama_hint || ""),
           short_note: String(oldScene.short_note || ""),
@@ -3707,6 +3808,16 @@ export default function ManualTimingEditorPage() {
       })
       : hydratedScenes;
     const selectedSceneId = extraPatch.selectedSceneId || project.selectedSceneId || nextScenes[0]?.scene_id || "";
+    nextScenes.forEach((scene) => {
+      console.info("[MT SOURCE MAP]", {
+        scene_id: scene?.scene_id || "",
+        mode: options.rebuildAction || "rebuild",
+        timelineStart: scene?.start_sec,
+        timelineEnd: scene?.end_sec,
+        sourceStart: scene?.source_start_sec,
+        sourceEnd: scene?.source_end_sec,
+      });
+    });
     return persist({
       ...project,
       ...extraPatch,
@@ -3767,9 +3878,18 @@ export default function ManualTimingEditorPage() {
 
   const selectSceneAndSeekStart = (scene, { pause = true } = {}) => {
     if (!scene) return;
+    stopManualTimingPlayback();
     playUntilRef.current = null;
     persist({ ...project, selectedSceneId: scene.scene_id });
-    setAudioTime(Number(scene.start_sec || 0), { pause, clearBound: true });
+    const sceneStart = Number(scene.start_sec || 0);
+    setDisplayTime(sceneStart);
+    if (isManualTimingSilenceScene(scene)) {
+      try { audioRef.current?.pause(); } catch {}
+      return;
+    }
+    const sourceStart = getManualTimingSceneSourceStartSec(scene);
+    if (Number.isFinite(sourceStart)) setAudioElementTime(sourceStart);
+    if (pause) setPlayingState(false);
   };
 
   const onPlayPause = () => {
@@ -3793,13 +3913,16 @@ export default function ManualTimingEditorPage() {
       manualTimingPausedQueueRef.current = null;
     }
 
-    const position = findManualTimingTimelinePosition(currentTimeRef.current || currentTime || 0, scenes);
-    const sceneUnderCursor = position?.scene || null;
-
-    const sceneToPlay = sceneUnderCursor || selectedScene || scenes[0];
+    const cursorTime = roundTimingSec(currentTimeRef.current || currentTime || 0);
+    const sceneToPlay = selectedScene || findManualTimingTimelinePosition(cursorTime, scenes)?.scene || scenes[0];
 
     if (sceneToPlay) {
-      playManualTimingSceneQueue([sceneToPlay], "scene");
+      const sceneStart = roundTimingSec(Number(sceneToPlay.start_sec || 0));
+      const sceneEnd = roundTimingSec(Number(sceneToPlay.end_sec || sceneStart));
+      const startOverride = cursorTime > sceneStart + 0.001 && cursorTime < sceneEnd - 0.001
+        ? cursorTime
+        : sceneStart;
+      playManualTimingSceneQueue([sceneToPlay], "scene", startOverride);
     }
   };
 
@@ -4418,7 +4541,9 @@ export default function ManualTimingEditorPage() {
     if (!(endSec > startSec + 0.02)) return;
 
     persist({ ...project, selectedSceneId: scene.scene_id });
-    playManualTimingSceneQueue([scene], "scene");
+    const cursorTime = roundTimingSec(currentTimeRef.current || currentTime || 0);
+    const startOverride = cursorTime > startSec + 0.001 && cursorTime < endSec - 0.001 ? cursorTime : startSec;
+    playManualTimingSceneQueue([scene], "scene", startOverride);
   };
 
   const splitSegmentAtCurrentTime = (scene) => {
@@ -6314,12 +6439,12 @@ export default function ManualTimingEditorPage() {
                 </div> : null}
                 {asrPhraseMarkers.length ? <div className="manualTimingPhraseTrack" aria-label="ASR phrase markers">
                   {asrPhraseMarkers.map((phrase) => <button
-                    key={`phrase-marker-${phrase.phrase_id}`}
+                    key={`phrase-marker-${phrase.marker_id || phrase.phrase_id}`}
                     type="button"
                     className="manualTimingPhraseMarker"
                     style={phrase.style}
-                    onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }}
-                    title={`${phrase.phrase_id}: ${formatTimingSec(phrase.start_sec)} – ${formatTimingSec(phrase.end_sec)} · ${pickManualTimingAudioPhraseOriginalText(phrase) || "ASR phrase"}`}
+                    onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.timeline_start_sec ?? phrase.start_sec, phrase.timeline_end_sec ?? phrase.end_sec, "phrase_preview"); }}
+                    title={`${phrase.phrase_id}: ${formatTimingSec(phrase.timeline_start_sec ?? phrase.start_sec)} – ${formatTimingSec(phrase.timeline_end_sec ?? phrase.end_sec)} · source ${formatTimingSec(phrase.source_start_sec ?? phrase.start_sec)} – ${formatTimingSec(phrase.source_end_sec ?? phrase.end_sec)} · ${pickManualTimingAudioPhraseOriginalText(phrase) || "ASR phrase"}`}
                   />)}
                 </div> : null}
                 {scenes.map((scene, idx) => {
@@ -6342,7 +6467,7 @@ export default function ManualTimingEditorPage() {
                     </span>
                   </button>;
                 })}
-                {candidateWidthPercent > 0.1 ? <div
+                {shouldShowCandidateRange ? <div
                   className="manualTimingCandidateRange"
                   style={{ left: `${lastCutPercent}%`, width: `${candidateWidthPercent}%` }}
                   title={`Следующий отрезок: ${formatTimingSec(lastCutSec)} – ${formatTimingSec(currentTime)}`}
