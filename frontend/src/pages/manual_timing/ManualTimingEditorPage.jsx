@@ -640,6 +640,42 @@ function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = ge
   };
 }
 
+function resetManualTimingProjectForAudioSignature(project = {}, audioSource = "audio_signature_reset") {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const safeAudio = normalizeManualTimingProjectAudioForHandoff(safeProject);
+  const durationSec = Number(safeAudio.duration_sec || safeProject.audio_duration_sec || 0) || 0;
+  const resetProject = buildManualTimingProjectForAudioChange(
+    {
+      ...safeProject,
+      project_mode: safeProject.project_mode || "",
+      project_kind: safeProject.project_kind || "",
+      format: safeProject.format || safeProject.aspect_ratio || "9:16",
+      aspect_ratio: safeProject.aspect_ratio || safeProject.format || "9:16",
+    },
+    {
+      ...safeAudio,
+      duration_sec: durationSec,
+      duration_ms: durationSec > 0 ? Math.round(durationSec * 1000) : safeAudio.duration_ms,
+      source_duration_sec: Number(safeAudio.source_duration_sec || safeAudio.original_duration_sec || durationSec || 0) || 0,
+      original_duration_sec: Number(safeAudio.original_duration_sec || safeAudio.source_duration_sec || durationSec || 0) || 0,
+    },
+    audioSource
+  );
+  return repairManualTimingInvalidSourceMaps({
+    ...resetProject,
+    project_id: safeProject.project_id || resetProject.project_id,
+    projectId: safeProject.projectId || safeProject.project_id || resetProject.projectId,
+    input_signature: safeProject.input_signature || safeProject.inputSignature || resetProject.input_signature,
+    inputSignature: safeProject.inputSignature || safeProject.input_signature || resetProject.inputSignature,
+    audio_signature: safeProject.audio_signature || safeProject.audioSignature || resetProject.audio_signature,
+    audioSignature: safeProject.audioSignature || safeProject.audio_signature || resetProject.audioSignature,
+    audio_metadata: safeProject.audio_metadata || safeProject.audioMetadata || resetProject.audio_metadata,
+    podcast_edit_manifest: safeProject.podcast_edit_manifest || resetProject.podcast_edit_manifest,
+    composer_edit_manifest: safeProject.composer_edit_manifest || resetProject.composer_edit_manifest,
+    audio_duration_sec: durationSec,
+  });
+}
+
 function normalizeStoredManualTimingProject(raw = null, ownerNodeId = "") {
   const project = { ...getDefaultManualTimingNodeData(), ...(raw || {}) };
   const audio = normalizeManualTimingProjectAudioForHandoff(project);
@@ -1129,17 +1165,82 @@ function decorateManualTimingSilenceScene(scene = {}) {
 }
 
 
-function materializeManualTimingSceneSourceMap(scene = {}) {
-  if (isManualTimingSilenceScene(scene)) return decorateManualTimingSilenceScene(scene);
+function getManualTimingSceneDeclaredSourceDurationSec(scene = {}, fallbackDurationSec = 0) {
+  const audio = scene?.audio && typeof scene.audio === "object" ? scene.audio : {};
+  return Number(
+    scene?.source_duration_sec
+    || scene?.original_duration_sec
+    || scene?.audio_duration_sec
+    || audio.source_duration_sec
+    || audio.original_duration_sec
+    || audio.duration_sec
+    || fallbackDurationSec
+    || 0
+  ) || 0;
+}
+
+function getManualTimingProjectSourceDurationSec(project = {}, fallbackDurationSec = 0) {
+  const audio = normalizeManualTimingAudio(project?.audio);
+  const metadata = project?.audio_metadata || project?.audioMetadata || {};
+  return Number(
+    audio.source_duration_sec
+    || audio.original_duration_sec
+    || metadata.source_duration_sec
+    || metadata.original_duration_sec
+    || project?.source_duration_sec
+    || project?.original_duration_sec
+    || project?.audio_duration_sec
+    || audio.duration_sec
+    || fallbackDurationSec
+    || 0
+  ) || 0;
+}
+
+function isValidManualTimingAudioSourceRange(startValue, endValue, sourceDurationSec = 0) {
+  const start = Number(startValue);
+  const end = Number(endValue);
+  const sourceDuration = Number(sourceDurationSec || 0);
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return false;
+  if (start < -0.001) return false;
+  if (end <= start + 0.01) return false;
+  if (sourceDuration > 0 && end > sourceDuration + 0.25) return false;
+
+  return true;
+}
+
+function materializeManualTimingSceneSourceMap(scene = {}, fallbackSourceDurationSec = 0) {
+  if (isManualTimingSilenceScene(scene)) {
+    return decorateManualTimingSilenceScene({
+      ...scene,
+      source_kind: "silence",
+      source_start_sec: null,
+      source_end_sec: null,
+    });
+  }
 
   const start = roundTimingSec(Number(scene.start_sec || 0));
   const end = roundTimingSec(Number(scene.end_sec || start));
-  const sourceStart = Number.isFinite(Number(scene.source_start_sec))
-    ? roundTimingSec(Number(scene.source_start_sec))
-    : start;
-  const sourceEnd = Number.isFinite(Number(scene.source_end_sec))
-    ? roundTimingSec(Number(scene.source_end_sec))
-    : roundTimingSec(sourceStart + Math.max(0, end - start));
+  const timelineDuration = roundTimingSec(Math.max(0.01, end - start));
+  const sourceDuration = getManualTimingSceneDeclaredSourceDurationSec(scene, fallbackSourceDurationSec);
+  const explicitSourceStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+  const explicitSourceEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+  const hasValidExplicitSource = isValidManualTimingAudioSourceRange(explicitSourceStart, explicitSourceEnd, sourceDuration);
+  const fallbackStart = roundTimingSec(Math.max(0, start));
+  let sourceStart = hasValidExplicitSource ? roundTimingSec(explicitSourceStart) : fallbackStart;
+  let sourceEnd = hasValidExplicitSource ? roundTimingSec(explicitSourceEnd) : roundTimingSec(sourceStart + timelineDuration);
+
+  sourceStart = roundTimingSec(Math.max(0, sourceStart));
+  if (sourceDuration > 0) sourceStart = roundTimingSec(Math.min(sourceStart, Math.max(0, sourceDuration - 0.01)));
+  if (sourceDuration > 0) sourceEnd = roundTimingSec(Math.min(sourceDuration, sourceEnd));
+  if (sourceEnd <= sourceStart + 0.01) {
+    sourceEnd = roundTimingSec(sourceDuration > 0
+      ? Math.min(sourceDuration, sourceStart + timelineDuration)
+      : sourceStart + timelineDuration);
+  }
+  if (sourceEnd <= sourceStart + 0.01) {
+    sourceEnd = roundTimingSec(sourceStart + 0.01);
+  }
 
   return {
     ...scene,
@@ -1151,17 +1252,22 @@ function materializeManualTimingSceneSourceMap(scene = {}) {
 
 function getManualTimingSceneSourceStartSec(scene = {}) {
   if (isManualTimingSilenceScene(scene)) return null;
-  const explicit = Number(scene.source_start_sec ?? scene.sourceStartSec);
-  if (Number.isFinite(explicit)) return roundTimingSec(explicit);
-  return roundTimingSec(scene.start_sec);
+  const explicitStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+  const explicitEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+  const sourceDuration = getManualTimingSceneDeclaredSourceDurationSec(scene);
+  if (isValidManualTimingAudioSourceRange(explicitStart, explicitEnd, sourceDuration)) return roundTimingSec(explicitStart);
+  return roundTimingSec(Math.max(0, Number(scene.start_sec || 0)));
 }
 
 function getManualTimingSceneSourceEndSec(scene = {}) {
   if (isManualTimingSilenceScene(scene)) return null;
-  const explicit = Number(scene.source_end_sec ?? scene.sourceEndSec);
-  if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+  const explicitStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+  const explicitEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+  const sourceDuration = getManualTimingSceneDeclaredSourceDurationSec(scene);
+  if (isValidManualTimingAudioSourceRange(explicitStart, explicitEnd, sourceDuration)) return roundTimingSec(explicitEnd);
   const sourceStart = getManualTimingSceneSourceStartSec(scene);
-  return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
+  const fallbackEnd = roundTimingSec(Number(sourceStart || 0) + Math.max(0.01, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
+  return sourceDuration > 0 ? roundTimingSec(Math.min(sourceDuration, fallbackEnd)) : fallbackEnd;
 }
 
 function buildManualTimingSilenceBlocksFromScenes(scenes = []) {
@@ -1273,8 +1379,7 @@ function rebuildManualTimingScenesWithVirtualSilence(rawScenes = [], originalDur
 
   const explicitSourceCount = safeScenes.filter((scene) => (
     !isManualTimingSilenceScene(scene)
-    && Number.isFinite(Number(scene?.source_start_sec))
-    && Number.isFinite(Number(scene?.source_end_sec))
+    && isValidManualTimingAudioSourceRange(scene?.source_start_sec, scene?.source_end_sec, sourceDuration)
   )).length;
   const audioSceneIndexes = safeScenes
     .map((scene, index) => (isManualTimingSilenceScene(scene) ? -1 : index))
@@ -1303,8 +1408,9 @@ function rebuildManualTimingScenesWithVirtualSilence(rawScenes = [], originalDur
 
     const explicitSourceStart = Number(scene.source_start_sec);
     const explicitSourceEnd = Number(scene.source_end_sec);
-    let sourceStart = Number.isFinite(explicitSourceStart) ? roundTimingSec(explicitSourceStart) : roundTimingSec(sourceCursor);
-    let sourceEnd = Number.isFinite(explicitSourceEnd) ? roundTimingSec(explicitSourceEnd) : null;
+    const hasValidExplicitSource = isValidManualTimingAudioSourceRange(explicitSourceStart, explicitSourceEnd, sourceDuration);
+    let sourceStart = hasValidExplicitSource ? roundTimingSec(explicitSourceStart) : roundTimingSec(sourceCursor);
+    let sourceEnd = hasValidExplicitSource ? roundTimingSec(explicitSourceEnd) : null;
 
     if (sourceEnd === null) {
       const remainingSource = roundTimingSec(Math.max(0.01, sourceDuration - sourceStart));
@@ -1320,8 +1426,7 @@ function rebuildManualTimingScenesWithVirtualSilence(rawScenes = [], originalDur
     if (
       Math.abs(start - oldStart) > 0.001
       || Math.abs(end - oldEnd) > 0.001
-      || !Number.isFinite(Number(scene.source_start_sec))
-      || !Number.isFinite(Number(scene.source_end_sec))
+      || !hasValidExplicitSource
     ) changed = true;
 
     return retimeManualTimingScene(scene, start, end, {
@@ -1337,6 +1442,99 @@ function rebuildManualTimingScenesWithVirtualSilence(rawScenes = [], originalDur
     scenes: reindexManualTimingTimelineScenes(rebuilt),
     durationSec: roundTimingSec(Math.max(timelineCursor, sourceDuration + silenceTotal)),
     changed,
+  };
+}
+
+function repairManualTimingInvalidSourceMaps(project = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const rawScenes = Array.isArray(safeProject.scenes) ? safeProject.scenes : [];
+  if (!rawScenes.length) return safeProject;
+
+  const sourceDuration = roundTimingSec(Math.max(0, getManualTimingProjectSourceDurationSec(safeProject)));
+  const audioSceneIndexes = rawScenes
+    .map((scene, index) => (isManualTimingSilenceScene(scene) ? -1 : index))
+    .filter((index) => index >= 0);
+  const lastAudioIndex = audioSceneIndexes[audioSceneIndexes.length - 1];
+  let sourceCursor = 0;
+  let changed = false;
+
+  const sortedScenes = rawScenes
+    .slice()
+    .sort((a, b) => Number(a?.start_sec || 0) - Number(b?.start_sec || 0));
+  const sortedAudioIndexes = sortedScenes
+    .map((scene, index) => (isManualTimingSilenceScene(scene) ? -1 : index))
+    .filter((index) => index >= 0);
+  const lastSortedAudioIndex = sortedAudioIndexes[sortedAudioIndexes.length - 1];
+
+  const repairedScenes = sortedScenes
+    .map((scene, sortedIndex) => {
+      const timelineStart = roundTimingSec(Number(scene?.start_sec || 0));
+      const timelineEnd = roundTimingSec(Number(scene?.end_sec || timelineStart));
+      const sceneDuration = roundTimingSec(Math.max(0.01, timelineEnd - timelineStart));
+
+      if (isManualTimingSilenceScene(scene)) {
+        const nextScene = decorateManualTimingSilenceScene({
+          ...scene,
+          source_kind: "silence",
+          source_start_sec: null,
+          source_end_sec: null,
+        });
+        if (scene.source_kind !== "silence" || scene.source_start_sec !== null || scene.source_end_sec !== null) changed = true;
+        return nextScene;
+      }
+
+      const originalIndex = rawScenes.indexOf(scene);
+      const isLastAudioScene = originalIndex === lastAudioIndex || sortedIndex === lastSortedAudioIndex;
+      const explicitSourceStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+      const explicitSourceEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+      const validExplicit = isValidManualTimingAudioSourceRange(explicitSourceStart, explicitSourceEnd, sourceDuration);
+      let sourceStart = validExplicit ? roundTimingSec(explicitSourceStart) : roundTimingSec(sourceCursor);
+      let sourceEnd = validExplicit ? roundTimingSec(explicitSourceEnd) : roundTimingSec(sourceStart + sceneDuration);
+
+      sourceStart = roundTimingSec(Math.max(0, sourceStart));
+      if (sourceDuration > 0) sourceStart = roundTimingSec(Math.min(sourceStart, Math.max(0, sourceDuration - 0.01)));
+      if (sourceDuration > 0) sourceEnd = roundTimingSec(Math.min(sourceDuration, sourceEnd));
+      if (isLastAudioScene && sourceDuration > 0 && sourceEnd < sourceDuration - 0.001) sourceEnd = sourceDuration;
+      if (sourceEnd <= sourceStart + 0.01) {
+        sourceEnd = roundTimingSec(sourceDuration > 0
+          ? Math.min(sourceDuration, sourceStart + sceneDuration)
+          : sourceStart + sceneDuration);
+      }
+      if (sourceEnd <= sourceStart + 0.01) sourceEnd = roundTimingSec(sourceStart + 0.01);
+
+      const sourceChanged = !validExplicit
+        || Math.abs(sourceStart - explicitSourceStart) > 0.001
+        || Math.abs(sourceEnd - explicitSourceEnd) > 0.001
+        || scene.source_kind === "silence";
+      if (sourceChanged) {
+        changed = true;
+        if (!validExplicit && (Number.isFinite(explicitSourceStart) || Number.isFinite(explicitSourceEnd))) {
+          console.warn("[MT SOURCE MAP INVALID_REPAIRED]", {
+            scene_id: scene.scene_id,
+            timelineStart,
+            timelineEnd,
+            badSourceStart: explicitSourceStart,
+            badSourceEnd: explicitSourceEnd,
+            repairedSourceStart: sourceStart,
+            repairedSourceEnd: sourceEnd,
+            sourceDuration,
+          });
+        }
+      }
+
+      sourceCursor = sourceEnd;
+      return {
+        ...scene,
+        source_kind: scene.source_kind || "audio",
+        source_start_sec: sourceStart,
+        source_end_sec: sourceEnd,
+      };
+    });
+
+  if (!changed) return safeProject;
+  return {
+    ...safeProject,
+    scenes: reindexManualTimingTimelineScenes(repairedScenes),
   };
 }
 
@@ -2170,9 +2368,19 @@ export default function ManualTimingEditorPage() {
     const incomingInitialProject = getIncomingManualTimingProjectFromLocation(location, storedInitialProject, initialOwner);
     const incomingInitialSignature = incomingInitialProject ? getManualTimingAudioSignature(incomingInitialProject) : "";
     const storedInitialSignature = storedInitialProject ? getManualTimingAudioSignature(storedInitialProject) : "";
-    initialProjectRef.current = incomingInitialProject && (!storedInitialProject || manualTimingAudioSignaturesDiffer(incomingInitialSignature, storedInitialSignature))
-      ? incomingInitialProject
+    const initialAudioSignatureChanged = incomingInitialProject && storedInitialProject && manualTimingAudioSignaturesDiffer(incomingInitialSignature, storedInitialSignature);
+    if (initialAudioSignatureChanged) {
+      console.warn("[MANUAL TIMING AUDIO_SIGNATURE_RESET]", {
+        incomingAudioName: getManualTimingAudioNameForDiagnostics(incomingInitialProject),
+        incomingAudioDurationSec: getManualTimingAudioDurationForDiagnostics(incomingInitialProject),
+        storedAudioName: getManualTimingAudioNameForDiagnostics(storedInitialProject),
+        storedAudioDurationSec: getManualTimingAudioDurationForDiagnostics(storedInitialProject),
+      });
+    }
+    const initialProject = incomingInitialProject && (!storedInitialProject || initialAudioSignatureChanged)
+      ? (initialAudioSignatureChanged ? resetManualTimingProjectForAudioSignature(incomingInitialProject) : incomingInitialProject)
       : storedInitialProject;
+    initialProjectRef.current = repairManualTimingInvalidSourceMaps(initialProject);
   }
   const audioRef = useRef(null);
   const timelineViewportRef = useRef(null);
@@ -2597,10 +2805,19 @@ export default function ManualTimingEditorPage() {
           incomingAudioName: getManualTimingAudioNameForDiagnostics(incomingProject),
           storedAudioName: getManualTimingAudioNameForDiagnostics(storedProject),
         });
+        console.warn("[MANUAL TIMING AUDIO_SIGNATURE_RESET]", {
+          incomingAudioName: getManualTimingAudioNameForDiagnostics(incomingProject),
+          incomingAudioDurationSec: getManualTimingAudioDurationForDiagnostics(incomingProject),
+          storedAudioName: getManualTimingAudioNameForDiagnostics(storedProject),
+          storedAudioDurationSec: getManualTimingAudioDurationForDiagnostics(storedProject),
+        });
       }
-      setProject(incomingProject);
-      persistManualTimingProject(incomingProject);
-      setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(ownerNodeId, incomingProject, { logStale: true }));
+      const safeIncomingProject = repairManualTimingInvalidSourceMaps(changed && storedProject
+        ? resetManualTimingProjectForAudioSignature(incomingProject)
+        : incomingProject);
+      setProject(safeIncomingProject);
+      persistManualTimingProject(safeIncomingProject);
+      setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(ownerNodeId, safeIncomingProject, { logStale: true }));
       setAudioTime(0, { pause: true, clearBound: true });
       setAsrStatus("");
       setHandoffStatus("");
@@ -2609,7 +2826,7 @@ export default function ManualTimingEditorPage() {
 
     if (!storedProject) return;
 
-    const restoredProject = normalizeStoredManualTimingProject(storedProject, ownerNodeId);
+    const restoredProject = repairManualTimingInvalidSourceMaps(normalizeStoredManualTimingProject(storedProject, ownerNodeId));
     setProject(restoredProject);
     persistManualTimingProject(restoredProject);
     setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(ownerNodeId, restoredProject, { logStale: true }));
@@ -2637,12 +2854,13 @@ export default function ManualTimingEditorPage() {
 
   const persist = (nextProject) => {
     const ownerNodeId = String(routeSourceNodeId || nextProject?.sourceNodeId || nextProject?.nodeId || getManualTimingOwnerNodeId(nextProject) || finalOwnerNodeId || "").trim();
+    const repairedProject = repairManualTimingInvalidSourceMaps(nextProject);
     const safeProject = {
-      ...nextProject,
+      ...repairedProject,
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
-      project_mode: nextProject?.project_mode || "",
-      project_kind: nextProject?.project_kind || "",
+      project_mode: repairedProject?.project_mode || "",
+      project_kind: repairedProject?.project_kind || "",
       updatedAt: Date.now(),
     };
     setProject(safeProject);
@@ -2652,8 +2870,9 @@ export default function ManualTimingEditorPage() {
 
   const persistRestoredProject = (snapshotProject) => {
     const ownerNodeId = String(routeSourceNodeId || snapshotProject?.sourceNodeId || snapshotProject?.nodeId || getManualTimingOwnerNodeId(snapshotProject) || finalOwnerNodeId || "").trim();
+    const repairedProject = repairManualTimingInvalidSourceMaps(snapshotProject);
     const safeProject = {
-      ...(snapshotProject || {}),
+      ...(repairedProject || {}),
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       updatedAt: Date.now(),
@@ -2756,17 +2975,22 @@ export default function ManualTimingEditorPage() {
 
   const getSceneSourceStartSec = (scene = {}) => {
     if (isManualTimingSilenceScene(scene)) return null;
-    const explicit = Number(scene.source_start_sec ?? scene.sourceStartSec);
-    if (Number.isFinite(explicit)) return roundTimingSec(explicit);
-    return roundTimingSec(scene.start_sec);
+    const explicitStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+    const explicitEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+    const sourceDuration = Number(audio.source_duration_sec || audio.original_duration_sec || audio.duration_sec || durationSec || 0) || 0;
+    if (isValidManualTimingAudioSourceRange(explicitStart, explicitEnd, sourceDuration)) return roundTimingSec(explicitStart);
+    return roundTimingSec(Math.max(0, Number(scene.start_sec || 0)));
   };
 
   const getSceneSourceEndSec = (scene = {}) => {
     if (isManualTimingSilenceScene(scene)) return null;
-    const explicit = Number(scene.source_end_sec ?? scene.sourceEndSec);
-    if (Number.isFinite(explicit)) return roundTimingSec(explicit);
+    const explicitStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+    const explicitEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+    const sourceDuration = Number(audio.source_duration_sec || audio.original_duration_sec || audio.duration_sec || durationSec || 0) || 0;
+    if (isValidManualTimingAudioSourceRange(explicitStart, explicitEnd, sourceDuration)) return roundTimingSec(explicitEnd);
     const sourceStart = getSceneSourceStartSec(scene);
-    return roundTimingSec(Number(sourceStart || 0) + Math.max(0, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
+    const fallbackEnd = roundTimingSec(Number(sourceStart || 0) + Math.max(0.01, Number(scene.end_sec || 0) - Number(scene.start_sec || 0)));
+    return sourceDuration > 0 ? roundTimingSec(Math.min(sourceDuration, fallbackEnd)) : fallbackEnd;
   };
 
   function getSceneTimelineRange(scene) {
@@ -2782,27 +3006,67 @@ export default function ManualTimingEditorPage() {
     return { start, end };
   }
 
-  function getSceneAudioSourceRangeSafe(scene = {}, timelineSilenceOffsetSec = 0) {
+  function getSceneAudioSourceRangeSafe(scene = {}, timelineSilenceOffsetSec = 0, contextScenes = scenes) {
     if (!scene || isManualTimingSilenceScene(scene)) return null;
 
     const timelineStart = roundTimingSec(Number(scene.start_sec || 0));
     const timelineEnd = roundTimingSec(Number(scene.end_sec || timelineStart));
     const timelineDuration = roundTimingSec(Math.max(0.01, timelineEnd - timelineStart));
+    const sourceDuration = Number(
+      audio.source_duration_sec
+      || audio.original_duration_sec
+      || audio.duration_sec
+      || durationSecRef.current
+      || durationSec
+      || 0
+    ) || 0;
 
-    let sourceStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
-    let sourceEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+    const badSourceStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+    const badSourceEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
 
-    // Если source-map уже есть и валидный — используем его.
-    if (Number.isFinite(sourceStart) && Number.isFinite(sourceEnd) && sourceEnd > sourceStart + 0.001) {
+    if (isValidManualTimingAudioSourceRange(badSourceStart, badSourceEnd, sourceDuration)) {
       return {
-        start: roundTimingSec(sourceStart),
-        end: roundTimingSec(sourceEnd),
+        start: roundTimingSec(badSourceStart),
+        end: roundTimingSec(badSourceEnd),
       };
     }
 
-    // Если source-map отсутствует, восстанавливаем его из timeline минус уже накопленная virtual silence.
-    sourceStart = roundTimingSec(Math.max(0, timelineStart - Number(timelineSilenceOffsetSec || 0)));
-    sourceEnd = roundTimingSec(sourceStart + timelineDuration);
+    let sourceStart = roundTimingSec(Math.max(0, timelineStart - Number(timelineSilenceOffsetSec || 0)));
+    let sourceEnd = roundTimingSec(Math.min(sourceDuration || Infinity, sourceStart + timelineDuration));
+
+    const orderedScenes = (Array.isArray(contextScenes) ? contextScenes : [])
+      .slice()
+      .sort((a, b) => Number(a?.start_sec || 0) - Number(b?.start_sec || 0));
+    const audioScenes = orderedScenes.filter((item) => !isManualTimingSilenceScene(item));
+    const currentAudioIndex = audioScenes.findIndex((item) => String(item?.scene_id || "") === String(scene?.scene_id || ""));
+    const isLastAudioScene = currentAudioIndex >= 0 && currentAudioIndex === audioScenes.length - 1;
+
+    if (sourceEnd <= sourceStart + 0.01 || (isLastAudioScene && sourceDuration > 0 && sourceEnd < sourceDuration - 0.001)) {
+      const previousAudioScene = currentAudioIndex > 0 ? audioScenes[currentAudioIndex - 1] : null;
+      const previousSourceEnd = Number(previousAudioScene?.source_end_sec ?? previousAudioScene?.sourceEndSec);
+      if (Number.isFinite(previousSourceEnd) && previousSourceEnd >= 0) sourceStart = roundTimingSec(previousSourceEnd);
+      if (sourceDuration > 0 && isLastAudioScene) sourceEnd = roundTimingSec(sourceDuration);
+      else sourceEnd = roundTimingSec(Math.min(sourceDuration || Infinity, sourceStart + timelineDuration));
+    }
+
+    if (sourceDuration > 0) {
+      sourceStart = roundTimingSec(Math.min(Math.max(0, sourceStart), Math.max(0, sourceDuration - 0.01)));
+      sourceEnd = roundTimingSec(Math.min(sourceDuration, sourceEnd));
+    } else {
+      sourceStart = roundTimingSec(Math.max(0, sourceStart));
+    }
+    if (sourceEnd <= sourceStart + 0.01) sourceEnd = roundTimingSec(sourceStart + 0.01);
+
+    console.warn("[MT SOURCE MAP INVALID_REPAIRED]", {
+      scene_id: scene.scene_id,
+      timelineStart,
+      timelineEnd,
+      badSourceStart,
+      badSourceEnd,
+      repairedSourceStart: sourceStart,
+      repairedSourceEnd: sourceEnd,
+      sourceDuration,
+    });
 
     return {
       start: sourceStart,
@@ -2828,7 +3092,13 @@ export default function ManualTimingEditorPage() {
   }
 
   function buildManualTimingPlaybackQueue(sceneQueue = [], contextScenes = scenes) {
-    const rawScenes = (Array.isArray(sceneQueue) ? sceneQueue : [])
+    const repairedProject = repairManualTimingInvalidSourceMaps({ ...project, scenes: contextScenes });
+    const repairedContextScenes = Array.isArray(repairedProject?.scenes) ? repairedProject.scenes : contextScenes;
+    const repairedSceneById = new Map((Array.isArray(repairedContextScenes) ? repairedContextScenes : [])
+      .map((scene) => [String(scene?.scene_id || ""), scene]));
+    const inputScenes = (Array.isArray(sceneQueue) ? sceneQueue : [])
+      .map((scene) => repairedSceneById.get(String(scene?.scene_id || "")) || scene);
+    const rawScenes = inputScenes
       .filter((scene) => Number(scene?.end_sec || 0) > Number(scene?.start_sec || 0) + 0.001);
     const isFullContextQueue = Array.isArray(sceneQueue) && sceneQueue === contextScenes;
 
@@ -2846,9 +3116,9 @@ export default function ManualTimingEditorPage() {
 
       const contextSilenceOffset = isFullContextQueue
         ? localSilenceOffset
-        : getAccumulatedVirtualSilenceBeforeTimelineTime(scene.start_sec, contextScenes);
+        : getAccumulatedVirtualSilenceBeforeTimelineTime(scene.start_sec, repairedContextScenes);
       const effectiveSilenceOffset = Math.max(localSilenceOffset, contextSilenceOffset);
-      const sourceRange = getSceneAudioSourceRangeSafe(scene, effectiveSilenceOffset);
+      const sourceRange = getSceneAudioSourceRangeSafe(scene, effectiveSilenceOffset, repairedContextScenes);
 
       console.info("[MT SOURCE MAP]", {
         scene_id: scene.scene_id,
@@ -4517,8 +4787,12 @@ export default function ManualTimingEditorPage() {
         const sceneStart = roundTimingSec(scene.start_sec);
         const sceneEnd = roundTimingSec(scene.end_sec);
         const sceneAfterEnd = roundTimingSec(sceneEnd + silenceDuration);
-        const sourceStart = Number.isFinite(Number(scene.source_start_sec)) ? roundTimingSec(scene.source_start_sec) : sceneStart;
-        const sourceEnd = Number.isFinite(Number(scene.source_end_sec)) ? roundTimingSec(scene.source_end_sec) : roundTimingSec(sourceStart + Math.max(0, sceneEnd - sceneStart));
+        const sourceDuration = Number(audio.source_duration_sec || audio.original_duration_sec || audio.duration_sec || activeDuration || 0) || 0;
+        const explicitSourceStart = Number(scene.source_start_sec);
+        const explicitSourceEnd = Number(scene.source_end_sec);
+        const hasValidExplicitSource = isValidManualTimingAudioSourceRange(explicitSourceStart, explicitSourceEnd, sourceDuration);
+        const sourceStart = hasValidExplicitSource ? roundTimingSec(explicitSourceStart) : sceneStart;
+        const sourceEnd = hasValidExplicitSource ? roundTimingSec(explicitSourceEnd) : roundTimingSec(sourceStart + Math.max(0, sceneEnd - sceneStart));
         const leftSourceEnd = roundTimingSec(sourceStart + Math.max(0, cursor - sceneStart));
 
         if (cursor > sceneStart + epsilon) {
