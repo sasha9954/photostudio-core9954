@@ -2192,6 +2192,7 @@ export default function ManualTimingEditorPage() {
   const playStartGuardRef = useRef(null);
   const manualTimingPlaybackSessionRef = useRef(null);
   const manualTimingQueuePlaybackRef = useRef(null);
+  const manualTimingPausedQueueRef = useRef(null);
   const manualTimingQueueRafRef = useRef(null);
   const manualTimingInternalSwitchRef = useRef(false);
   const manualTimingPlaybackModeRef = useRef("");
@@ -3047,6 +3048,8 @@ export default function ManualTimingEditorPage() {
   };
 
   function stopManualTimingQueuePlayback({ keepDisplayTime = true } = {}) {
+    manualTimingPausedQueueRef.current = null;
+
     if (manualTimingQueueRafRef.current) {
       window.cancelAnimationFrame(manualTimingQueueRafRef.current);
       manualTimingQueueRafRef.current = null;
@@ -3067,6 +3070,8 @@ export default function ManualTimingEditorPage() {
   }
 
   function stopManualTimingPlayback() {
+    manualTimingPausedQueueRef.current = null;
+
     const audioEl = audioRef.current;
     stopManualTimingQueuePlayback();
     playUntilRef.current = null;
@@ -3193,7 +3198,104 @@ export default function ManualTimingEditorPage() {
   };
 
 
-  function playManualTimingQueueItem(session, index) {
+  function getCurrentQueueTimelineTime() {
+    const session = manualTimingQueuePlaybackRef.current;
+    const audioEl = audioRef.current;
+
+    if (!session) return roundTimingSec(currentTimeRef.current || currentTime || 0);
+
+    const scene = session.scenes?.[session.index];
+    if (!scene) return roundTimingSec(currentTimeRef.current || currentTime || 0);
+
+    const timelineStart = roundTimingSec(Number(scene.start_sec || 0));
+    const timelineEnd = roundTimingSec(Number(scene.end_sec || timelineStart));
+
+    if (isManualTimingSilenceScene(scene)) {
+      return roundTimingSec(clampTime(currentTimeRef.current || timelineStart, timelineEnd));
+    }
+
+    const sourceStart = Number(scene.source_start_sec ?? scene.sourceStartSec);
+    const sourceEnd = Number(scene.source_end_sec ?? scene.sourceEndSec);
+
+    if (audioEl && Number.isFinite(sourceStart) && Number.isFinite(sourceEnd) && sourceEnd > sourceStart) {
+      const sourceTime = roundTimingSec(Math.max(sourceStart, Math.min(sourceEnd, Number(audioEl.currentTime || sourceStart))));
+      return roundTimingSec(Math.max(timelineStart, Math.min(timelineEnd, timelineStart + (sourceTime - sourceStart))));
+    }
+
+    return roundTimingSec(currentTimeRef.current || timelineStart);
+  }
+
+  function pauseManualTimingQueuePlayback() {
+    const session = manualTimingQueuePlaybackRef.current;
+    if (!session) {
+      stopManualTimingPlayback();
+      return;
+    }
+
+    const pausedTimelineTime = getCurrentQueueTimelineTime();
+
+    manualTimingPausedQueueRef.current = {
+      mode: session.mode || "scene",
+      timelineTimeSec: pausedTimelineTime,
+      sceneIndex: Number(session.index || 0),
+      sceneId: session.scenes?.[session.index]?.scene_id || "",
+      scenes: session.scenes || [],
+    };
+
+    if (manualTimingQueueRafRef.current) {
+      window.cancelAnimationFrame(manualTimingQueueRafRef.current);
+      manualTimingQueueRafRef.current = null;
+    }
+
+    manualTimingQueuePlaybackRef.current = null;
+
+    try {
+      audioRef.current?.pause();
+    } catch {}
+
+    setDisplayTime(pausedTimelineTime);
+    setPlayingState(false);
+  }
+
+  function resumeManualTimingPausedQueue() {
+    const paused = manualTimingPausedQueueRef.current;
+    if (!paused) return false;
+
+    const safeScenes = Array.isArray(paused.scenes) && paused.scenes.length
+      ? paused.scenes
+      : (paused.mode === "all" ? buildManualTimingPlaybackQueue(scenes, scenes) : []);
+
+    if (!safeScenes.length) {
+      manualTimingPausedQueueRef.current = null;
+      return false;
+    }
+
+    const position = findManualTimingTimelinePosition(paused.timelineTimeSec, safeScenes);
+    const resumeIndex = position?.index >= 0
+      ? position.index
+      : Math.max(0, Number(paused.sceneIndex || 0));
+
+    const session = {
+      mode: paused.mode || "scene",
+      scenes: safeScenes,
+      index: resumeIndex,
+      rangeEndSec: null,
+      startedAtMs: 0,
+      silenceStartTimelineSec: 0,
+      silenceEndTimelineSec: 0,
+    };
+
+    manualTimingPausedQueueRef.current = null;
+    manualTimingQueuePlaybackRef.current = session;
+
+    manualTimingPlaybackModeRef.current = session.mode === "all" ? "full_timeline" : "selected_scene";
+    setManualTimingPlaybackMode(session.mode === "all" ? "full_timeline" : "selected_scene");
+
+    playManualTimingQueueItem(session, resumeIndex, paused.timelineTimeSec);
+    return true;
+  }
+
+  function playManualTimingQueueItem(session, index, startTimelineOverrideSec = null) {
     const audioEl = audioRef.current;
     if (!audioEl || !session) return;
 
@@ -3211,15 +3313,21 @@ export default function ManualTimingEditorPage() {
     manualTimingQueuePlaybackRef.current = session;
 
     const { start: timelineStart, end: timelineEnd } = getSceneTimelineRange(scene);
+    const effectiveTimelineStart = Number.isFinite(Number(startTimelineOverrideSec))
+      ? roundTimingSec(Math.max(timelineStart, Math.min(timelineEnd, Number(startTimelineOverrideSec))))
+      : timelineStart;
 
     if (isManualTimingSilenceScene(scene)) {
+      const silenceStart = effectiveTimelineStart;
+      const silenceEnd = timelineEnd;
+
       try { audioEl.pause(); } catch {}
 
       session.startedAtMs = performance.now();
-      session.silenceStartTimelineSec = timelineStart;
-      session.silenceEndTimelineSec = timelineEnd;
+      session.silenceStartTimelineSec = silenceStart;
+      session.silenceEndTimelineSec = silenceEnd;
 
-      setDisplayTime(timelineStart);
+      setDisplayTime(silenceStart);
       setPlayingState(true);
 
       const tick = () => {
@@ -3227,10 +3335,10 @@ export default function ManualTimingEditorPage() {
         if (!liveSession || liveSession !== session) return;
 
         const elapsed = (performance.now() - session.startedAtMs) / 1000;
-        const nextTimeline = roundTimingSec(Math.min(timelineEnd, timelineStart + elapsed));
+        const nextTimeline = roundTimingSec(Math.min(silenceEnd, silenceStart + elapsed));
         setDisplayTime(nextTimeline);
 
-        if (nextTimeline >= timelineEnd - 0.012) {
+        if (nextTimeline >= silenceEnd - 0.012) {
           manualTimingQueueRafRef.current = null;
           playManualTimingQueueItem(session, index + 1);
           return;
@@ -3263,12 +3371,16 @@ export default function ManualTimingEditorPage() {
       return;
     }
 
+    const effectiveSourceStart = roundTimingSec(
+      Math.max(sourceStart, Math.min(sourceEnd, sourceStart + (effectiveTimelineStart - timelineStart)))
+    );
+
     try {
       audioEl.pause();
-      audioEl.currentTime = sourceStart;
+      audioEl.currentTime = effectiveSourceStart;
     } catch {}
 
-    setDisplayTime(timelineStart);
+    setDisplayTime(effectiveTimelineStart);
     setPlayingState(true);
 
     audioEl.play().then(() => {
@@ -3469,8 +3581,12 @@ export default function ManualTimingEditorPage() {
     if (!audioEl) return;
 
     if (manualTimingQueuePlaybackRef.current || !audioEl.paused || isPlayingRef.current) {
-      stopManualTimingPlayback();
+      pauseManualTimingQueuePlayback();
       return;
+    }
+
+    if (manualTimingPausedQueueRef.current) {
+      if (resumeManualTimingPausedQueue()) return;
     }
 
     const position = findManualTimingTimelinePosition(currentTimeRef.current || currentTime || 0, scenes);
@@ -6024,16 +6140,21 @@ export default function ManualTimingEditorPage() {
                 className="clipSB_btn clipSB_btnSecondary manualTimingFullPlaybackButton"
                 type="button"
                 onClick={() => {
-                  if (manualTimingPlaybackMode === "full_timeline") {
-                    stopManualTimingPlayback();
-                  } else {
-                    playFullManualTiming();
+                  const paused = manualTimingPausedQueueRef.current;
+                  if (manualTimingQueuePlaybackRef.current && manualTimingPlaybackMode === "full_timeline") {
+                    pauseManualTimingQueuePlayback();
+                    return;
                   }
+                  if (paused?.mode === "all") {
+                    resumeManualTimingPausedQueue();
+                    return;
+                  }
+                  playFullManualTiming();
                 }}
                 disabled={!audio.url}
                 title="Прослушать весь тайминг с начала"
               >
-                {manualTimingPlaybackMode === "full_timeline" ? "■ всё" : "▶ всё"}
+                {isPlaying && manualTimingPlaybackMode === "full_timeline" ? "■ всё" : "▶ всё"}
               </button>
             </div>
 
