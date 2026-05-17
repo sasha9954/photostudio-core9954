@@ -2493,24 +2493,7 @@ export default function PodcastAudioComposerPage() {
     const virtualTime = roundSeconds(blockVirtualStart + Math.max(0, sourceTime - roundSeconds(block.source_start_sec)));
 
     if (sourceTime >= roundSeconds(block.source_end_sec) - 0.025) {
-      const selectedIndex = safeBlocks.findIndex((item) => item.id === selectedBlockIdRef.current);
-      if (selectedIndex === index) {
-        setCurrentTimeSec(roundSeconds(blockVirtualStart + getBlockDuration(block)));
-        setIsPlaying(false);
-        element.pause();
-        return;
-      }
-
-      const nextIndex = index + 1;
-      if (safeBlocks[nextIndex]) {
-        const nextBlock = safeBlocks[nextIndex];
-        currentBlockIndexRef.current = nextIndex;
-        element.currentTime = roundSeconds(nextBlock.source_start_sec);
-        setCurrentTimeSec(getBlockVirtualStart(safeBlocks, nextIndex));
-        return;
-      }
-
-      setCurrentTimeSec(getTimelineDuration(safeBlocks));
+      setCurrentTimeSec(roundSeconds(blockVirtualStart + getBlockDuration(block)));
       setIsPlaying(false);
       element.pause();
       return;
