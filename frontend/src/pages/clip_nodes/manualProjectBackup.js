@@ -256,6 +256,42 @@ export function logManualBoardMediaRefs(label = "[MANUAL BOARD MEDIA REFS]", pro
   }
 }
 
+export function getManualBoardMediaDebugStats(project = {}) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const sceneRows = scenes.map((scene) => ({
+    scene_id: scene?.scene_id || scene?.id || "",
+    image_url: scene?.image_url || "",
+    imageUrl: scene?.imageUrl || "",
+    generated_image_url: scene?.generated_image_url || "",
+    generatedImageUrl: scene?.generatedImageUrl || "",
+    start_image_url: scene?.start_image_url || "",
+    startImageUrl: scene?.startImageUrl || "",
+    displayImageUrl: scene?.displayImageUrl || "",
+    video_url: scene?.video_url || "",
+    videoUrl: scene?.videoUrl || "",
+    generated_video_url: scene?.generated_video_url || "",
+    generatedVideoUrl: scene?.generatedVideoUrl || "",
+    final_video_url: scene?.final_video_url || "",
+    finalVideoUrl: scene?.finalVideoUrl || "",
+  }));
+
+  const scenesWithImage = sceneRows.filter((row) => (
+    row.image_url || row.imageUrl || row.generated_image_url || row.generatedImageUrl || row.start_image_url || row.startImageUrl || row.displayImageUrl
+  )).length;
+
+  const scenesWithVideo = sceneRows.filter((row) => (
+    row.video_url || row.videoUrl || row.generated_video_url || row.generatedVideoUrl || row.final_video_url || row.finalVideoUrl
+  )).length;
+
+  return {
+    scenesCount: scenes.length,
+    scenesWithImage,
+    scenesWithVideo,
+    firstScene: sceneRows[0] || null,
+    selectedScene: sceneRows.find((row) => row.scene_id === project?.selectedSceneId) || null,
+  };
+}
+
 let lastManualClipBoardStorageError = null;
 
 export function getLastManualClipBoardStorageError() {
@@ -292,10 +328,46 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
   const safeProject = sanitizeManualClipBoardProjectForStorage(project && typeof project === "object" ? project : {});
   const nodeId = getManualProjectOwnerId(safeProject);
   if (!nodeId || !hasMeaningfulManualProject(safeProject)) return false;
+  let existingDurableProject = null;
+  try {
+    existingDurableProject = await loadManualClipBoardProjectDurable(nodeId, {
+      timeoutMs: 5000,
+      silent: true,
+    });
+  } catch {}
+
+  const incomingMediaStats = getManualBoardMediaDebugStats(safeProject);
+  const existingMediaStats = getManualBoardMediaDebugStats(existingDurableProject);
+  const incomingHasNoMedia =
+    incomingMediaStats.scenesWithImage <= 0
+    && incomingMediaStats.scenesWithVideo <= 0;
+  const existingHasMedia =
+    existingMediaStats.scenesWithImage > 0
+    || existingMediaStats.scenesWithVideo > 0;
+  const reason = String(options?.reason || safeProject?.lastPersistReason || "");
+  const isInitialOpenSkeletonReason = reason === "manual_new_project_from_audio_split_open_embedded"
+    || reason === "manual_new_project_from_audio_split";
+
+  if (existingHasMedia && incomingHasNoMedia && (!options?.allowEmptyDurableOverwrite || isInitialOpenSkeletonReason)) {
+    console.warn("[manual board durable save skipped: incoming would drop media]", {
+      nodeId,
+      reason,
+      incomingMediaStats,
+      existingMediaStats,
+    });
+    return true;
+  }
+
   const durableProject = sanitizeManualClipBoardProjectForStorage({
     ...buildManualProjectBackupJson(safeProject, { source: "manual_board_backend_durable" }),
     source: String(safeProject.source || safeProject.ownerNodeType || "manual_board_backend_durable"),
     durable_source: String(options?.source || "manual_board_backend_durable"),
+  });
+  const mediaDebugStats = getManualBoardMediaDebugStats(safeProject);
+  console.info("[manual board durable save payload media debug]", {
+    nodeId,
+    reason: reason || safeProject?.lastPersistReason || "",
+    mediaDebugStats,
   });
   const response = await fetchJson("/api/manual-board/save", {
     method: "POST",
@@ -305,10 +377,17 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
       nodeId,
       project: {
         ...durableProject,
-        lastPersistReason: String(options?.reason || safeProject.lastPersistReason || durableProject.lastPersistReason || "manual_board_backend_durable_save"),
+        lastPersistReason: String(reason || durableProject.lastPersistReason || "manual_board_backend_durable_save"),
       },
     },
   });
+  if (response?.ok) {
+    console.info("[manual board durable save ok]", {
+      nodeId,
+      reason: reason || safeProject?.lastPersistReason || "manual_board_backend_durable_save",
+      mediaDebugStats,
+    });
+  }
   return Boolean(response?.ok);
 }
 
@@ -320,6 +399,7 @@ export function queueManualClipBoardProjectDurableSave(project = {}, options = {
           nodeId: getManualProjectOwnerId(project),
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
           stats: getManualClipBoardMaterialStats(project),
+          mediaDebugStats: getManualBoardMediaDebugStats(project),
         });
       }
     }).catch((error) => {
@@ -363,6 +443,7 @@ function queueManualBoardDurableSaveOnce(project = {}, options = {}) {
           nodeId: getManualProjectOwnerId(project),
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
           stats: getManualClipBoardMaterialStats(project),
+          mediaDebugStats: getManualBoardMediaDebugStats(project),
         });
       }
     }).catch((error) => {
@@ -396,11 +477,17 @@ export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {
   if (response?.found === false) return null;
   const project = response?.project && typeof response.project === "object" ? unwrapManualProjectBackupJson(response.project) : null;
   if (!hasMeaningfulManualProject(project)) return null;
-  console.info("[manual board durable hydrate] backend load ok", {
-    nodeId: safeNodeId,
-    found: response?.found,
-    stats: getManualClipBoardMaterialStats(project),
-  });
+  if (!options?.silent) {
+    console.info("[manual board durable hydrate] backend load ok", {
+      nodeId: safeNodeId,
+      found: response?.found,
+      stats: getManualClipBoardMaterialStats(project),
+    });
+    console.info("[manual board durable load media debug]", {
+      nodeId: safeNodeId,
+      mediaDebugStats: getManualBoardMediaDebugStats(project),
+    });
+  }
   return project;
 }
 
