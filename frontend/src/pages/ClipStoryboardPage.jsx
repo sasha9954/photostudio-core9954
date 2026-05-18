@@ -3678,6 +3678,86 @@ function shouldSkipEmptyWorkspacePersistOverGeneratedAssets(nextPayload = {}, ex
   return lostGeneratedAssets || nextHasNoScenes;
 }
 
+function unwrapClipWorkspacePayload(payload = {}) {
+  if (payload?.workspace && typeof payload.workspace === "object") return payload.workspace;
+  return payload && typeof payload === "object" ? payload : {};
+}
+
+function mergeStoryboardNodeDataPreservingGeneratedAssets(currentNode = {}, existingNode = {}) {
+  const nodeType = String(currentNode?.type || existingNode?.type || "").trim();
+  const currentData = currentNode?.data && typeof currentNode.data === "object" ? currentNode.data : {};
+  const existingData = existingNode?.data && typeof existingNode.data === "object" ? existingNode.data : {};
+  if (nodeType === "scenarioStoryboard" || nodeType === "storyboardNode") {
+    const currentScenes = Array.isArray(currentData.scenes) ? currentData.scenes : [];
+    const existingScenes = Array.isArray(existingData.scenes) ? existingData.scenes : [];
+    if (!existingScenes.length) return currentData;
+    return {
+      ...currentData,
+      scenes: mergeScenarioRuntimeScenes(currentScenes, existingScenes, "scene", { preserveOnlyMissing: true }),
+    };
+  }
+  if (nodeType === "comfyStoryboard") {
+    const currentScenes = Array.isArray(currentData.mockScenes) ? currentData.mockScenes : [];
+    const existingScenes = Array.isArray(existingData.mockScenes) ? existingData.mockScenes : [];
+    if (!existingScenes.length) return currentData;
+    return {
+      ...currentData,
+      mockScenes: mergeScenarioRuntimeScenes(currentScenes, existingScenes, "comfy_scene", { preserveOnlyMissing: true }),
+    };
+  }
+  return currentData;
+}
+
+function mergeWorkspacePayloadPreservingGeneratedAssets(currentPayload = {}, existingPayload = {}) {
+  const currentWorkspace = unwrapClipWorkspacePayload(currentPayload);
+  const existingWorkspace = unwrapClipWorkspacePayload(existingPayload);
+  const currentNodes = Array.isArray(currentWorkspace?.nodes) ? currentWorkspace.nodes : [];
+  const existingNodes = Array.isArray(existingWorkspace?.nodes) ? existingWorkspace.nodes : [];
+  const existingNodesById = new Map(existingNodes.map((node) => [String(node?.id || ""), node]).filter(([id]) => Boolean(id)));
+  const mergedNodes = currentNodes.map((node) => {
+    const existingNode = existingNodesById.get(String(node?.id || ""));
+    if (!existingNode) return node;
+    const mergedData = mergeStoryboardNodeDataPreservingGeneratedAssets(node, existingNode);
+    if (mergedData === node?.data) return node;
+    return { ...node, data: mergedData };
+  });
+  const currentAssemblyResult = currentWorkspace?.assemblyResult && typeof currentWorkspace.assemblyResult === "object"
+    ? currentWorkspace.assemblyResult
+    : null;
+  const existingAssemblyResult = existingWorkspace?.assemblyResult && typeof existingWorkspace.assemblyResult === "object"
+    ? existingWorkspace.assemblyResult
+    : null;
+  const shouldRestoreAssemblyResult = !hasRuntimeAssetValue(currentAssemblyResult?.finalVideoUrl)
+    && hasRuntimeAssetValue(existingAssemblyResult?.finalVideoUrl);
+  return {
+    ...currentWorkspace,
+    nodes: mergedNodes,
+    edges: Array.isArray(currentWorkspace?.edges) ? currentWorkspace.edges : [],
+    assemblyResult: shouldRestoreAssemblyResult ? existingAssemblyResult : currentWorkspace?.assemblyResult,
+    assemblyBuildState: shouldRestoreAssemblyResult ? (existingWorkspace?.assemblyBuildState || "done") : currentWorkspace?.assemblyBuildState,
+    assemblyPayloadSignature: shouldRestoreAssemblyResult
+      ? (existingWorkspace?.assemblyPayloadSignature || currentWorkspace?.assemblyPayloadSignature || "")
+      : currentWorkspace?.assemblyPayloadSignature,
+  };
+}
+
+function buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload = {}) {
+  const nodes = Array.isArray(finalPayload?.nodes) ? finalPayload.nodes : [];
+  const edges = Array.isArray(finalPayload?.edges) ? finalPayload.edges : [];
+  return {
+    nodesCount: nodes.length,
+    hasVideoMatchBoard: nodes.some((n) => n.type === "videoMatchBoard"),
+    videoMatchNodes: nodes.filter((n) => n.type === "videoMatchBoard").map((n) => ({
+      id: n.id,
+      type: n.type,
+      dataKeys: Object.keys(n.data || {}),
+      segments: Array.isArray(n.data?.matchSegments) ? n.data.matchSegments.length : 0,
+      blocks: Array.isArray(n.data?.videoBlocks) ? n.data.videoBlocks.length : 0,
+    })),
+    edgesToVideoMatch: edges.filter((e) => e.targetHandle === "timing_in"),
+  };
+}
+
 function normalizeScenarioRuntimeSnapshot(rawSnapshot, sourceKey = "") {
   const parsed = typeof rawSnapshot === "string" ? JSON.parse(rawSnapshot) : rawSnapshot;
   if (!parsed || typeof parsed !== "object") return null;
@@ -3755,7 +3835,7 @@ function shouldMergeScenarioRuntimeAssets(currentScene = {}, persistedScene = {}
   return !currentSignature || !persistedSignature || currentSignature === persistedSignature;
 }
 
-function buildScenarioRuntimeAssetPatch(currentScene = {}, persistedScene = {}) {
+function buildScenarioRuntimeAssetPatch(currentScene = {}, persistedScene = {}, options = {}) {
   const patch = {};
   const runtimeFields = new Set([
     ...SCENARIO_GENERATED_ASSET_FIELDS,
@@ -3790,22 +3870,23 @@ function buildScenarioRuntimeAssetPatch(currentScene = {}, persistedScene = {}) 
     const persistedValue = persistedScene?.[field];
     if (!isMeaningfulRuntimeValue(persistedValue)) return;
     const currentValue = currentScene?.[field];
-    if (isMeaningfulRuntimeValue(currentValue) && !SCENARIO_GENERATED_ASSET_FIELDS.includes(field)) return;
+    if (options?.preserveOnlyMissing && isMeaningfulRuntimeValue(currentValue)) return;
+    if (!options?.preserveOnlyMissing && isMeaningfulRuntimeValue(currentValue) && !SCENARIO_GENERATED_ASSET_FIELDS.includes(field)) return;
     patch[field] = persistedValue;
   });
   return patch;
 }
 
-function mergeScenarioRuntimeScenes(currentScenes = [], persistedScenes = []) {
-  const normalizedCurrentScenes = normalizeSceneCollectionWithSceneId(currentScenes, "scene");
-  const normalizedPersistedScenes = normalizeSceneCollectionWithSceneId(persistedScenes, "scene");
+function mergeScenarioRuntimeScenes(currentScenes = [], persistedScenes = [], prefix = "scene", options = {}) {
+  const normalizedCurrentScenes = normalizeSceneCollectionWithSceneId(currentScenes, prefix);
+  const normalizedPersistedScenes = normalizeSceneCollectionWithSceneId(persistedScenes, prefix);
   if (!normalizedCurrentScenes.length) return normalizedPersistedScenes;
-  const persistedLookup = buildScenarioRuntimeSceneLookup(normalizedPersistedScenes, "scene");
+  const persistedLookup = buildScenarioRuntimeSceneLookup(normalizedPersistedScenes, prefix);
   return normalizedCurrentScenes.map((scene, idx) => {
-    const persistedScene = findScenarioRuntimeSceneMatch(scene, idx, persistedLookup, "scene");
+    const persistedScene = findScenarioRuntimeSceneMatch(scene, idx, persistedLookup, prefix);
     if (!persistedScene) return scene;
     if (!shouldMergeScenarioRuntimeAssets(scene, persistedScene)) return scene;
-    const runtimePatch = buildScenarioRuntimeAssetPatch(scene, persistedScene);
+    const runtimePatch = buildScenarioRuntimeAssetPatch(scene, persistedScene, options);
     if (!Object.keys(runtimePatch).length) return scene;
     return preserveScenarioCanonicalResult(persistedScene, { ...scene, ...runtimePatch });
   });
@@ -27699,33 +27780,37 @@ const hydrate = useCallback((source = "unknown") => {
     if (serialEdges.length === 0) {
       console.warn("[CLIP WARN] persist attempted with empty edges");
     }
-    const payloadToStore = {
-      workspace: {
-        ...payloadComparable,
-        persistedAt: new Date().toISOString(),
-      },
+    let finalWorkspacePayload = {
+      ...payloadComparable,
+      persistedAt: new Date().toISOString(),
     };
     const existingWorkspaceRaw = safeGet(WORKSPACE_STORE_KEY) || safeGet(STORE_KEY);
     if (existingWorkspaceRaw) {
       try {
         const existingWorkspaceParsed = JSON.parse(existingWorkspaceRaw);
-        if (shouldSkipEmptyWorkspacePersistOverGeneratedAssets(payloadToStore.workspace, existingWorkspaceParsed)) {
-          console.warn("[CLIP STORAGE] persist skipped to protect generated storyboard assets", {
+        if (shouldSkipEmptyWorkspacePersistOverGeneratedAssets(finalWorkspacePayload, existingWorkspaceParsed)) {
+          const mergedWorkspacePayload = mergeWorkspacePayloadPreservingGeneratedAssets(finalWorkspacePayload, existingWorkspaceParsed);
+          console.warn("[CLIP STORAGE] persist merged to protect generated storyboard assets", {
             accountKey,
-            nextStats: collectClipWorkspaceRuntimeAssetStats(payloadToStore.workspace),
+            nextStats: collectClipWorkspaceRuntimeAssetStats(finalWorkspacePayload),
             existingStats: collectClipWorkspaceRuntimeAssetStats(existingWorkspaceParsed),
+            mergedStats: collectClipWorkspaceRuntimeAssetStats(mergedWorkspacePayload),
           });
-          return;
+          finalWorkspacePayload = mergedWorkspacePayload;
         }
       } catch {
         // ignore malformed existing storage; hydrate will handle it on reload
       }
     }
+    console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalWorkspacePayload));
+    const payloadToStore = { workspace: finalWorkspacePayload };
     const workspaceOk = safeSet(WORKSPACE_STORE_KEY, JSON.stringify(payloadToStore));
     // legacy mirror for backward compatibility
-    const legacyOk = safeSet(STORE_KEY, JSON.stringify(payloadToStore.workspace));
+    const legacyOk = safeSet(STORE_KEY, JSON.stringify(finalWorkspacePayload));
     if (workspaceOk || legacyOk) {
-      lastPersistedPayloadRef.current = comparablePayloadString;
+      const finalComparablePayload = { ...finalWorkspacePayload };
+      delete finalComparablePayload.persistedAt;
+      lastPersistedPayloadRef.current = JSON.stringify(finalComparablePayload);
       console.info("[CLIP STORAGE] persist state", {
         accountKey,
         WORKSPACE_STORE_KEY,
@@ -27792,23 +27877,27 @@ const hydrate = useCallback((source = "unknown") => {
         assemblyBuildState: assemblyBuildState === "done" ? "done" : "idle",
         assemblyPayloadSignature,
       };
+      let finalPayload = payload;
       const existingWorkspaceRaw = safeGet(WORKSPACE_STORE_KEY) || safeGet(STORE_KEY);
       if (existingWorkspaceRaw) {
         try {
           const existingWorkspaceParsed = JSON.parse(existingWorkspaceRaw);
-          if (shouldSkipEmptyWorkspacePersistOverGeneratedAssets(payload, existingWorkspaceParsed)) {
-            console.warn("[CLIP STORAGE] beforeunload persist skipped to protect generated storyboard assets", {
+          if (shouldSkipEmptyWorkspacePersistOverGeneratedAssets(finalPayload, existingWorkspaceParsed)) {
+            const mergedPayload = mergeWorkspacePayloadPreservingGeneratedAssets(finalPayload, existingWorkspaceParsed);
+            console.warn("[CLIP STORAGE] beforeunload persist merged to protect generated storyboard assets", {
               accountKey,
-              nextStats: collectClipWorkspaceRuntimeAssetStats(payload),
+              nextStats: collectClipWorkspaceRuntimeAssetStats(finalPayload),
               existingStats: collectClipWorkspaceRuntimeAssetStats(existingWorkspaceParsed),
+              mergedStats: collectClipWorkspaceRuntimeAssetStats(mergedPayload),
             });
-            return;
+            finalPayload = mergedPayload;
           }
         } catch {
           // ignore malformed existing storage; hydrate will handle it on reload
         }
       }
-      const ok = safeSet(WORKSPACE_STORE_KEY, JSON.stringify({ workspace: payload })) || safeSet(STORE_KEY, JSON.stringify(payload));
+      console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload));
+      const ok = safeSet(WORKSPACE_STORE_KEY, JSON.stringify({ workspace: finalPayload })) || safeSet(STORE_KEY, JSON.stringify(finalPayload));
       if (ok) setLastSavedAt(Date.now());
     };
 
