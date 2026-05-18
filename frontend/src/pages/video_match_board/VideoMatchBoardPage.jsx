@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { fetchJson } from "../../services/api.js";
+import { API_BASE, fetchJson } from "../../services/api.js";
 import {
   getDefaultVideoMatchBoardProject,
   getVideoMatchBoardEmergencyStorageKey,
@@ -36,6 +36,25 @@ function getBlockWidth(block, duration) {
 function getValidDurationSec(value) {
   const duration = Number(value || 0);
   return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
+function resolveOutputUrl(outputUrl = "") {
+  const raw = String(outputUrl || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/")) return `${API_BASE}${raw}`;
+  return raw;
+}
+
+function isBrowserSafeThumbnail(thumbnail = "") {
+  const raw = String(thumbnail || "").trim();
+  if (!raw) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(raw)) return false;
+  if (raw.includes("\\")) return false;
+  return raw.startsWith("http://")
+    || raw.startsWith("https://")
+    || raw.startsWith("/")
+    || raw.startsWith("data:")
+    || raw.startsWith("blob:");
 }
 
 export default function VideoMatchBoardPage() {
@@ -94,6 +113,7 @@ export default function VideoMatchBoardPage() {
   const sourceVideoUrl = String(project.sourceVideoUrl || "");
   const timelineDuration = videoDurationSec || Number(project?.sourceVideo?.duration_sec || 0) || 0;
   const assemblyDurationSec = Math.max(0, ...assemblyBlocks.map((block) => Number(block?.targetEndSec || 0)));
+  const assembledPreviewOutputUrl = resolveOutputUrl(assembledPreview?.outputUrl || "");
   const candidatesTotal = matchSegments.reduce((total, segment) => total + (Array.isArray(segment?.candidates) ? segment.candidates.length : 0), 0);
   const effectiveExpandedSegmentId = expandedSegmentId || project.selectedSegmentId;
   const selectedSegment = matchSegments.find((segment) => segment.id === project.selectedSegmentId || segment.audioSceneId === project.selectedSegmentId) || matchSegments[0] || null;
@@ -604,10 +624,10 @@ export default function VideoMatchBoardPage() {
               <input type="text" value={assembleAudioPath} onChange={(event) => setAssembleAudioPath(event.target.value)} placeholder="C:\\path\\to\\practice_30sec_audio.mp3" />
             </label>
             {assembleError ? <div className="videoMatchError">{assembleError}</div> : null}
-            {assembledPreview?.ok ? (
+            {assembledPreview?.ok && assembledPreviewOutputUrl ? (
               <div>
-                <a href={assembledPreview.outputUrl} target="_blank" rel="noreferrer">▶ Смотреть MP4</a>{" "}
-                <a href={assembledPreview.outputUrl} download>⬇ Скачать MP4</a>
+                <a href={assembledPreviewOutputUrl} target="_blank" rel="noreferrer">▶ Смотреть MP4</a>{" "}
+                <a href={assembledPreviewOutputUrl} download>⬇ Скачать MP4</a>
                 {assembledPreview.warning ? <div className="videoMatchWarnings">warning: {assembledPreview.warning}</div> : null}
               </div>
             ) : null}
@@ -636,7 +656,7 @@ export default function VideoMatchBoardPage() {
                   const isPreviewCandidate = candidate.id === previewCandidateId;
                   return (
                     <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
-                      {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                      {isBrowserSafeThumbnail(candidate.thumbnail) ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                       <div className="videoMatchCandidateBody">
                         <b>{candidate.id}{isCandidateSelected ? " · выбрано" : ""}{isPreviewCandidate ? " · просмотр" : ""}</b>
                         <span>видео: {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность: {candidate.confidence ?? "—"}</span>
@@ -727,7 +747,7 @@ export default function VideoMatchBoardPage() {
                           const isPreviewCandidate = candidate.id === previewCandidateId;
                           return (
                             <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
-                              {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                              {isBrowserSafeThumbnail(candidate.thumbnail) ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                               <div className="videoMatchCandidateBody">
                                 <b>{candidate.id}{isPreviewCandidate ? " · просмотр" : ""}</b>
                                 <span>видео {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность {candidate.confidence ?? "—"}</span>

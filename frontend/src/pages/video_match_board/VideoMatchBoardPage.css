@@ -576,7 +576,9 @@
 }
 .videoMatchInspectorPanel {
   max-height: calc(100vh - 118px);
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .videoMatchInspectorPanel h3 {
   margin-top: 10px;
@@ -598,9 +600,11 @@
   max-height: min(360px, calc(100vh - 305px));
   overflow: auto;
   gap: 7px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .videoMatchCandidateCard {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 58px;
   padding: 6px 7px;
   gap: 7px;
 }
@@ -622,6 +626,7 @@
 }
 .videoMatchCandidateActions {
   flex-wrap: nowrap;
+  flex-direction: column;
 }
 .videoMatchCandidateBody small,
 .videoMatchWarnings {
@@ -636,10 +641,14 @@
   line-height: 1;
 }
 .videoMatchIconBtn {
-  width: 26px;
-  min-width: 26px;
-  height: 26px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
   padding: 0 !important;
+}
+.videoMatchWarnings {
+  font-size: 11px;
+  line-height: 1.25;
 }
 .videoMatchMiniPanels {
   grid-template-columns: repeat(3, auto);
