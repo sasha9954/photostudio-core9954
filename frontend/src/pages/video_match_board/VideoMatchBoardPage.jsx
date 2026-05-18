@@ -43,8 +43,9 @@ export default function VideoMatchBoardPage() {
   const [searchParams] = useSearchParams();
   const nodeId = String(searchParams.get("nodeId") || location.state?.nodeId || "default").trim() || "default";
   const videoRef = useRef(null);
-  const playStopRef = useRef(null);
+  const playbackRef = useRef(null);
   const objectUrlRef = useRef("");
+  const segmentRefs = useRef({});
 
   const initialProject = useMemo(() => {
     const stateProject = location.state?.project || null;
@@ -77,12 +78,19 @@ export default function VideoMatchBoardPage() {
   const [videoDurationSec, setVideoDurationSec] = useState(Number(initialProject?.sourceVideo?.duration_sec || 0));
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [sourceVideoLoadMessage, setSourceVideoLoadMessage] = useState("");
+  const [expandedSegmentId, setExpandedSegmentId] = useState(String(initialProject?.selectedSegmentId || ""));
+  const [previewCandidateId, setPreviewCandidateId] = useState("");
+  const [isAssemblyPlaying, setIsAssemblyPlaying] = useState(false);
 
   const matchSegments = Array.isArray(project.matchSegments) ? project.matchSegments : [];
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
+  const assemblyBlocks = useMemo(() => [...videoBlocks].sort((a, b) => Number(a?.targetStartSec || 0) - Number(b?.targetStartSec || 0)), [videoBlocks]);
   const selectedBlock = videoBlocks.find((block) => block.id === project.selectedBlockId) || null;
   const sourceVideoUrl = String(project.sourceVideoUrl || "");
   const timelineDuration = videoDurationSec || Number(project?.sourceVideo?.duration_sec || 0) || 0;
+  const assemblyDurationSec = Math.max(0, ...assemblyBlocks.map((block) => Number(block?.targetEndSec || 0)));
+  const candidatesTotal = matchSegments.reduce((total, segment) => total + (Array.isArray(segment?.candidates) ? segment.candidates.length : 0), 0);
+  const effectiveExpandedSegmentId = expandedSegmentId || project.selectedSegmentId;
 
   const patchProject = (patch = {}, persistOptions = {}) => {
     setProject((prev) => {
@@ -95,6 +103,10 @@ export default function VideoMatchBoardPage() {
     setProject(initialProject);
     setVideoDurationSec(Number(initialProject?.sourceVideo?.duration_sec || 0));
     setSourceVideoLoadMessage("");
+    setExpandedSegmentId(String(initialProject?.selectedSegmentId || ""));
+    setPreviewCandidateId("");
+    setIsAssemblyPlaying(false);
+    playbackRef.current = null;
   }, [initialProject]);
 
   useEffect(() => {
@@ -188,14 +200,19 @@ export default function VideoMatchBoardPage() {
       selectedBlockId: result.videoBlocks[0]?.id || "",
       jsonError: durationWarning,
     });
+    setExpandedSegmentId(result.selectedSegmentId);
     if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
   };
 
   const onPlaySelectedBlock = async () => {
-    if (!selectedBlock || !videoRef.current) return;
+    if (!selectedBlock) return;
+    if (!sourceVideoUrl || !videoRef.current) {
+      showMissingSourceVideoMessage();
+      return;
+    }
     const start = Math.max(0, Number(selectedBlock.sourceVideoStartSec || 0));
     const end = Math.max(start, Number(selectedBlock.sourceVideoEndSec || start));
-    playStopRef.current = end;
+    playbackRef.current = { end, blocks: [], index: 0 };
     videoRef.current.currentTime = start;
     try {
       await videoRef.current.play();
@@ -204,15 +221,53 @@ export default function VideoMatchBoardPage() {
     }
   };
 
+  const stopPlayback = () => {
+    playbackRef.current = null;
+    setIsAssemblyPlaying(false);
+    if (videoRef.current) videoRef.current.pause();
+  };
+
+  const showMissingSourceVideoMessage = () => {
+    setSourceVideoLoadMessage("Загрузите source video заново");
+    patchProject({ jsonError: "Загрузите source video заново" }, { lastGood: false });
+  };
+
+  const playSourceRange = async (start = 0, end = 0) => {
+    if (!sourceVideoUrl || !videoRef.current) {
+      showMissingSourceVideoMessage();
+      return false;
+    }
+    videoRef.current.currentTime = Math.max(0, Number(start || 0));
+    try {
+      await videoRef.current.play();
+      return true;
+    } catch (error) {
+      patchProject({ jsonError: `Не удалось запустить video player: ${String(error?.message || error)}` }, { lastGood: false });
+      return false;
+    }
+  };
+
   const onTimeUpdate = () => {
     const current = Number(videoRef.current?.currentTime || 0);
     setCurrentTimeSec(current);
-    const stopAt = Number(playStopRef.current || 0);
+    const playback = playbackRef.current;
+    const stopAt = Number(playback?.end || 0);
     if (stopAt > 0 && current >= stopAt) {
       videoRef.current.pause();
       videoRef.current.currentTime = stopAt;
-      playStopRef.current = null;
       setCurrentTimeSec(stopAt);
+      const nextIndex = Number(playback?.index || 0) + 1;
+      const nextBlock = Array.isArray(playback?.blocks) ? playback.blocks[nextIndex] : null;
+      if (nextBlock) {
+        playbackRef.current = { ...playback, index: nextIndex, end: Math.max(Number(nextBlock.sourceVideoStartSec || 0), Number(nextBlock.sourceVideoEndSec || 0)) };
+        patchProject(getSelectionPatchForBlock(nextBlock), { lastGood: false });
+        setExpandedSegmentId(nextBlock.segmentId || nextBlock.audioSceneId || "");
+        setTimeout(() => scrollSegmentIntoView(nextBlock.segmentId || nextBlock.audioSceneId || ""), 0);
+        void playSourceRange(nextBlock.sourceVideoStartSec, nextBlock.sourceVideoEndSec);
+        return;
+      }
+      playbackRef.current = null;
+      setIsAssemblyPlaying(false);
     }
   };
 
@@ -221,6 +276,47 @@ export default function VideoMatchBoardPage() {
     selectedSegmentId: block?.segmentId || block?.audioSceneId || "",
     selectedCandidateId: block?.candidateId || block?.id || "",
   });
+
+  const scrollSegmentIntoView = (segmentId = "") => {
+    const node = segmentRefs.current[String(segmentId || "")];
+    if (node) node.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
+  const onSelectBlock = (block = {}) => {
+    const segmentId = block?.segmentId || block?.audioSceneId || "";
+    setExpandedSegmentId(segmentId);
+    patchProject(getSelectionPatchForBlock(block), { lastGood: false });
+    setTimeout(() => scrollSegmentIntoView(segmentId), 0);
+  };
+
+  const onPreviewCandidate = async (segment = {}, candidate = {}) => {
+    setPreviewCandidateId(candidate.id || "");
+    setExpandedSegmentId(segment.id || "");
+    const start = Math.max(0, Number(candidate.sourceVideoStartSec || 0));
+    const end = Math.max(start, Number(candidate.sourceVideoEndSec || start));
+    playbackRef.current = { end, blocks: [], index: 0 };
+    setIsAssemblyPlaying(false);
+    await playSourceRange(start, end);
+  };
+
+  const playAssemblyFromBlock = async (startBlock = null) => {
+    if (!assemblyBlocks.length) return;
+    if (!sourceVideoUrl || !videoRef.current) {
+      showMissingSourceVideoMessage();
+      return;
+    }
+    const startIndex = Math.max(0, assemblyBlocks.findIndex((block) => block.id === startBlock?.id));
+    const firstBlock = assemblyBlocks[startIndex] || assemblyBlocks[0];
+    playbackRef.current = {
+      end: Math.max(Number(firstBlock.sourceVideoStartSec || 0), Number(firstBlock.sourceVideoEndSec || 0)),
+      blocks: assemblyBlocks,
+      index: startIndex,
+    };
+    setIsAssemblyPlaying(true);
+    onSelectBlock(firstBlock);
+    const didPlay = await playSourceRange(firstBlock.sourceVideoStartSec, firstBlock.sourceVideoEndSec);
+    if (!didPlay) setIsAssemblyPlaying(false);
+  };
 
   const onSelectCandidate = (segmentId = "", candidateId = "") => {
     const nextSegments = matchSegments.map((segment) => {
@@ -240,6 +336,8 @@ export default function VideoMatchBoardPage() {
       selectedCandidateId: candidateId,
       selectedBlockId: nextBlock?.id || "",
     });
+    setExpandedSegmentId(segmentId);
+    setTimeout(() => scrollSegmentIntoView(segmentId), 0);
   };
 
   const sampleDurationSec = Math.max(getValidDurationSec(videoDurationSec), 130);
@@ -362,6 +460,13 @@ export default function VideoMatchBoardPage() {
         <button className="btn" type="button" onClick={() => navigate(-1)}>Назад в граф</button>
       </div>
 
+      <div className="videoMatchSummaryBar">
+        <span>segments: {matchSegments.length}</span>
+        <span>selected blocks: {videoBlocks.length}</span>
+        <span>candidates total: {candidatesTotal}</span>
+        <span>assembly duration: {formatSec(assemblyDurationSec)} sec</span>
+      </div>
+
       <div className="videoMatchGrid">
         <section className="videoMatchPanel videoMatchPlayerPanel">
           <div className="videoMatchPanelHeader">
@@ -391,14 +496,49 @@ export default function VideoMatchBoardPage() {
                 type="button"
                 className={`videoMatchTimelineBlock ${block.id === project.selectedBlockId ? "isSelected" : ""}`}
                 style={{ left: `${getBlockLeft(block, timelineDuration)}%`, width: `${getBlockWidth(block, timelineDuration)}%` }}
-                onClick={() => patchProject(getSelectionPatchForBlock(block), { lastGood: false })}
+                onClick={() => onSelectBlock(block)}
                 title={`${block.id}: ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с`}
               />
             ))}
           </div>
           <div className="videoMatchActions">
-            <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!selectedBlock || !sourceVideoUrl} onClick={onPlaySelectedBlock}>Play selected block</button>
+            <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!selectedBlock} onClick={onPlaySelectedBlock}>Play selected block</button>
             <span>{selectedBlock ? `${selectedBlock.id}: ${formatSec(selectedBlock.sourceVideoStartSec)} → ${formatSec(selectedBlock.sourceVideoEndSec)}` : "Block не выбран"}</span>
+          </div>
+        </section>
+
+        <section className="videoMatchPanel videoMatchAssemblyPanel">
+          <div className="videoMatchPanelHeader">
+            <h2>Assembly preview</h2>
+            <div className="videoMatchAssemblyControls">
+              <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>Play assembly preview</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>Play from selected scene</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isAssemblyPlaying} onClick={stopPlayback}>Stop</button>
+            </div>
+          </div>
+          {assemblyBlocks.length === 0 ? <div className="videoMatchEmptyList">Selected candidates появятся здесь как будущая сборка.</div> : null}
+          <div className="videoMatchAssemblyTimeline" aria-label="Assembly preview timeline">
+            {assemblyBlocks.map((block) => {
+              const left = assemblyDurationSec > 0 ? Math.max(0, Math.min(100, (Number(block.targetStartSec || 0) / assemblyDurationSec) * 100)) : 0;
+              const width = assemblyDurationSec > 0 ? Math.max(1.2, Math.min(100, ((Number(block.targetEndSec || 0) - Number(block.targetStartSec || 0)) / assemblyDurationSec) * 100)) : 0;
+              return (
+                <button
+                  key={block.id}
+                  type="button"
+                  className={`videoMatchAssemblyBlock ${block.id === project.selectedBlockId ? "isSelected" : ""}`}
+                  style={{ left: `${left}%`, width: `${width}%` }}
+                  onClick={() => onSelectBlock(block)}
+                  title={`${block.audioSceneId || block.segmentId}: target ${formatSec(block.targetStartSec)}–${formatSec(block.targetEndSec)}с · candidate ${block.candidateId || block.id}`}
+                >
+                  <span>{block.audioSceneId || block.segmentId}</span>
+                  <small>{block.candidateId || block.id}</small>
+                </button>
+              );
+            })}
+          </div>
+          <div className="videoMatchAssemblyLegend">
+            <span>{selectedBlock ? `selected: ${selectedBlock.audioSceneId || selectedBlock.segmentId} · ${selectedBlock.candidateId || selectedBlock.id}` : "selected: —"}</span>
+            <span>target duration {formatSec(assemblyDurationSec)} sec</span>
           </div>
         </section>
 
@@ -428,44 +568,63 @@ export default function VideoMatchBoardPage() {
           <h2>Segments / candidates</h2>
           {matchSegments.length === 0 ? <div className="videoMatchEmptyList">После применения JSON здесь появятся segments и candidates.</div> : null}
           <div className="videoMatchSegmentsList">
-            {matchSegments.map((segment) => (
-              <div key={segment.id} className={`videoMatchSegmentCard ${segment.id === project.selectedSegmentId ? "isSelected" : ""}`}>
-                <div className="videoMatchSegmentHeader">
-                  <div>
-                    <b>{segment.audioSceneId || segment.id}{segment.storySceneId ? ` · story: ${segment.storySceneId}` : ""}</b>
-                    <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · candidates {Array.isArray(segment.candidates) ? segment.candidates.length : 0}</span>
+            {matchSegments.map((segment) => {
+              const candidates = Array.isArray(segment.candidates) ? segment.candidates : [];
+              const isSegmentSelected = segment.id === project.selectedSegmentId;
+              const isOpen = effectiveExpandedSegmentId === segment.id;
+              return (
+                <div
+                  key={segment.id}
+                  ref={(node) => { if (node) segmentRefs.current[segment.id] = node; }}
+                  className={`videoMatchSegmentCard ${isSegmentSelected ? "isSelected" : ""}`}
+                >
+                  <div className="videoMatchSegmentHeader">
+                    <button className="videoMatchSegmentTitle" type="button" onClick={() => { setExpandedSegmentId(isOpen ? "" : segment.id); patchProject({ selectedSegmentId: segment.id, selectedCandidateId: segment.selectedCandidateId || "" }, { lastGood: false }); }}>
+                      <b>{segment.audioSceneId || segment.id}</b>
+                      <span>story_scene_id: {segment.storySceneId || "—"}</span>
+                      <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · selected candidate {segment.selectedCandidateId || "—"} · candidates {candidates.length}</span>
+                    </button>
+                    <div className="videoMatchSegmentHeaderActions">
+                      {segment.mood ? <small>{segment.mood}</small> : null}
+                      <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setExpandedSegmentId(isOpen ? "" : segment.id)}>{isOpen ? "Свернуть" : "Открыть candidates"}</button>
+                    </div>
                   </div>
-                  {segment.mood ? <small>{segment.mood}</small> : null}
+                  {segment.text ? <p>{segment.text}</p> : null}
+                  {segment.visualNeed ? <small className="videoMatchSegmentNeed">Need: {segment.visualNeed}</small> : null}
+                  {isOpen ? (
+                    <div className="videoMatchCandidatesList">
+                      {candidates.map((candidate) => {
+                        const isCandidateSelected = candidate.id === segment.selectedCandidateId;
+                        const isPreviewCandidate = candidate.id === previewCandidateId;
+                        return (
+                          <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
+                            {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                            <div className="videoMatchCandidateBody">
+                              <b>{candidate.id}{isPreviewCandidate ? " · preview" : ""}</b>
+                              <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
+                              <span>{[candidate.fitMode, candidate.visualType, candidate.shotType, candidate.motionLevel].filter(Boolean).join(" · ") || "metadata —"}</span>
+                              {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
+                              {candidate.warnings?.length ? <small className="videoMatchWarnings">Warnings: {candidate.warnings.join("; ")}</small> : null}
+                            </div>
+                            <div className="videoMatchCandidateActions">
+                              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => onPreviewCandidate(segment, candidate)}>Preview</button>
+                              <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={isCandidateSelected} onClick={() => onSelectCandidate(segment.id, candidate.id)}>{isCandidateSelected ? "Выбран" : "Выбрать candidate"}</button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </div>
-                {segment.text ? <p>{segment.text}</p> : null}
-                {segment.visualNeed ? <small className="videoMatchSegmentNeed">Need: {segment.visualNeed}</small> : null}
-                <div className="videoMatchCandidatesList">
-                  {(Array.isArray(segment.candidates) ? segment.candidates : []).map((candidate) => {
-                    const isCandidateSelected = candidate.id === segment.selectedCandidateId;
-                    return (
-                      <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""}`}>
-                        {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
-                        <div className="videoMatchCandidateBody">
-                          <b>{candidate.id}</b>
-                          <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
-                          <span>{[candidate.fitMode, candidate.visualType, candidate.shotType, candidate.motionLevel].filter(Boolean).join(" · ") || "metadata —"}</span>
-                          {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
-                          {candidate.warnings?.length ? <small className="videoMatchWarnings">Warnings: {candidate.warnings.join("; ")}</small> : null}
-                        </div>
-                        <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={isCandidateSelected} onClick={() => onSelectCandidate(segment.id, candidate.id)}>{isCandidateSelected ? "Выбран" : "Выбрать candidate"}</button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <h2>Video blocks</h2>
           {videoBlocks.length === 0 ? <div className="videoMatchEmptyList">Selected candidates появятся здесь как video blocks.</div> : null}
           <div className="videoMatchBlocksList">
             {videoBlocks.map((block) => (
-              <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => patchProject(getSelectionPatchForBlock(block), { lastGood: false })}>
+              <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => onSelectBlock(block)}>
                 <b>{block.id}</b>
                 <span>audio: {block.audioSceneId || "—"} · target {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
                 <span>video {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · confidence {block.confidence ?? "—"}</span>
