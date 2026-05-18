@@ -169,7 +169,7 @@ export default function VideoMatchBoardPage() {
           <h1>Video Match Board</h1>
           <p>MVP-доска подбора фрагментов большого видео под audio/timing карту.</p>
         </div>
-        <button className="btn" type="button" onClick={() => navigate("/studio/storyboard")}>Назад в граф</button>
+        <button className="btn" type="button" onClick={() => navigate(-1)}>Назад в граф</button>
       </div>
 
       <div className="videoMatchGrid">
