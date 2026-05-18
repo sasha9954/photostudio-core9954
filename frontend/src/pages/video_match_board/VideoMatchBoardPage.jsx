@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { fetchJson } from "../../services/api.js";
 import {
   getDefaultVideoMatchBoardProject,
   getVideoMatchBoardEmergencyStorageKey,
@@ -81,6 +82,10 @@ export default function VideoMatchBoardPage() {
   const [expandedSegmentId, setExpandedSegmentId] = useState(String(initialProject?.selectedSegmentId || ""));
   const [previewCandidateId, setPreviewCandidateId] = useState("");
   const [isAssemblyPlaying, setIsAssemblyPlaying] = useState(false);
+  const [assembleAudioPath, setAssembleAudioPath] = useState("");
+  const [isAssemblingMp4, setIsAssemblingMp4] = useState(false);
+  const [assembledPreview, setAssembledPreview] = useState(null);
+  const [assembleError, setAssembleError] = useState("");
 
   const matchSegments = Array.isArray(project.matchSegments) ? project.matchSegments : [];
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
@@ -113,6 +118,9 @@ export default function VideoMatchBoardPage() {
     setExpandedSegmentId(String(initialProject?.selectedSegmentId || ""));
     setPreviewCandidateId("");
     setIsAssemblyPlaying(false);
+    setAssembleAudioPath(String(initialProject?.audioPath || ""));
+    setAssembledPreview(null);
+    setAssembleError("");
     playbackRef.current = null;
   }, [initialProject]);
 
@@ -345,6 +353,43 @@ export default function VideoMatchBoardPage() {
     setExpandedSegmentId(segmentId);
   };
 
+  const onAssembleMp4 = async () => {
+    if (!assemblyBlocks.length) return;
+    const sourceVideoPath = String(project?.sourceVideo?.path || "").trim();
+    if (!sourceVideoPath) {
+      setAssembleError("Для сборки нужен sourceVideo.path из JSON.");
+      return;
+    }
+    setIsAssemblingMp4(true);
+    setAssembleError("");
+    setAssembledPreview(null);
+    try {
+      const response = await fetchJson("/api/video-match/assemble", {
+        method: "POST",
+        body: {
+          sourceVideoPath,
+          audioPath: assembleAudioPath || project?.timingContext?.sourceAudioPath || "",
+          audioUrl: project?.timingContext?.sourceAudioUrl || "",
+          outputFormat: "16:9",
+          previewQuality: "720p",
+          blocks: assemblyBlocks.map((block) => ({
+            id: block.id,
+            audioSceneId: block.audioSceneId || block.segmentId || "",
+            targetStartSec: Number(block.targetStartSec || 0),
+            targetEndSec: Number(block.targetEndSec || 0),
+            sourceVideoStartSec: Number(block.sourceVideoStartSec || 0),
+            sourceVideoEndSec: Number(block.sourceVideoEndSec || 0),
+          })),
+        },
+      });
+      setAssembledPreview(response || null);
+    } catch (error) {
+      setAssembleError(String(error?.message || error || "Не удалось собрать MP4"));
+    } finally {
+      setIsAssemblingMp4(false);
+    }
+  };
+
   const sampleDurationSec = Math.max(getValidDurationSec(videoDurationSec), 130);
   const sampleJson = JSON.stringify({
     schema: "video_match_board_v2",
@@ -550,7 +595,22 @@ export default function VideoMatchBoardPage() {
             <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>▶ Сборка</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>▶ Отсюда</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isAssemblyPlaying} onClick={stopPlayback}>■ Стоп</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!assemblyBlocks.length || isAssemblingMp4} onClick={onAssembleMp4}>{isAssemblingMp4 ? "Собираем MP4..." : "⬇ MP4"}</button>
             <span>{selectedBlock ? `${selectedBlock.id}: ${formatSec(selectedBlock.sourceVideoStartSec)}–${formatSec(selectedBlock.sourceVideoEndSec)} с` : "Кусок не выбран"}</span>
+          </div>
+          <div className="videoMatchContextRows">
+            <label>
+              Путь к аудио для сборки
+              <input type="text" value={assembleAudioPath} onChange={(event) => setAssembleAudioPath(event.target.value)} placeholder="C:\\path\\to\\practice_30sec_audio.mp3" />
+            </label>
+            {assembleError ? <div className="videoMatchError">{assembleError}</div> : null}
+            {assembledPreview?.ok ? (
+              <div>
+                <a href={assembledPreview.outputUrl} target="_blank" rel="noreferrer">▶ Смотреть MP4</a>{" "}
+                <a href={assembledPreview.outputUrl} download>⬇ Скачать MP4</a>
+                {assembledPreview.warning ? <div className="videoMatchWarnings">warning: {assembledPreview.warning}</div> : null}
+              </div>
+            ) : null}
           </div>
         </section>
 
