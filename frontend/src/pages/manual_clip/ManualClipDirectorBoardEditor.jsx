@@ -352,6 +352,25 @@ function pickNewestManualBoardCandidate(candidates = [], openState = {}) {
   return ranked[0] || null;
 }
 
+function mergePickedManualBoardTimelineIfNeeded(picked = null, candidates = [], reason = "hydrate_candidate_merge") {
+  const pickedProject = picked?.project;
+  if (!hasMeaningfulManualProject(pickedProject) || manualProjectHasTimelineStructure(pickedProject)) return pickedProject;
+  const timelineCandidate = (Array.isArray(candidates) ? candidates : [])
+    .filter(({ project }) => hasMeaningfulManualProject(project) && manualProjectHasTimelineStructure(project))
+    .sort((a, b) => getManualProjectTimelineDiagnostics(b.project).scenesWithTiming - getManualProjectTimelineDiagnostics(a.project).scenesWithTiming)[0];
+  if (!timelineCandidate?.project) return pickedProject;
+  const mergedProject = preserveProjectTimelineIfIncomingEmpty(pickedProject, timelineCandidate.project, pickedProject);
+  console.warn("[MANUAL BOARD HYDRATE TIMELINE MERGE]", {
+    reason,
+    materialSource: picked?.source || "unknown",
+    timelineSource: timelineCandidate.source || "unknown",
+    materialTimeline: getManualProjectTimelineDiagnostics(pickedProject),
+    timelineCandidate: getManualProjectTimelineDiagnostics(timelineCandidate.project),
+    mergedTimeline: getManualProjectTimelineDiagnostics(mergedProject),
+  });
+  return mergedProject;
+}
+
 function readManualActiveProject(sourceNodeId = "", navigationProject = null, options = {}) {
   const safeSourceNodeId = String(sourceNodeId || "").trim();
   if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
@@ -405,8 +424,9 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
           openStateMatch: manualBoardMatchesOpenState(candidate.project, openState),
         })),
       });
-      logManualBoardHydratePick(picked.source, picked.project, { sourceNodeId: safeSourceNodeId });
-      return picked.project;
+      const pickedProject = mergePickedManualBoardTimelineIfNeeded(picked, ownerCandidates, "source_bound_hydrate");
+      logManualBoardHydratePick(picked.source, pickedProject, { sourceNodeId: safeSourceNodeId });
+      return pickedProject;
     }
 
     console.warn("[MANUAL BOARD HYDRATE] no project for sourceNodeId", {
@@ -434,8 +454,9 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     else if (bestProject === canonicalProject) source = "canonical";
     else if (bestProject === nodeProject) source = "node-scoped";
   }
-  if (bestProject) logManualBoardHydratePick(source, bestProject);
-  return bestProject;
+  const bestProjectWithTimeline = mergePickedManualBoardTimelineIfNeeded(picked || { source, project: bestProject }, candidates, "active_hydrate");
+  if (bestProjectWithTimeline) logManualBoardHydratePick(source, bestProjectWithTimeline);
+  return bestProjectWithTimeline;
 }
 
 function persistManualProject(nextProject = {}, options = {}) {
@@ -1451,28 +1472,149 @@ function importedSceneHasRealTiming(scene = {}) {
   return timing.end_sec > 0 || timing.duration_sec > 0;
 }
 
-function preserveCurrentSceneTimelineIfIncomingIsEmpty(nextScene = {}, currentScene = {}, incomingScene = {}) {
-  if (!importedSceneHasRealTiming(currentScene) || importedSceneHasRealTiming(incomingScene)) return nextScene;
-  const timing = getImportedSceneTimingValues(currentScene);
+const MANUAL_PROJECT_TIMELINE_FIELDS = [
+  "audio",
+  "audio_metadata",
+  "audio_duration_sec",
+  "markers",
+  "story_blocks",
+  "audio_phrases",
+  "speakers",
+  "topic_blocks",
+  "song_blocks",
+  "timing_status",
+];
+
+const MANUAL_SCENE_TIMELINE_FIELDS = [
+  "start_sec",
+  "end_sec",
+  "duration_sec",
+  "speech_start_sec",
+  "speech_end_sec",
+  "story_block_id",
+  "story_block_title_ru",
+  "story_block_position_ru",
+  "source_phrase_ids",
+  "audio_slice_url",
+  "audio_slice_duration_sec",
+  "translated_text_ru",
+  "meaning_hint_ru",
+  "scene_goal_ru",
+  "scene_role_in_block_ru",
+  "block_progress_ru",
+];
+
+function getManualProjectTimelineDiagnostics(project = {}) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const scenesWithTiming = scenes.filter((scene) => importedSceneHasRealTiming(scene)).length;
   return {
-    ...nextScene,
-    start_sec: timing.start_sec,
-    end_sec: timing.end_sec,
-    duration_sec: timing.duration_sec,
-    speech_start_sec: timing.speech_start_sec,
-    speech_end_sec: timing.speech_end_sec,
-    timing: {
-      ...((nextScene?.timing && typeof nextScene.timing === "object") ? nextScene.timing : {}),
-      ...timing,
-    },
-    story_block_id: nextScene?.story_block_id || currentScene?.story_block_id || "",
-    story_block_title_ru: nextScene?.story_block_title_ru || currentScene?.story_block_title_ru || "",
-    source_phrase_ids: Array.isArray(nextScene?.source_phrase_ids) && nextScene.source_phrase_ids.length
-      ? nextScene.source_phrase_ids
-      : (Array.isArray(currentScene?.source_phrase_ids) ? currentScene.source_phrase_ids : []),
-    audio_slice_url: nextScene?.audio_slice_url || currentScene?.audio_slice_url || "",
-    audio_slice_duration_sec: firstImportedSceneNumber(nextScene?.audio_slice_duration_sec, currentScene?.audio_slice_duration_sec),
+    project_id: project?.project_id || project?.projectId || "",
+    audioDurationSec: Number(project?.audio_duration_sec || project?.audio?.duration_sec || project?.audioMetadata?.duration_sec || project?.audio_metadata?.duration_sec || 0) || 0,
+    markersCount: Array.isArray(project?.markers) ? project.markers.length : 0,
+    storyBlocksCount: Array.isArray(project?.story_blocks) ? project.story_blocks.length : 0,
+    audioPhrasesCount: Array.isArray(project?.audio_phrases) ? project.audio_phrases.length : 0,
+    speakersCount: Array.isArray(project?.speakers) ? project.speakers.length : 0,
+    topicBlocksCount: Array.isArray(project?.topic_blocks) ? project.topic_blocks.length : 0,
+    songBlocksCount: Array.isArray(project?.song_blocks) ? project.song_blocks.length : 0,
+    scenesCount: scenes.length,
+    scenesWithTiming,
+    scenesWithZeroTiming: Math.max(0, scenes.length - scenesWithTiming),
+    selectedSceneId: String(project?.selectedSceneId || "").trim(),
   };
+}
+
+function manualProjectHasTimelineStructure(project = {}) {
+  const diagnostics = getManualProjectTimelineDiagnostics(project);
+  return Boolean(
+    diagnostics.audioDurationSec > 0
+    || diagnostics.markersCount > 0
+    || diagnostics.storyBlocksCount > 0
+    || diagnostics.audioPhrasesCount > 0
+    || diagnostics.speakersCount > 0
+    || diagnostics.topicBlocksCount > 0
+    || diagnostics.songBlocksCount > 0
+    || diagnostics.scenesWithTiming > 0
+    || String(project?.timing_status || "").trim()
+  );
+}
+
+function manualProjectIncomingTimelineIsEmpty(project = {}) {
+  return !manualProjectHasTimelineStructure(project);
+}
+
+function shouldPreserveTimelineValue(currentValue, incomingValue) {
+  if (Array.isArray(currentValue)) return currentValue.length > 0 && (!Array.isArray(incomingValue) || incomingValue.length === 0);
+  if (currentValue && typeof currentValue === "object") {
+    if (!incomingValue || typeof incomingValue !== "object") return Object.keys(currentValue).length > 0;
+    const currentMeaningful = Object.values(currentValue).some((value) => (typeof value === "number" ? value > 0 : String(value ?? "").trim() !== ""));
+    const incomingMeaningful = Object.values(incomingValue).some((value) => (typeof value === "number" ? value > 0 : String(value ?? "").trim() !== ""));
+    return currentMeaningful && !incomingMeaningful;
+  }
+  if (typeof currentValue === "number") return currentValue > 0 && Number(incomingValue || 0) <= 0;
+  return String(currentValue ?? "").trim() !== "" && String(incomingValue ?? "").trim() === "";
+}
+
+function preserveSceneTimelineFieldsIfIncomingEmpty(nextScene = {}, currentScene = {}, incomingScene = {}) {
+  if (!importedSceneHasRealTiming(currentScene) || importedSceneHasRealTiming(incomingScene)) return nextScene;
+  const preservedScene = { ...(nextScene || {}) };
+  MANUAL_SCENE_TIMELINE_FIELDS.forEach((field) => {
+    if (shouldPreserveTimelineValue(currentScene?.[field], incomingScene?.[field])) {
+      preservedScene[field] = currentScene[field];
+    }
+  });
+  const timing = getImportedSceneTimingValues(currentScene);
+  preservedScene.start_sec = timing.start_sec;
+  preservedScene.end_sec = timing.end_sec;
+  preservedScene.duration_sec = timing.duration_sec;
+  preservedScene.speech_start_sec = timing.speech_start_sec;
+  preservedScene.speech_end_sec = timing.speech_end_sec;
+  preservedScene.timing = {
+    ...((nextScene?.timing && typeof nextScene.timing === "object") ? nextScene.timing : {}),
+    ...timing,
+  };
+  return preservedScene;
+}
+
+function preserveProjectTimelineIfIncomingEmpty(nextProject = {}, currentProject = {}, incomingProject = {}) {
+  if (!manualProjectHasTimelineStructure(currentProject) || !manualProjectIncomingTimelineIsEmpty(incomingProject)) return nextProject || {};
+  const preservedProject = { ...(nextProject || {}) };
+  MANUAL_PROJECT_TIMELINE_FIELDS.forEach((field) => {
+    if (shouldPreserveTimelineValue(currentProject?.[field], incomingProject?.[field])) {
+      preservedProject[field] = currentProject[field];
+    }
+  });
+
+  const currentScenes = Array.isArray(currentProject?.scenes) ? currentProject.scenes : [];
+  const nextScenes = Array.isArray(preservedProject?.scenes) ? preservedProject.scenes : [];
+  const incomingScenes = Array.isArray(incomingProject?.scenes) ? incomingProject.scenes : [];
+  const currentById = new Map(currentScenes.map((scene, idx) => [String(scene?.scene_id || scene?.id || `seg_${String(idx + 1).padStart(2, "0")}`).trim(), scene]));
+  const incomingById = new Map(incomingScenes.map((scene, idx) => [String(scene?.scene_id || scene?.id || `seg_${String(idx + 1).padStart(2, "0")}`).trim(), scene]));
+  preservedProject.scenes = nextScenes.map((scene, idx) => {
+    const sceneId = String(scene?.scene_id || scene?.id || `seg_${String(idx + 1).padStart(2, "0")}`).trim();
+    return preserveSceneTimelineFieldsIfIncomingEmpty(scene, currentById.get(sceneId) || currentScenes[idx] || {}, incomingById.get(sceneId) || incomingScenes[idx] || {});
+  });
+  return preservedProject;
+}
+
+function logManualBoardRuntimeTimelineDebug(reason = "manual_director_persist", project = {}, source = "before_persist") {
+  console.info("[MANUAL BOARD RUNTIME TIMELINE DEBUG]", {
+    reason,
+    ...getManualProjectTimelineDiagnostics(project),
+    source,
+  });
+}
+
+function logManualBoardRuntimeTimelineRegression(reason = "manual_director_persist", currentProject = {}, nextProject = {}) {
+  console.warn("[MANUAL BOARD RUNTIME TIMELINE REGRESSION]", {
+    reason,
+    currentTimeline: getManualProjectTimelineDiagnostics(currentProject),
+    nextTimeline: getManualProjectTimelineDiagnostics(nextProject),
+    action: "merged_current_timeline_into_next",
+  });
+}
+
+function preserveCurrentSceneTimelineIfIncomingIsEmpty(nextScene = {}, currentScene = {}, incomingScene = {}) {
+  return preserveSceneTimelineFieldsIfIncomingEmpty(nextScene, currentScene, incomingScene);
 }
 
 function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScenes = []) {
@@ -1642,9 +1784,16 @@ export default function ManualClipDirectorBoardEditor({
       warnMissingSourceNodeId();
       return false;
     }
-    const safeProject = normalizeDirectorProjectOwner(candidateProject);
+    let safeProject = normalizeDirectorProjectOwner(candidateProject);
     const persistReason = options?.reason || safeProject.lastPersistReason || "manual_director_persist";
     if (isManualPollLocalOnlyReason(persistReason)) return false;
+    const timelineBaseline = projectRef.current || lastGoodBoardRef.current || lastPersistedProjectRef.current || readManualClipBoardProjectForNode(ownerNodeId);
+    const beforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
+    safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, timelineBaseline, candidateProject);
+    if (beforeTimeline.scenesWithTiming === 0 && getManualProjectTimelineDiagnostics(timelineBaseline).scenesWithTiming > 0) {
+      logManualBoardRuntimeTimelineRegression(persistReason, timelineBaseline, safeProject);
+    }
+    logManualBoardRuntimeTimelineDebug(persistReason, safeProject, "before_persist");
     const persistOptions = { ...(options || {}), reason: persistReason, embedded };
 
     if (embedded && typeof onProjectChange === "function") {
@@ -1750,7 +1899,7 @@ export default function ManualClipDirectorBoardEditor({
       }) : [];
       const parsedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
       const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId) ? parsedSelectedSceneId : String(scenes[0]?.scene_id || "");
-      const hydratedProject = normalizeDirectorProjectOwner({
+      let hydratedProject = normalizeDirectorProjectOwner({
         ...normalizeManualBoardProjectAudioCompat(parsed),
         ...(forcedProjectId ? { project_id: forcedProjectId, projectId: forcedProjectId } : {}),
         ...(forcedInputSignature ? { input_signature: forcedInputSignature, inputSignature: forcedInputSignature } : {}),
@@ -1762,6 +1911,7 @@ export default function ManualClipDirectorBoardEditor({
         selectedSceneId: selectedSceneIdForHydrate,
       });
       const currentHydratedProject = projectRef.current;
+      hydratedProject = preserveProjectTimelineIfIncomingEmpty(hydratedProject, currentHydratedProject || readLastGoodManualClipBoardProject() || lastGoodBoardRef.current, parsed);
       const incomingReason = String(hydratedProject?.lastPersistReason || parsed?.lastPersistReason || "").trim();
       const currentDiagnostics = getManualBoardMediaDiagnostics(currentHydratedProject || {}, currentHydratedProject?.selectedSceneId || selectedSceneIdRef.current || "");
       const incomingDiagnostics = getManualBoardMediaDiagnostics(hydratedProject, selectedSceneIdForHydrate);
@@ -1830,6 +1980,7 @@ export default function ManualClipDirectorBoardEditor({
         setAutosaveStatus("Сохранено");
         setProject(projectToPersist);
         const ownerNodeId = sourceNodeIdFromRoute || hydratedProject.sourceNodeId || hydratedProject.nodeId;
+        logManualBoardRuntimeTimelineDebug(reason, projectToPersist, "before_persist");
         let persisted = persistManualProject(projectToPersist, {
           reason,
           forceReplace: Boolean(navigationProject || explicitNewProject),
@@ -1898,13 +2049,20 @@ export default function ManualClipDirectorBoardEditor({
       return true;
     }
 
-    const safeProject = normalizeDirectorProjectOwner({
+    let safeProject = normalizeDirectorProjectOwner({
       ...currentProject,
       selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "",
       updatedAt: Date.now(),
       lastPersistReason: reason,
     });
-    const persistedBaseline = lastPersistedProjectRef.current || readManualClipBoardProjectForNode(getProjectOwnerNodeId(safeProject));
+    const persistedBaseline = lastGoodBoardRef.current || lastPersistedProjectRef.current || readManualClipBoardProjectForNode(getProjectOwnerNodeId(safeProject));
+    const beforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
+    safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, persistedBaseline || currentProject, safeProject);
+    const baselineTimeline = getManualProjectTimelineDiagnostics(persistedBaseline || currentProject);
+    if (beforeTimeline.scenesWithTiming === 0 && baselineTimeline.scenesWithTiming > 0) {
+      logManualBoardRuntimeTimelineRegression(reason, persistedBaseline || currentProject, safeProject);
+    }
+    logManualBoardRuntimeTimelineDebug(reason, safeProject, "before_persist");
     const currentDiagnostics = getManualBoardMediaDiagnostics(persistedBaseline || {}, persistedBaseline?.selectedSceneId || selectedSceneIdRef.current || "");
     const nextDiagnostics = getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId);
     if (
@@ -2022,13 +2180,19 @@ export default function ManualClipDirectorBoardEditor({
 
   const persistProject = (nextProject) => {
     const nextFormat = resolveProjectAspectFormat(nextProject || {}, (nextProject || {})?.scenes?.[0] || {});
-    const safeProject = normalizeDirectorProjectOwner({
+    const currentProject = projectRef.current || project || lastGoodBoardRef.current || lastPersistedProjectRef.current || {};
+    let safeProject = normalizeDirectorProjectOwner({
       ...(nextProject || {}),
       format: nextFormat,
       aspect_ratio: nextFormat,
       selectedSceneId: String(nextProject?.selectedSceneId || selectedSceneIdRef.current || ""),
       updatedAt: Date.now(),
     });
+    const beforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
+    safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, currentProject, nextProject);
+    if (beforeTimeline.scenesWithTiming === 0 && getManualProjectTimelineDiagnostics(currentProject).scenesWithTiming > 0) {
+      logManualBoardRuntimeTimelineRegression(safeProject.lastPersistReason || "manual_director_persist_project", currentProject, safeProject);
+    }
     projectRef.current = safeProject;
     selectedSceneIdRef.current = safeProject.selectedSceneId;
     setProject(safeProject);
@@ -2048,12 +2212,19 @@ export default function ManualClipDirectorBoardEditor({
       setBackupStatus("Ошибка сохранения доски");
       return;
     }
-    const safeProject = normalizeDirectorProjectOwner({
+    let safeProject = normalizeDirectorProjectOwner({
       ...currentProject,
       selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || "",
       updatedAt: Date.now(),
       lastPersistReason: "manual_force_save_button",
     });
+    const forceSaveBaseline = lastGoodBoardRef.current || lastPersistedProjectRef.current || readManualClipBoardProjectForNode(ownerNodeId);
+    const forceSaveBeforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
+    safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, forceSaveBaseline || currentProject, safeProject);
+    if (forceSaveBeforeTimeline.scenesWithTiming === 0 && getManualProjectTimelineDiagnostics(forceSaveBaseline || currentProject).scenesWithTiming > 0) {
+      logManualBoardRuntimeTimelineRegression("manual_force_save_button", forceSaveBaseline || currentProject, safeProject);
+    }
+    logManualBoardRuntimeTimelineDebug("manual_force_save_button", safeProject, "before_persist");
     projectRef.current = safeProject;
     setProject(safeProject);
     console.info("[MANUAL BOARD SAVE MEDIA FIELDS]", getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId));
@@ -2270,14 +2441,16 @@ export default function ManualClipDirectorBoardEditor({
     const importedScenes = Array.isArray(parsed?.scenes) ? parsed.scenes : [];
     const mergedScenes = mergeImportedScenesPreservingMaterials(projectRef.current?.scenes || project?.scenes || [], importedScenes);
     const scenes = mergedScenes.map((scene, idx) => normalizeScene(scene, idx, storyBlockLookup));
-    const nextProject = {
-      ...(projectRef.current || project || {}),
+    const currentProject = projectRef.current || project || {};
+    let nextProject = {
+      ...currentProject,
       ...parsed,
       story_blocks: storyBlocks,
       scenes,
       selectedSceneId: String(parsed?.selectedSceneId || scenes[0]?.scene_id || ""),
       updatedAt: Date.now(),
     };
+    nextProject = preserveProjectTimelineIfIncomingEmpty(nextProject, currentProject, parsed);
     persistProject(nextProject);
     console.debug("[manual director import video/photo]", {
       stats: getManualClipBoardMaterialStats(nextProject),
@@ -2739,7 +2912,7 @@ export default function ManualClipDirectorBoardEditor({
     if (!isManualPollLocalOnlyReason(persistReason) && /job|poll|video_done|video_queued|video_running|mmaudio/i.test(persistReason) && nextSelectedSceneId !== sceneId) {
       console.info("[MANUAL BOARD BLOCK AUTO SELECT FROM JOB]", { reason: persistReason, sceneId, selectedSceneId: nextSelectedSceneId });
     }
-    const nextProject = normalizeDirectorProjectOwner({
+    let nextProject = normalizeDirectorProjectOwner({
       ...baseProject,
       scenes: nextScenes,
       selectedSceneId: nextSelectedSceneId,
@@ -2751,6 +2924,7 @@ export default function ManualClipDirectorBoardEditor({
       deletedMediaRevision: isDeletionUpdate ? Math.max(Number(baseProject.deletedMediaRevision || baseProject.deleted_media_revision || 0) || 0, now) : (Number(baseProject.deletedMediaRevision || baseProject.deleted_media_revision || 0) || 0),
       lastPersistReason: persistReason,
     });
+    nextProject = preserveProjectTimelineIfIncomingEmpty(nextProject, lastGoodBoardRef.current || lastPersistedProjectRef.current || baseProject, nextProject);
 
     projectRef.current = nextProject;
     selectedSceneIdRef.current = nextProject.selectedSceneId;
