@@ -431,9 +431,36 @@ function mergePickedManualBoardTimelineIfNeeded(picked = null, candidates = [], 
 function readManualActiveProject(sourceNodeId = "", navigationProject = null, options = {}) {
   const safeSourceNodeId = String(sourceNodeId || "").trim();
   const durableProject = options?.durableProject || null;
+  const durableTried = options?.durableTried === true;
   if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
+    if (!durableTried) {
+      console.warn("[MANUAL BOARD EXPLICIT NEW WAITING DURABLE]", {
+        sourceNodeId: safeSourceNodeId,
+      });
+      return null;
+    }
+
     const durableStats = getManualClipBoardMaterialStats(durableProject);
     const navStats = getManualClipBoardMaterialStats(navigationProject);
+    const durableHasAnyMedia = Boolean(
+      hasMeaningfulManualProject(durableProject)
+      && (
+        (durableStats?.scenesWithImage || 0) > 0
+        || (durableStats?.scenesWithVideo || 0) > 0
+        || (durableStats?.generatedImages || 0) > 0
+        || (durableStats?.generatedVideos || 0) > 0
+        || (durableStats?.imageCount || 0) > 0
+        || (durableStats?.videoCount || 0) > 0
+      )
+    );
+    const navHasNoMedia = (
+      (navStats?.scenesWithImage || 0) <= 0
+      && (navStats?.scenesWithVideo || 0) <= 0
+      && (navStats?.generatedImages || 0) <= 0
+      && (navStats?.generatedVideos || 0) <= 0
+      && (navStats?.imageCount || 0) <= 0
+      && (navStats?.videoCount || 0) <= 0
+    );
     const durableHasMoreMedia = Boolean(
       hasMeaningfulManualProject(durableProject)
       && (
@@ -444,7 +471,13 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
       )
     );
 
-    if (!durableHasMoreMedia) {
+    if (durableHasAnyMedia && navHasNoMedia) {
+      console.warn("[MANUAL BOARD NAVIGATION PROJECT REJECTED: WOULD DROP MEDIA]", {
+        sourceNodeId: safeSourceNodeId,
+        navStats,
+        durableStats,
+      });
+    } else if (!durableHasMoreMedia) {
       logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId: safeSourceNodeId });
       console.info("[MANUAL BOARD EMBEDDED PICK]", {
         sourceNodeId: safeSourceNodeId,
@@ -462,13 +495,13 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
         stats: navStats,
       });
       return navigationProject;
+    } else {
+      console.warn("[MANUAL BOARD EXPLICIT NEW IGNORED: DURABLE HAS MORE MEDIA]", {
+        sourceNodeId: safeSourceNodeId,
+        navStats,
+        durableStats,
+      });
     }
-
-    console.warn("[MANUAL BOARD EXPLICIT NEW IGNORED: DURABLE HAS MORE MEDIA]", {
-      sourceNodeId: safeSourceNodeId,
-      navStats,
-      durableStats,
-    });
   }
   const lastGoodProject = readLastGoodManualClipBoardProject();
   const emergencyProject = readEmergencyManualClipBoardProjectForNode(safeSourceNodeId);
@@ -2028,20 +2061,26 @@ export default function ManualClipDirectorBoardEditor({
       && hasFreshNavigationProject
       && String(freshNavigationCandidate?.lastPersistReason || "").includes("manual_new_project_from_audio_split")
     );
-    if (sourceNodeIdFromRoute && !shouldBypassDurableForFreshNewProject && durableBoardLoad.nodeId !== sourceNodeIdFromRoute) return;
-    if (sourceNodeIdFromRoute && !shouldBypassDurableForFreshNewProject && durableBoardLoad.loading) return;
+    if (sourceNodeIdFromRoute && durableBoardLoad.nodeId !== sourceNodeIdFromRoute) return;
+    if (sourceNodeIdFromRoute && durableBoardLoad.loading) return;
     const durableProject = durableBoardLoad.nodeId === sourceNodeIdFromRoute ? durableBoardLoad.project : null;
+    const navStats = getManualClipBoardMaterialStats(embedded ? embeddedProject : navigationProject);
+    const durableStats = getManualClipBoardMaterialStats(durableProject);
     const parsedProject = embedded
-      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject, durableProject })
-      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject, durableProject });
+      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject, durableProject, durableTried: durableBoardLoad.tried })
+      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject, durableProject, durableTried: durableBoardLoad.tried });
+    const pickedStats = getManualClipBoardMaterialStats(parsedProject);
     console.info("[MANUAL BOARD HYDRATE SOURCE FINAL]", {
       sourceNodeId: sourceNodeIdFromRoute,
       explicitNewProject,
+      shouldBypassDurableForFreshNewProject,
       durableTried: durableBoardLoad.tried,
       durableFound: hasMeaningfulManualProject(durableProject),
+      durableStats,
+      navStats,
       pickedOwner: getManualProjectOwnerId(parsedProject),
       pickedProjectId: parsedProject?.project_id || parsedProject?.projectId || "",
-      pickedStats: getManualClipBoardMaterialStats(parsedProject),
+      pickedStats,
     });
     if (!hasMeaningfulManualProject(parsedProject)) {
       setProject(null);

@@ -337,6 +337,7 @@ export function queueManualClipBoardProjectDurableSave(project = {}, options = {
 }
 
 let lastManualBoardDurableSaveSignature = "";
+let pendingManualBoardDurableSaveSignature = "";
 
 function buildManualBoardDurableSaveSignature(project = {}, reason = "") {
   return JSON.stringify({
@@ -352,9 +353,37 @@ function buildManualBoardDurableSaveSignature(project = {}, reason = "") {
 
 function queueManualBoardDurableSaveOnce(project = {}, options = {}) {
   const signature = buildManualBoardDurableSaveSignature(project, options?.reason || "");
-  if (signature && signature === lastManualBoardDurableSaveSignature) return false;
-  lastManualBoardDurableSaveSignature = signature;
-  return queueManualClipBoardProjectDurableSave(project, options);
+  if (signature && (signature === pendingManualBoardDurableSaveSignature || signature === lastManualBoardDurableSaveSignature)) return false;
+  pendingManualBoardDurableSaveSignature = signature;
+  try {
+    saveManualClipBoardProjectDurable(project, options).then((ok) => {
+      if (ok) {
+        lastManualBoardDurableSaveSignature = signature;
+        console.info("[manual board durable persist] backend write ok", {
+          nodeId: getManualProjectOwnerId(project),
+          reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
+          stats: getManualClipBoardMaterialStats(project),
+        });
+      }
+    }).catch((error) => {
+      console.warn("[manual board durable persist] backend write failed; local fallback remains", {
+        nodeId: getManualProjectOwnerId(project),
+        reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
+        errorName: error?.name,
+        errorMessage: error?.message,
+      });
+    }).finally(() => {
+      if (pendingManualBoardDurableSaveSignature === signature) {
+        pendingManualBoardDurableSaveSignature = "";
+      }
+    });
+    return true;
+  } catch {
+    if (pendingManualBoardDurableSaveSignature === signature) {
+      pendingManualBoardDurableSaveSignature = "";
+    }
+    return false;
+  }
 }
 
 export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {}) {
