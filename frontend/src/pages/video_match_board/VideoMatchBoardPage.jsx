@@ -217,6 +217,7 @@ export default function VideoMatchBoardPage() {
     segments: [
       {
         audio_scene_id: "seg_01",
+        story_scene_id: "story_01",
         target_t0: 0,
         target_t1: 4.8,
         text: "Opening phrase",
@@ -267,6 +268,7 @@ export default function VideoMatchBoardPage() {
       },
       {
         audio_scene_id: "seg_02",
+        story_scene_id: "story_02",
         target_t0: 4.8,
         target_t1: 9.6,
         text: "Second beat",
@@ -398,7 +400,7 @@ export default function VideoMatchBoardPage() {
               <div key={segment.id} className={`videoMatchSegmentCard ${segment.id === project.selectedSegmentId ? "isSelected" : ""}`}>
                 <div className="videoMatchSegmentHeader">
                   <div>
-                    <b>{segment.audioSceneId || segment.id}</b>
+                    <b>{segment.audioSceneId || segment.id}{segment.storySceneId ? ` · story: ${segment.storySceneId}` : ""}</b>
                     <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · candidates {Array.isArray(segment.candidates) ? segment.candidates.length : 0}</span>
                   </div>
                   {segment.mood ? <small>{segment.mood}</small> : null}

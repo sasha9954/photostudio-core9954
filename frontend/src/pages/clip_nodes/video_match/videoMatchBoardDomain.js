@@ -58,7 +58,14 @@ function toNullableFiniteNumber(value) {
 }
 
 function toBool(value) {
-  return value === true;
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value === null || value === undefined || value === "") return false;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "y"].includes(normalized)) return true;
+    if (["false", "0", "no", "n", ""].includes(normalized)) return false;
+  }
+  return false;
 }
 
 export function normalizeVideoMatchTimingContext(raw = {}) {
@@ -159,15 +166,21 @@ export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourc
 export function normalizeVideoMatchSegment(segment = {}, index = 0, sourceVideoUrl = "") {
   const source = segment && typeof segment === "object" ? segment : {};
   const audioSceneId = String(source.audio_scene_id || source.audioSceneId || source.id || `segment_${String(index + 1).padStart(3, "0")}`).trim();
+  const storySceneId = String(source.story_scene_id ?? source.storySceneId ?? "").trim();
   const id = audioSceneId || `segment_${String(index + 1).padStart(3, "0")}`;
-  const baseSegment = { id, audioSceneId };
+  const baseSegment = { id, audioSceneId, storySceneId };
   const rawCandidates = Array.isArray(source.candidates) ? source.candidates : [];
   const candidates = rawCandidates.map((candidate, candidateIndex) => normalizeVideoMatchCandidate(candidate, baseSegment, sourceVideoUrl, candidateIndex));
-  const selectedCandidateId = String(source.selected_candidate_id || source.selectedCandidateId || source.selectedCandidate?.id || candidates[0]?.id || "").trim();
+  const rawSelectedCandidateId = String(source.selected_candidate_id ?? source.selectedCandidateId ?? source.selectedCandidate?.id ?? "").trim();
+  const selectedCandidateId = candidates.some((candidate) => candidate.id === rawSelectedCandidateId)
+    ? rawSelectedCandidateId
+    : (candidates[0]?.id || rawSelectedCandidateId);
   return {
     id,
     audioSceneId,
     audio_scene_id: audioSceneId,
+    storySceneId,
+    story_scene_id: storySceneId,
     targetStartSec: toFiniteNumber(source.target_t0 ?? source.targetStartSec, 0),
     targetEndSec: toFiniteNumber(source.target_t1 ?? source.targetEndSec, 0),
     text: String(source.text || "").trim(),
@@ -186,6 +199,8 @@ export function normalizeVideoBlock(match = {}, sourceVideoUrl = "") {
     segmentId: String(match.segmentId || match.audioSceneId || match.audio_scene_id || "").trim(),
     candidateId: String(match.candidateId || match.id || "").trim(),
     audioSceneId: String(match.audio_scene_id || match.audioSceneId || match.segmentId || "").trim(),
+    storySceneId: String(match.story_scene_id ?? match.storySceneId ?? "").trim(),
+    story_scene_id: String(match.story_scene_id ?? match.storySceneId ?? "").trim(),
     targetStartSec: toFiniteNumber(match.target_t0 ?? match.targetStartSec, 0),
     targetEndSec: toFiniteNumber(match.target_t1 ?? match.targetEndSec, 0),
     sourceVideoStartSec: toFiniteNumber(match.video_t0 ?? match.sourceVideoStartSec ?? match.videoStartSec, 0),
@@ -208,6 +223,8 @@ export function buildVideoBlocksFromMatchSegments(matchSegments = [], sourceVide
         candidateId: selectedCandidate.id,
         segmentId: normalizedSegment.id,
         audioSceneId: normalizedSegment.audioSceneId,
+        storySceneId: normalizedSegment.storySceneId,
+        story_scene_id: normalizedSegment.story_scene_id,
         targetStartSec: normalizedSegment.targetStartSec,
         targetEndSec: normalizedSegment.targetEndSec,
         sourceVideoStartSec: selectedCandidate.sourceVideoStartSec,
