@@ -41,6 +41,13 @@ import {
 import "./ManualClipDirectorPage.css";
 
 const ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text", "first_last", "first_last_sound"];
+const MANUAL_GENERATION_MODEL_OPTIONS = [
+  "i2v",
+  "ltx23_i2v_sound_clean",
+  "f_l",
+  "first_last_sound_clean",
+  "lip_sync_music",
+];
 const I2V_SOUND_GAIN_DEFAULT_DB = -6;
 const I2V_SOUND_GAIN_MIN_DB = -18;
 const I2V_SOUND_GAIN_MAX_DB = 10;
@@ -3009,14 +3016,18 @@ export default function ManualClipDirectorBoardEditor({
   const selectedGenerationModel = getManualSceneSelectedModel(selectedScene);
   const selectedGenerationProvider = getManualSceneSelectedProvider(selectedScene);
   const selectedGenerationModelOptions = useMemo(() => {
-    const options = new Set();
+    const options = new Set(MANUAL_GENERATION_MODEL_OPTIONS);
+
     if (selectedGenerationModel) options.add(selectedGenerationModel);
+
     scenes.forEach((scene) => {
       const model = getManualSceneSelectedModel(scene);
       if (model) options.add(model);
     });
+
     const projectModel = getManualSceneSelectedModel(project || {});
     if (projectModel) options.add(projectModel);
+
     return Array.from(options);
   }, [project, scenes, selectedGenerationModel]);
   const selectedMMAudioGainDb = useMemo(() => {
@@ -4789,6 +4800,12 @@ export default function ManualClipDirectorBoardEditor({
           <select value={selectedGenerationModel} onChange={(e) => {
             const value = e.target.value;
             const provider = selectedGenerationProvider;
+            console.info("[MANUAL BOARD MODEL SELECTED]", {
+              sceneId: selectedScene.scene_id,
+              model: value,
+              provider: provider || "comfy_remote",
+              route: selectedScene.route,
+            });
             updateScene(selectedScene.scene_id, {
               selectedProvider: provider || "comfy_remote",
               provider: provider || "comfy_remote",
