@@ -1220,6 +1220,14 @@ function readActiveProjectPair(activeKey, activeIdKey, projectKeyFactory) {
 export function rememberLastGoodManualClipBoardProject(project = {}) {
   if (!hasMeaningfulManualProject(project)) return false;
   try {
+    const existingLastGood = readLastGoodManualClipBoardProject();
+    if (manualBoardHasReloadRestorePayload(existingLastGood) && manualBoardSnapshotLosesTimeline(existingLastGood, project)) {
+      console.warn("[MANUAL BOARD SESSION SNAPSHOT PRESERVE] blocked timeline-empty overwrite", {
+        existing: getManualBoardTimingSummary(existingLastGood),
+        incoming: getManualBoardTimingSummary(project),
+      });
+      return false;
+    }
     const storageProject = sanitizeManualClipBoardProjectForStorage(project);
     sessionStorage.setItem(MANUAL_CLIP_BOARD_LAST_GOOD_SESSION_KEY, JSON.stringify(storageProject));
     return true;
@@ -1662,6 +1670,16 @@ function manualBoardHasTimelineStructure(project = {}) {
   return Boolean(summary.audioDurationSec > 0 || summary.markersCount > 0 || summary.storyBlocksCount > 0 || summary.scenesWithTiming > 0);
 }
 
+function manualBoardHasReloadRestorePayload(project = {}) {
+  const summary = getManualBoardTimingSummary(project);
+  return Boolean(
+    summary.audioDurationSec > 0
+    && summary.storyBlocksCount > 0
+    && summary.scenesCount > 0
+    && summary.scenesWithTiming > 0
+  );
+}
+
 function manualBoardSnapshotLosesTimeline(referenceProject = {}, candidateProject = {}) {
   const reference = getManualBoardTimingSummary(referenceProject);
   const candidate = getManualBoardTimingSummary(candidateProject);
@@ -1852,6 +1870,15 @@ export function buildEmergencyManualClipBoardProjectForStorage(project = {}) {
 
 function writeEmergencyManualClipBoardSnapshot(project = {}, nodeId = "") {
   const safeNodeId = String(nodeId || project?.nodeId || project?.sourceNodeId || "").trim();
+  const existingEmergencyProject = readEmergencyManualClipBoardProjectForNode(safeNodeId);
+  if (manualBoardHasReloadRestorePayload(existingEmergencyProject) && manualBoardSnapshotLosesTimeline(existingEmergencyProject, project)) {
+    console.warn("[MANUAL BOARD EMERGENCY SNAPSHOT PRESERVE] blocked timeline-empty overwrite", {
+      nodeId: safeNodeId,
+      existing: getManualBoardTimingSummary(existingEmergencyProject),
+      incoming: getManualBoardTimingSummary(project),
+    });
+    return true;
+  }
   const emergencyProject = protectManualBoardTimingStorageSnapshot(buildEmergencyManualClipBoardProjectForStorage({
     ...(project && typeof project === "object" ? project : {}),
     nodeId: safeNodeId || project?.nodeId || project?.sourceNodeId || "",
