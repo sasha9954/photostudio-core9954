@@ -2111,6 +2111,7 @@ export default function ManualClipDirectorBoardEditor({
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
   const didHydrateRef = useRef(false);
+  const consumedExplicitNewProjectRef = useRef(false);
   const didWarnMissingSourceNodeIdRef = useRef(false);
   const projectRef = useRef(null);
   const selectedSceneIdRef = useRef("");
@@ -2357,12 +2358,13 @@ export default function ManualClipDirectorBoardEditor({
   useEffect(() => {
     const navigationProject = location.state?.director_board || location.state?.project || null;
     const openState = readManualClipBoardOpenState();
-    const explicitNewProject = Boolean(
+    const rawExplicitNewProject = Boolean(
       manualBoardExplicitNewProject
       || location.state?.manualBoardExplicitNewProject === true
       || openState?.manualBoardExplicitNewProject === true
       || ["manual_new_project_from_audio_split", "manual_new_project_from_audio_split_open_embedded"].includes(String((embeddedProject || navigationProject)?.lastPersistReason || ""))
     );
+    const explicitNewProject = rawExplicitNewProject && consumedExplicitNewProjectRef.current !== true;
     const hasFreshNavigationProject = hasMeaningfulManualProject(navigationProject || embeddedProject);
     const freshNavigationCandidate = embeddedProject || navigationProject;
     const shouldBypassDurableForFreshNewProject = Boolean(
@@ -2387,29 +2389,6 @@ export default function ManualClipDirectorBoardEditor({
       ? getManualBoardStrictProjectIdentity(currentProject)
       : null;
 
-    const incomingIdentity = hasMeaningfulManualProject(hydrationNavigationProject)
-      ? getManualBoardStrictProjectIdentity(hydrationNavigationProject)
-      : null;
-
-    const durableIdentity = hasMeaningfulManualProject(durableProject)
-      ? getManualBoardStrictProjectIdentity(durableProject)
-      : null;
-
-    const sameIncomingAsCurrent =
-      currentHasMeaningfulProject
-      && hasMeaningfulManualProject(hydrationNavigationProject)
-      && manualBoardStrictIdentityMatches(currentProject, hydrationNavigationProject);
-
-    const sameDurableAsCurrent =
-      currentHasMeaningfulProject
-      && hasMeaningfulManualProject(durableProject)
-      && manualBoardStrictIdentityMatches(currentProject, durableProject);
-
-    const incomingProjectChangesIdentity = Boolean(
-      currentHasMeaningfulProject
-      && hasMeaningfulManualProject(hydrationNavigationProject)
-      && !manualBoardStrictIdentityMatches(currentProject, hydrationNavigationProject)
-    );
 
     const isSourceNodeChange = Boolean(
       currentIdentity?.sourceNodeId
@@ -2426,14 +2405,7 @@ export default function ManualClipDirectorBoardEditor({
     ) {
       console.warn("[MANUAL BOARD HYDRATE SKIP: CURRENT EDITING STATE PROTECTED]", {
         sourceNodeId: sourceNodeIdFromRoute,
-        currentIdentity,
-        incomingIdentity,
-        durableIdentity,
-        incomingProjectChangesIdentity,
-        isSourceNodeChange,
-        currentStats: getManualClipBoardMaterialStats(currentProject),
-        incomingStats: getManualClipBoardMaterialStats(hydrationNavigationProject),
-        durableStats: getManualClipBoardMaterialStats(durableProject),
+        reason: "already_hydrated_same_source",
       });
       return;
     }
@@ -2601,6 +2573,9 @@ export default function ManualClipDirectorBoardEditor({
         selectedSceneId: selectedSceneIdForHydrate,
         updatedAt: Date.now(),
       });
+      if (explicitNewProject) {
+        consumedExplicitNewProjectRef.current = true;
+      }
       console.info("[MANUAL BOARD AUDIO HYDRATE]", {
         project_id: hydratedProject.project_id || hydratedProject.projectId || "",
         audio: getManualBoardAudioInfo(hydratedProject),
@@ -4998,30 +4973,39 @@ export default function ManualClipDirectorBoardEditor({
         </div>
 
         <label>Route
-          <select value={selectedScene.route} onChange={(e) => {
+          <select value={selectedScene.route || "i2v"} onChange={(e) => {
             const route = e.target.value;
+            console.info("[MANUAL BOARD ROUTE USER EDIT]", {
+              sceneId: selectedScene.scene_id,
+              from: selectedScene.route,
+              to: route,
+              autosave: false,
+            });
             updateScene(selectedScene.scene_id, (currentScene = {}) => {
               const generatedAudioEnabled = route === "i2v_sound" || route === "i2v_text" || route === "first_last_sound";
+
               const routePatch = {
                 route,
                 keep_generated_audio: generatedAudioEnabled,
                 keepGeneratedAudio: generatedAudioEnabled,
-                generated_audio_policy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "",
-                generatedAudioPolicy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "",
-                generated_audio_gain_db: Number(currentScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
-                generatedAudioGainDb: Number(currentScene.generated_audio_gain_db ?? currentScene.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
+                generated_audio_policy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "silent_video_use_master_track",
+                generatedAudioPolicy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "silent_video_use_master_track",
+                generated_audio_gain_db: Number(currentScene.generated_audio_gain_db ?? currentScene.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
+                generatedAudioGainDb: Number(currentScene.generatedAudioGainDb ?? currentScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
                 start_image_url: isFirstLastRoute(route) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.start_image_url,
                 image_url: isFirstLastRoute(route) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.image_url,
               };
-              if (route !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)) {
-                return {
-                  ...clearVideoPatch(currentScene),
-                  ...routePatch,
-                  status: resolveManualSceneStatus({ ...currentScene, ...clearManualSceneVideoMediaPatch(), ...routePatch }),
-                };
-              }
-              return routePatch;
-            }, { reason: route !== selectedScene.route ? "route_change_clear_video" : "route_change" });
+
+              return {
+                ...routePatch,
+                route_changed_after_video: Boolean(route !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)),
+                routeChangedAfterVideo: Boolean(route !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)),
+              };
+            }, {
+              reason: "route_user_edit",
+              autosave: false,
+              allowEmptyPromptModelOverwrite: true,
+            });
           }}>{ROUTES.map((route) => <option key={route} value={route}>{route}</option>)}</select>
         </label>
 
