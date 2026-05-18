@@ -133,6 +133,99 @@ function mergeManualScenePreservingMedia(currentScene = {}, patch = {}) {
   return withManualSceneMediaAliases(merged);
 }
 
+function mergeManualScenePatchPreservingPromptModel(existingScene = {}, patch = {}, options = {}) {
+  const allowEmptyPromptModelOverwrite = options?.allowEmptyPromptModelOverwrite === true;
+
+  const promptModelKeys = [
+    "prompt",
+    "image_prompt",
+    "imagePrompt",
+    "photo_prompt",
+    "photoPrompt",
+    "source_image_prompt_en",
+    "source_image_prompt_ru",
+    "video_prompt",
+    "videoPrompt",
+    "i2v_prompt_en",
+    "final_video_prompt",
+    "finalVideoPrompt",
+    "positive_prompt",
+    "positivePrompt",
+    "negative_prompt",
+    "negativePrompt",
+    "i2v_negative_prompt_en",
+    "sound_prompt",
+    "negative_audio_prompt",
+    "user_prompt",
+    "userPrompt",
+    "custom_prompt",
+    "customPrompt",
+    "speech_text",
+    "voice_profile",
+    "voice_mode",
+    "voice_language",
+    "delivery_style",
+    "mmaudio_prompt",
+    "mmaudioPrompt",
+    "mmaudio_negative_prompt",
+    "mmaudioNegativePrompt",
+
+    "selected_model",
+    "selectedModel",
+    "model",
+    "model_id",
+    "modelId",
+    "image_model",
+    "imageModel",
+    "video_model",
+    "videoModel",
+    "generator_model",
+    "generatorModel",
+    "selectedImageModel",
+    "selectedVideoModel",
+    "selectedGenerator",
+    "selectedProvider",
+    "provider",
+    "provider_model",
+    "providerModel",
+    "imageProvider",
+    "videoProvider",
+    "generationModel",
+    "generation_model",
+    "generation_settings",
+    "generationSettings",
+    "model_settings",
+    "modelSettings",
+  ];
+
+  const safePatch = patch && typeof patch === "object" ? patch : {};
+  const merged = {
+    ...(existingScene || {}),
+    ...safePatch,
+  };
+
+  if (!allowEmptyPromptModelOverwrite) {
+    promptModelKeys.forEach((key) => {
+      const existingValue = existingScene?.[key];
+      const patchHasKey = Object.prototype.hasOwnProperty.call(safePatch, key);
+      const patchValue = safePatch?.[key];
+
+      const patchIsEmpty =
+        patchHasKey
+        && (patchValue === "" || patchValue === null || patchValue === undefined);
+
+      const existingHasValue =
+        existingValue !== "" && existingValue !== null && existingValue !== undefined;
+
+      if (patchIsEmpty && existingHasValue) {
+        merged[key] = existingValue;
+      }
+    });
+  }
+
+  return merged;
+}
+
 const MANUAL_STALE_PROMPT_FIELD_CLEAR_PATCH = {
   positive_prompt: "",
   positivePrompt: "",
@@ -1375,18 +1468,33 @@ function preserveManualScenePromptAndModelFields(normalized = {}, rawScene = {})
     "imagePrompt",
     "photo_prompt",
     "photoPrompt",
+    "source_image_prompt_en",
+    "source_image_prompt_ru",
     "video_prompt",
     "videoPrompt",
+    "i2v_prompt_en",
     "final_video_prompt",
     "finalVideoPrompt",
     "positive_prompt",
     "positivePrompt",
     "negative_prompt",
     "negativePrompt",
+    "i2v_negative_prompt_en",
+    "sound_prompt",
+    "negative_audio_prompt",
     "user_prompt",
     "userPrompt",
     "custom_prompt",
     "customPrompt",
+    "speech_text",
+    "voice_profile",
+    "voice_mode",
+    "voice_language",
+    "delivery_style",
+    "mmaudio_prompt",
+    "mmaudioPrompt",
+    "mmaudio_negative_prompt",
+    "mmaudioNegativePrompt",
     "selected_model",
     "selectedModel",
     "model",
@@ -1398,7 +1506,17 @@ function preserveManualScenePromptAndModelFields(normalized = {}, rawScene = {})
     "videoModel",
     "generator_model",
     "generatorModel",
+    "selectedImageModel",
+    "selectedVideoModel",
+    "selectedGenerator",
+    "selectedProvider",
     "provider",
+    "provider_model",
+    "providerModel",
+    "imageProvider",
+    "videoProvider",
+    "generationModel",
+    "generation_model",
     "generation_settings",
     "generationSettings",
     "model_settings",
@@ -2881,6 +2999,14 @@ export default function ManualClipDirectorBoardEditor({
     setMMAudioGainDraftDb(selectedMMAudioGainDb);
   }, [selectedScene?.scene_id, selectedMMAudioGainDb]);
 
+  useEffect(() => {
+    const scene = selectedScene;
+    if (!scene) return;
+
+    setMMAudioPrompt(String(scene.mmaudio_prompt || scene.mmaudioPrompt || scene.sound_prompt || ""));
+    setMMAudioNegativePrompt(String(scene.mmaudio_negative_prompt || scene.mmaudioNegativePrompt || scene.negative_audio_prompt || ""));
+  }, [project?.project_id, project?.updatedAt, selectedSceneId]);
+
   const currentBlock = useMemo(() => {
     const blockId = String(selectedScene?.story_block_id || "").trim();
     if (!blockId) return null;
@@ -3252,8 +3378,26 @@ export default function ManualClipDirectorBoardEditor({
     const prevScenes = Array.isArray(baseProject?.scenes) ? baseProject.scenes : [];
     const nextScenes = prevScenes.map((scene) => {
       if (scene.scene_id !== sceneId) return scene;
-      const patch = typeof patchOrFactory === "function" ? patchOrFactory(scene) : patchOrFactory;
-      return mergeManualScenePreservingMedia(scene, patch || {});
+      const existingScene = scene || {};
+      const patch = typeof patchOrFactory === "function" ? patchOrFactory(existingScene) : patchOrFactory;
+      console.info("[MANUAL BOARD UPDATE_SCENE PATCH DEBUG]", {
+        sceneId,
+        reason: "update_scene",
+        beforeSceneState: getManualBoardSceneStateDebugStats({ ...projectRef.current, scenes: [existingScene] }),
+        patchSceneState: getManualBoardSceneStateDebugStats({ ...projectRef.current, scenes: [patch] }),
+        patchKeys: Object.keys(patch || {}),
+      });
+      const nextScene = mergeManualScenePreservingMedia(
+        existingScene,
+        mergeManualScenePatchPreservingPromptModel(existingScene, patch || {}, {
+          allowEmptyPromptModelOverwrite: options?.allowEmptyPromptModelOverwrite === true,
+        })
+      );
+      console.info("[MANUAL BOARD UPDATE_SCENE MERGED DEBUG]", {
+        sceneId,
+        mergedSceneState: getManualBoardSceneStateDebugStats({ ...projectRef.current, scenes: [nextScene] }),
+      });
+      return nextScene;
     });
     const persistReason = options?.reason || "update_scene";
     const isDeletionUpdate = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/i.test(persistReason);
