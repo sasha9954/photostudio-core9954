@@ -9227,7 +9227,10 @@ function mergeSavedVideoMatchBoardData(nodeId = "", data = {}, timingContextOver
   if (saved) {
     if (saved.sourceVideo && typeof saved.sourceVideo === "object") merged.sourceVideo = saved.sourceVideo;
     if (Object.prototype.hasOwnProperty.call(saved, "sourceVideoUrl")) merged.sourceVideoUrl = String(saved.sourceVideoUrl || "");
+    if (Array.isArray(saved.matchSegments)) merged.matchSegments = saved.matchSegments;
     if (Array.isArray(saved.videoBlocks)) merged.videoBlocks = saved.videoBlocks;
+    if (Object.prototype.hasOwnProperty.call(saved, "selectedSegmentId")) merged.selectedSegmentId = String(saved.selectedSegmentId || "");
+    if (Object.prototype.hasOwnProperty.call(saved, "selectedCandidateId")) merged.selectedCandidateId = String(saved.selectedCandidateId || "");
     if (Object.prototype.hasOwnProperty.call(saved, "selectedBlockId")) merged.selectedBlockId = String(saved.selectedBlockId || "");
     if (Object.prototype.hasOwnProperty.call(saved, "jsonInput")) merged.jsonInput = String(saved.jsonInput || "");
     if (Object.prototype.hasOwnProperty.call(saved, "jsonError")) merged.jsonError = String(saved.jsonError || "");

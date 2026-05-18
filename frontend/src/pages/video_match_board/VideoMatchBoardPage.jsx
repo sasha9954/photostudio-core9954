@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   getDefaultVideoMatchBoardProject,
   getVideoMatchBoardEmergencyStorageKey,
+  buildVideoBlocksFromMatchSegments,
   parseVideoMatchBoardJson,
   persistVideoMatchBoardProject,
   readVideoMatchBoardProjectForNode,
@@ -52,6 +53,7 @@ export default function VideoMatchBoardPage() {
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [sourceVideoLoadMessage, setSourceVideoLoadMessage] = useState("");
 
+  const matchSegments = Array.isArray(project.matchSegments) ? project.matchSegments : [];
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
   const selectedBlock = videoBlocks.find((block) => block.id === project.selectedBlockId) || null;
   const sourceVideoUrl = String(project.sourceVideoUrl || "");
@@ -145,8 +147,12 @@ export default function VideoMatchBoardPage() {
       duration_sec: Number(nextDurationSec.toFixed(3)),
     };
     patchProject({
+      schema: result.schema,
       sourceVideo: nextSourceVideo,
+      matchSegments: result.matchSegments,
       videoBlocks: result.videoBlocks,
+      selectedSegmentId: result.selectedSegmentId,
+      selectedCandidateId: result.selectedCandidateId,
       selectedBlockId: result.videoBlocks[0]?.id || "",
       jsonError: durationWarning,
     });
@@ -178,8 +184,139 @@ export default function VideoMatchBoardPage() {
     }
   };
 
+  const getSelectionPatchForBlock = (block = {}) => ({
+    selectedBlockId: block?.id || "",
+    selectedSegmentId: block?.segmentId || block?.audioSceneId || "",
+    selectedCandidateId: block?.candidateId || block?.id || "",
+  });
+
+  const onSelectCandidate = (segmentId = "", candidateId = "") => {
+    const nextSegments = matchSegments.map((segment) => {
+      if (segment.id !== segmentId) return segment;
+      return {
+        ...segment,
+        selectedCandidateId: candidateId,
+        selected_candidate_id: candidateId,
+      };
+    });
+    const nextBlocks = buildVideoBlocksFromMatchSegments(nextSegments, sourceVideoUrl);
+    const nextBlock = nextBlocks.find((block) => block.segmentId === segmentId && (block.candidateId === candidateId || block.id === candidateId)) || nextBlocks[0] || null;
+    patchProject({
+      matchSegments: nextSegments,
+      videoBlocks: nextBlocks,
+      selectedSegmentId: segmentId,
+      selectedCandidateId: candidateId,
+      selectedBlockId: nextBlock?.id || "",
+    });
+  };
+
   const sampleDurationSec = Math.max(getValidDurationSec(videoDurationSec), 130);
-  const sampleJson = `{"schema":"video_match_board_v1","source_video":{"filename":"source.mp4","duration_sec":${Number(sampleDurationSec.toFixed(3))}},"matches":[{"id":"match_001","audio_scene_id":"seg_01","target_t0":0,"target_t1":4.8,"video_t0":120.4,"video_t1":125.2,"match_reason":"reason","confidence":0.86}]}`;
+  const sampleJson = JSON.stringify({
+    schema: "video_match_board_v2",
+    source_video: { filename: "source.mp4", duration_sec: Number(sampleDurationSec.toFixed(3)) },
+    segments: [
+      {
+        audio_scene_id: "seg_01",
+        target_t0: 0,
+        target_t1: 4.8,
+        text: "Opening phrase",
+        mood: "curious",
+        visual_need: "intro establishing shot",
+        selected_candidate_id: "seg_01_a",
+        candidates: [
+          {
+            id: "seg_01_a",
+            video_t0: 12.4,
+            video_t1: 17.2,
+            fit_mode: "exact",
+            confidence: 0.86,
+            match_reason: "Wide intro shot matches the opening mood.",
+            visual_type: "intro",
+            shot_type: "wide",
+            emotion: "calm",
+            action: "location reveal",
+            contains_face: false,
+            mouth_visible: false,
+            lip_sync_candidate: false,
+            dialogue_present: false,
+            motion_level: "low",
+            camera_motion: "slow_pan",
+            thumbnail: "",
+            warnings: [],
+          },
+          {
+            id: "seg_01_b",
+            video_t0: 38.0,
+            video_t1: 42.8,
+            fit_mode: "trim",
+            confidence: 0.74,
+            match_reason: "Alternate establishing shot with more movement.",
+            visual_type: "intro",
+            shot_type: "medium",
+            emotion: "neutral",
+            action: "subject enters frame",
+            contains_face: true,
+            mouth_visible: false,
+            lip_sync_candidate: false,
+            dialogue_present: false,
+            motion_level: "medium",
+            camera_motion: "handheld",
+            warnings: ["More motion than requested"],
+          },
+        ],
+      },
+      {
+        audio_scene_id: "seg_02",
+        target_t0: 4.8,
+        target_t1: 9.6,
+        text: "Second beat",
+        mood: "focused",
+        visual_need: "detail or reaction shot",
+        selected_candidate_id: "seg_02_a",
+        candidates: [
+          {
+            id: "seg_02_a",
+            video_t0: 64.2,
+            video_t1: 69.0,
+            fit_mode: "exact",
+            confidence: 0.82,
+            match_reason: "Close detail supports the focused narration.",
+            visual_type: "detail",
+            shot_type: "close_up",
+            emotion: "focused",
+            action: "hands work on object",
+            contains_face: false,
+            mouth_visible: false,
+            lip_sync_candidate: false,
+            dialogue_present: false,
+            motion_level: "low",
+            camera_motion: "static",
+            warnings: [],
+          },
+          {
+            id: "seg_02_b",
+            video_t0: 92.5,
+            video_t1: 97.3,
+            fit_mode: "trim",
+            confidence: 0.77,
+            match_reason: "Reaction shot can bridge into the next line.",
+            visual_type: "reaction",
+            shot_type: "close_up",
+            emotion: "thoughtful",
+            action: "person looks off camera",
+            contains_face: true,
+            mouth_visible: true,
+            lip_sync_candidate: false,
+            dialogue_present: false,
+            motion_level: "low",
+            camera_motion: "static",
+            thumbnail: "",
+            warnings: ["Mouth is visible; avoid if narration feels lip-synced"],
+          },
+        ],
+      },
+    ],
+  }, null, 2);
 
   return (
     <div className="videoMatchPage">
@@ -220,7 +357,7 @@ export default function VideoMatchBoardPage() {
                 type="button"
                 className={`videoMatchTimelineBlock ${block.id === project.selectedBlockId ? "isSelected" : ""}`}
                 style={{ left: `${getBlockLeft(block, timelineDuration)}%`, width: `${getBlockWidth(block, timelineDuration)}%` }}
-                onClick={() => patchProject({ selectedBlockId: block.id }, { lastGood: false })}
+                onClick={() => patchProject(getSelectionPatchForBlock(block), { lastGood: false })}
                 title={`${block.id}: ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с`}
               />
             ))}
@@ -248,17 +385,53 @@ export default function VideoMatchBoardPage() {
             <h2>Codex JSON</h2>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => patchProject({ jsonInput: sampleJson }, { lastGood: false })}>Вставить пример</button>
           </div>
-          <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1..." />
+          <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1 или video_match_board_v2..." />
           <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onApplyJson}>Применить JSON</button>
           {project.jsonError ? <div className="videoMatchError">{project.jsonError}</div> : null}
         </section>
 
         <section className="videoMatchPanel videoMatchBlocksPanel">
+          <h2>Segments / candidates</h2>
+          {matchSegments.length === 0 ? <div className="videoMatchEmptyList">После применения JSON здесь появятся segments и candidates.</div> : null}
+          <div className="videoMatchSegmentsList">
+            {matchSegments.map((segment) => (
+              <div key={segment.id} className={`videoMatchSegmentCard ${segment.id === project.selectedSegmentId ? "isSelected" : ""}`}>
+                <div className="videoMatchSegmentHeader">
+                  <div>
+                    <b>{segment.audioSceneId || segment.id}</b>
+                    <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · candidates {Array.isArray(segment.candidates) ? segment.candidates.length : 0}</span>
+                  </div>
+                  {segment.mood ? <small>{segment.mood}</small> : null}
+                </div>
+                {segment.text ? <p>{segment.text}</p> : null}
+                {segment.visualNeed ? <small className="videoMatchSegmentNeed">Need: {segment.visualNeed}</small> : null}
+                <div className="videoMatchCandidatesList">
+                  {(Array.isArray(segment.candidates) ? segment.candidates : []).map((candidate) => {
+                    const isCandidateSelected = candidate.id === segment.selectedCandidateId;
+                    return (
+                      <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""}`}>
+                        {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                        <div className="videoMatchCandidateBody">
+                          <b>{candidate.id}</b>
+                          <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
+                          <span>{[candidate.fitMode, candidate.visualType, candidate.shotType, candidate.motionLevel].filter(Boolean).join(" · ") || "metadata —"}</span>
+                          {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
+                          {candidate.warnings?.length ? <small className="videoMatchWarnings">Warnings: {candidate.warnings.join("; ")}</small> : null}
+                        </div>
+                        <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={isCandidateSelected} onClick={() => onSelectCandidate(segment.id, candidate.id)}>{isCandidateSelected ? "Выбран" : "Выбрать candidate"}</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <h2>Video blocks</h2>
-          {videoBlocks.length === 0 ? <div className="videoMatchEmptyList">После применения JSON здесь появятся video blocks.</div> : null}
+          {videoBlocks.length === 0 ? <div className="videoMatchEmptyList">Selected candidates появятся здесь как video blocks.</div> : null}
           <div className="videoMatchBlocksList">
             {videoBlocks.map((block) => (
-              <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => patchProject({ selectedBlockId: block.id }, { lastGood: false })}>
+              <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => patchProject(getSelectionPatchForBlock(block), { lastGood: false })}>
                 <b>{block.id}</b>
                 <span>audio: {block.audioSceneId || "—"} · target {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
                 <span>video {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · confidence {block.confidence ?? "—"}</span>
