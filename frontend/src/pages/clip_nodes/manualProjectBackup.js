@@ -1066,14 +1066,37 @@ export function getManualProjectInputSignature(project = {}) {
 }
 
 export function getManualBoardStrictProjectIdentity(project = {}) {
-  const audio = project?.audio || project?.audio_metadata || {};
+  const audio = {
+    ...(project?.audio_metadata && typeof project.audio_metadata === "object" ? project.audio_metadata : {}),
+    ...(project?.audio && typeof project.audio === "object" ? project.audio : {}),
+  };
+  const projectId = String(project?.project_id || project?.projectId || "").trim();
+  const explicitInputSignature = String(project?.input_signature || project?.inputSignature || "").trim();
+  const computedInputSignature = explicitInputSignature || getManualProjectInputSignature(project);
+  const explicitAudioSignature = String(project?.audio_signature || project?.audioSignature || "").trim();
+  const computedAudioSignature = explicitAudioSignature || computeManualProjectInputSignature(project, { audioOnly: true });
+  const audioUrl = String(
+    audio?.url
+    || project?.audio_url
+    || project?.audioUrl
+    || ""
+  ).trim();
+  const audioDurationSec = Number(
+    audio?.duration_sec
+    || audio?.durationSec
+    || project?.audio_duration_sec
+    || project?.audioDurationSec
+    || 0
+  ) || 0;
+  const sourceNodeId = String(project?.sourceNodeId || project?.nodeId || project?.ownerNodeId || "").trim();
+
   return {
-    projectId: String(project?.project_id || project?.projectId || "").trim(),
-    inputSignature: String(project?.input_signature || project?.inputSignature || "").trim(),
-    audioSignature: String(project?.audio_signature || project?.audioSignature || "").trim(),
-    audioUrl: String(audio?.url || project?.audio_url || project?.audioUrl || "").trim(),
-    audioDurationSec: Number(audio?.duration_sec || project?.audio_duration_sec || 0) || 0,
-    sourceNodeId: String(project?.sourceNodeId || project?.nodeId || project?.ownerNodeId || "").trim(),
+    projectId,
+    inputSignature: computedInputSignature,
+    audioSignature: computedAudioSignature,
+    audioUrl,
+    audioDurationSec,
+    sourceNodeId,
   };
 }
 
