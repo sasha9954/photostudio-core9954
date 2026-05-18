@@ -10,6 +10,7 @@ import {
 } from "./manualBlockStoryboardDomain.js";
 import {
   buildEmergencyManualClipBoardProjectForStorage,
+  MANUAL_CLIP_BOARD_EMERGENCY_DOWNLOADED_ONCE_KEY,
   buildManualProjectBackupJson,
   cleanupManualClipBoardStorageAggressive,
   computeManualProjectInputSignature,
@@ -40,6 +41,8 @@ const ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text", "first_last", "first_las
 const I2V_SOUND_GAIN_DEFAULT_DB = -6;
 const I2V_SOUND_GAIN_MIN_DB = -18;
 const I2V_SOUND_GAIN_MAX_DB = 10;
+const MANUAL_BOARD_EMERGENCY_DOWNLOAD_THROTTLE_MS = 10 * 60 * 1000;
+const MANUAL_BOARD_EMERGENCY_DOWNLOAD_LAST_TS_KEY = "manual_board_emergency_download_last_ts";
 const MANUAL_TIMING_STORY_VOICEOVER_MODE = "story_voiceover";
 const MANUAL_TIMING_MUSIC_CLIP_MODE = "music_clip";
 const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
@@ -1681,6 +1684,7 @@ export default function ManualClipDirectorBoardEditor({
   const lastPersistedProjectRef = useRef(null);
   const lastGoodBoardRef = useRef(null);
   const emergencyBackupDownloadedRef = useRef(false);
+  const lastEmergencyAutoDownloadAtRef = useRef(0);
   const quickListenAudioRef = useRef(null);
   const quickListenRafRef = useRef(null);
   const playbackRangeRef = useRef({ startSec: 0, endSec: null });
@@ -1713,6 +1717,40 @@ export default function ManualClipDirectorBoardEditor({
     const ownerNodeType = String(candidateProject?.ownerNodeType || location.state?.ownerNodeType || "").trim().toLowerCase();
     const source = String(candidateProject?.source || location.state?.source || "").trim().toLowerCase();
     return ownerNodeType === "manualtiming" || source === "manual_timing_node";
+  };
+
+  const isCriticalEmergencyDownloadReason = (reason = "") => (
+    /^(before_unload|route_leave|manual_force_save_button_failed|video_done_force_persist_failed)$/.test(String(reason || ""))
+  );
+
+  const canAutoDownloadEmergencyBackup = (reason = "") => {
+    if (!isCriticalEmergencyDownloadReason(reason)) return false;
+    try {
+      if (sessionStorage.getItem(MANUAL_CLIP_BOARD_EMERGENCY_DOWNLOADED_ONCE_KEY) === "true") return false;
+    } catch {}
+    const now = Date.now();
+    const storedLastDownloadAt = (() => {
+      try { return Number(sessionStorage.getItem(MANUAL_BOARD_EMERGENCY_DOWNLOAD_LAST_TS_KEY) || 0) || 0; } catch { return 0; }
+    })();
+    const lastDownloadAt = Math.max(lastEmergencyAutoDownloadAtRef.current || 0, storedLastDownloadAt);
+    return !lastDownloadAt || now - lastDownloadAt >= MANUAL_BOARD_EMERGENCY_DOWNLOAD_THROTTLE_MS;
+  };
+
+  const markEmergencyBackupAutoDownloaded = () => {
+    const now = Date.now();
+    emergencyBackupDownloadedRef.current = true;
+    lastEmergencyAutoDownloadAtRef.current = now;
+    try {
+      sessionStorage.setItem(MANUAL_CLIP_BOARD_EMERGENCY_DOWNLOADED_ONCE_KEY, "true");
+      sessionStorage.setItem(MANUAL_BOARD_EMERGENCY_DOWNLOAD_LAST_TS_KEY, String(now));
+    } catch {}
+  };
+
+  const maybeAutoDownloadEmergencyBackup = (reason = "") => {
+    if (!canAutoDownloadEmergencyBackup(reason)) return false;
+    const downloaded = downloadEmergencyBoardBackup(reason);
+    if (downloaded !== false) markEmergencyBackupAutoDownloaded();
+    return downloaded !== false;
   };
 
   const getManualBoardForceState = (candidateProject = projectRef.current || project || {}) => ({
@@ -2103,12 +2141,14 @@ export default function ManualClipDirectorBoardEditor({
       if (updateStatus) {
         setProject(safeProject);
         if (storageErrorAfterSave?.emergencySaved === true) {
-          setAutosaveStatus("Сохранён аварийный backup");
+          const isQuotaEmergency = storageErrorAfterSave?.reason === "quota_exceeded";
+          setAutosaveStatus(isQuotaEmergency ? "Autosave переполнен — скачайте backup вручную" : "Сохранён аварийный backup в браузере");
           setAutosaveError(String(storageErrorAfterSave?.errorMessage || storageErrorAfterSave?.reason || "emergency_saved"));
+          setShowEmergencyBackupButton(isQuotaEmergency);
         } else {
           setAutosaveStatus("Сохранено");
+          setShowEmergencyBackupButton(false);
         }
-        setShowEmergencyBackupButton(false);
       }
       const diagnostics = getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId);
       console.info("[MANUAL BOARD AUTOSAVE DONE]", {
@@ -2124,17 +2164,16 @@ export default function ManualClipDirectorBoardEditor({
       const errorMessage = String(storageError?.errorMessage || storageError?.reason || error?.message || error || "autosave_failed");
       if (updateStatus) {
         if (storageError?.emergencySaved === true) {
-          setAutosaveStatus("Сохранён аварийный backup");
+          const isQuotaEmergency = storageError?.reason === "quota_exceeded";
+          setAutosaveStatus(isQuotaEmergency ? "Autosave переполнен — скачайте backup вручную" : "Сохранён аварийный backup в браузере");
           setAutosaveError(errorMessage);
-          setShowEmergencyBackupButton(false);
+          setShowEmergencyBackupButton(isQuotaEmergency);
         } else {
-          setAutosaveStatus("Ошибка autosave");
+          const isQuotaError = storageError?.reason === "quota_exceeded";
+          setAutosaveStatus(isQuotaError ? "Autosave переполнен — скачайте backup вручную" : "Ошибка autosave");
           setAutosaveError(errorMessage);
           setShowEmergencyBackupButton(true);
-          if (!emergencyBackupDownloadedRef.current) {
-            emergencyBackupDownloadedRef.current = true;
-            downloadEmergencyBoardBackup("manual_director_board_autosave_failed");
-          }
+          maybeAutoDownloadEmergencyBackup(reason);
         }
       }
       console.error("[MANUAL BOARD AUTOSAVE FAILED]", {
@@ -2235,7 +2274,7 @@ export default function ManualClipDirectorBoardEditor({
     setAutosaveStatus("Сохраняем…");
     setAutosaveError("");
     const wrote = forceWriteManualClipBoardProjectForNode(safeProject, { reason: "manual_force_save_button" });
-    const storageError = wrote ? null : getLastManualClipBoardStorageError();
+    const storageError = getLastManualClipBoardStorageError();
     if (!wrote) {
       console.error("[MANUAL BOARD SAVE BUTTON] force write failed", {
         sourceNodeId: ownerNodeId,
@@ -2257,10 +2296,11 @@ export default function ManualClipDirectorBoardEditor({
       setShowEmergencyBackupButton(false);
       rememberManualBoardLastGood(safeProject);
     } else {
-      setAutosaveStatus("Ошибка autosave");
+      const isQuotaError = storageError?.reason === "quota_exceeded";
+      setAutosaveStatus(isQuotaError ? "Autosave переполнен — скачайте backup вручную" : "Ошибка autosave");
       setAutosaveError(String(storageError?.errorMessage || storageError?.reason || "manual_force_save_failed"));
       setShowEmergencyBackupButton(true);
-      downloadEmergencyBoardBackup("manual_director_board_manual_save_failed");
+      maybeAutoDownloadEmergencyBackup("manual_force_save_button_failed");
     }
     logStorageVerify(ownerNodeId);
     setBackupStatus(readbackOk
@@ -2293,7 +2333,7 @@ export default function ManualClipDirectorBoardEditor({
 
   useEffect(() => {
     const persistBeforeLeave = () => {
-      flushManualBoardAutosave("pagehide_or_beforeunload", {
+      flushManualBoardAutosave("before_unload", {
         updateStatus: false,
         skipSignatureCheck: true,
       });
@@ -2399,10 +2439,18 @@ export default function ManualClipDirectorBoardEditor({
     return rememberLastGoodManualClipBoardProject(candidateProject);
   };
 
-  const downloadEmergencyBoardBackup = (source = "manual_director_board_emergency") => {
-    const currentProject = projectRef.current || project || readLastGoodManualClipBoardProject() || lastGoodBoardRef.current || {};
-    const fallbackProject = hasMeaningfulManualProject(currentProject) ? currentProject : (lastGoodBoardRef.current || readLastGoodManualClipBoardProject() || {});
+  function downloadEmergencyBoardBackup(source = "manual_director_board_emergency") {
+    const currentProject = projectRef.current || project || {};
+    const ownerNodeId = String(getProjectOwnerNodeId(currentProject) || sourceNodeIdFromRoute || "").trim();
+    const storedEmergencyProject = readEmergencyManualClipBoardProjectForNode(ownerNodeId);
+    const fallbackProject = hasMeaningfulManualProject(storedEmergencyProject)
+      ? storedEmergencyProject
+      : (hasMeaningfulManualProject(currentProject) ? currentProject : (lastGoodBoardRef.current || readLastGoodManualClipBoardProject() || {}));
     const currentSelectedSceneId = selectedSceneIdRef.current || fallbackProject.selectedSceneId || selectedSceneId || "";
+    if (!hasMeaningfulManualProject(fallbackProject)) {
+      setBackupStatus("Нет аварийного backup для скачивания");
+      return false;
+    }
     downloadJsonPayload(
       {
         backup_type: "photostudio_manual_project_emergency_backup",
@@ -2413,7 +2461,10 @@ export default function ManualClipDirectorBoardEditor({
       },
       `manual_director_emergency_backup_${Date.now()}.json`,
     );
-  };
+    setBackupStatus("Аварийный backup скачан");
+    window.setTimeout(() => setBackupStatus(""), 1800);
+    return true;
+  }
 
   const onCleanupOldBrowserBackups = () => {
     const currentProject = projectRef.current || project || {};
@@ -2934,8 +2985,11 @@ export default function ManualClipDirectorBoardEditor({
       if (options?.forcePersist) {
         const saved = flushManualBoardAutosave(persistReason, { skipSignatureCheck: true });
         if (!saved) {
-          setAutosaveStatus("Ошибка autosave");
+          const storageError = getLastManualClipBoardStorageError();
+          const isQuotaError = storageError?.reason === "quota_exceeded";
+          setAutosaveStatus(isQuotaError ? "Autosave переполнен — скачайте backup вручную" : "Ошибка autosave");
           setShowEmergencyBackupButton(true);
+          if (/video_done/i.test(persistReason)) maybeAutoDownloadEmergencyBackup("video_done_force_persist_failed");
         }
       } else {
         scheduleManualBoardAutosave(persistReason);
@@ -4065,7 +4119,7 @@ export default function ManualClipDirectorBoardEditor({
         });
       }}>Прослушать сцены</button>
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
-      <span className={`manualDirectorAutosaveStatus ${autosaveStatus === "Ошибка autosave" ? "isError" : ""}`} title={autosaveError || undefined} aria-live="polite">{autosaveStatus}</span>
+      <span className={`manualDirectorAutosaveStatus ${autosaveStatus === "Ошибка autosave" || autosaveStatus.startsWith("Autosave переполнен") ? "isError" : ""}`} title={autosaveError || undefined} aria-live="polite">{autosaveStatus}</span>
       {autosaveStatus === "Ошибка autosave" ? <button className="clipSB_btn" onClick={onCleanupOldBrowserBackups}>Очистить старые backup в браузере</button> : null}
       {showEmergencyBackupButton ? <button className="clipSB_btn clipSB_btnDanger" onClick={() => downloadEmergencyBoardBackup("manual_director_board_emergency_button")}>Скачать аварийный backup</button> : null}
       <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
