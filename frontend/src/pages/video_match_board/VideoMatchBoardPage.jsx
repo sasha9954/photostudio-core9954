@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { API_BASE, fetchJson } from "../../services/api.js";
 import {
   getDefaultVideoMatchBoardProject,
   getVideoMatchBoardEmergencyStorageKey,
@@ -66,6 +67,25 @@ function findAssemblyBlockByAudioTime(blocks = [], audioTimeSec = 0, fallbackInd
   return { block: blocks[safeFallback] || blocks[0], index: safeFallback };
 }
 
+function resolveOutputUrl(outputUrl = "") {
+  const raw = String(outputUrl || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/")) return `${API_BASE}${raw}`;
+  return raw;
+}
+
+function isBrowserSafeThumbnail(thumbnail = "") {
+  const raw = String(thumbnail || "").trim();
+  if (!raw) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(raw)) return false;
+  if (raw.includes("\\")) return false;
+  return raw.startsWith("http://")
+    || raw.startsWith("https://")
+    || raw.startsWith("/")
+    || raw.startsWith("data:")
+    || raw.startsWith("blob:");
+}
+
 export default function VideoMatchBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -114,6 +134,10 @@ export default function VideoMatchBoardPage() {
   const [previewCandidateId, setPreviewCandidateId] = useState("");
   const [isAssemblyPlaying, setIsAssemblyPlaying] = useState(false);
   const [isPlaybackActive, setIsPlaybackActive] = useState(false);
+  const [assembleAudioPath, setAssembleAudioPath] = useState("");
+  const [isAssemblingMp4, setIsAssemblingMp4] = useState(false);
+  const [assembledPreview, setAssembledPreview] = useState(null);
+  const [assembleError, setAssembleError] = useState("");
 
   const matchSegments = Array.isArray(project.matchSegments) ? project.matchSegments : [];
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
@@ -125,6 +149,7 @@ export default function VideoMatchBoardPage() {
   const timelineDuration = videoDurationSec || Number(project?.sourceVideo?.duration_sec || 0) || 0;
   const effectiveAudioDurationSec = audioDurationSec || Number(project?.audioPreviewMeta?.duration_sec || 0) || 0;
   const assemblyDurationSec = Math.max(0, ...assemblyBlocks.map((block) => getBlockTargetEnd(block)));
+  const assembledPreviewOutputUrl = resolveOutputUrl(assembledPreview?.outputUrl || "");
   const candidatesTotal = matchSegments.reduce((total, segment) => total + (Array.isArray(segment?.candidates) ? segment.candidates.length : 0), 0);
   const selectedSegment = matchSegments.find((segment) => segment.id === project.selectedSegmentId || segment.audioSceneId === project.selectedSegmentId) || matchSegments[0] || null;
   const selectedSegmentCandidates = Array.isArray(selectedSegment?.candidates) ? selectedSegment.candidates : [];
@@ -159,6 +184,9 @@ export default function VideoMatchBoardPage() {
     setPreviewCandidateId("");
     setIsAssemblyPlaying(false);
     setIsPlaybackActive(false);
+    setAssembleAudioPath(String(initialProject?.audioPath || ""));
+    setAssembledPreview(null);
+    setAssembleError("");
     playbackRef.current = null;
   }, [initialProject]);
 
@@ -549,8 +577,10 @@ export default function VideoMatchBoardPage() {
         : "";
 
       const nextSourceVideo = {
+        ...(result.sourceVideo || {}),
         ...(project.sourceVideo || {}),
         filename: currentFilename || result.sourceVideo?.filename || "source.mp4",
+        path: project.sourceVideo?.path || result.sourceVideo?.path || "",
         duration_sec: Number(nextDurationSec.toFixed(3)),
       };
       patchProject({
@@ -566,6 +596,43 @@ export default function VideoMatchBoardPage() {
       if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
     } catch (error) {
       patchProject({ jsonError: String(error?.message || error || "JSON parse error") }, { lastGood: false });
+    }
+  };
+
+  const onAssembleMp4 = async () => {
+    if (!assemblyBlocks.length) return;
+    const sourceVideoPath = String(project?.sourceVideo?.path || "").trim();
+    if (!sourceVideoPath) {
+      setAssembleError("Для сборки нужен sourceVideo.path из JSON.");
+      return;
+    }
+    setIsAssemblingMp4(true);
+    setAssembleError("");
+    setAssembledPreview(null);
+    try {
+      const response = await fetchJson("/api/video-match/assemble", {
+        method: "POST",
+        body: {
+          sourceVideoPath,
+          audioPath: assembleAudioPath || project?.timingContext?.sourceAudioPath || "",
+          audioUrl: project?.timingContext?.sourceAudioUrl || "",
+          outputFormat: "16:9",
+          previewQuality: "720p",
+          blocks: assemblyBlocks.map((block) => ({
+            id: block.id,
+            audioSceneId: block.audioSceneId || block.segmentId || "",
+            targetStartSec: Number(block.targetStartSec || 0),
+            targetEndSec: Number(block.targetEndSec || 0),
+            sourceVideoStartSec: Number(block.sourceVideoStartSec || 0),
+            sourceVideoEndSec: Number(block.sourceVideoEndSec || 0),
+          })),
+        },
+      });
+      setAssembledPreview(response || null);
+    } catch (error) {
+      setAssembleError(String(error?.message || error || "Не удалось собрать MP4"));
+    } finally {
+      setIsAssemblingMp4(false);
     }
   };
 
@@ -806,7 +873,22 @@ export default function VideoMatchBoardPage() {
             <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>▶ Сборка</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>▶ Отсюда</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isPlaybackActive} onClick={stopPlayback}>■ Стоп</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!assemblyBlocks.length || isAssemblingMp4} onClick={onAssembleMp4}>{isAssemblingMp4 ? "Собираем MP4..." : "⬇ MP4"}</button>
             <span>{selectedBlock ? `${selectedBlock.id}: ${formatSec(selectedBlock.sourceVideoStartSec)}–${formatSec(selectedBlock.sourceVideoEndSec)} с` : "Кусок не выбран"}</span>
+          </div>
+          <div className="videoMatchContextRows">
+            <label>
+              Путь к аудио для сборки
+              <input type="text" value={assembleAudioPath} onChange={(event) => setAssembleAudioPath(event.target.value)} placeholder="C:\\path\\to\\practice_30sec_audio.mp3" />
+            </label>
+            {assembleError ? <div className="videoMatchError">{assembleError}</div> : null}
+            {assembledPreview?.ok && assembledPreviewOutputUrl ? (
+              <div>
+                <a href={assembledPreviewOutputUrl} target="_blank" rel="noreferrer">▶ Смотреть MP4</a>{" "}
+                <a href={assembledPreviewOutputUrl} download>⬇ Скачать MP4</a>
+                {assembledPreview.warning ? <div className="videoMatchWarnings">warning: {assembledPreview.warning}</div> : null}
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -832,7 +914,7 @@ export default function VideoMatchBoardPage() {
                   const isPreviewCandidate = candidate.id === previewCandidateId;
                   return (
                     <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
-                      {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                      {isBrowserSafeThumbnail(candidate.thumbnail) ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                       <div className="videoMatchCandidateBody">
                         <b>{candidate.id}{isCandidateSelected ? " · выбрано" : ""}{isPreviewCandidate ? " · просмотр" : ""}</b>
                         <span>видео: {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность: {candidate.confidence ?? "—"}</span>
@@ -917,7 +999,7 @@ export default function VideoMatchBoardPage() {
                           const isPreviewCandidate = candidate.id === previewCandidateId;
                           return (
                             <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
-                              {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                              {isBrowserSafeThumbnail(candidate.thumbnail) ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                               <div className="videoMatchCandidateBody">
                                 <b>{candidate.id}{isPreviewCandidate ? " · просмотр" : ""}</b>
                                 <span>видео {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность {candidate.confidence ?? "—"}</span>
