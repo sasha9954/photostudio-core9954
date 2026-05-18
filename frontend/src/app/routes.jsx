@@ -15,6 +15,7 @@ import ManualClipDirectorPage from "../pages/manual_clip/ManualClipDirectorPage.
 import ManualClipAudioPreviewPage from "../pages/manual_clip/ManualClipAudioPreviewPage.jsx";
 import ManualTimingEditorPage from "../pages/manual_timing/ManualTimingEditorPage.jsx";
 import PodcastAudioComposerPage from "../pages/podcast_audio/PodcastAudioComposerPage.jsx";
+import VideoMatchBoardPage from "../pages/video_match_board/VideoMatchBoardPage.jsx";
 import { useAuth } from "./AuthContext.jsx";
 
 const Placeholder = ({ title }) => (
@@ -65,6 +66,7 @@ export default function AppRoutes() {
         <Route path="/studio/manual-timing" element={<RequireAuth><ManualTimingEditorPage /></RequireAuth>} />
         <Route path="/studio/manual-timing-editor" element={<RequireAuth><ManualTimingEditorPage /></RequireAuth>} />
         <Route path="/studio/podcast-audio-composer" element={<RequireAuth><PodcastAudioComposerPage /></RequireAuth>} />
+        <Route path="/studio/video-match-board" element={<RequireAuth><VideoMatchBoardPage /></RequireAuth>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
