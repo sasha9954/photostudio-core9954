@@ -2145,6 +2145,19 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   );
   logManualBoardTimingSaveDebug(storageProject, storageMode);
   const storageStats = getManualClipBoardMaterialStats(storageProject);
+  const durableCandidateProject = fullSerialized.length <= 24 * 1024 * 1024
+    ? fullStorageProject
+    : storageProject;
+  const queueDurableSaveAfterLocalSuccess = (projectForDurable, sourceSuffix = "") => {
+    queueManualClipBoardProjectDurableSave(projectForDurable, {
+      reason,
+      source: sourceSuffix || (
+        useLightweightPersist
+          ? "manual_board_persist_after_local_success_full_backend"
+          : "manual_board_persist_after_local_success"
+      ),
+    });
+  };
   try {
     serialized = JSON.stringify(storageProject);
     localStorage.setItem(getManualClipBoardCanonicalStorageKey(), serialized);
@@ -2162,10 +2175,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     }
     rememberManualClipBoardStorageError(null);
     rememberLastGoodManualClipBoardProject(storageProject);
-    queueManualClipBoardProjectDurableSave(storageProject, {
-      reason,
-      source: "manual_board_persist_after_local_success",
-    });
+    queueDurableSaveAfterLocalSuccess(durableCandidateProject);
     writeManualClipBoardStorageModeLog({ mode: useLightweightPersist ? "lightweight" : "full", serializedLength: serialized.length, emergencySaved: false, quotaCleanupTriggered: false, removedKeysCount: 0, reason, nodeId });
     console.info("[MANUAL BOARD PERSIST WRITE]", {
       target: "canonical+active+node",
@@ -2213,10 +2223,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
         }
         rememberManualClipBoardStorageError(null);
         rememberLastGoodManualClipBoardProject(storageProject);
-        queueManualClipBoardProjectDurableSave(storageProject, {
-          reason,
-          source: "manual_board_persist_after_local_success",
-        });
+        queueDurableSaveAfterLocalSuccess(durableCandidateProject, "manual_board_persist_after_quota_cleanup_full_backend");
         writeManualClipBoardStorageModeLog({ mode: useLightweightPersist ? "lightweight" : "full", serializedLength: serialized.length, emergencySaved: false, quotaCleanupTriggered: true, removedKeysCount: quotaCleanupRemovedKeys.length, reason, nodeId });
         console.warn("[MANUAL BOARD PERSIST WRITE] saved after quota cleanup", {
           reason,
@@ -2251,9 +2258,14 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
         }
         rememberManualClipBoardStorageError(null);
         rememberLastGoodManualClipBoardProject(lightweightProject);
-        queueManualClipBoardProjectDurableSave(lightweightProject, {
+        const lightweightDurableCandidate = fullSerialized.length <= 24 * 1024 * 1024
+          ? fullStorageProject
+          : lightweightProject;
+        queueManualClipBoardProjectDurableSave(lightweightDurableCandidate, {
           reason,
-          source: "manual_board_persist_after_local_success",
+          source: fullSerialized.length <= 24 * 1024 * 1024
+            ? "manual_board_persist_lightweight_local_full_backend"
+            : "manual_board_persist_lightweight_backend",
         });
         writeManualClipBoardStorageModeLog({ mode: "lightweight", serializedLength: lightweightSerialized.length, emergencySaved: false, quotaCleanupTriggered: quotaCleanupRemovedKeys.length > 0, removedKeysCount: quotaCleanupRemovedKeys.length, reason, nodeId });
         console.warn("[MANUAL BOARD PERSIST WRITE] saved lightweight snapshot after quota cleanup", {
