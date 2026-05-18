@@ -37,15 +37,45 @@ function getValidDurationSec(value) {
   return Number.isFinite(duration) && duration > 0 ? duration : 0;
 }
 
+function getBlockTargetStart(block = {}) {
+  return Number(block?.targetStartSec ?? block?.target_t0 ?? 0) || 0;
+}
+
+function getBlockTargetEnd(block = {}) {
+  const start = getBlockTargetStart(block);
+  const end = Number(block?.targetEndSec ?? block?.target_t1 ?? start) || start;
+  return Math.max(start, end);
+}
+
+function getBlockSourceStart(block = {}) {
+  return Number(block?.sourceVideoStartSec ?? block?.video_t0 ?? 0) || 0;
+}
+
+function getBlockSourceEnd(block = {}) {
+  const start = getBlockSourceStart(block);
+  const end = Number(block?.sourceVideoEndSec ?? block?.video_t1 ?? start) || start;
+  return Math.max(start, end);
+}
+
+function findAssemblyBlockByAudioTime(blocks = [], audioTimeSec = 0, fallbackIndex = 0) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return { block: null, index: -1 };
+  const currentTime = Number(audioTimeSec || 0);
+  const index = blocks.findIndex((block) => currentTime >= getBlockTargetStart(block) && currentTime < getBlockTargetEnd(block));
+  if (index >= 0) return { block: blocks[index], index };
+  const safeFallback = Math.max(0, Math.min(blocks.length - 1, Number(fallbackIndex || 0)));
+  return { block: blocks[safeFallback] || blocks[0], index: safeFallback };
+}
+
 export default function VideoMatchBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const nodeId = String(searchParams.get("nodeId") || location.state?.nodeId || "default").trim() || "default";
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
   const playbackRef = useRef(null);
   const objectUrlRef = useRef("");
-  const segmentRefs = useRef({});
+  const audioObjectUrlRef = useRef("");
 
   const initialProject = useMemo(() => {
     const stateProject = location.state?.project || null;
@@ -77,42 +107,58 @@ export default function VideoMatchBoardPage() {
   const [project, setProject] = useState(initialProject);
   const [videoDurationSec, setVideoDurationSec] = useState(Number(initialProject?.sourceVideo?.duration_sec || 0));
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [audioDurationSec, setAudioDurationSec] = useState(Number(initialProject?.audioPreviewMeta?.duration_sec || 0));
+  const [audioCurrentTimeSec, setAudioCurrentTimeSec] = useState(0);
   const [sourceVideoLoadMessage, setSourceVideoLoadMessage] = useState("");
-  const [expandedSegmentId, setExpandedSegmentId] = useState(String(initialProject?.selectedSegmentId || ""));
+  const [audioLoadMessage, setAudioLoadMessage] = useState("");
   const [previewCandidateId, setPreviewCandidateId] = useState("");
   const [isAssemblyPlaying, setIsAssemblyPlaying] = useState(false);
+  const [isPlaybackActive, setIsPlaybackActive] = useState(false);
 
   const matchSegments = Array.isArray(project.matchSegments) ? project.matchSegments : [];
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
-  const assemblyBlocks = useMemo(() => [...videoBlocks].sort((a, b) => Number(a?.targetStartSec || 0) - Number(b?.targetStartSec || 0)), [videoBlocks]);
-  const selectedBlock = videoBlocks.find((block) => block.id === project.selectedBlockId) || null;
+  const assemblyBlocks = useMemo(() => [...videoBlocks].sort((a, b) => getBlockTargetStart(a) - getBlockTargetStart(b)), [videoBlocks]);
+  const selectedBlock = videoBlocks.find((block) => block.id === project.selectedBlockId) || assemblyBlocks[0] || null;
   const sourceVideoUrl = String(project.sourceVideoUrl || "");
+  const audioPreviewUrl = String(project.audioPreviewUrl || "");
+  const useAudioPreview = Boolean(project.useAudioPreview);
   const timelineDuration = videoDurationSec || Number(project?.sourceVideo?.duration_sec || 0) || 0;
-  const assemblyDurationSec = Math.max(0, ...assemblyBlocks.map((block) => Number(block?.targetEndSec || 0)));
+  const effectiveAudioDurationSec = audioDurationSec || Number(project?.audioPreviewMeta?.duration_sec || 0) || 0;
+  const assemblyDurationSec = Math.max(0, ...assemblyBlocks.map((block) => getBlockTargetEnd(block)));
   const candidatesTotal = matchSegments.reduce((total, segment) => total + (Array.isArray(segment?.candidates) ? segment.candidates.length : 0), 0);
-  const effectiveExpandedSegmentId = expandedSegmentId || project.selectedSegmentId;
   const selectedSegment = matchSegments.find((segment) => segment.id === project.selectedSegmentId || segment.audioSceneId === project.selectedSegmentId) || matchSegments[0] || null;
   const selectedSegmentCandidates = Array.isArray(selectedSegment?.candidates) ? selectedSegment.candidates : [];
   const currentPlayingBlockId = videoBlocks.find((block) => {
-    const start = Number(block?.sourceVideoStartSec || 0);
-    const end = Number(block?.sourceVideoEndSec || start);
+    const start = getBlockSourceStart(block);
+    const end = getBlockSourceEnd(block);
     return currentTimeSec >= start && currentTimeSec < end;
   })?.id || "";
 
   const patchProject = (patch = {}, persistOptions = {}) => {
-    setProject((prev) => {
-      const next = persistVideoMatchBoardProject({ ...prev, ...(patch || {}), nodeId, sourceNodeId: nodeId }, persistOptions);
-      return next;
-    });
+    setProject((prev) => persistVideoMatchBoardProject({ ...prev, ...(patch || {}), nodeId, sourceNodeId: nodeId }, persistOptions));
+  };
+
+  const getSelectionPatchForBlock = (block = {}) => ({
+    selectedBlockId: block?.id || "",
+    selectedSegmentId: block?.segmentId || block?.audioSceneId || "",
+    selectedCandidateId: block?.candidateId || block?.id || "",
+  });
+
+  const onSelectBlock = (block = {}) => {
+    patchProject(getSelectionPatchForBlock(block), { lastGood: false });
   };
 
   useEffect(() => {
     setProject(initialProject);
     setVideoDurationSec(Number(initialProject?.sourceVideo?.duration_sec || 0));
+    setAudioDurationSec(Number(initialProject?.audioPreviewMeta?.duration_sec || 0));
+    setCurrentTimeSec(0);
+    setAudioCurrentTimeSec(0);
     setSourceVideoLoadMessage("");
-    setExpandedSegmentId(String(initialProject?.selectedSegmentId || ""));
+    setAudioLoadMessage("");
     setPreviewCandidateId("");
     setIsAssemblyPlaying(false);
+    setIsPlaybackActive(false);
     playbackRef.current = null;
   }, [initialProject]);
 
@@ -128,6 +174,7 @@ export default function VideoMatchBoardPage() {
 
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    if (audioObjectUrlRef.current) URL.revokeObjectURL(audioObjectUrlRef.current);
   }, []);
 
   useEffect(() => {
@@ -137,113 +184,40 @@ export default function VideoMatchBoardPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProject?.sourceVideoUrl]);
 
-  const onVideoFileChange = (file) => {
-    if (!file) return;
-    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-    const url = URL.createObjectURL(file);
-    objectUrlRef.current = url;
-    setVideoDurationSec(0);
-    setSourceVideoLoadMessage("");
-    patchProject({
-      sourceVideoUrl: url,
-      sourceVideo: {
-        filename: file.name || "source.mp4",
-        duration_sec: 0,
-        type: file.type || "video/mp4",
-        size: file.size || 0,
-      },
-    });
-  };
-
-  const onLoadedMetadata = () => {
-    setSourceVideoLoadMessage("");
-    const duration = Number(videoRef.current?.duration || 0);
-    if (!Number.isFinite(duration) || duration <= 0) return;
-    setVideoDurationSec(duration);
-    patchProject({
-      sourceVideo: {
-        ...(project.sourceVideo || {}),
-        duration_sec: Number(duration.toFixed(3)),
-      },
-    }, { lastGood: false });
-  };
-
-  const onSourceVideoError = () => {
-    if (!sourceVideoUrl.startsWith("blob:")) return;
-    setSourceVideoLoadMessage("Загрузите source video заново");
-    patchProject({ sourceVideoUrl: "" }, { lastGood: false });
-  };
-
-  const onApplyJson = () => {
-    const result = parseVideoMatchBoardJson(project.jsonInput, sourceVideoUrl);
-    if (!result.ok) {
-      patchProject({ jsonError: result.error }, { lastGood: false });
-      return;
-    }
-
-    const videoElementDurationSec = getValidDurationSec(videoRef.current?.duration);
-    const stateVideoDurationSec = getValidDurationSec(videoDurationSec);
-    const loadedVideoDurationSec = videoElementDurationSec || (sourceVideoUrl ? stateVideoDurationSec : 0);
-    const jsonDurationSec = getValidDurationSec(result.sourceVideo?.duration_sec);
-    const nextDurationSec = loadedVideoDurationSec || jsonDurationSec;
-    const currentFilename = String(project.sourceVideo?.filename || "").trim();
-    const maxBlockEndSec = Math.max(0, ...result.videoBlocks.map((block) => Number(block.sourceVideoEndSec || 0)));
-    const durationWarning = loadedVideoDurationSec > 0 && maxBlockEndSec > loadedVideoDurationSec
-      ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
-      : "";
-
-    const nextSourceVideo = {
-      ...(project.sourceVideo || {}),
-      filename: currentFilename || result.sourceVideo?.filename || "source.mp4",
-      duration_sec: Number(nextDurationSec.toFixed(3)),
-    };
-    patchProject({
-      schema: result.schema,
-      sourceVideo: nextSourceVideo,
-      matchSegments: result.matchSegments,
-      videoBlocks: result.videoBlocks,
-      selectedSegmentId: result.selectedSegmentId,
-      selectedCandidateId: result.selectedCandidateId,
-      selectedBlockId: result.videoBlocks[0]?.id || "",
-      jsonError: durationWarning,
-    });
-    setExpandedSegmentId(result.selectedSegmentId);
-    if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
-  };
-
-  const onPlaySelectedBlock = async () => {
-    if (!selectedBlock) return;
-    if (!sourceVideoUrl || !videoRef.current) {
-      showMissingSourceVideoMessage();
-      return;
-    }
-    const start = Math.max(0, Number(selectedBlock.sourceVideoStartSec || 0));
-    const end = Math.max(start, Number(selectedBlock.sourceVideoEndSec || start));
-    playbackRef.current = { end, blocks: [], index: 0 };
-    videoRef.current.currentTime = start;
-    try {
-      await videoRef.current.play();
-    } catch (error) {
-      patchProject({ jsonError: `Не удалось запустить video player: ${String(error?.message || error)}` }, { lastGood: false });
-    }
-  };
-
-  const stopPlayback = () => {
-    playbackRef.current = null;
-    setIsAssemblyPlaying(false);
-    if (videoRef.current) videoRef.current.pause();
-  };
+  useEffect(() => {
+    if (!String(initialProject?.audioPreviewUrl || "").startsWith("blob:")) return;
+    setAudioLoadMessage("Загрузите аудио заново");
+    patchProject({ audioPreviewUrl: "" }, { lastGood: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProject?.audioPreviewUrl]);
 
   const showMissingSourceVideoMessage = () => {
     setSourceVideoLoadMessage("Загрузите source video заново");
     patchProject({ jsonError: "Загрузите source video заново" }, { lastGood: false });
   };
 
-  const playSourceRange = async (start = 0, end = 0) => {
+  const showMissingAudioMessage = () => {
+    setAudioLoadMessage("Загрузите аудио");
+    patchProject({ jsonError: "Загрузите аудио для просмотра с аудио" }, { lastGood: false });
+  };
+
+  const stopPlayback = () => {
+    playbackRef.current = null;
+    setIsAssemblyPlaying(false);
+    setIsPlaybackActive(false);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.muted = false;
+    }
+    if (audioRef.current) audioRef.current.pause();
+  };
+
+  const playSourceRange = async (start = 0, end = 0, { muted = false } = {}) => {
     if (!sourceVideoUrl || !videoRef.current) {
       showMissingSourceVideoMessage();
       return false;
     }
+    videoRef.current.muted = Boolean(muted);
     videoRef.current.currentTime = Math.max(0, Number(start || 0));
     try {
       await videoRef.current.play();
@@ -254,55 +228,71 @@ export default function VideoMatchBoardPage() {
     }
   };
 
-  const onTimeUpdate = () => {
-    const current = Number(videoRef.current?.currentTime || 0);
-    setCurrentTimeSec(current);
-    const playback = playbackRef.current;
-    const stopAt = Number(playback?.end || 0);
-    if (stopAt > 0 && current >= stopAt) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = stopAt;
-      setCurrentTimeSec(stopAt);
-      const nextIndex = Number(playback?.index || 0) + 1;
-      const nextBlock = Array.isArray(playback?.blocks) ? playback.blocks[nextIndex] : null;
-      if (nextBlock) {
-        playbackRef.current = { ...playback, index: nextIndex, end: Math.max(Number(nextBlock.sourceVideoStartSec || 0), Number(nextBlock.sourceVideoEndSec || 0)) };
-        onSelectBlock(nextBlock, { scroll: false });
-        void playSourceRange(nextBlock.sourceVideoStartSec, nextBlock.sourceVideoEndSec);
-        return;
-      }
-      playbackRef.current = null;
-      setIsAssemblyPlaying(false);
+  const playAudioFrom = async (start = 0) => {
+    if (!audioPreviewUrl || !audioRef.current) {
+      showMissingAudioMessage();
+      return false;
+    }
+    audioRef.current.currentTime = Math.max(0, Number(start || 0));
+    try {
+      await audioRef.current.play();
+      return true;
+    } catch (error) {
+      patchProject({ jsonError: `Не удалось запустить audio player: ${String(error?.message || error)}` }, { lastGood: false });
+      return false;
     }
   };
 
-  const getSelectionPatchForBlock = (block = {}) => ({
-    selectedBlockId: block?.id || "",
-    selectedSegmentId: block?.segmentId || block?.audioSceneId || "",
-    selectedCandidateId: block?.candidateId || block?.id || "",
-  });
-
-  const scrollSegmentIntoView = (segmentId = "") => {
-    const node = segmentRefs.current[String(segmentId || "")];
-    if (node) node.scrollIntoView({ behavior: "smooth", block: "center" });
-  };
-
-  const onSelectBlock = (block = {}, options = {}) => {
-    const { scroll = false } = options;
-    const segmentId = block?.segmentId || block?.audioSceneId || "";
-    setExpandedSegmentId(segmentId);
-    patchProject(getSelectionPatchForBlock(block), { lastGood: false });
-    if (scroll) setTimeout(() => scrollSegmentIntoView(segmentId), 0);
-  };
-
-  const onPreviewCandidate = async (segment = {}, candidate = {}) => {
-    setPreviewCandidateId(candidate.id || "");
-    setExpandedSegmentId(segment.id || "");
-    const start = Math.max(0, Number(candidate.sourceVideoStartSec || 0));
-    const end = Math.max(start, Number(candidate.sourceVideoEndSec || start));
-    playbackRef.current = { end, blocks: [], index: 0 };
+  const startVideoOnlyBlock = async (block = {}) => {
+    const start = getBlockSourceStart(block);
+    const end = getBlockSourceEnd(block);
+    playbackRef.current = { mode: "video_range", end, blocks: [], index: 0, currentBlockId: block.id || "" };
+    if (audioRef.current) audioRef.current.pause();
     setIsAssemblyPlaying(false);
-    await playSourceRange(start, end);
+    setIsPlaybackActive(true);
+    const didPlay = await playSourceRange(start, end, { muted: false });
+    if (!didPlay) setIsPlaybackActive(false);
+    return didPlay;
+  };
+
+  const startAudioSyncedBlock = async (block = {}) => {
+    if (!audioPreviewUrl || !audioRef.current) {
+      showMissingAudioMessage();
+      return false;
+    }
+    const targetStart = getBlockTargetStart(block);
+    const targetEnd = getBlockTargetEnd(block);
+    playbackRef.current = {
+      mode: "audio_range",
+      blocks: [block],
+      index: 0,
+      targetEnd,
+      currentBlockId: block.id || "",
+    };
+    setIsAssemblyPlaying(false);
+    setIsPlaybackActive(true);
+    const didStartVideo = await playSourceRange(getBlockSourceStart(block), getBlockSourceEnd(block), { muted: true });
+    if (!didStartVideo) {
+      setIsPlaybackActive(false);
+      return false;
+    }
+    const didStartAudio = await playAudioFrom(targetStart);
+    if (!didStartAudio) {
+      if (videoRef.current) videoRef.current.pause();
+      setIsPlaybackActive(false);
+      return false;
+    }
+    return true;
+  };
+
+  const onPlaySelectedBlock = async () => {
+    if (!selectedBlock) return;
+    onSelectBlock(selectedBlock);
+    if (useAudioPreview) {
+      await startAudioSyncedBlock(selectedBlock);
+      return;
+    }
+    await startVideoOnlyBlock(selectedBlock);
   };
 
   const playAssemblyFromBlock = async (startBlock = null) => {
@@ -311,17 +301,130 @@ export default function VideoMatchBoardPage() {
       showMissingSourceVideoMessage();
       return;
     }
-    const startIndex = Math.max(0, assemblyBlocks.findIndex((block) => block.id === startBlock?.id));
+    const rawIndex = assemblyBlocks.findIndex((block) => block.id === startBlock?.id);
+    const startIndex = rawIndex >= 0 ? rawIndex : 0;
     const firstBlock = assemblyBlocks[startIndex] || assemblyBlocks[0];
+    onSelectBlock(firstBlock);
+
+    if (useAudioPreview) {
+      if (!audioPreviewUrl || !audioRef.current) {
+        showMissingAudioMessage();
+        return;
+      }
+      playbackRef.current = {
+        mode: "assembly_audio",
+        blocks: assemblyBlocks,
+        index: startIndex,
+        targetEnd: getBlockTargetEnd(assemblyBlocks[assemblyBlocks.length - 1]),
+        currentBlockId: firstBlock.id || "",
+      };
+      setIsAssemblyPlaying(true);
+      setIsPlaybackActive(true);
+      const didStartVideo = await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: true });
+      if (!didStartVideo) {
+        setIsAssemblyPlaying(false);
+        setIsPlaybackActive(false);
+        return;
+      }
+      const didStartAudio = await playAudioFrom(getBlockTargetStart(firstBlock));
+      if (!didStartAudio) {
+        setIsAssemblyPlaying(false);
+        setIsPlaybackActive(false);
+        if (videoRef.current) videoRef.current.pause();
+      }
+      return;
+    }
+
     playbackRef.current = {
-      end: Math.max(Number(firstBlock.sourceVideoStartSec || 0), Number(firstBlock.sourceVideoEndSec || 0)),
+      mode: "assembly_video",
+      end: getBlockSourceEnd(firstBlock),
       blocks: assemblyBlocks,
       index: startIndex,
+      currentBlockId: firstBlock.id || "",
     };
     setIsAssemblyPlaying(true);
-    onSelectBlock(firstBlock, { scroll: false });
-    const didPlay = await playSourceRange(firstBlock.sourceVideoStartSec, firstBlock.sourceVideoEndSec);
-    if (!didPlay) setIsAssemblyPlaying(false);
+    setIsPlaybackActive(true);
+    const didPlay = await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: false });
+    if (!didPlay) {
+      setIsAssemblyPlaying(false);
+      setIsPlaybackActive(false);
+    }
+  };
+
+  const onTimeUpdate = () => {
+    const current = Number(videoRef.current?.currentTime || 0);
+    setCurrentTimeSec(current);
+    const playback = playbackRef.current;
+    if (!playback) return;
+
+    if (playback.mode === "audio_range" || playback.mode === "assembly_audio") {
+      const currentBlock = playback.blocks?.[playback.index] || selectedBlock;
+      const sourceEnd = getBlockSourceEnd(currentBlock);
+      if (sourceEnd > 0 && current >= sourceEnd && videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.currentTime = sourceEnd;
+        setCurrentTimeSec(sourceEnd);
+      }
+      return;
+    }
+
+    const stopAt = Number(playback?.end || 0);
+    if (stopAt > 0 && current >= stopAt) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = stopAt;
+      setCurrentTimeSec(stopAt);
+      const nextIndex = Number(playback?.index || 0) + 1;
+      const nextBlock = Array.isArray(playback?.blocks) ? playback.blocks[nextIndex] : null;
+      if (nextBlock) {
+        playbackRef.current = { ...playback, index: nextIndex, end: getBlockSourceEnd(nextBlock), currentBlockId: nextBlock.id || "" };
+        onSelectBlock(nextBlock);
+        void playSourceRange(getBlockSourceStart(nextBlock), getBlockSourceEnd(nextBlock), { muted: false });
+        return;
+      }
+      playbackRef.current = null;
+      setIsAssemblyPlaying(false);
+      setIsPlaybackActive(false);
+    }
+  };
+
+  const onAudioTimeUpdate = () => {
+    const current = Number(audioRef.current?.currentTime || 0);
+    setAudioCurrentTimeSec(current);
+    const playback = playbackRef.current;
+    if (!playback || (playback.mode !== "audio_range" && playback.mode !== "assembly_audio")) return;
+
+    if (playback.mode === "audio_range") {
+      const targetEnd = Number(playback.targetEnd || 0);
+      if (targetEnd > 0 && current >= targetEnd) {
+        stopPlayback();
+      }
+      return;
+    }
+
+    const blocks = Array.isArray(playback.blocks) ? playback.blocks : [];
+    if (!blocks.length) return;
+    const lastTargetEnd = Number(playback.targetEnd || getBlockTargetEnd(blocks[blocks.length - 1]));
+    if (lastTargetEnd > 0 && current >= lastTargetEnd) {
+      stopPlayback();
+      return;
+    }
+
+    const found = findAssemblyBlockByAudioTime(blocks, current, playback.index);
+    if (!found.block) return;
+    if (found.index !== playback.index || found.block.id !== playback.currentBlockId) {
+      playbackRef.current = {
+        ...playback,
+        index: found.index,
+        currentBlockId: found.block.id || "",
+      };
+      onSelectBlock(found.block);
+      void playSourceRange(getBlockSourceStart(found.block), getBlockSourceEnd(found.block), { muted: true });
+    }
+  };
+
+  const onAudioEnded = () => {
+    const playback = playbackRef.current;
+    if (playback?.mode === "audio_range" || playback?.mode === "assembly_audio") stopPlayback();
   };
 
   const onSelectCandidate = (segmentId = "", candidateId = "") => {
@@ -342,7 +445,128 @@ export default function VideoMatchBoardPage() {
       selectedCandidateId: candidateId,
       selectedBlockId: nextBlock?.id || "",
     });
-    setExpandedSegmentId(segmentId);
+  };
+
+  const onPreviewCandidate = async (segment = {}, candidate = {}) => {
+    setPreviewCandidateId(candidate.id || "");
+    const start = Math.max(0, Number(candidate.sourceVideoStartSec || 0));
+    const end = Math.max(start, Number(candidate.sourceVideoEndSec || start));
+    playbackRef.current = { mode: "video_range", end, blocks: [], index: 0, currentBlockId: candidate.id || "" };
+    setIsAssemblyPlaying(false);
+    setIsPlaybackActive(true);
+    if (audioRef.current) audioRef.current.pause();
+    patchProject({ selectedSegmentId: segment.id || "", selectedCandidateId: candidate.id || "" }, { lastGood: false });
+    const didPlay = await playSourceRange(start, end, { muted: false });
+    if (!didPlay) setIsPlaybackActive(false);
+  };
+
+  const onVideoFileChange = (file) => {
+    if (!file) return;
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    const url = URL.createObjectURL(file);
+    objectUrlRef.current = url;
+    setVideoDurationSec(0);
+    setSourceVideoLoadMessage("");
+    patchProject({
+      sourceVideoUrl: url,
+      sourceVideo: {
+        filename: file.name || "source.mp4",
+        duration_sec: 0,
+        type: file.type || "video/mp4",
+        size: file.size || 0,
+      },
+    });
+  };
+
+  const onAudioFileChange = (file) => {
+    if (!file) return;
+    if (audioObjectUrlRef.current) URL.revokeObjectURL(audioObjectUrlRef.current);
+    const url = URL.createObjectURL(file);
+    audioObjectUrlRef.current = url;
+    setAudioDurationSec(0);
+    setAudioCurrentTimeSec(0);
+    setAudioLoadMessage("");
+    patchProject({
+      audioPreviewUrl: url,
+      audioPreviewMeta: {
+        filename: file.name || "audio.mp3",
+        duration_sec: 0,
+        type: file.type || "audio/mpeg",
+        size: file.size || 0,
+      },
+      useAudioPreview: true,
+    });
+  };
+
+  const onLoadedMetadata = () => {
+    setSourceVideoLoadMessage("");
+    const duration = Number(videoRef.current?.duration || 0);
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    setVideoDurationSec(duration);
+    patchProject({
+      sourceVideo: {
+        ...(project.sourceVideo || {}),
+        duration_sec: Number(duration.toFixed(3)),
+      },
+    });
+  };
+
+  const onLoadedAudioMetadata = () => {
+    setAudioLoadMessage("");
+    const duration = Number(audioRef.current?.duration || 0);
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    setAudioDurationSec(duration);
+    patchProject({
+      audioPreviewMeta: {
+        ...(project.audioPreviewMeta || {}),
+        duration_sec: Number(duration.toFixed(3)),
+      },
+    });
+  };
+
+  const onSourceVideoError = () => {
+    setSourceVideoLoadMessage("Видео недоступно. Если страница перезагружалась, загрузите source video заново.");
+    if (String(project.sourceVideoUrl || "").startsWith("blob:")) patchProject({ sourceVideoUrl: "" }, { lastGood: false });
+  };
+
+  const onAudioError = () => {
+    setAudioLoadMessage("Аудио недоступно. Если страница перезагружалась, загрузите аудио заново.");
+    if (String(project.audioPreviewUrl || "").startsWith("blob:")) patchProject({ audioPreviewUrl: "" }, { lastGood: false });
+  };
+
+  const onApplyJson = () => {
+    try {
+      const result = parseVideoMatchBoardJson(project.jsonInput || "", sourceVideoUrl);
+      const videoElementDurationSec = getValidDurationSec(videoRef.current?.duration);
+      const stateVideoDurationSec = getValidDurationSec(videoDurationSec);
+      const loadedVideoDurationSec = videoElementDurationSec || (sourceVideoUrl ? stateVideoDurationSec : 0);
+      const jsonDurationSec = getValidDurationSec(result.sourceVideo?.duration_sec);
+      const nextDurationSec = loadedVideoDurationSec || jsonDurationSec;
+      const currentFilename = String(project.sourceVideo?.filename || "").trim();
+      const maxBlockEndSec = Math.max(0, ...result.videoBlocks.map((block) => Number(block.sourceVideoEndSec || 0)));
+      const durationWarning = loadedVideoDurationSec > 0 && maxBlockEndSec > loadedVideoDurationSec
+        ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
+        : "";
+
+      const nextSourceVideo = {
+        ...(project.sourceVideo || {}),
+        filename: currentFilename || result.sourceVideo?.filename || "source.mp4",
+        duration_sec: Number(nextDurationSec.toFixed(3)),
+      };
+      patchProject({
+        schema: result.schema,
+        sourceVideo: nextSourceVideo,
+        matchSegments: result.matchSegments,
+        videoBlocks: result.videoBlocks,
+        selectedSegmentId: result.selectedSegmentId,
+        selectedCandidateId: result.selectedCandidateId,
+        selectedBlockId: result.videoBlocks[0]?.id || "",
+        jsonError: durationWarning,
+      });
+      if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
+    } catch (error) {
+      patchProject({ jsonError: String(error?.message || error || "JSON parse error") }, { lastGood: false });
+    }
   };
 
   const sampleDurationSec = Math.max(getValidDurationSec(videoDurationSec), 130);
@@ -489,17 +713,25 @@ export default function VideoMatchBoardPage() {
         <span>выбрано сцен: {videoBlocks.length}</span>
         <span>вариантов: {candidatesTotal}</span>
         <span>длительность сборки: {formatSec(assemblyDurationSec)} с</span>
+        <span>аудио: {project.audioPreviewMeta?.filename || "—"}</span>
       </div>
 
       <div className="videoMatchTopWorkspace">
         <section className="videoMatchPanel videoMatchPlayerPanel">
           <div className="videoMatchPanelHeader">
             <h2>Исходное видео</h2>
-            <label className="clipSB_btn clipSB_btnPrimary videoMatchUploadBtn">
-              Загрузить видео
-              <input type="file" accept="video/*" hidden onChange={(event) => onVideoFileChange(event.target.files?.[0])} />
-            </label>
+            <div className="videoMatchHeaderButtons">
+              <label className="clipSB_btn clipSB_btnPrimary videoMatchUploadBtn">
+                Загрузить видео
+                <input type="file" accept="video/*" hidden onChange={(event) => onVideoFileChange(event.target.files?.[0])} />
+              </label>
+              <label className="clipSB_btn clipSB_btnSecondary videoMatchUploadBtn">
+                + Аудио
+                <input type="file" accept="audio/*" hidden onChange={(event) => onAudioFileChange(event.target.files?.[0])} />
+              </label>
+            </div>
           </div>
+
           <div className="videoMatchVideoBox">
             {sourceVideoUrl ? (
               <video ref={videoRef} src={sourceVideoUrl} controls onLoadedMetadata={onLoadedMetadata} onError={onSourceVideoError} onTimeUpdate={onTimeUpdate} />
@@ -507,7 +739,18 @@ export default function VideoMatchBoardPage() {
               <div className="videoMatchEmptyVideo">Загрузите видеофайл для просмотра.</div>
             )}
           </div>
+          <audio
+            ref={audioRef}
+            src={audioPreviewUrl || undefined}
+            onLoadedMetadata={onLoadedAudioMetadata}
+            onTimeUpdate={onAudioTimeUpdate}
+            onEnded={onAudioEnded}
+            onError={onAudioError}
+            preload="metadata"
+          />
           {sourceVideoLoadMessage ? <div className="videoMatchError">{sourceVideoLoadMessage}</div> : null}
+          {audioLoadMessage ? <div className="videoMatchError videoMatchAudioNotice">{audioLoadMessage}</div> : null}
+
           <div className="videoMatchTimelineMeta">
             <span>{project.sourceVideo?.filename || "source.mp4"}</span>
             <span>{formatSec(currentTimeSec)} / {formatSec(timelineDuration)} с</span>
@@ -520,10 +763,23 @@ export default function VideoMatchBoardPage() {
                 type="button"
                 className={`videoMatchTimelineBlock ${block.id === project.selectedBlockId ? "isSelected" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""}`}
                 style={{ left: `${getBlockLeft(block, timelineDuration)}%`, width: `${getBlockWidth(block, timelineDuration)}%` }}
-                onClick={() => onSelectBlock(block, { scroll: false })}
+                onClick={() => onSelectBlock(block)}
                 title={`${block.id}: ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с`}
               />
             ))}
+          </div>
+
+          <div className="videoMatchAudioRow">
+            <label className="videoMatchAudioToggle">
+              <input
+                type="checkbox"
+                checked={useAudioPreview}
+                onChange={(event) => patchProject({ useAudioPreview: event.target.checked }, { lastGood: false })}
+              />
+              <span>С аудио</span>
+            </label>
+            <span>{project.audioPreviewMeta?.filename || "аудио не загружено"}</span>
+            <span>{formatSec(audioCurrentTimeSec)} / {formatSec(effectiveAudioDurationSec)} с</span>
           </div>
 
           <div className="videoMatchAssemblyHeader">
@@ -538,7 +794,7 @@ export default function VideoMatchBoardPage() {
                 type="button"
                 className={`videoMatchStripSegment ${block.id === project.selectedBlockId ? "isSelected" : ""} ${block.id === currentPlayingBlockId ? "isCurrent" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""}`}
                 style={{ "--strip-color-index": index % 8 }}
-                onClick={() => onSelectBlock(block, { scroll: false })}
+                onClick={() => onSelectBlock(block)}
                 title={`${block.audioSceneId || block.segmentId}: video ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с · candidate ${block.candidateId || block.id}`}
               >
                 <span>{block.audioSceneId || block.segmentId || `seg_${String(index + 1).padStart(2, "0")}`}</span>
@@ -549,7 +805,7 @@ export default function VideoMatchBoardPage() {
             <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!selectedBlock} onClick={onPlaySelectedBlock}>▶ Кусок</button>
             <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>▶ Сборка</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>▶ Отсюда</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isAssemblyPlaying} onClick={stopPlayback}>■ Стоп</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isPlaybackActive} onClick={stopPlayback}>■ Стоп</button>
             <span>{selectedBlock ? `${selectedBlock.id}: ${formatSec(selectedBlock.sourceVideoStartSec)}–${formatSec(selectedBlock.sourceVideoEndSec)} с` : "Кусок не выбран"}</span>
           </div>
         </section>
@@ -628,6 +884,8 @@ export default function VideoMatchBoardPage() {
             <div>вариантов: {candidatesTotal}</div>
             <div>video blocks: {videoBlocks.length}</div>
             <div>длительность сборки: {formatSec(assemblyDurationSec)} с</div>
+            <div>аудио preview: {project.audioPreviewMeta?.filename || "—"}</div>
+            <div>audioPreviewUrl: {project.audioPreviewUrl ? "есть" : "—"}</div>
             <div>selectedSegmentId: {project.selectedSegmentId || "—"}</div>
             <div>selectedCandidateId: {project.selectedCandidateId || "—"}</div>
             <div>selectedBlockId: {project.selectedBlockId || "—"}</div>
@@ -640,22 +898,14 @@ export default function VideoMatchBoardPage() {
               {matchSegments.map((segment) => {
                 const candidates = Array.isArray(segment.candidates) ? segment.candidates : [];
                 const isSegmentSelected = segment.id === project.selectedSegmentId;
-                const isOpen = effectiveExpandedSegmentId === segment.id;
+                const isOpen = segment.id === project.selectedSegmentId;
                 return (
-                  <div
-                    key={segment.id}
-                    ref={(node) => { if (node) segmentRefs.current[segment.id] = node; }}
-                    className={`videoMatchSegmentCard ${isSegmentSelected ? "isSelected" : ""}`}
-                  >
+                  <div key={segment.id} className={`videoMatchSegmentCard ${isSegmentSelected ? "isSelected" : ""}`}>
                     <div className="videoMatchSegmentHeader">
-                      <button className="videoMatchSegmentTitle" type="button" onClick={() => { setExpandedSegmentId(isOpen ? "" : segment.id); patchProject({ selectedSegmentId: segment.id, selectedCandidateId: segment.selectedCandidateId || "" }, { lastGood: false }); }}>
+                      <div className="videoMatchSegmentTitle">
                         <b>{segment.audioSceneId || segment.id}</b>
                         <span>story: {segment.storySceneId || "—"}</span>
                         <span>тайминг {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · выбрано {segment.selectedCandidateId || "—"} · вариантов {candidates.length}</span>
-                      </button>
-                      <div className="videoMatchSegmentHeaderActions">
-                        {segment.mood ? <small>{segment.mood}</small> : null}
-                        <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setExpandedSegmentId(isOpen ? "" : segment.id)}>{isOpen ? "Свернуть" : "Открыть варианты"}</button>
                       </div>
                     </div>
                     {segment.text ? <p>{segment.text}</p> : null}
@@ -694,7 +944,7 @@ export default function VideoMatchBoardPage() {
             {videoBlocks.length === 0 ? <div className="videoMatchEmptyList">Выбранные варианты появятся здесь как video blocks.</div> : null}
             <div className="videoMatchBlocksList">
               {videoBlocks.map((block) => (
-                <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => onSelectBlock(block, { scroll: false })}>
+                <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => onSelectBlock(block)}>
                   <b>{block.id}</b>
                   <span>audio: {block.audioSceneId || "—"} · тайминг {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
                   <span>видео {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · уверенность {block.confidence ?? "—"}</span>
@@ -707,5 +957,4 @@ export default function VideoMatchBoardPage() {
       </div>
     </div>
   );
-
 }
