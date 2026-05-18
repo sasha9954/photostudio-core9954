@@ -584,7 +584,11 @@ export function manualClipBoardProjectsShareIdentity(a = {}, b = {}) {
   if (!hasMeaningfulManualProject(a) || !hasMeaningfulManualProject(b)) return true;
   const ownerA = getManualProjectOwnerId(a);
   const ownerB = getManualProjectOwnerId(b);
-  if (ownerA && ownerB && ownerA !== ownerB) return false;
+  // Manual Timing's source/owner node is the durable identity anchor.
+  // Project ids and input signatures may legitimately change after import,
+  // backup restore, or rebuild and must not block material autosaves for the
+  // same Manual Timing board.
+  if (ownerA && ownerB) return ownerA === ownerB;
   const projectA = getManualProjectProjectId(a);
   const projectB = getManualProjectProjectId(b);
   if (projectA && projectB && projectA !== projectB) return false;
@@ -854,6 +858,38 @@ const MANUAL_BOARD_REAL_USER_MATERIAL_UPDATE_REASONS = new Set([
   "manual_director_embedded_update",
 ]);
 
+function logManualBoardIdentityDebug(nextProject = {}, existingProject = {}, decision = "allow") {
+  try {
+    const candidateNodeId = getManualProjectOwnerId(nextProject);
+    const existingNodeId = getManualProjectOwnerId(existingProject);
+    const candidateProjectId = getManualProjectProjectId(nextProject);
+    const existingProjectId = getManualProjectProjectId(existingProject);
+    const candidateInputSignature = getManualProjectInputSignature(nextProject);
+    const existingInputSignature = getManualProjectInputSignature(existingProject);
+    console.warn("[MANUAL BOARD IDENTITY DEBUG]", {
+      candidateNodeId,
+      existingNodeId,
+      candidateProjectId,
+      existingProjectId,
+      candidateInputSignature,
+      existingInputSignature,
+      sameNode: Boolean(candidateNodeId && existingNodeId && candidateNodeId === existingNodeId),
+      sameProjectId: Boolean(candidateProjectId && existingProjectId && candidateProjectId === existingProjectId),
+      sameInputSignature: Boolean(candidateInputSignature && existingInputSignature && candidateInputSignature === existingInputSignature),
+      decision,
+    });
+  } catch {}
+}
+
+function manualBoardStatsHaveMaterialGain(nextStats = {}, existingStats = {}) {
+  return (nextStats.imageCount || 0) > (existingStats.imageCount || 0)
+    || (nextStats.videoCount || 0) > (existingStats.videoCount || 0)
+    || (nextStats.promptCount || 0) > (existingStats.promptCount || 0)
+    || (nextStats.readyStatuses || 0) > (existingStats.readyStatuses || 0)
+    || (nextStats.materialScore || 0) > (existingStats.materialScore || 0)
+    || (nextStats.materialTotal || 0) > (existingStats.materialTotal || 0);
+}
+
 function logManualBoardPersistDecision(label, nextProject, existingProject, extra = {}) {
   try {
     const nextStats = getManualClipBoardMaterialStats(nextProject);
@@ -891,6 +927,7 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
   const existingStats = getManualClipBoardMaterialStats(existingProject);
   const sameIdentity = manualClipBoardProjectsShareIdentity(nextProject, existingProject);
   if (!sameIdentity && hasMeaningfulManualProject(existingProject)) {
+    logManualBoardIdentityDebug(nextProject, existingProject, "reject_identity_mismatch");
     logManualBoardPersistDecision("[MANUAL BOARD PERSIST BLOCK OLDER]", nextProject, existingProject, { reason, blockReason: "identity_mismatch" });
     return true;
   }
@@ -903,6 +940,7 @@ export function shouldSkipManualBoardPersistToProtectMaterials(nextProject, exis
 
   if (sameIdentity && (
     nextDeletionRevision > existingDeletionRevision
+    || manualBoardStatsHaveMaterialGain(nextStats, existingStats)
     || (isRealUserMaterialUpdate && (nextRevision > existingRevision || nextUpdatedAt > existingUpdatedAt))
   )) {
     logManualBoardPersistDecision("[MANUAL BOARD PERSIST ALLOW NEWER]", nextProject, existingProject, { reason });
@@ -996,11 +1034,11 @@ function logManualClipBoardNewerRevisionPick(winner, olderRicherCandidates = [])
 }
 
 function manualClipBoardProjectSort(a, b) {
-  if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
-    return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
-  }
   if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) {
     return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
+  }
+  if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) {
+    return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
   }
   if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) {
     return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
@@ -1008,20 +1046,17 @@ function manualClipBoardProjectSort(a, b) {
   if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) {
     return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
   }
-  if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) {
-    return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
-  }
   if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) {
     return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
+  }
+  if (b.scoreData.updatedAt !== a.scoreData.updatedAt) {
+    return b.scoreData.updatedAt - a.scoreData.updatedAt;
   }
   if (b.scoreData.stats.materialTotal !== a.scoreData.stats.materialTotal) {
     return b.scoreData.stats.materialTotal - a.scoreData.stats.materialTotal;
   }
   if (b.scoreData.revision !== a.scoreData.revision) {
     return b.scoreData.revision - a.scoreData.revision;
-  }
-  if (b.scoreData.updatedAt !== a.scoreData.updatedAt) {
-    return b.scoreData.updatedAt - a.scoreData.updatedAt;
   }
   if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) {
     return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
@@ -1184,6 +1219,18 @@ export function readLastGoodManualClipBoardProject() {
   }
 }
 
+export function readEmergencyManualClipBoardProjectForNode(nodeId = "") {
+  const safeNodeId = String(nodeId || "").trim();
+  const candidates = [];
+  const addCandidate = (key = "") => {
+    if (!key) return;
+    candidates.push(readManualProjectJsonStorage(key));
+  };
+  addCandidate(getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:${safeNodeId || "default"}`));
+  if (safeNodeId) addCandidate(getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:default`));
+  return pickBestManualClipBoardProject(candidates);
+}
+
 function writeManualClipBoardProjectStorage(project = {}) {
   const fullStorageProject = sanitizeManualClipBoardProjectForStorage(project);
   const fullSerialized = JSON.stringify(fullStorageProject);
@@ -1217,7 +1264,7 @@ function readScopedManualClipBoardProjectCandidates() {
 
 
 export function getManualProjectOwnerId(project = {}) {
-  return String(project?.sourceNodeId || project?.nodeId || "").trim();
+  return String(project?.sourceNodeId || project?.ownerNodeId || project?.nodeId || "").trim();
 }
 
 export function manualProjectBelongsToNode(project = {}, nodeId = "") {
@@ -1594,6 +1641,32 @@ export function buildEmergencyManualClipBoardProjectForStorage(project = {}) {
   }, "emergency");
 }
 
+function downloadManualClipBoardEmergencySnapshotJson(project = {}, nodeId = "") {
+  try {
+    if (typeof document === "undefined" || typeof Blob === "undefined" || typeof URL === "undefined") return false;
+    const payload = {
+      backup_type: "photostudio_manual_project_emergency_backup",
+      backup_schema_version: 1,
+      createdAt: new Date().toISOString(),
+      source: "manual_clip_board_storage_quota_emergency",
+      nodeId: String(nodeId || project?.nodeId || project?.sourceNodeId || "").trim(),
+      project,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `manual_director_emergency_backup_${Date.now()}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function writeEmergencyManualClipBoardSnapshot(project = {}, nodeId = "") {
   const safeNodeId = String(nodeId || project?.nodeId || project?.sourceNodeId || "").trim();
   const emergencyProject = buildEmergencyManualClipBoardProjectForStorage({
@@ -1628,11 +1701,13 @@ function writeEmergencyManualClipBoardSnapshot(project = {}, nodeId = "") {
         console.warn("[manual board emergency snapshot] wrote ultra-light fallback after cleanup", { nodeId: safeNodeId, removedKeysCount: removedKeys.length, serializedKb: Math.round(serialized.length / 1024), stats: getManualClipBoardMaterialStats(emergencyProject) });
         return true;
       } catch (retryError) {
-        console.warn("[manual board emergency snapshot] browser storage still full after cleanup; automatic JSON download required", { nodeId: safeNodeId, errorName: retryError?.name, errorCode: retryError?.code, removedKeysCount: removedKeys.length, serializedKb: Math.round(serialized.length / 1024) });
+        const emergencyBackupDownloaded = downloadManualClipBoardEmergencySnapshotJson(emergencyProject, safeNodeId);
+        console.warn("[manual board emergency snapshot] browser storage still full after cleanup; automatic JSON download required", { nodeId: safeNodeId, errorName: retryError?.name, errorCode: retryError?.code, removedKeysCount: removedKeys.length, serializedKb: Math.round(serialized.length / 1024), emergencyBackupDownloaded });
         return false;
       }
     }
-    console.warn("[manual board emergency snapshot] write failed", { nodeId: safeNodeId, errorName: error?.name, errorMessage: error?.message });
+    const emergencyBackupDownloaded = downloadManualClipBoardEmergencySnapshotJson(emergencyProject, safeNodeId);
+    console.warn("[manual board emergency snapshot] write failed", { nodeId: safeNodeId, errorName: error?.name, errorMessage: error?.message, emergencyBackupDownloaded });
     return false;
   }
 }
@@ -1642,7 +1717,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const forceReplace = Boolean(options?.forceReplace);
   const explicitReset = Boolean(options?.explicitReset);
   const reason = String(options?.reason || safeProject?.lastPersistReason || "");
-  const nodeId = String(safeProject?.nodeId || safeProject?.sourceNodeId || "").trim();
+  const nodeId = getManualProjectOwnerId(safeProject);
   const nodeScopedExisting = nodeId ? readManualClipBoardProjectForNode(nodeId) : null;
   const activeExistingRaw = readActiveManualClipBoardProject();
   const activeExistingRawOwner = getManualProjectOwnerId(activeExistingRaw);
@@ -1665,6 +1740,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const isIntentionalMaterialDelete = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete|explicit.*reset|reset|import/.test(reason.toLowerCase());
 
   if (hasMeaningfulManualProject(existing) && !manualClipBoardProjectsShareIdentity(safeProject, existing) && !forceReplace && !explicitReset) {
+    logManualBoardIdentityDebug(safeProject, existing, "reject_identity_mismatch");
     console.warn("[MANUAL BOARD REJECT OLD SNAPSHOT]", {
       candidate: { revision: safeProject?.revision, updatedAt: safeProject?.updatedAt, stats: nextStats },
       current: { revision: existing?.revision, updatedAt: existing?.updatedAt, stats: existingStats },
@@ -1831,6 +1907,39 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
         return true;
       } catch (retryErr) {
         err = retryErr;
+      }
+    }
+
+    if (quotaExceeded && !useLightweightPersist) {
+      try {
+        const lightweightProject = buildLightweightManualClipBoardProjectForStorage(safeProject);
+        const lightweightSerialized = JSON.stringify(lightweightProject);
+        localStorage.setItem(getManualClipBoardCanonicalStorageKey(), lightweightSerialized);
+        localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY), lightweightSerialized);
+        if (nodeId) {
+          localStorage.setItem(getAccountScopedStorageKey(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY), nodeId);
+          localStorage.setItem(getAccountScopedStorageKey(getManualClipBoardProjectStorageKey(nodeId)), lightweightSerialized);
+        }
+        if (canUseLegacyManualProjectStorage()) {
+          localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, lightweightSerialized);
+          if (nodeId) {
+            localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId);
+            localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), lightweightSerialized);
+          }
+        }
+        rememberManualClipBoardStorageError(null);
+        rememberLastGoodManualClipBoardProject(lightweightProject);
+        writeManualClipBoardStorageModeLog({ mode: "lightweight", serializedLength: lightweightSerialized.length, emergencySaved: false, quotaCleanupTriggered: quotaCleanupRemovedKeys.length > 0, removedKeysCount: quotaCleanupRemovedKeys.length, reason, nodeId });
+        console.warn("[MANUAL BOARD PERSIST WRITE] saved lightweight snapshot after quota cleanup", {
+          reason,
+          nodeId,
+          removedKeysCount: quotaCleanupRemovedKeys.length,
+          storageSerializedKb: Math.round(lightweightSerialized.length / 1024),
+          storageStats: getManualClipBoardMaterialStats(lightweightProject),
+        });
+        return true;
+      } catch (lightweightErr) {
+        err = lightweightErr;
       }
     }
 
@@ -2069,7 +2178,7 @@ function removeManualClipBoardForceWriteTargetKeys({ nodeId = "", nodeScopedKey 
 
 export function forceWriteManualClipBoardProjectForNode(project = {}, options = {}) {
   const incomingProject = project && typeof project === "object" ? project : {};
-  const nodeId = String(incomingProject.nodeId || incomingProject.sourceNodeId || "").trim();
+  const nodeId = getManualProjectOwnerId(incomingProject);
   const reason = String(
     options?.reason
     || incomingProject.lastPersistReason
@@ -2231,6 +2340,34 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
       rememberLastGoodManualClipBoardProject(storageProject);
       writeManualClipBoardStorageModeLog({ mode: useLightweightPersist ? "lightweight" : "full", serializedLength: serialized.length, emergencySaved: false, quotaCleanupTriggered: removedKeys.length > 0, removedKeysCount: removedKeys.length, reason, nodeId });
       return true;
+    }
+
+    if (quotaExceeded && !useLightweightPersist) {
+      try {
+        const lightweightProject = buildLightweightManualClipBoardProjectForStorage(safeProject);
+        const lightweightSerialized = JSON.stringify(lightweightProject);
+        serialized = lightweightSerialized;
+        removeForceWriteTargetKeys();
+        localStorage.setItem(nodeScopedKey, lightweightSerialized);
+        try { localStorage.setItem(activeIdKey, nodeId); } catch {}
+        try { localStorage.setItem(activeKey, lightweightSerialized); } catch {}
+        try { localStorage.setItem(canonicalKey, lightweightSerialized); } catch {}
+        if (canUseLegacyManualProjectStorage()) {
+          try { localStorage.setItem(getManualClipBoardProjectStorageKey(nodeId), lightweightSerialized); } catch {}
+          try { localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY, lightweightSerialized); } catch {}
+          try { localStorage.setItem(MANUAL_CLIP_BOARD_ACTIVE_PROJECT_ID_KEY, nodeId); } catch {}
+        }
+        const readback = readManualClipBoardProjectForNode(nodeId);
+        if (hasMeaningfulManualProject(readback) && getManualProjectOwnerId(readback) === nodeId) {
+          rememberManualClipBoardStorageError(null);
+          rememberLastGoodManualClipBoardProject(lightweightProject);
+          writeManualClipBoardStorageModeLog({ mode: "lightweight", serializedLength: lightweightSerialized.length, emergencySaved: false, quotaCleanupTriggered: removedKeys.length > 0, removedKeysCount: removedKeys.length, reason, nodeId });
+          console.warn("[manual board force write node-scoped] saved lightweight snapshot after quota cleanup", { nodeId, reason, removedKeysCount: removedKeys.length, serializedKb: Math.round(lightweightSerialized.length / 1024), stats: getManualClipBoardMaterialStats(lightweightProject) });
+          return true;
+        }
+      } catch (lightweightErr) {
+        err = lightweightErr;
+      }
     }
 
     const errorInfo = {
