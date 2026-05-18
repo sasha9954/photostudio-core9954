@@ -2501,7 +2501,15 @@ export default function ManualClipDirectorBoardEditor({
         };
       }) : [];
       const parsedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
-      const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId) ? parsedSelectedSceneId : String(scenes[0]?.scene_id || "");
+      const currentSelectedSceneId = String(selectedSceneIdRef.current || "").trim();
+      const openStateSelectedSceneId = String(openState?.selectedSceneId || "").trim();
+      const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId)
+        ? parsedSelectedSceneId
+        : scenes.some((scene) => scene.scene_id === currentSelectedSceneId)
+          ? currentSelectedSceneId
+          : scenes.some((scene) => scene.scene_id === openStateSelectedSceneId)
+            ? openStateSelectedSceneId
+            : String(scenes[0]?.scene_id || "");
       console.info("[MANUAL BOARD HYDRATE RAW SCENE MEDIA DEBUG]", {
         selectedSceneId: selectedSceneIdForHydrate,
         rawMediaDebugStats: getManualBoardMediaDebugStats(parsed),
@@ -2576,6 +2584,13 @@ export default function ManualClipDirectorBoardEditor({
         });
         return;
       }
+      writeManualClipBoardOpenState({
+        ...(openState || {}),
+        manualBoardExplicitNewProject: false,
+        forceResetBoard: false,
+        selectedSceneId: selectedSceneIdForHydrate,
+        updatedAt: Date.now(),
+      });
       console.info("[MANUAL BOARD AUDIO HYDRATE]", {
         project_id: hydratedProject.project_id || hydratedProject.projectId || "",
         audio: getManualBoardAudioInfo(hydratedProject),
@@ -3534,22 +3549,34 @@ export default function ManualClipDirectorBoardEditor({
   const selectSceneByUser = (sceneId) => {
     const safeSceneId = String(sceneId || "").trim();
     const baseProject = projectRef.current || project || {};
-    const sceneExists = Array.isArray(baseProject.scenes) && baseProject.scenes.some((scene) => scene.scene_id === safeSceneId);
+    const sceneExists = Array.isArray(baseProject.scenes)
+      && baseProject.scenes.some((scene) => String(scene.scene_id || "") === safeSceneId);
+
     if (!safeSceneId || !sceneExists) return;
+
     selectedSceneIdRef.current = safeSceneId;
     setSelectedSceneId(safeSceneId);
-    const nextProject = normalizeDirectorProjectOwner({
+
+    projectRef.current = {
       ...baseProject,
       selectedSceneId: safeSceneId,
-      updatedAt: Date.now(),
-      revision: (Number(baseProject.revision || 0) || 0) + 1,
-      lastPersistReason: "selected_scene_user",
+    };
+
+    try {
+      writeManualClipBoardOpenState({
+        ...(readManualClipBoardOpenState() || {}),
+        isOpen: true,
+        sourceNodeId: getProjectOwnerNodeId(baseProject),
+        selectedSceneId: safeSceneId,
+        updatedAt: Date.now(),
+        reason: "selected_scene_ui_only",
+      });
+    } catch {}
+
+    console.info("[MANUAL BOARD SELECT SCENE UI ONLY]", {
+      sceneId: safeSceneId,
+      sourceNodeId: getProjectOwnerNodeId(baseProject),
     });
-    projectRef.current = nextProject;
-    setProject(nextProject);
-    if (didHydrateRef.current && hasMeaningfulManualProject(nextProject)) {
-      scheduleManualBoardAutosave("selected_scene_user");
-    }
   };
 
   useEffect(() => {
