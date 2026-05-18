@@ -1772,7 +1772,6 @@ export function readEmergencyManualClipBoardProjectForNode(nodeId = "") {
     candidates.push(readManualProjectJsonStorage(key));
   };
   addCandidate(getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:${safeNodeId || "default"}`));
-  if (safeNodeId) addCandidate(getAccountScopedStorageKey(`manual_clip_board_emergency_snapshot:default`));
   return pickBestManualClipBoardProject(candidates);
 }
 
@@ -2602,10 +2601,6 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const durableCandidateProject = fullSerialized.length <= 24 * 1024 * 1024
     ? fullStorageProject
     : storageProject;
-  queueManualBoardDurableSaveOnce(durableCandidateProject, {
-    reason,
-    source: "manual_board_before_localstorage_quota_safe",
-  });
   const queueDurableSaveAfterLocalSuccess = (projectForDurable, sourceSuffix = "") => {
     queueManualBoardDurableSaveOnce(projectForDurable, {
       reason,
