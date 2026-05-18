@@ -432,6 +432,8 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
   const safeSourceNodeId = String(sourceNodeId || "").trim();
   const durableProject = options?.durableProject || null;
   const durableTried = options?.durableTried === true;
+  let navigationProjectForCandidates = navigationProject;
+  let forcePreferDurableProject = false;
   if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
     if (!durableTried) {
       console.warn("[MANUAL BOARD EXPLICIT NEW WAITING DURABLE]", {
@@ -477,6 +479,9 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
         navStats,
         durableStats,
       });
+
+      navigationProjectForCandidates = null;
+      forcePreferDurableProject = true;
     } else if (!durableHasMoreMedia) {
       logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId: safeSourceNodeId });
       console.info("[MANUAL BOARD EMBEDDED PICK]", {
@@ -513,7 +518,7 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     { source: "backend-durable", project: durableProject },
     { source: "session-last-good", project: lastGoodProject },
     { source: "emergency", project: emergencyProject },
-    { source: "navigation", project: navigationProject },
+    { source: "navigation", project: navigationProjectForCandidates },
     { source: "node-scoped", project: nodeProject },
     { source: "active", project: activeProject },
     { source: "canonical", project: canonicalProject },
@@ -526,6 +531,20 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
       if (!sourceMatches) logManualBoardSkipStale(source, candidateProject, { sourceNodeId: safeSourceNodeId }, "owner_mismatch");
       return sourceMatches;
     });
+
+    if (forcePreferDurableProject && hasMeaningfulManualProject(durableProject)) {
+      console.warn("[MANUAL BOARD PICK FORCED: BACKEND DURABLE PRESERVES MEDIA]", {
+        sourceNodeId: safeSourceNodeId,
+        durableStats: getManualClipBoardMaterialStats(durableProject),
+      });
+
+      return mergePickedManualBoardTimelineIfNeeded(
+        { source: "backend-durable", project: durableProject },
+        candidates,
+        "forced_backend_durable_preserve_media"
+      );
+    }
+
     const picked = pickNewestManualBoardCandidate(ownerCandidates, openState);
     if (picked?.project) {
       console.info("[MANUAL BOARD EMBEDDED PICK]", {
