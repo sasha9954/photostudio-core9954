@@ -1,6 +1,6 @@
 .videoMatchPage {
   min-height: 100%;
-  padding: 28px;
+  padding: 18px;
   color: rgba(255,255,255,0.9);
 }
 .videoMatchHeader {
@@ -8,49 +8,63 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 .videoMatchHeader h1 {
   margin: 0;
-  font-size: 30px;
+  font-size: 28px;
 }
 .videoMatchHeader p {
-  margin: 6px 0 0;
+  margin: 4px 0 0;
   color: rgba(255,255,255,0.62);
 }
-.videoMatchGrid {
+.videoMatchTopWorkspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(330px, 0.55fr);
+  gap: 14px;
+  align-items: start;
+}
+.videoMatchBelowGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
 }
 .videoMatchPanel {
   border: 1px solid rgba(255,255,255,0.12);
   border-radius: 18px;
   background: rgba(9, 16, 28, 0.78);
   box-shadow: 0 20px 55px rgba(0,0,0,0.22);
-  padding: 16px;
+  padding: 14px;
 }
-.videoMatchPanel h2 {
-  margin: 0 0 12px;
-  font-size: 17px;
+.videoMatchPanel h2,
+.videoMatchPanel h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.videoMatchPanel h3 {
+  margin-top: 12px;
+  margin-bottom: 8px;
+  color: rgba(255,255,255,0.78);
 }
 .videoMatchPanelHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+.videoMatchPanelHeader span {
+  color: rgba(255,255,255,0.62);
+  font-size: 12px;
 }
 .videoMatchUploadBtn {
   cursor: pointer;
 }
-.videoMatchPlayerPanel {
-  grid-row: span 2;
-}
 .videoMatchVideoBox {
   display: grid;
   place-items: center;
-  min-height: 390px;
+  height: clamp(255px, 40vh, 360px);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 16px;
   background: rgba(0,0,0,0.35);
@@ -59,26 +73,36 @@
 .videoMatchVideoBox video {
   display: block;
   width: 100%;
-  max-height: 62vh;
+  height: 100%;
+  object-fit: contain;
   background: #000;
 }
 .videoMatchEmptyVideo,
 .videoMatchEmptyList {
   color: rgba(255,255,255,0.55);
   text-align: center;
-  padding: 24px;
+  padding: 18px;
 }
-.videoMatchTimelineMeta {
+.videoMatchCompactEmpty {
+  padding: 10px;
+  font-size: 12px;
+}
+.videoMatchTimelineMeta,
+.videoMatchAssemblyHeader,
+.videoMatchAssemblyLegend {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  margin: 12px 2px 8px;
+  margin: 8px 2px 6px;
   color: rgba(255,255,255,0.62);
-  font-size: 13px;
+  font-size: 12px;
+}
+.videoMatchAssemblyHeader h2 {
+  font-size: 14px;
 }
 .videoMatchTimeline {
   position: relative;
-  height: 42px;
+  height: 34px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,0.13);
   background: linear-gradient(90deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03));
@@ -93,8 +117,8 @@
 }
 .videoMatchTimelineBlock {
   position: absolute;
-  top: 8px;
-  height: 26px;
+  top: 7px;
+  height: 20px;
   min-width: 8px;
   border: 1px solid rgba(255,255,255,0.5);
   border-radius: 999px;
@@ -105,12 +129,88 @@
   background: rgba(109, 213, 255, 0.9);
   box-shadow: 0 0 0 2px rgba(109, 213, 255, 0.22);
 }
+.videoMatchTimelineBlock.isPlaying,
+.videoMatchAssemblyBlock.isPlaying {
+  border-color: rgba(108, 255, 177, 0.95);
+  box-shadow: 0 0 0 2px rgba(108, 255, 177, 0.18), 0 0 18px rgba(108, 255, 177, 0.2);
+}
+.videoMatchAssemblyTimeline {
+  position: relative;
+  height: 52px;
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 14px;
+  background: linear-gradient(90deg, rgba(109,213,255,0.08), rgba(255,196,87,0.07));
+  overflow: hidden;
+}
+.videoMatchAssemblyBlock {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  min-width: 42px;
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.36);
+  border-radius: 11px;
+  background: rgba(255, 196, 87, 0.42);
+  color: rgba(255,255,255,0.9);
+  cursor: pointer;
+  padding: 5px 7px;
+  text-align: left;
+}
+.videoMatchAssemblyBlock span,
+.videoMatchAssemblyBlock small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.videoMatchAssemblyBlock small {
+  color: rgba(255,255,255,0.64);
+  font-size: 10px;
+}
+.videoMatchAssemblyBlock.isSelected {
+  border-color: rgba(109, 213, 255, 0.86);
+  background: rgba(109, 213, 255, 0.42);
+}
 .videoMatchActions {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 12px;
+  gap: 8px;
+  margin-top: 10px;
   color: rgba(255,255,255,0.68);
+}
+.videoMatchPlaybackActions {
+  flex-wrap: wrap;
+}
+.videoMatchPlaybackActions span {
+  font-size: 12px;
+}
+.videoMatchInspectorPanel {
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+}
+.videoMatchSceneInfo {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(109,213,255,0.18);
+  border-radius: 14px;
+  background: rgba(109,213,255,0.07);
+  padding: 10px;
+}
+.videoMatchSceneInfo span,
+.videoMatchSceneInfo small {
+  color: rgba(255,255,255,0.66);
+  font-size: 12px;
+}
+.videoMatchSceneInfo p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 2px 0;
+  color: rgba(255,255,255,0.8);
+  font-size: 13px;
 }
 .videoMatchContextRows {
   display: grid;
@@ -118,6 +218,30 @@
   color: rgba(255,255,255,0.72);
   font-size: 13px;
   overflow-wrap: anywhere;
+  margin-top: 12px;
+}
+.videoMatchDetailsPanel {
+  padding: 0;
+  overflow: hidden;
+}
+.videoMatchDetailsPanel summary {
+  cursor: pointer;
+  padding: 13px 14px;
+  color: rgba(255,255,255,0.86);
+  font-weight: 700;
+}
+.videoMatchDetailsPanel[open] {
+  padding: 0 14px 14px;
+}
+.videoMatchDetailsPanel[open] summary {
+  margin: 0 -14px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.videoMatchJsonActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .videoMatchJsonPanel textarea {
   width: 100%;
@@ -131,7 +255,6 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
   box-sizing: border-box;
-  margin-bottom: 10px;
 }
 .videoMatchError {
   margin-top: 10px;
@@ -144,8 +267,9 @@
 .videoMatchBlocksList {
   display: grid;
   gap: 10px;
-  max-height: 420px;
+  max-height: 260px;
   overflow: auto;
+  margin-top: 12px;
 }
 .videoMatchBlockCard {
   display: grid;
@@ -167,21 +291,14 @@
 .videoMatchBlockCard small {
   color: rgba(255,255,255,0.62);
 }
-@media (max-width: 980px) {
-  .videoMatchGrid {
-    grid-template-columns: 1fr;
-  }
-  .videoMatchPlayerPanel {
-    grid-row: auto;
-  }
-}
 .videoMatchPage .clipSB_btn {
   border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(255,255,255,0.08);
   color: rgba(255,255,255,0.9);
-  padding: 9px 12px;
+  padding: 7px 10px;
   cursor: pointer;
+  white-space: nowrap;
 }
 .videoMatchPage .clipSB_btnPrimary {
   border-color: rgba(109,213,255,0.45);
@@ -194,6 +311,13 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+.videoMatchIconBtn {
+  width: 34px;
+  padding-inline: 0 !important;
+}
+.videoMatchChooseBtn {
+  min-width: 76px;
+}
 .videoMatchSegmentsList,
 .videoMatchCandidatesList {
   display: grid;
@@ -201,8 +325,13 @@
 }
 .videoMatchSegmentsList {
   margin-bottom: 16px;
-  max-height: 520px;
+  max-height: 380px;
   overflow: auto;
+}
+.videoMatchInspectorCandidates {
+  max-height: calc(100vh - 330px);
+  overflow: auto;
+  padding-right: 2px;
 }
 .videoMatchSegmentCard {
   display: grid;
@@ -238,17 +367,21 @@
 }
 .videoMatchCandidateCard {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 14px;
   background: rgba(0,0,0,0.14);
-  padding: 10px;
+  padding: 9px;
 }
 .videoMatchCandidateCard.isSelected {
   border-color: rgba(255, 196, 87, 0.62);
   background: rgba(255, 196, 87, 0.1);
+}
+.videoMatchCandidateCard.isPreview {
+  border-color: rgba(176, 132, 255, 0.72);
+  box-shadow: 0 0 0 2px rgba(176, 132, 255, 0.16);
 }
 .videoMatchCandidateCard img {
   width: 72px;
@@ -259,83 +392,6 @@
 }
 .videoMatchWarnings {
   color: #ffd28a !important;
-}
-@media (max-width: 640px) {
-  .videoMatchCandidateCard {
-    grid-template-columns: 1fr;
-    align-items: stretch;
-  }
-}
-.videoMatchSummaryBar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: -8px 0 18px;
-  color: rgba(255,255,255,0.7);
-  font-size: 12px;
-}
-.videoMatchSummaryBar span {
-  border: 1px solid rgba(255,255,255,0.11);
-  border-radius: 999px;
-  background: rgba(255,255,255,0.055);
-  padding: 6px 10px;
-}
-.videoMatchAssemblyPanel {
-  grid-column: 1 / -1;
-}
-.videoMatchAssemblyControls {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.videoMatchAssemblyTimeline {
-  position: relative;
-  min-height: 74px;
-  border: 1px solid rgba(255,255,255,0.13);
-  border-radius: 16px;
-  background: linear-gradient(90deg, rgba(109,213,255,0.08), rgba(255,196,87,0.07));
-  overflow: hidden;
-}
-.videoMatchAssemblyBlock {
-  position: absolute;
-  top: 10px;
-  bottom: 10px;
-  min-width: 46px;
-  display: grid;
-  align-content: center;
-  gap: 3px;
-  overflow: hidden;
-  border: 1px solid rgba(255,255,255,0.36);
-  border-radius: 13px;
-  background: rgba(255, 196, 87, 0.42);
-  color: rgba(255,255,255,0.9);
-  cursor: pointer;
-  padding: 7px 9px;
-  text-align: left;
-}
-.videoMatchAssemblyBlock span,
-.videoMatchAssemblyBlock small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.videoMatchAssemblyBlock small {
-  color: rgba(255,255,255,0.64);
-  font-size: 11px;
-}
-.videoMatchAssemblyBlock.isSelected {
-  border-color: rgba(109, 213, 255, 0.86);
-  background: rgba(109, 213, 255, 0.42);
-  box-shadow: 0 0 0 2px rgba(109, 213, 255, 0.2), 0 10px 25px rgba(0,0,0,0.22);
-}
-.videoMatchAssemblyLegend {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 10px;
-  color: rgba(255,255,255,0.62);
-  font-size: 12px;
 }
 .videoMatchSegmentTitle {
   display: grid;
@@ -353,24 +409,52 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 7px;
 }
 .videoMatchCandidateActions {
   flex-wrap: wrap;
 }
-.videoMatchCandidateCard.isPreview {
-  border-color: rgba(176, 132, 255, 0.72);
-  box-shadow: 0 0 0 2px rgba(176, 132, 255, 0.16);
+.videoMatchSummaryBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 12px;
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+}
+.videoMatchSummaryBar span {
+  border: 1px solid rgba(255,255,255,0.11);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.055);
+  padding: 5px 9px;
+}
+@media (max-width: 980px) {
+  .videoMatchTopWorkspace,
+  .videoMatchBelowGrid {
+    grid-template-columns: 1fr;
+  }
+  .videoMatchInspectorPanel {
+    max-height: none;
+  }
+  .videoMatchInspectorCandidates {
+    max-height: none;
+  }
 }
 @media (max-width: 640px) {
-  .videoMatchAssemblyLegend,
+  .videoMatchPage {
+    padding: 12px;
+  }
+  .videoMatchCandidateCard {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+  .videoMatchAssemblyBlock {
+    min-width: 34px;
+    padding: 5px;
+  }
   .videoMatchSegmentHeader,
   .videoMatchSegmentHeaderActions {
     display: grid;
     justify-content: stretch;
-  }
-  .videoMatchAssemblyBlock {
-    min-width: 34px;
-    padding: 6px;
   }
 }
