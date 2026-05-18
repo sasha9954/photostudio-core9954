@@ -399,6 +399,25 @@ export default function VideoMatchBoardPage() {
             camera_motion: "handheld",
             warnings: ["More motion than requested"],
           },
+          {
+            id: "seg_01_c",
+            video_t0: 41.6,
+            video_t1: 46.4,
+            fit_mode: "fallback",
+            confidence: 0.69,
+            match_reason: "Backup wide shot keeps the scene readable if the preferred opening feels too static.",
+            visual_type: "intro",
+            shot_type: "wide",
+            emotion: "calm",
+            action: "subject prepares the workspace",
+            contains_face: true,
+            mouth_visible: false,
+            lip_sync_candidate: false,
+            dialogue_present: false,
+            motion_level: "low",
+            camera_motion: "static",
+            warnings: ["Less precise match", "Use only if pacing needs a calmer opening"],
+          },
         ],
       },
       {
@@ -485,7 +504,7 @@ export default function VideoMatchBoardPage() {
             {sourceVideoUrl ? (
               <video ref={videoRef} src={sourceVideoUrl} controls onLoadedMetadata={onLoadedMetadata} onError={onSourceVideoError} onTimeUpdate={onTimeUpdate} />
             ) : (
-              <div className="videoMatchEmptyVideo">Загрузите видеофайл для preview.</div>
+              <div className="videoMatchEmptyVideo">Загрузите видеофайл для просмотра.</div>
             )}
           </div>
           {sourceVideoLoadMessage ? <div className="videoMatchError">{sourceVideoLoadMessage}</div> : null}
@@ -544,8 +563,8 @@ export default function VideoMatchBoardPage() {
             <>
               <div className="videoMatchSceneInfo">
                 <b>{selectedSegment.audioSceneId || selectedSegment.id}</b>
-                <span>story_scene_id: {selectedSegment.storySceneId || "—"}</span>
-                <span>target time: {formatSec(selectedSegment.targetStartSec)}–{formatSec(selectedSegment.targetEndSec)} с</span>
+                <span>story: {selectedSegment.storySceneId || "—"}</span>
+                <span>тайминг: {formatSec(selectedSegment.targetStartSec)}–{formatSec(selectedSegment.targetEndSec)} с</span>
                 <span>выбрано: {selectedSegment.selectedCandidateId || "—"}</span>
                 {selectedSegment.text ? <p>{selectedSegment.text}</p> : null}
                 {selectedSegment.visualNeed ? <small>Нужно: {selectedSegment.visualNeed}</small> : null}
@@ -559,8 +578,8 @@ export default function VideoMatchBoardPage() {
                     <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
                       {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                       <div className="videoMatchCandidateBody">
-                        <b>{candidate.id}{isCandidateSelected ? " · выбрано" : ""}{isPreviewCandidate ? " · preview" : ""}</b>
-                        <span>video time: {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence: {candidate.confidence ?? "—"}</span>
+                        <b>{candidate.id}{isCandidateSelected ? " · выбрано" : ""}{isPreviewCandidate ? " · просмотр" : ""}</b>
+                        <span>видео: {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность: {candidate.confidence ?? "—"}</span>
                         {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
                         {candidate.warnings?.length ? <small className="videoMatchWarnings">Предупреждения: {candidate.warnings.join("; ")}</small> : null}
                       </div>
@@ -631,8 +650,8 @@ export default function VideoMatchBoardPage() {
                     <div className="videoMatchSegmentHeader">
                       <button className="videoMatchSegmentTitle" type="button" onClick={() => { setExpandedSegmentId(isOpen ? "" : segment.id); patchProject({ selectedSegmentId: segment.id, selectedCandidateId: segment.selectedCandidateId || "" }, { lastGood: false }); }}>
                         <b>{segment.audioSceneId || segment.id}</b>
-                        <span>story_scene_id: {segment.storySceneId || "—"}</span>
-                        <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · выбрано {segment.selectedCandidateId || "—"} · вариантов {candidates.length}</span>
+                        <span>story: {segment.storySceneId || "—"}</span>
+                        <span>тайминг {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · выбрано {segment.selectedCandidateId || "—"} · вариантов {candidates.length}</span>
                       </button>
                       <div className="videoMatchSegmentHeaderActions">
                         {segment.mood ? <small>{segment.mood}</small> : null}
@@ -650,8 +669,8 @@ export default function VideoMatchBoardPage() {
                             <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
                               {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                               <div className="videoMatchCandidateBody">
-                                <b>{candidate.id}{isPreviewCandidate ? " · preview" : ""}</b>
-                                <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
+                                <b>{candidate.id}{isPreviewCandidate ? " · просмотр" : ""}</b>
+                                <span>видео {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность {candidate.confidence ?? "—"}</span>
                                 {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
                                 {candidate.warnings?.length ? <small className="videoMatchWarnings">Предупреждения: {candidate.warnings.join("; ")}</small> : null}
                               </div>
@@ -677,8 +696,8 @@ export default function VideoMatchBoardPage() {
               {videoBlocks.map((block) => (
                 <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => onSelectBlock(block, { scroll: false })}>
                   <b>{block.id}</b>
-                  <span>audio: {block.audioSceneId || "—"} · target {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
-                  <span>video {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · confidence {block.confidence ?? "—"}</span>
+                  <span>audio: {block.audioSceneId || "—"} · тайминг {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
+                  <span>видео {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · уверенность {block.confidence ?? "—"}</span>
                   {block.matchReason ? <small>{block.matchReason}</small> : null}
                 </button>
               ))}

@@ -477,7 +477,7 @@
   margin: -2px 0 10px;
 }
 .videoMatchTopWorkspace {
-  grid-template-columns: minmax(0, 1.58fr) minmax(320px, 0.42fr);
+  grid-template-columns: minmax(0, 1.42fr) minmax(380px, 0.58fr);
   gap: 12px;
 }
 .videoMatchPanel {
@@ -512,6 +512,7 @@
   min-height: 42px;
   overflow-x: auto;
   overflow-y: hidden;
+  flex-wrap: nowrap;
   padding: 5px;
   border: 1px solid rgba(255,255,255,0.13);
   border-radius: 14px;
@@ -519,8 +520,8 @@
 }
 .videoMatchStripSegment {
   --strip-color: var(--strip-c0);
-  flex: 1 0 74px;
-  min-width: 64px;
+  flex: 0 0 82px;
+  min-width: 82px;
   max-width: 150px;
   border: 1px solid rgba(255,255,255,0.28);
   border-radius: 10px;
@@ -594,17 +595,18 @@
   overflow: hidden;
 }
 .videoMatchInspectorCandidates {
-  max-height: calc(100vh - 305px);
-  gap: 8px;
+  max-height: min(360px, calc(100vh - 305px));
+  overflow: auto;
+  gap: 7px;
 }
 .videoMatchCandidateCard {
   grid-template-columns: minmax(0, 1fr) auto;
-  padding: 8px;
-  gap: 8px;
+  padding: 6px 7px;
+  gap: 7px;
 }
 .videoMatchCandidateCard img {
-  width: 54px;
-  height: 34px;
+  width: 50px;
+  height: 32px;
 }
 .videoMatchCandidateBody {
   min-width: 0;
@@ -621,10 +623,22 @@
 .videoMatchCandidateActions {
   flex-wrap: nowrap;
 }
+.videoMatchCandidateBody small,
+.videoMatchWarnings {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.videoMatchCandidateActions .clipSB_btn {
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1;
+}
 .videoMatchIconBtn {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
   padding: 0 !important;
 }
 .videoMatchMiniPanels {
@@ -675,7 +689,7 @@
   .videoMatchHeader p { margin-top: 2px; }
   .videoMatchVideoBox { height: clamp(255px, 40vh, 345px); }
   .videoMatchPanel { padding: 10px; }
-  .videoMatchInspectorCandidates { max-height: calc(100vh - 285px); }
+  .videoMatchInspectorCandidates { max-height: min(330px, calc(100vh - 285px)); }
 }
 @media (max-width: 980px) {
   .videoMatchTopWorkspace,
