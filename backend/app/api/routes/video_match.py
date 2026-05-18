@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_user
@@ -65,6 +66,17 @@ def _probe_duration_sec(path: Path) -> float:
         return 0.0
 
 
+@router.get("/output/{filename}")
+async def get_video_match_output(filename: str, _user=Depends(get_current_user)):
+    safe_name = Path(filename).name
+    if safe_name != filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail={"code": "invalid_filename"})
+    output_path = VIDEO_MATCH_OUTPUTS_DIR / safe_name
+    if not output_path.is_file():
+        raise HTTPException(status_code=404, detail={"code": "output_not_found", "message": safe_name})
+    return FileResponse(output_path, media_type="video/mp4", filename=safe_name)
+
+
 @router.post("/assemble")
 async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body(...), _user=Depends(get_current_user)):
     source_path = Path(payload.sourceVideoPath).expanduser()
@@ -118,9 +130,10 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
         duration_sec = _probe_duration_sec(output_path)
         result = {
             "ok": True,
-            "outputUrl": f"/static/assets/video_match_outputs/{output_name}",
+            "outputUrl": f"/api/video-match/output/{output_name}",
             "outputPath": str(output_path),
             "durationSec": round(duration_sec, 3),
+            "audioUsed": has_audio,
         }
         if audio_warning:
             result["warning"] = audio_warning
