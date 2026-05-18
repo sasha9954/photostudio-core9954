@@ -750,26 +750,28 @@ function isGeneratedSoundRoute(route = "") {
 }
 
 function getManualSceneSelectedModel(scene = {}) {
+  const safeScene = scene && typeof scene === "object" ? scene : {};
   return String(
-    scene.selectedModel
-    || scene.selected_model
-    || scene.generationModel
-    || scene.generation_model
-    || scene.providerModel
-    || scene.provider_model
-    || scene.modelId
-    || scene.model_id
-    || scene.model
+    safeScene.selectedModel
+    || safeScene.selected_model
+    || safeScene.generationModel
+    || safeScene.generation_model
+    || safeScene.providerModel
+    || safeScene.provider_model
+    || safeScene.modelId
+    || safeScene.model_id
+    || safeScene.model
     || ""
   ).trim();
 }
 
 function getManualSceneSelectedProvider(scene = {}) {
+  const safeScene = scene && typeof scene === "object" ? scene : {};
   return String(
-    scene.selectedProvider
-    || scene.provider
-    || scene.imageProvider
-    || scene.videoProvider
+    safeScene.selectedProvider
+    || safeScene.provider
+    || safeScene.imageProvider
+    || safeScene.videoProvider
     || ""
   ).trim();
 }
