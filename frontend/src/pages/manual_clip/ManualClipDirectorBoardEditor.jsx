@@ -316,6 +316,56 @@ function manualBoardMatchesOpenState(project = {}, openState = {}) {
   return true;
 }
 
+function getManualBoardReloadPickDiagnostics(project = {}) {
+  const timeline = getManualProjectTimelineDiagnostics(project);
+  const material = getManualClipBoardMaterialStats(project);
+  return {
+    ...timeline,
+    imageCount: material.imageCount || 0,
+    videoCount: material.videoCount || 0,
+    promptCount: material.promptCount || 0,
+    materialScore: material.materialScore || 0,
+  };
+}
+
+function hasManualBoardReloadRestorePayload(project = {}) {
+  const diagnostics = getManualBoardReloadPickDiagnostics(project);
+  return Boolean(
+    diagnostics.audioDurationSec > 0
+    && diagnostics.storyBlocksCount > 0
+    && diagnostics.scenesCount > 0
+    && diagnostics.scenesWithTiming > 0
+  );
+}
+
+function compareManualBoardReloadRestorePriority(a, b) {
+  const aDiagnostics = getManualBoardReloadPickDiagnostics(a?.project);
+  const bDiagnostics = getManualBoardReloadPickDiagnostics(b?.project);
+  const aHasRestorePayload = hasManualBoardReloadRestorePayload(a?.project);
+  const bHasRestorePayload = hasManualBoardReloadRestorePayload(b?.project);
+  if (Number(bHasRestorePayload) !== Number(aHasRestorePayload)) return Number(bHasRestorePayload) - Number(aHasRestorePayload);
+  if (bDiagnostics.audioDurationSec !== aDiagnostics.audioDurationSec) return bDiagnostics.audioDurationSec - aDiagnostics.audioDurationSec;
+  if (bDiagnostics.storyBlocksCount !== aDiagnostics.storyBlocksCount) return bDiagnostics.storyBlocksCount - aDiagnostics.storyBlocksCount;
+  if (bDiagnostics.scenesWithTiming !== aDiagnostics.scenesWithTiming) return bDiagnostics.scenesWithTiming - aDiagnostics.scenesWithTiming;
+  if (bDiagnostics.scenesCount !== aDiagnostics.scenesCount) return bDiagnostics.scenesCount - aDiagnostics.scenesCount;
+  return 0;
+}
+
+function logManualBoardReloadPickDebug(candidate = null, projectOverride = null) {
+  const project = projectOverride || candidate?.project || {};
+  const diagnostics = getManualBoardReloadPickDiagnostics(project);
+  console.info("[MANUAL BOARD RELOAD PICK DEBUG]", {
+    source: candidate?.source || "unknown",
+    audioDurationSec: diagnostics.audioDurationSec,
+    storyBlocksCount: diagnostics.storyBlocksCount,
+    scenesCount: diagnostics.scenesCount,
+    scenesWithTiming: diagnostics.scenesWithTiming,
+    imageCount: diagnostics.imageCount,
+    promptCount: diagnostics.promptCount,
+    selectedSceneId: diagnostics.selectedSceneId,
+  });
+}
+
 function buildManualBoardPickLogEntry(candidate = {}) {
   const project = candidate?.project || {};
   const scoreData = scoreManualClipBoardProject(project);
@@ -327,6 +377,7 @@ function buildManualBoardPickLogEntry(candidate = {}) {
     deletionRevision: scoreData.deletionRevision,
     updatedAt: scoreData.updatedAt,
     stats: scoreData.stats,
+    reloadRestore: getManualBoardReloadPickDiagnostics(project),
     selectedSceneId: String(project?.selectedSceneId || "").trim(),
     openStateMatch: Boolean(candidate?.openStateMatch),
   };
@@ -341,6 +392,8 @@ function pickNewestManualBoardCandidate(candidates = [], openState = {}) {
       scoreData: scoreManualClipBoardProject(candidate.project),
     }))
     .sort((a, b) => {
+      const reloadRestorePriority = compareManualBoardReloadRestorePriority(a, b);
+      if (reloadRestorePriority !== 0) return reloadRestorePriority;
       if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
       if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
       if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
@@ -428,6 +481,7 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
         })),
       });
       const pickedProject = mergePickedManualBoardTimelineIfNeeded(picked, ownerCandidates, "source_bound_hydrate");
+      logManualBoardReloadPickDebug(picked, pickedProject);
       logManualBoardHydratePick(picked.source, pickedProject, { sourceNodeId: safeSourceNodeId });
       return pickedProject;
     }
@@ -458,7 +512,10 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     else if (bestProject === nodeProject) source = "node-scoped";
   }
   const bestProjectWithTimeline = mergePickedManualBoardTimelineIfNeeded(picked || { source, project: bestProject }, candidates, "active_hydrate");
-  if (bestProjectWithTimeline) logManualBoardHydratePick(source, bestProjectWithTimeline);
+  if (bestProjectWithTimeline) {
+    logManualBoardReloadPickDebug(picked || { source, project: bestProject }, bestProjectWithTimeline);
+    logManualBoardHydratePick(source, bestProjectWithTimeline);
+  }
   return bestProjectWithTimeline;
 }
 
