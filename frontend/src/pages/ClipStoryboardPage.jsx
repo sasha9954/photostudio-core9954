@@ -2946,7 +2946,13 @@ function safeSet(key, value) {
   try {
     localStorage.setItem(key, value);
     return true;
-  } catch {
+  } catch (err) {
+    console.warn("[CLIP STORAGE SAFESET ERROR]", {
+      key,
+      valueLength: typeof value === "string" ? value.length : 0,
+      error: String(err?.message || err || "localStorage_set_failed"),
+      name: String(err?.name || ""),
+    });
     return false;
   }
 }
@@ -9424,6 +9430,155 @@ function sanitizeNarrativeTesterNodeData(nodeType, rawData = {}) {
   return testerType ? { testerType } : {};
 }
 
+
+const WORKSPACE_TOPOLOGY_ALWAYS_DROP_KEYS = new Set([
+  "rawScenarioResponse",
+  "rawScenarioResponseSummary",
+  "rawResponse",
+  "responseJson",
+  "responseBlob",
+  "cachedResponseBlob",
+  "runtimeImageApiResult",
+  "lastImageApiResult",
+  "lastImageResult",
+  "pendingRawResponse",
+  "pendingRawResponseSummary",
+  "normalizedStageOutputs",
+  "generatedImages",
+  "generatedVideos",
+  "generatedAudios",
+  "generatedAssets",
+  "generatedStoryboards",
+  "sceneGeneration",
+  "assemblyResult",
+  "assemblyPayload",
+  "assemblyVideoData",
+  "finalVideoData",
+  "blob",
+  "blobUrl",
+  "dataUrl",
+  "base64",
+]);
+
+const WORKSPACE_TOPOLOGY_HEAVY_KEY_PATTERN = /(base64|blob|rawresponse|responseblob|generatedimages|generatedvideos|assemblyvideodata|finalvideodata|runtimeimageapiresult|pendingrawresponse)/i;
+const WORKSPACE_TOPOLOGY_DATA_URL_PATTERN = /^data:|^blob:/i;
+const WORKSPACE_TOPOLOGY_MAX_STRING_LENGTH = 20000;
+const WORKSPACE_TOPOLOGY_MAX_TIMING_CONTEXT_LENGTH = 120000;
+
+function sanitizeWorkspaceTopologyValue(value, options = {}) {
+  const maxStringLength = Number(options.maxStringLength || WORKSPACE_TOPOLOGY_MAX_STRING_LENGTH);
+  if (typeof value === "function" || value === undefined) return undefined;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (WORKSPACE_TOPOLOGY_DATA_URL_PATTERN.test(trimmed)) return undefined;
+    if (trimmed.length > maxStringLength) return undefined;
+    return value;
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeWorkspaceTopologyValue(item, options))
+      .filter((item) => item !== undefined);
+  }
+  if (value && typeof value === "object") {
+    const next = {};
+    Object.entries(value).forEach(([key, nested]) => {
+      if (WORKSPACE_TOPOLOGY_ALWAYS_DROP_KEYS.has(key) || WORKSPACE_TOPOLOGY_HEAVY_KEY_PATTERN.test(key)) return;
+      const cleaned = sanitizeWorkspaceTopologyValue(nested, options);
+      if (cleaned !== undefined) next[key] = cleaned;
+    });
+    return next;
+  }
+  return undefined;
+}
+
+function sanitizeWorkspaceTopologyDataForNode(nodeType = "", data = {}) {
+  const safeData = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  if (nodeType === "videoMatchBoard") {
+    const next = {};
+    if (safeData.sourceVideo && typeof safeData.sourceVideo === "object") {
+      const sourceVideo = sanitizeWorkspaceTopologyValue(safeData.sourceVideo);
+      if (sourceVideo && typeof sourceVideo === "object") next.sourceVideo = sourceVideo;
+    }
+    [
+      "sourceVideoUrl",
+      "selectedSegmentId",
+      "selectedCandidateId",
+      "selectedBlockId",
+      "jsonInput",
+      "jsonError",
+      "timingSourceNodeId",
+      "videoMatchUpdatedAt",
+    ].forEach((key) => {
+      if (Object.prototype.hasOwnProperty.call(safeData, key)) {
+        const cleaned = sanitizeWorkspaceTopologyValue(safeData[key]);
+        if (cleaned !== undefined) next[key] = cleaned;
+      }
+    });
+    if (Array.isArray(safeData.matchSegments)) next.matchSegments = sanitizeWorkspaceTopologyValue(safeData.matchSegments) || [];
+    if (Array.isArray(safeData.videoBlocks)) next.videoBlocks = sanitizeWorkspaceTopologyValue(safeData.videoBlocks) || [];
+    if (safeData.timingContext && typeof safeData.timingContext === "object") {
+      const timingContext = sanitizeWorkspaceTopologyValue(safeData.timingContext);
+      try {
+        if (timingContext && JSON.stringify(timingContext).length <= WORKSPACE_TOPOLOGY_MAX_TIMING_CONTEXT_LENGTH) {
+          next.timingContext = timingContext;
+        }
+      } catch {
+        // skip malformed or circular timing context in the lightweight topology snapshot
+      }
+    }
+    return next;
+  }
+
+  const sanitized = sanitizeWorkspaceTopologyValue(safeData);
+  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return {};
+
+  if (nodeType === "manualTiming") {
+    delete sanitized.director_board;
+    delete sanitized.connectedAudio;
+    delete sanitized.connectedInputs;
+    delete sanitized.audio?.url;
+  }
+
+  return sanitized;
+}
+
+function buildWorkspaceTopologyPayload(finalWorkspacePayload = {}) {
+  const workspace = unwrapClipWorkspacePayload(finalWorkspacePayload);
+  const nodes = Array.isArray(workspace?.nodes) ? workspace.nodes : [];
+  const lightweightNodes = nodes
+    .filter((node) => node && typeof node.id === "string" && typeof node.type === "string")
+    .map((node) => {
+      const nextNode = {
+        id: String(node.id || ""),
+        type: String(node.type || ""),
+        position: node.position && typeof node.position === "object"
+          ? {
+            x: Number.isFinite(Number(node.position.x)) ? Number(node.position.x) : 0,
+            y: Number.isFinite(Number(node.position.y)) ? Number(node.position.y) : 0,
+          }
+          : { x: 0, y: 0 },
+        data: sanitizeWorkspaceTopologyDataForNode(String(node.type || ""), node.data || {}),
+      };
+      if (node.measured && typeof node.measured === "object") {
+        nextNode.measured = sanitizeWorkspaceTopologyValue(node.measured) || undefined;
+      }
+      if (Number.isFinite(Number(node.width))) nextNode.width = Number(node.width);
+      if (Number.isFinite(Number(node.height))) nextNode.height = Number(node.height);
+      return nextNode;
+    });
+  return {
+    nodes: lightweightNodes,
+    edges: Array.isArray(workspace?.edges) ? workspace.edges : [],
+    viewport: workspace?.viewport && typeof workspace.viewport === "object" ? workspace.viewport : null,
+    ui: workspace?.ui && typeof workspace.ui === "object" ? workspace.ui : {},
+    workspaceBinding: workspace?.workspaceBinding && typeof workspace.workspaceBinding === "object" ? workspace.workspaceBinding : {},
+    accountKey: String(workspace?.accountKey || ""),
+    persistedAt: String(workspace?.persistedAt || new Date().toISOString()),
+  };
+}
+
 function serializeNodesForStorage(nodes) {
   const safeNodes = Array.isArray(nodes) ? nodes : [];
   console.info("[CLIP SERIALIZE] start", { nodesCount: safeNodes.length });
@@ -11420,6 +11575,7 @@ export default function ClipStoryboardPage() {
   const accountKey = useMemo(() => getAccountKey(user) || "guest", [user]);
   const STORE_KEY = useMemo(() => `ps:clipStoryboard:v1:${accountKey}`, [accountKey]);
   const WORKSPACE_STORE_KEY = useMemo(() => `ps:clipStoryboard:workspace:v2:${accountKey}`, [accountKey]);
+  const WORKSPACE_TOPOLOGY_STORE_KEY = useMemo(() => `ps:clipStoryboard:workspaceTopology:v1:${accountKey}`, [accountKey]);
   const VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:videoJob:v1:${accountKey}`, [accountKey]);
   const COMFY_VIDEO_JOB_STORE_KEY = useMemo(() => `ps:clipStoryboard:comfyVideoJob:v1:${accountKey}`, [accountKey]);
   const STORYBOARD_RUNTIME_STORE_KEY = useMemo(() => `ps:clipStoryboard:scenarioRuntime:v1:${accountKey}:${window.location.pathname}`, [accountKey]);
@@ -12855,11 +13011,13 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
     reason,
     accountKey,
     WORKSPACE_STORE_KEY,
+    WORKSPACE_TOPOLOGY_STORE_KEY,
     STORE_KEY,
     VIDEO_JOB_STORE_KEY,
     COMFY_VIDEO_JOB_STORE_KEY,
   });
   safeDel(WORKSPACE_STORE_KEY);
+  safeDel(WORKSPACE_TOPOLOGY_STORE_KEY);
   safeDel(STORE_KEY);
   safeDel(VIDEO_JOB_STORE_KEY);
   safeDel(COMFY_VIDEO_JOB_STORE_KEY);
@@ -12868,7 +13026,7 @@ const clearClipStoryboardStorageForCurrentAccount = useCallback((reason = "") =>
     safeDel(STORYBOARD_RUNTIME_FALLBACK_STORE_KEY);
   }
   storageVersionRef.current += 1;
-}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, accountKey]);
+}, [COMFY_VIDEO_JOB_STORE_KEY, STORE_KEY, STORYBOARD_RUNTIME_FALLBACK_STORE_KEY, STORYBOARD_RUNTIME_STORE_KEY, VIDEO_JOB_STORE_KEY, WORKSPACE_STORE_KEY, WORKSPACE_TOPOLOGY_STORE_KEY, accountKey]);
 
 const stopScenarioVideoPolling = useCallback((sceneId = "") => {
   const key = String(sceneId || "").trim();
@@ -26953,9 +27111,11 @@ const hydrate = useCallback((source = "unknown") => {
       }));
     };
 
+    addStorageCandidate(WORKSPACE_TOPOLOGY_STORE_KEY, "workspaceTopology");
     addStorageCandidate(WORKSPACE_STORE_KEY, "workspaceV2");
     addStorageCandidate(STORE_KEY, "legacyV1");
 
+    let topologyCandidate = storageCandidates.find((candidate) => candidate?.source === "workspaceTopology") || null;
     let workspaceV2Candidate = storageCandidates.find((candidate) => candidate?.source === "workspaceV2") || null;
     let legacyV1Candidate = storageCandidates.find((candidate) => candidate?.source === "legacyV1") || null;
 
@@ -26967,15 +27127,35 @@ const hydrate = useCallback((source = "unknown") => {
       const emailRaw = user?.email ? String(user.email).toLowerCase() : "";
       if (emailRaw) addStorageCandidate(`ps:clipStoryboard:v1:${emailRaw}`, "legacyCompat");
       addStorageCandidate("ps:clipStoryboard:v1:guest", "legacyCompat");
+      topologyCandidate = storageCandidates.find((candidate) => candidate?.source === "workspaceTopology") || null;
       workspaceV2Candidate = storageCandidates.find((candidate) => candidate?.source === "workspaceV2") || null;
       legacyV1Candidate = storageCandidates.find((candidate) => candidate?.source === "legacyV1") || null;
     }
 
-    const pickedCandidate = pickClipWorkspaceStorageCandidate(storageCandidates);
+    const newestCandidate = pickClipWorkspaceStorageCandidate(storageCandidates);
+    const topologyPool = storageCandidates.filter((candidate) => candidate?.valid && !candidate?.hasBrainNode);
+    const pickedCandidate = topologyPool.length
+      ? topologyPool.slice().sort((a, b) => {
+        if (b.persistedTime !== a.persistedTime) return b.persistedTime - a.persistedTime;
+        if (a.source === "workspaceTopology" && b.source !== "workspaceTopology") return -1;
+        if (b.source === "workspaceTopology" && a.source !== "workspaceTopology") return 1;
+        return 0;
+      })[0]
+      : newestCandidate;
+    const heavyAssetsCandidate = pickClipWorkspaceStorageCandidate(
+      storageCandidates.filter((candidate) => candidate?.source !== "workspaceTopology")
+    );
     console.debug("[CLIP HYDRATE STORAGE CANDIDATES]", {
+      hasWorkspaceTopology: !!topologyCandidate?.valid,
       hasWorkspaceV2: !!workspaceV2Candidate?.valid,
       hasLegacyV1: !!legacyV1Candidate?.valid,
       pickedSource: pickedCandidate?.source || null,
+      newestSource: newestCandidate?.source || null,
+      workspaceTopology: {
+        nodesCount: topologyCandidate?.meta?.nodesCount || 0,
+        nodeTypes: topologyCandidate?.meta?.nodeTypes || [],
+        persistedAt: topologyCandidate?.meta?.persistedAt || "",
+      },
       workspaceV2: {
         nodesCount: workspaceV2Candidate?.meta?.nodesCount || 0,
         nodeTypes: workspaceV2Candidate?.meta?.nodeTypes || [],
@@ -27061,19 +27241,39 @@ const hydrate = useCallback((source = "unknown") => {
 
     try {
       const parsedRaw = JSON.parse(raw);
-      const parsed = parsedRaw?.workspace && typeof parsedRaw.workspace === "object" ? parsedRaw.workspace : parsedRaw;
-      const savedNodes = Array.isArray(parsed?.nodes) ? parsed.nodes : null;
-      const savedEdges = Array.isArray(parsed?.edges) ? parsed.edges : null;
-      const savedViewport = parsed?.viewport && typeof parsed.viewport === "object" ? parsed.viewport : null;
-      const savedUi = parsed?.ui && typeof parsed.ui === "object" ? parsed.ui : {};
-      const savedAssemblyResult = parsed?.assemblyResult && typeof parsed.assemblyResult === "object" ? parsed.assemblyResult : null;
-      const savedAssemblyBuildState = ["idle", "done"].includes(parsed?.assemblyBuildState)
-        ? parsed.assemblyBuildState
+      const topologyWorkspace = pickedCandidate?.workspace && typeof pickedCandidate.workspace === "object"
+        ? pickedCandidate.workspace
+        : unwrapClipWorkspacePayload(parsedRaw);
+      const heavyWorkspace = heavyAssetsCandidate?.workspace && typeof heavyAssetsCandidate.workspace === "object"
+        ? heavyAssetsCandidate.workspace
+        : topologyWorkspace;
+      const parsed = topologyWorkspace;
+      const mergedForAssets = heavyWorkspace && heavyWorkspace !== topologyWorkspace
+        ? mergeWorkspacePayloadPreservingGeneratedAssets(topologyWorkspace, heavyWorkspace)
+        : topologyWorkspace;
+      const savedNodes = Array.isArray(mergedForAssets?.nodes) ? mergedForAssets.nodes : null;
+      const savedEdges = Array.isArray(topologyWorkspace?.edges) ? topologyWorkspace.edges : (Array.isArray(mergedForAssets?.edges) ? mergedForAssets.edges : null);
+      const savedViewport = topologyWorkspace?.viewport && typeof topologyWorkspace.viewport === "object" ? topologyWorkspace.viewport : null;
+      const savedUi = topologyWorkspace?.ui && typeof topologyWorkspace.ui === "object" ? topologyWorkspace.ui : {};
+      const savedAssemblyResult = heavyWorkspace?.assemblyResult && typeof heavyWorkspace.assemblyResult === "object" ? heavyWorkspace.assemblyResult : null;
+      const savedAssemblyBuildState = ["idle", "done"].includes(heavyWorkspace?.assemblyBuildState)
+        ? heavyWorkspace.assemblyBuildState
         : "idle";
-      const savedAssemblyPayloadSignature = String(parsed?.assemblyPayloadSignature || "");
-      const savedPlannerSignature = String(parsed?.plannerInputSignature || "");
-      const savedStoryboardSignature = String(parsed?.storyboardSceneSignature || "");
-      const savedComfySignature = String(parsed?.comfySceneSignature || "");
+      const savedAssemblyPayloadSignature = String(heavyWorkspace?.assemblyPayloadSignature || "");
+      const savedPlannerSignature = String(heavyWorkspace?.plannerInputSignature || topologyWorkspace?.plannerInputSignature || "");
+      const savedStoryboardSignature = String(heavyWorkspace?.storyboardSceneSignature || topologyWorkspace?.storyboardSceneSignature || "");
+      const savedComfySignature = String(heavyWorkspace?.comfySceneSignature || topologyWorkspace?.comfySceneSignature || "");
+
+      console.warn("[CLIP HYDRATE PICKED TOPOLOGY]", {
+        pickedTopologySource: pickedCandidate?.source || null,
+        topologyNodesCount: topologyWorkspace?.nodes?.length || 0,
+        topologyNodeTypes: Array.isArray(topologyWorkspace?.nodes) ? topologyWorkspace.nodes.map((nodeItem) => String(nodeItem?.type || "")) : [],
+        heavyAssetsSource: heavyAssetsCandidate?.source || null,
+        heavyNodesCount: heavyWorkspace?.nodes?.length || 0,
+        heavyNodeTypes: Array.isArray(heavyWorkspace?.nodes) ? heavyWorkspace.nodes.map((nodeItem) => String(nodeItem?.type || "")) : [],
+        finalNodesCount: savedNodes?.length || 0,
+        hasVideoMatchBoard: Array.isArray(savedNodes) ? savedNodes.some((nodeItem) => nodeItem?.type === "videoMatchBoard") : false,
+      });
 
       if (!savedNodes || !savedEdges) throw new Error("bad_format");
 
@@ -27607,6 +27807,7 @@ const hydrate = useCallback((source = "unknown") => {
     }
   }, [
     WORKSPACE_STORE_KEY,
+    WORKSPACE_TOPOLOGY_STORE_KEY,
     STORE_KEY,
     VIDEO_JOB_STORE_KEY,
     COMFY_VIDEO_JOB_STORE_KEY,
@@ -27953,11 +28154,32 @@ const hydrate = useCallback((source = "unknown") => {
       }
     }
     console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalWorkspacePayload));
+    const topologyPayload = buildWorkspaceTopologyPayload(finalWorkspacePayload);
+    const topologyPayloadString = JSON.stringify({ workspace: topologyPayload });
+    const topologyOk = safeSet(WORKSPACE_TOPOLOGY_STORE_KEY, topologyPayloadString);
+    console.warn("[CLIP TOPOLOGY SAVE RESULT]", {
+      topologyOk,
+      topologyPayloadLength: topologyPayloadString.length,
+      nodesCount: topologyPayload.nodes?.length || 0,
+      hasVideoMatchBoard: topologyPayload.nodes?.some((n) => n.type === "videoMatchBoard"),
+      edgesCount: topologyPayload.edges?.length || 0,
+    });
     const payloadToStore = { workspace: finalWorkspacePayload };
-    const workspaceOk = safeSet(WORKSPACE_STORE_KEY, JSON.stringify(payloadToStore));
+    const workspacePayloadString = JSON.stringify(payloadToStore);
+    const legacyPayloadString = JSON.stringify(finalWorkspacePayload);
+    const workspaceOk = safeSet(WORKSPACE_STORE_KEY, workspacePayloadString);
     // legacy mirror for backward compatibility
-    const legacyOk = safeSet(STORE_KEY, JSON.stringify(finalWorkspacePayload));
-    if (workspaceOk || legacyOk) {
+    const legacyOk = safeSet(STORE_KEY, legacyPayloadString);
+    console.warn("[CLIP STORAGE WRITE RESULT]", {
+      accountKey,
+      workspaceOk,
+      legacyOk,
+      workspacePayloadLength: workspacePayloadString.length,
+      legacyPayloadLength: legacyPayloadString.length,
+      nodesCount: finalWorkspacePayload.nodes?.length || 0,
+      hasVideoMatchBoard: finalWorkspacePayload.nodes?.some((n) => n.type === "videoMatchBoard"),
+    });
+    if (workspaceOk || legacyOk || topologyOk) {
       const finalComparablePayload = { ...finalWorkspacePayload };
       delete finalComparablePayload.persistedAt;
       lastPersistedPayloadRef.current = JSON.stringify(finalComparablePayload);
@@ -27982,6 +28204,7 @@ const hydrate = useCallback((source = "unknown") => {
     nodes,
     edges,
     WORKSPACE_STORE_KEY,
+    WORKSPACE_TOPOLOGY_STORE_KEY,
     STORE_KEY,
     accountKey,
     assemblyResult,
@@ -28054,7 +28277,30 @@ const hydrate = useCallback((source = "unknown") => {
         }
       }
       console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload));
-      const ok = safeSet(WORKSPACE_STORE_KEY, JSON.stringify({ workspace: finalPayload })) || safeSet(STORE_KEY, JSON.stringify(finalPayload));
+      const topologyPayload = buildWorkspaceTopologyPayload(finalPayload);
+      const topologyPayloadString = JSON.stringify({ workspace: topologyPayload });
+      const topologyOk = safeSet(WORKSPACE_TOPOLOGY_STORE_KEY, topologyPayloadString);
+      console.warn("[CLIP TOPOLOGY SAVE RESULT]", {
+        topologyOk,
+        topologyPayloadLength: topologyPayloadString.length,
+        nodesCount: topologyPayload.nodes?.length || 0,
+        hasVideoMatchBoard: topologyPayload.nodes?.some((n) => n.type === "videoMatchBoard"),
+        edgesCount: topologyPayload.edges?.length || 0,
+      });
+      const workspacePayloadString = JSON.stringify({ workspace: finalPayload });
+      const legacyPayloadString = JSON.stringify(finalPayload);
+      const workspaceOk = safeSet(WORKSPACE_STORE_KEY, workspacePayloadString);
+      const legacyOk = safeSet(STORE_KEY, legacyPayloadString);
+      console.warn("[CLIP STORAGE WRITE RESULT]", {
+        accountKey,
+        workspaceOk,
+        legacyOk,
+        workspacePayloadLength: workspacePayloadString.length,
+        legacyPayloadLength: legacyPayloadString.length,
+        nodesCount: finalPayload.nodes?.length || 0,
+        hasVideoMatchBoard: finalPayload.nodes?.some((n) => n.type === "videoMatchBoard"),
+      });
+      const ok = workspaceOk || legacyOk || topologyOk;
       if (ok) {
         lastSuccessfulWorkspaceSaveRef.current = {
           accountKey,
@@ -28073,6 +28319,7 @@ const hydrate = useCallback((source = "unknown") => {
     nodes,
     edges,
     WORKSPACE_STORE_KEY,
+    WORKSPACE_TOPOLOGY_STORE_KEY,
     STORE_KEY,
     accountKey,
     assemblyResult,
