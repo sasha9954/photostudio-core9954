@@ -93,6 +93,11 @@ export default function VideoMatchBoardPage() {
   const effectiveExpandedSegmentId = expandedSegmentId || project.selectedSegmentId;
   const selectedSegment = matchSegments.find((segment) => segment.id === project.selectedSegmentId || segment.audioSceneId === project.selectedSegmentId) || matchSegments[0] || null;
   const selectedSegmentCandidates = Array.isArray(selectedSegment?.candidates) ? selectedSegment.candidates : [];
+  const currentPlayingBlockId = videoBlocks.find((block) => {
+    const start = Number(block?.sourceVideoStartSec || 0);
+    const end = Number(block?.sourceVideoEndSec || start);
+    return currentTimeSec >= start && currentTimeSec < end;
+  })?.id || "";
 
   const patchProject = (patch = {}, persistOptions = {}) => {
     setProject((prev) => {
@@ -496,7 +501,7 @@ export default function VideoMatchBoardPage() {
                 type="button"
                 className={`videoMatchTimelineBlock ${block.id === project.selectedBlockId ? "isSelected" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""}`}
                 style={{ left: `${getBlockLeft(block, timelineDuration)}%`, width: `${getBlockWidth(block, timelineDuration)}%` }}
-                onClick={() => onSelectBlock(block, { scroll: true })}
+                onClick={() => onSelectBlock(block, { scroll: false })}
                 title={`${block.id}: ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с`}
               />
             ))}
@@ -506,25 +511,20 @@ export default function VideoMatchBoardPage() {
             <h2>Черновая сборка</h2>
             <span>длительность: {formatSec(assemblyDurationSec)} с</span>
           </div>
-          {assemblyBlocks.length === 0 ? <div className="videoMatchEmptyList videoMatchCompactEmpty">Выбранные варианты появятся здесь как сборка.</div> : null}
-          <div className="videoMatchAssemblyTimeline" aria-label="Черновая сборка">
-            {assemblyBlocks.map((block) => {
-              const left = assemblyDurationSec > 0 ? Math.max(0, Math.min(100, (Number(block.targetStartSec || 0) / assemblyDurationSec) * 100)) : 0;
-              const width = assemblyDurationSec > 0 ? Math.max(1.2, Math.min(100, ((Number(block.targetEndSec || 0) - Number(block.targetStartSec || 0)) / assemblyDurationSec) * 100)) : 0;
-              return (
-                <button
-                  key={block.id}
-                  type="button"
-                  className={`videoMatchAssemblyBlock ${block.id === project.selectedBlockId ? "isSelected" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""}`}
-                  style={{ left: `${left}%`, width: `${width}%` }}
-                  onClick={() => onSelectBlock(block, { scroll: true })}
-                  title={`${block.audioSceneId || block.segmentId}: target ${formatSec(block.targetStartSec)}–${formatSec(block.targetEndSec)}с · candidate ${block.candidateId || block.id}`}
-                >
-                  <span>{block.audioSceneId || block.segmentId}</span>
-                  <small>{block.candidateId || block.id}</small>
-                </button>
-              );
-            })}
+          {assemblyBlocks.length === 0 ? <div className="videoMatchEmptyList videoMatchCompactEmpty">Выбранные варианты появятся здесь как цветная лента сцен.</div> : null}
+          <div className="videoMatchBlocksStrip" aria-label="Video blocks strip">
+            {assemblyBlocks.map((block, index) => (
+              <button
+                key={block.id}
+                type="button"
+                className={`videoMatchStripSegment ${block.id === project.selectedBlockId ? "isSelected" : ""} ${block.id === currentPlayingBlockId ? "isCurrent" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""}`}
+                style={{ "--strip-color-index": index % 8 }}
+                onClick={() => onSelectBlock(block, { scroll: false })}
+                title={`${block.audioSceneId || block.segmentId}: video ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с · candidate ${block.candidateId || block.id}`}
+              >
+                <span>{block.audioSceneId || block.segmentId || `seg_${String(index + 1).padStart(2, "0")}`}</span>
+              </button>
+            ))}
           </div>
           <div className="videoMatchActions videoMatchPlaybackActions">
             <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!selectedBlock} onClick={onPlaySelectedBlock}>▶ Кусок</button>
@@ -537,14 +537,15 @@ export default function VideoMatchBoardPage() {
 
         <aside className="videoMatchPanel videoMatchInspectorPanel">
           <div className="videoMatchPanelHeader">
-            <h2>Сцена</h2>
+            <h2>Сцена / Варианты</h2>
             <span>{selectedSegmentCandidates.length} вариантов</span>
           </div>
           {selectedSegment ? (
             <>
               <div className="videoMatchSceneInfo">
-                <b>{selectedSegment.audioSceneId || selectedSegment.id} / {selectedSegment.storySceneId || "story —"}</b>
-                <span>target {formatSec(selectedSegment.targetStartSec)}–{formatSec(selectedSegment.targetEndSec)} с</span>
+                <b>{selectedSegment.audioSceneId || selectedSegment.id}</b>
+                <span>story_scene_id: {selectedSegment.storySceneId || "—"}</span>
+                <span>target time: {formatSec(selectedSegment.targetStartSec)}–{formatSec(selectedSegment.targetEndSec)} с</span>
                 <span>выбрано: {selectedSegment.selectedCandidateId || "—"}</span>
                 {selectedSegment.text ? <p>{selectedSegment.text}</p> : null}
                 {selectedSegment.visualNeed ? <small>Нужно: {selectedSegment.visualNeed}</small> : null}
@@ -559,14 +560,13 @@ export default function VideoMatchBoardPage() {
                       {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                       <div className="videoMatchCandidateBody">
                         <b>{candidate.id}{isCandidateSelected ? " · выбрано" : ""}{isPreviewCandidate ? " · preview" : ""}</b>
-                        <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
-                        <span>{[candidate.fitMode, candidate.visualType, candidate.shotType, candidate.motionLevel].filter(Boolean).join(" · ") || "metadata —"}</span>
+                        <span>video time: {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence: {candidate.confidence ?? "—"}</span>
                         {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
                         {candidate.warnings?.length ? <small className="videoMatchWarnings">Предупреждения: {candidate.warnings.join("; ")}</small> : null}
                       </div>
                       <div className="videoMatchCandidateActions">
                         <button className="clipSB_btn clipSB_btnSecondary videoMatchIconBtn" type="button" onClick={() => onPreviewCandidate(selectedSegment, candidate)}>▶</button>
-                        <button className="clipSB_btn clipSB_btnSecondary videoMatchChooseBtn" type="button" disabled={isCandidateSelected} onClick={() => onSelectCandidate(selectedSegment.id, candidate.id)}>{isCandidateSelected ? "✓" : "✓ Выбрать"}</button>
+                        <button className="clipSB_btn clipSB_btnSecondary videoMatchIconBtn" type="button" disabled={isCandidateSelected} title={isCandidateSelected ? "выбрано" : "Выбрать"} onClick={() => onSelectCandidate(selectedSegment.id, candidate.id)}>✓</button>
                       </div>
                     </div>
                   );
@@ -579,7 +579,17 @@ export default function VideoMatchBoardPage() {
         </aside>
       </div>
 
-      <div className="videoMatchBelowGrid">
+      <div className="videoMatchBelowGrid videoMatchMiniPanels">
+        <details className="videoMatchPanel videoMatchDetailsPanel videoMatchJsonPanel">
+          <summary>JSON от Codex</summary>
+          <div className="videoMatchJsonActions">
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => patchProject({ jsonInput: sampleJson }, { lastGood: false })}>Вставить пример</button>
+            <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onApplyJson}>Применить JSON</button>
+          </div>
+          <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1 или video_match_board_v2..." />
+          {project.jsonError ? <div className="videoMatchError">{project.jsonError}</div> : null}
+        </details>
+
         <details className="videoMatchPanel videoMatchDetailsPanel">
           <summary>Аудио-карта</summary>
           <div className="videoMatchContextRows">
@@ -592,83 +602,88 @@ export default function VideoMatchBoardPage() {
           </div>
         </details>
 
-        <details className="videoMatchPanel videoMatchDetailsPanel videoMatchJsonPanel">
-          <summary>JSON от Codex</summary>
-          <div className="videoMatchJsonActions">
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => patchProject({ jsonInput: sampleJson }, { lastGood: false })}>Вставить пример</button>
-            <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onApplyJson}>Применить JSON</button>
-          </div>
-          <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1 или video_match_board_v2..." />
-          {project.jsonError ? <div className="videoMatchError">{project.jsonError}</div> : null}
-        </details>
-
         <details className="videoMatchPanel videoMatchDetailsPanel videoMatchBlocksPanel">
-          <summary>Все блоки / debug</summary>
-          {matchSegments.length === 0 ? <div className="videoMatchEmptyList">После применения JSON здесь появятся segments и candidates.</div> : null}
-          <div className="videoMatchSegmentsList">
-            {matchSegments.map((segment) => {
-              const candidates = Array.isArray(segment.candidates) ? segment.candidates : [];
-              const isSegmentSelected = segment.id === project.selectedSegmentId;
-              const isOpen = effectiveExpandedSegmentId === segment.id;
-              return (
-                <div
-                  key={segment.id}
-                  ref={(node) => { if (node) segmentRefs.current[segment.id] = node; }}
-                  className={`videoMatchSegmentCard ${isSegmentSelected ? "isSelected" : ""}`}
-                >
-                  <div className="videoMatchSegmentHeader">
-                    <button className="videoMatchSegmentTitle" type="button" onClick={() => { setExpandedSegmentId(isOpen ? "" : segment.id); patchProject({ selectedSegmentId: segment.id, selectedCandidateId: segment.selectedCandidateId || "" }, { lastGood: false }); }}>
-                      <b>{segment.audioSceneId || segment.id}</b>
-                      <span>story_scene_id: {segment.storySceneId || "—"}</span>
-                      <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · выбрано {segment.selectedCandidateId || "—"} · вариантов {candidates.length}</span>
-                    </button>
-                    <div className="videoMatchSegmentHeaderActions">
-                      {segment.mood ? <small>{segment.mood}</small> : null}
-                      <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setExpandedSegmentId(isOpen ? "" : segment.id)}>{isOpen ? "Свернуть" : "Открыть варианты"}</button>
-                    </div>
-                  </div>
-                  {segment.text ? <p>{segment.text}</p> : null}
-                  {segment.visualNeed ? <small className="videoMatchSegmentNeed">Нужно: {segment.visualNeed}</small> : null}
-                  {isOpen ? (
-                    <div className="videoMatchCandidatesList">
-                      {candidates.map((candidate) => {
-                        const isCandidateSelected = candidate.id === segment.selectedCandidateId;
-                        const isPreviewCandidate = candidate.id === previewCandidateId;
-                        return (
-                          <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
-                            {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
-                            <div className="videoMatchCandidateBody">
-                              <b>{candidate.id}{isPreviewCandidate ? " · preview" : ""}</b>
-                              <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
-                              <span>{[candidate.fitMode, candidate.visualType, candidate.shotType, candidate.motionLevel].filter(Boolean).join(" · ") || "metadata —"}</span>
-                              {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
-                              {candidate.warnings?.length ? <small className="videoMatchWarnings">Предупреждения: {candidate.warnings.join("; ")}</small> : null}
-                            </div>
-                            <div className="videoMatchCandidateActions">
-                              <button className="clipSB_btn clipSB_btnSecondary videoMatchIconBtn" type="button" onClick={() => onPreviewCandidate(segment, candidate)}>▶</button>
-                              <button className="clipSB_btn clipSB_btnSecondary videoMatchChooseBtn" type="button" disabled={isCandidateSelected} onClick={() => onSelectCandidate(segment.id, candidate.id)}>{isCandidateSelected ? "✓" : "✓ Выбрать"}</button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+          <summary>Статистика / Debug</summary>
+          <div className="videoMatchContextRows">
+            <div>сцен: {matchSegments.length}</div>
+            <div>вариантов: {candidatesTotal}</div>
+            <div>video blocks: {videoBlocks.length}</div>
+            <div>длительность сборки: {formatSec(assemblyDurationSec)} с</div>
+            <div>selectedSegmentId: {project.selectedSegmentId || "—"}</div>
+            <div>selectedCandidateId: {project.selectedCandidateId || "—"}</div>
+            <div>selectedBlockId: {project.selectedBlockId || "—"}</div>
           </div>
 
-          {videoBlocks.length === 0 ? <div className="videoMatchEmptyList">Выбранные варианты появятся здесь как video blocks.</div> : null}
-          <div className="videoMatchBlocksList">
-            {videoBlocks.map((block) => (
-              <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => onSelectBlock(block, { scroll: true })}>
-                <b>{block.id}</b>
-                <span>audio: {block.audioSceneId || "—"} · target {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
-                <span>video {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · confidence {block.confidence ?? "—"}</span>
-                {block.matchReason ? <small>{block.matchReason}</small> : null}
-              </button>
-            ))}
-          </div>
+          <details className="videoMatchNestedDebug">
+            <summary>Segments / candidates</summary>
+            {matchSegments.length === 0 ? <div className="videoMatchEmptyList">После применения JSON здесь появятся segments и candidates.</div> : null}
+            <div className="videoMatchSegmentsList">
+              {matchSegments.map((segment) => {
+                const candidates = Array.isArray(segment.candidates) ? segment.candidates : [];
+                const isSegmentSelected = segment.id === project.selectedSegmentId;
+                const isOpen = effectiveExpandedSegmentId === segment.id;
+                return (
+                  <div
+                    key={segment.id}
+                    ref={(node) => { if (node) segmentRefs.current[segment.id] = node; }}
+                    className={`videoMatchSegmentCard ${isSegmentSelected ? "isSelected" : ""}`}
+                  >
+                    <div className="videoMatchSegmentHeader">
+                      <button className="videoMatchSegmentTitle" type="button" onClick={() => { setExpandedSegmentId(isOpen ? "" : segment.id); patchProject({ selectedSegmentId: segment.id, selectedCandidateId: segment.selectedCandidateId || "" }, { lastGood: false }); }}>
+                        <b>{segment.audioSceneId || segment.id}</b>
+                        <span>story_scene_id: {segment.storySceneId || "—"}</span>
+                        <span>target {formatSec(segment.targetStartSec)}–{formatSec(segment.targetEndSec)} · выбрано {segment.selectedCandidateId || "—"} · вариантов {candidates.length}</span>
+                      </button>
+                      <div className="videoMatchSegmentHeaderActions">
+                        {segment.mood ? <small>{segment.mood}</small> : null}
+                        <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => setExpandedSegmentId(isOpen ? "" : segment.id)}>{isOpen ? "Свернуть" : "Открыть варианты"}</button>
+                      </div>
+                    </div>
+                    {segment.text ? <p>{segment.text}</p> : null}
+                    {segment.visualNeed ? <small className="videoMatchSegmentNeed">Нужно: {segment.visualNeed}</small> : null}
+                    {isOpen ? (
+                      <div className="videoMatchCandidatesList">
+                        {candidates.map((candidate) => {
+                          const isCandidateSelected = candidate.id === segment.selectedCandidateId;
+                          const isPreviewCandidate = candidate.id === previewCandidateId;
+                          return (
+                            <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
+                              {candidate.thumbnail ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
+                              <div className="videoMatchCandidateBody">
+                                <b>{candidate.id}{isPreviewCandidate ? " · preview" : ""}</b>
+                                <span>video {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · confidence {candidate.confidence ?? "—"}</span>
+                                {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
+                                {candidate.warnings?.length ? <small className="videoMatchWarnings">Предупреждения: {candidate.warnings.join("; ")}</small> : null}
+                              </div>
+                              <div className="videoMatchCandidateActions">
+                                <button className="clipSB_btn clipSB_btnSecondary videoMatchIconBtn" type="button" onClick={() => onPreviewCandidate(segment, candidate)}>▶</button>
+                                <button className="clipSB_btn clipSB_btnSecondary videoMatchIconBtn" type="button" disabled={isCandidateSelected} title={isCandidateSelected ? "выбрано" : "Выбрать"} onClick={() => onSelectCandidate(segment.id, candidate.id)}>✓</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+
+          <details className="videoMatchNestedDebug">
+            <summary>Video blocks</summary>
+            {videoBlocks.length === 0 ? <div className="videoMatchEmptyList">Выбранные варианты появятся здесь как video blocks.</div> : null}
+            <div className="videoMatchBlocksList">
+              {videoBlocks.map((block) => (
+                <button key={block.id} type="button" className={`videoMatchBlockCard ${block.id === project.selectedBlockId ? "isSelected" : ""}`} onClick={() => onSelectBlock(block, { scroll: false })}>
+                  <b>{block.id}</b>
+                  <span>audio: {block.audioSceneId || "—"} · target {formatSec(block.targetStartSec)}–{formatSec(block.targetEndSec)}</span>
+                  <span>video {formatSec(block.sourceVideoStartSec)}–{formatSec(block.sourceVideoEndSec)} · confidence {block.confidence ?? "—"}</span>
+                  {block.matchReason ? <small>{block.matchReason}</small> : null}
+                </button>
+              ))}
+            </div>
+          </details>
         </details>
       </div>
     </div>
