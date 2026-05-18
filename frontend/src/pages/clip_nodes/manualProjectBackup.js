@@ -39,6 +39,11 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "negative_prompt",
   "sound_prompt",
   "negative_audio_prompt",
+  "speech_text",
+  "voice_profile",
+  "voice_mode",
+  "voice_language",
+  "delivery_style",
   "image_url",
   "imageUrl",
   "image_preview_url",
@@ -160,6 +165,16 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "generator_model",
   "generatorModel",
   "provider",
+  "selectedImageModel",
+  "selectedVideoModel",
+  "selectedGenerator",
+  "selectedProvider",
+  "provider_model",
+  "providerModel",
+  "imageProvider",
+  "videoProvider",
+  "generationModel",
+  "generation_model",
   "generation_settings",
   "generationSettings",
   "model_settings",
@@ -180,8 +195,12 @@ const MANUAL_STORAGE_SCENE_LIGHTWEIGHT_KEYS = new Set([
   "selected_model", "selectedModel", "model", "model_id", "modelId",
   "image_model", "imageModel", "video_model", "videoModel",
   "generator_model", "generatorModel", "provider",
+  "selectedImageModel", "selectedVideoModel", "selectedGenerator", "selectedProvider",
+  "provider_model", "providerModel", "imageProvider", "videoProvider",
+  "generationModel", "generation_model",
   "generation_settings", "generationSettings", "model_settings", "modelSettings",
   "sound_prompt", "negative_audio_prompt",
+  "mmaudio_prompt", "mmaudioPrompt", "mmaudio_negative_prompt", "mmaudioNegativePrompt",
   "speech_text", "voice_profile", "voice_mode", "voice_language", "delivery_style",
   "image_url", "imageUrl", "start_image_url", "startImageUrl", "end_image_url", "endImageUrl",
   "video_url", "videoUrl", "result_video_url", "resultVideoUrl", "generated_video_url", "generatedVideoUrl",
@@ -308,18 +327,33 @@ export function getManualBoardSceneStateDebugStats(project = {}) {
     imagePrompt: scene?.imagePrompt || "",
     photo_prompt: scene?.photo_prompt || "",
     photoPrompt: scene?.photoPrompt || "",
+    source_image_prompt_en: scene?.source_image_prompt_en || "",
+    source_image_prompt_ru: scene?.source_image_prompt_ru || "",
     video_prompt: scene?.video_prompt || "",
+    i2v_prompt_en: scene?.i2v_prompt_en || "",
     videoPrompt: scene?.videoPrompt || "",
     final_video_prompt: scene?.final_video_prompt || "",
     finalVideoPrompt: scene?.finalVideoPrompt || "",
     positive_prompt: scene?.positive_prompt || "",
     positivePrompt: scene?.positivePrompt || "",
     negative_prompt: scene?.negative_prompt || "",
+    i2v_negative_prompt_en: scene?.i2v_negative_prompt_en || "",
     negativePrompt: scene?.negativePrompt || "",
     user_prompt: scene?.user_prompt || "",
     userPrompt: scene?.userPrompt || "",
     custom_prompt: scene?.custom_prompt || "",
     customPrompt: scene?.customPrompt || "",
+    sound_prompt: scene?.sound_prompt || "",
+    negative_audio_prompt: scene?.negative_audio_prompt || "",
+    speech_text: scene?.speech_text || "",
+    voice_profile: scene?.voice_profile || "",
+    voice_mode: scene?.voice_mode || "",
+    voice_language: scene?.voice_language || "",
+    delivery_style: scene?.delivery_style || "",
+    mmaudio_prompt: scene?.mmaudio_prompt || "",
+    mmaudioPrompt: scene?.mmaudioPrompt || "",
+    mmaudio_negative_prompt: scene?.mmaudio_negative_prompt || "",
+    mmaudioNegativePrompt: scene?.mmaudioNegativePrompt || "",
 
     selected_model: scene?.selected_model || "",
     selectedModel: scene?.selectedModel || "",
@@ -332,7 +366,17 @@ export function getManualBoardSceneStateDebugStats(project = {}) {
     videoModel: scene?.videoModel || "",
     generator_model: scene?.generator_model || "",
     generatorModel: scene?.generatorModel || "",
+    selectedImageModel: scene?.selectedImageModel || "",
+    selectedVideoModel: scene?.selectedVideoModel || "",
+    selectedGenerator: scene?.selectedGenerator || "",
+    selectedProvider: scene?.selectedProvider || "",
     provider: scene?.provider || "",
+    provider_model: scene?.provider_model || "",
+    providerModel: scene?.providerModel || "",
+    imageProvider: scene?.imageProvider || "",
+    videoProvider: scene?.videoProvider || "",
+    generationModel: scene?.generationModel || "",
+    generation_model: scene?.generation_model || "",
     route: scene?.route || "",
   }));
 
@@ -342,12 +386,29 @@ export function getManualBoardSceneStateDebugStats(project = {}) {
     || row.imagePrompt
     || row.photo_prompt
     || row.photoPrompt
+    || row.source_image_prompt_en
+    || row.source_image_prompt_ru
     || row.video_prompt
+    || row.i2v_prompt_en
     || row.videoPrompt
     || row.final_video_prompt
     || row.finalVideoPrompt
     || row.positive_prompt
     || row.positivePrompt
+    || row.negative_prompt
+    || row.negativePrompt
+    || row.i2v_negative_prompt_en
+    || row.sound_prompt
+    || row.negative_audio_prompt
+    || row.speech_text
+    || row.voice_profile
+    || row.voice_mode
+    || row.voice_language
+    || row.delivery_style
+    || row.mmaudio_prompt
+    || row.mmaudioPrompt
+    || row.mmaudio_negative_prompt
+    || row.mmaudioNegativePrompt
     || row.user_prompt
     || row.userPrompt
     || row.custom_prompt
@@ -366,7 +427,17 @@ export function getManualBoardSceneStateDebugStats(project = {}) {
     || row.videoModel
     || row.generator_model
     || row.generatorModel
+    || row.selectedImageModel
+    || row.selectedVideoModel
+    || row.selectedGenerator
+    || row.selectedProvider
     || row.provider
+    || row.provider_model
+    || row.providerModel
+    || row.imageProvider
+    || row.videoProvider
+    || row.generationModel
+    || row.generation_model
   )).length;
 
   return {
