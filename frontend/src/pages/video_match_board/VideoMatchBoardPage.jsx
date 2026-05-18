@@ -45,6 +45,7 @@ export default function VideoMatchBoardPage() {
   const [project, setProject] = useState(initialProject);
   const [videoDurationSec, setVideoDurationSec] = useState(Number(initialProject?.sourceVideo?.duration_sec || 0));
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [sourceVideoLoadMessage, setSourceVideoLoadMessage] = useState("");
 
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
   const selectedBlock = videoBlocks.find((block) => block.id === project.selectedBlockId) || null;
@@ -61,6 +62,7 @@ export default function VideoMatchBoardPage() {
   useEffect(() => {
     setProject(initialProject);
     setVideoDurationSec(Number(initialProject?.sourceVideo?.duration_sec || 0));
+    setSourceVideoLoadMessage("");
   }, [initialProject]);
 
   useEffect(() => {
@@ -82,6 +84,7 @@ export default function VideoMatchBoardPage() {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     const url = URL.createObjectURL(file);
     objectUrlRef.current = url;
+    setSourceVideoLoadMessage("");
     patchProject({
       sourceVideoUrl: url,
       sourceVideo: {
@@ -94,6 +97,7 @@ export default function VideoMatchBoardPage() {
   };
 
   const onLoadedMetadata = () => {
+    setSourceVideoLoadMessage("");
     const duration = Number(videoRef.current?.duration || 0);
     if (!Number.isFinite(duration) || duration <= 0) return;
     setVideoDurationSec(duration);
@@ -103,6 +107,12 @@ export default function VideoMatchBoardPage() {
         duration_sec: Number(duration.toFixed(3)),
       },
     }, { lastGood: false });
+  };
+
+  const onSourceVideoError = () => {
+    if (!sourceVideoUrl.startsWith("blob:")) return;
+    setSourceVideoLoadMessage("Загрузите source video заново");
+    patchProject({ sourceVideoUrl: "" }, { lastGood: false });
   };
 
   const onApplyJson = () => {
@@ -173,11 +183,12 @@ export default function VideoMatchBoardPage() {
           </div>
           <div className="videoMatchVideoBox">
             {sourceVideoUrl ? (
-              <video ref={videoRef} src={sourceVideoUrl} controls onLoadedMetadata={onLoadedMetadata} onTimeUpdate={onTimeUpdate} />
+              <video ref={videoRef} src={sourceVideoUrl} controls onLoadedMetadata={onLoadedMetadata} onError={onSourceVideoError} onTimeUpdate={onTimeUpdate} />
             ) : (
               <div className="videoMatchEmptyVideo">Загрузите видеофайл для preview.</div>
             )}
           </div>
+          {sourceVideoLoadMessage ? <div className="videoMatchError">{sourceVideoLoadMessage}</div> : null}
           <div className="videoMatchTimelineMeta">
             <span>{project.sourceVideo?.filename || "source.mp4"}</span>
             <span>{formatSec(currentTimeSec)} / {formatSec(timelineDuration)} с</span>
