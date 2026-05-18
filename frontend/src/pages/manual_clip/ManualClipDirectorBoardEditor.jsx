@@ -19,6 +19,8 @@ import {
   getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
   readLastGoodManualClipBoardProject,
+  readEmergencyManualClipBoardProjectForNode,
+  readCanonicalManualClipBoardProject,
   rememberLastGoodManualClipBoardProject,
   getManualProjectOwnerId,
   hasMeaningfulManualProject,
@@ -336,15 +338,14 @@ function pickNewestManualBoardCandidate(candidates = [], openState = {}) {
       scoreData: scoreManualClipBoardProject(candidate.project),
     }))
     .sort((a, b) => {
-      if (Number(b.openStateMatch) !== Number(a.openStateMatch)) return Number(b.openStateMatch) - Number(a.openStateMatch);
-      if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
       if (b.scoreData.stats.imageCount !== a.scoreData.stats.imageCount) return b.scoreData.stats.imageCount - a.scoreData.stats.imageCount;
+      if (b.scoreData.stats.videoCount !== a.scoreData.stats.videoCount) return b.scoreData.stats.videoCount - a.scoreData.stats.videoCount;
       if (b.scoreData.stats.promptCount !== a.scoreData.stats.promptCount) return b.scoreData.stats.promptCount - a.scoreData.stats.promptCount;
       if (b.scoreData.stats.readyStatuses !== a.scoreData.stats.readyStatuses) return b.scoreData.stats.readyStatuses - a.scoreData.stats.readyStatuses;
-      if (b.scoreData.stats.videoJobs !== a.scoreData.stats.videoJobs) return b.scoreData.stats.videoJobs - a.scoreData.stats.videoJobs;
       if (b.scoreData.stats.materialScore !== a.scoreData.stats.materialScore) return b.scoreData.stats.materialScore - a.scoreData.stats.materialScore;
-      if (b.scoreData.revision !== a.scoreData.revision) return b.scoreData.revision - a.scoreData.revision;
       if (b.scoreData.updatedAt !== a.scoreData.updatedAt) return b.scoreData.updatedAt - a.scoreData.updatedAt;
+      if (Number(b.openStateMatch) !== Number(a.openStateMatch)) return Number(b.openStateMatch) - Number(a.openStateMatch);
+      if (b.scoreData.revision !== a.scoreData.revision) return b.scoreData.revision - a.scoreData.revision;
       if (b.scoreData.deletionRevision !== a.scoreData.deletionRevision) return b.scoreData.deletionRevision - a.scoreData.deletionRevision;
       return b.scoreData.score - a.scoreData.score;
     });
@@ -372,13 +373,19 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     });
     return navigationProject;
   }
+  const lastGoodProject = readLastGoodManualClipBoardProject();
+  const emergencyProject = readEmergencyManualClipBoardProjectForNode(safeSourceNodeId);
   const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
   const activeProject = readActiveManualClipBoardProject();
+  const canonicalProject = readCanonicalManualClipBoardProject();
   const openState = readManualClipBoardOpenState();
   const candidates = [
+    { source: "session-last-good", project: lastGoodProject },
+    { source: "emergency", project: emergencyProject },
     { source: "navigation", project: navigationProject },
     { source: "node-scoped", project: nodeProject },
     { source: "active", project: activeProject },
+    { source: "canonical", project: canonicalProject },
   ];
 
   if (safeSourceNodeId) {
@@ -404,8 +411,11 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
 
     console.warn("[MANUAL BOARD HYDRATE] no project for sourceNodeId", {
       sourceNodeId: safeSourceNodeId,
+      lastGoodProjectExists: hasMeaningfulManualProject(lastGoodProject),
+      emergencyProjectExists: hasMeaningfulManualProject(emergencyProject),
       nodeProjectExists: hasMeaningfulManualProject(nodeProject),
       activeProjectExists: hasMeaningfulManualProject(activeProject),
+      canonicalProjectExists: hasMeaningfulManualProject(canonicalProject),
       activeOwner: getManualProjectOwnerId(activeProject),
       navigationProjectExists: hasMeaningfulManualProject(navigationProject),
       navigationOwner: getManualProjectOwnerId(navigationProject),
@@ -415,9 +425,15 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
 
   const picked = pickNewestManualBoardCandidate(candidates, openState);
   const bestProject = picked?.project || navigationProject || activeProject || nodeProject;
-  const source = picked?.source || (bestProject === navigationProject
-    ? "navigation"
-    : (bestProject === activeProject ? "active" : (bestProject === nodeProject ? "node-scoped" : "unknown")));
+  let source = picked?.source || "unknown";
+  if (!picked?.source) {
+    if (bestProject === navigationProject) source = "navigation";
+    else if (bestProject === lastGoodProject) source = "session-last-good";
+    else if (bestProject === emergencyProject) source = "emergency";
+    else if (bestProject === activeProject) source = "active";
+    else if (bestProject === canonicalProject) source = "canonical";
+    else if (bestProject === nodeProject) source = "node-scoped";
+  }
   if (bestProject) logManualBoardHydratePick(source, bestProject);
   return bestProject;
 }
@@ -1858,12 +1874,18 @@ export default function ManualClipDirectorBoardEditor({
     try {
       const saved = persistAndBroadcastDirectorProject(safeProject, { reason });
       if (!saved) throw new Error(getLastManualClipBoardStorageError()?.reason || "autosave_verify_failed");
+      const storageErrorAfterSave = getLastManualClipBoardStorageError();
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
       lastPersistedProjectRef.current = safeProject;
       rememberManualBoardLastGood(safeProject);
       if (updateStatus) {
         setProject(safeProject);
-        setAutosaveStatus("Сохранено");
+        if (storageErrorAfterSave?.emergencySaved === true) {
+          setAutosaveStatus("Сохранён аварийный backup");
+          setAutosaveError(String(storageErrorAfterSave?.errorMessage || storageErrorAfterSave?.reason || "emergency_saved"));
+        } else {
+          setAutosaveStatus("Сохранено");
+        }
         setShowEmergencyBackupButton(false);
       }
       const diagnostics = getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId);
