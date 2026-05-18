@@ -289,14 +289,14 @@ export function canUseLegacyManualProjectStorage() {
 }
 
 export async function saveManualClipBoardProjectDurable(project = {}, options = {}) {
-  const safeProject = project && typeof project === "object" ? project : {};
+  const safeProject = sanitizeManualClipBoardProjectForStorage(project && typeof project === "object" ? project : {});
   const nodeId = getManualProjectOwnerId(safeProject);
   if (!nodeId || !hasMeaningfulManualProject(safeProject)) return false;
-  const durableProject = {
+  const durableProject = sanitizeManualClipBoardProjectForStorage({
     ...buildManualProjectBackupJson(safeProject, { source: "manual_board_backend_durable" }),
     source: String(safeProject.source || safeProject.ownerNodeType || "manual_board_backend_durable"),
     durable_source: String(options?.source || "manual_board_backend_durable"),
-  };
+  });
   const response = await fetchJson("/api/manual-board/save", {
     method: "POST",
     timeoutMs: Number(options?.timeoutMs || 12000),
@@ -343,6 +343,7 @@ export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {
   const response = await fetchJson(`/api/manual-board/load/${encodeURIComponent(safeNodeId)}?${qs.toString()}`, {
     timeoutMs: Number(options?.timeoutMs || 12000),
   });
+  if (response?.found === false) return null;
   const project = response?.project && typeof response.project === "object" ? unwrapManualProjectBackupJson(response.project) : null;
   if (!hasMeaningfulManualProject(project)) return null;
   console.info("[manual board durable hydrate] backend load ok", {
@@ -2144,7 +2145,6 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   );
   logManualBoardTimingSaveDebug(storageProject, storageMode);
   const storageStats = getManualClipBoardMaterialStats(storageProject);
-  queueManualClipBoardProjectDurableSave(storageProject, { reason, source: "manual_board_persist" });
   try {
     serialized = JSON.stringify(storageProject);
     localStorage.setItem(getManualClipBoardCanonicalStorageKey(), serialized);
