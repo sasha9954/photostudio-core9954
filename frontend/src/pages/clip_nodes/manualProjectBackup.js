@@ -2162,6 +2162,10 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
     }
     rememberManualClipBoardStorageError(null);
     rememberLastGoodManualClipBoardProject(storageProject);
+    queueManualClipBoardProjectDurableSave(storageProject, {
+      reason,
+      source: "manual_board_persist_after_local_success",
+    });
     writeManualClipBoardStorageModeLog({ mode: useLightweightPersist ? "lightweight" : "full", serializedLength: serialized.length, emergencySaved: false, quotaCleanupTriggered: false, removedKeysCount: 0, reason, nodeId });
     console.info("[MANUAL BOARD PERSIST WRITE]", {
       target: "canonical+active+node",
@@ -2209,6 +2213,10 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
         }
         rememberManualClipBoardStorageError(null);
         rememberLastGoodManualClipBoardProject(storageProject);
+        queueManualClipBoardProjectDurableSave(storageProject, {
+          reason,
+          source: "manual_board_persist_after_local_success",
+        });
         writeManualClipBoardStorageModeLog({ mode: useLightweightPersist ? "lightweight" : "full", serializedLength: serialized.length, emergencySaved: false, quotaCleanupTriggered: true, removedKeysCount: quotaCleanupRemovedKeys.length, reason, nodeId });
         console.warn("[MANUAL BOARD PERSIST WRITE] saved after quota cleanup", {
           reason,
@@ -2243,6 +2251,10 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
         }
         rememberManualClipBoardStorageError(null);
         rememberLastGoodManualClipBoardProject(lightweightProject);
+        queueManualClipBoardProjectDurableSave(lightweightProject, {
+          reason,
+          source: "manual_board_persist_after_local_success",
+        });
         writeManualClipBoardStorageModeLog({ mode: "lightweight", serializedLength: lightweightSerialized.length, emergencySaved: false, quotaCleanupTriggered: quotaCleanupRemovedKeys.length > 0, removedKeysCount: quotaCleanupRemovedKeys.length, reason, nodeId });
         console.warn("[MANUAL BOARD PERSIST WRITE] saved lightweight snapshot after quota cleanup", {
           reason,
