@@ -2965,6 +2965,78 @@ function safeDel(key) {
   }
 }
 
+function isLocalStorageQuotaExceededError(err) {
+  const name = String(err?.name || "");
+  const message = String(err?.message || err || "");
+  return name === "QuotaExceededError"
+    || name === "NS_ERROR_DOM_QUOTA_REACHED"
+    || /quota|exceeded/i.test(message);
+}
+
+function safeSetWithQuotaEvictionForTopology(key, value, { STORE_KEY, WORKSPACE_STORE_KEY } = {}) {
+  const valueLength = typeof value === "string" ? value.length : 0;
+  const attemptSet = (phase) => {
+    console.warn("[CLIP TOPOLOGY SAVE ATTEMPT]", {
+      key,
+      phase,
+      valueLength,
+    });
+    try {
+      localStorage.setItem(key, value);
+      return { ok: true, error: null };
+    } catch (err) {
+      return { ok: false, error: err };
+    }
+  };
+
+  safeDel(key);
+  let result = attemptSet("initial");
+  let evictedLegacy = false;
+  let evictedWorkspace = false;
+
+  if (!result.ok && isLocalStorageQuotaExceededError(result.error) && STORE_KEY) {
+    console.warn("[CLIP TOPOLOGY QUOTA EVICT LEGACY]", {
+      key,
+      STORE_KEY,
+      valueLength,
+      error: String(result.error?.message || result.error || "localStorage_set_failed"),
+      name: String(result.error?.name || ""),
+    });
+    safeDel(STORE_KEY);
+    evictedLegacy = true;
+    result = attemptSet("after_legacy_eviction");
+  }
+
+  if (!result.ok && isLocalStorageQuotaExceededError(result.error) && WORKSPACE_STORE_KEY) {
+    console.warn("[CLIP TOPOLOGY QUOTA EVICT_WORKSPACE]", {
+      key,
+      WORKSPACE_STORE_KEY,
+      valueLength,
+      error: String(result.error?.message || result.error || "localStorage_set_failed"),
+      name: String(result.error?.name || ""),
+    });
+    safeDel(WORKSPACE_STORE_KEY);
+    evictedWorkspace = true;
+    result = attemptSet("after_workspace_eviction");
+  }
+
+  if (!result.ok) {
+    console.warn("[CLIP STORAGE SAFESET ERROR]", {
+      key,
+      valueLength,
+      error: String(result.error?.message || result.error || "localStorage_set_failed"),
+      name: String(result.error?.name || ""),
+    });
+  }
+
+  return {
+    ok: !!result.ok,
+    evictedLegacy,
+    evictedWorkspace,
+    error: result.ok ? null : result.error,
+  };
+}
+
 function areNodesMeaningfullyEqual(prevNodes, nextNodes) {
   if (prevNodes === nextNodes) return true;
   if (!Array.isArray(prevNodes) || !Array.isArray(nextNodes)) return false;
@@ -9431,152 +9503,178 @@ function sanitizeNarrativeTesterNodeData(nodeType, rawData = {}) {
 }
 
 
-const WORKSPACE_TOPOLOGY_ALWAYS_DROP_KEYS = new Set([
-  "rawScenarioResponse",
-  "rawScenarioResponseSummary",
-  "rawResponse",
-  "responseJson",
-  "responseBlob",
-  "cachedResponseBlob",
-  "runtimeImageApiResult",
-  "lastImageApiResult",
-  "lastImageResult",
-  "pendingRawResponse",
-  "pendingRawResponseSummary",
-  "normalizedStageOutputs",
-  "generatedImages",
-  "generatedVideos",
-  "generatedAudios",
-  "generatedAssets",
-  "generatedStoryboards",
-  "sceneGeneration",
-  "assemblyResult",
-  "assemblyPayload",
-  "assemblyVideoData",
-  "finalVideoData",
-  "blob",
-  "blobUrl",
-  "dataUrl",
-  "base64",
-]);
-
-const WORKSPACE_TOPOLOGY_HEAVY_KEY_PATTERN = /(base64|blob|rawresponse|responseblob|generatedimages|generatedvideos|assemblyvideodata|finalvideodata|runtimeimageapiresult|pendingrawresponse)/i;
+const WORKSPACE_TOPOLOGY_MAX_PAYLOAD_LENGTH = 20000;
+const WORKSPACE_TOPOLOGY_MAX_PRIMITIVE_STRING_LENGTH = 500;
 const WORKSPACE_TOPOLOGY_DATA_URL_PATTERN = /^data:|^blob:/i;
-const WORKSPACE_TOPOLOGY_MAX_STRING_LENGTH = 20000;
-const WORKSPACE_TOPOLOGY_MAX_TIMING_CONTEXT_LENGTH = 120000;
 
-function sanitizeWorkspaceTopologyValue(value, options = {}) {
-  const maxStringLength = Number(options.maxStringLength || WORKSPACE_TOPOLOGY_MAX_STRING_LENGTH);
-  if (typeof value === "function" || value === undefined) return undefined;
+function normalizeWorkspaceTopologyNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function normalizeWorkspaceTopologyPrimitive(value, maxStringLength = WORKSPACE_TOPOLOGY_MAX_PRIMITIVE_STRING_LENGTH) {
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (WORKSPACE_TOPOLOGY_DATA_URL_PATTERN.test(trimmed)) return undefined;
-    if (trimmed.length > maxStringLength) return undefined;
+    if (!trimmed || WORKSPACE_TOPOLOGY_DATA_URL_PATTERN.test(trimmed) || trimmed.length > maxStringLength) return undefined;
     return value;
   }
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
   if (typeof value === "boolean" || value === null) return value;
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeWorkspaceTopologyValue(item, options))
-      .filter((item) => item !== undefined);
-  }
-  if (value && typeof value === "object") {
-    const next = {};
-    Object.entries(value).forEach(([key, nested]) => {
-      if (WORKSPACE_TOPOLOGY_ALWAYS_DROP_KEYS.has(key) || WORKSPACE_TOPOLOGY_HEAVY_KEY_PATTERN.test(key)) return;
-      const cleaned = sanitizeWorkspaceTopologyValue(nested, options);
-      if (cleaned !== undefined) next[key] = cleaned;
-    });
-    return next;
+  return undefined;
+}
+
+function pickWorkspaceTopologyPrimitive(source = {}, keys = []) {
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = normalizeWorkspaceTopologyPrimitive(source[key]);
+    if (value !== undefined) return value;
   }
   return undefined;
 }
 
-function sanitizeWorkspaceTopologyDataForNode(nodeType = "", data = {}) {
+function countWorkspaceTopologyArray(source = {}, keys = []) {
+  for (const key of keys) {
+    if (Array.isArray(source?.[key])) return source[key].length;
+  }
+  return undefined;
+}
+
+function buildWorkspaceTopologySourceVideo(sourceVideo = {}, { strict = false } = {}) {
+  const safeSource = sourceVideo && typeof sourceVideo === "object" && !Array.isArray(sourceVideo) ? sourceVideo : {};
+  const next = {};
+  const filename = pickWorkspaceTopologyPrimitive(safeSource, ["filename", "name", "fileName", "label"]);
+  const duration = pickWorkspaceTopologyPrimitive(safeSource, ["duration_sec", "durationSec", "duration", "durationSeconds"]);
+  const size = pickWorkspaceTopologyPrimitive(safeSource, ["size", "fileSize", "bytes"]);
+  if (filename !== undefined) next.filename = filename;
+  if (duration !== undefined) next.duration_sec = duration;
+  if (!strict && size !== undefined) next.size = size;
+  return next;
+}
+
+function buildWorkspaceTopologyNodeData(nodeType = "", data = {}, { strict = false } = {}) {
   const safeData = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+
   if (nodeType === "videoMatchBoard") {
     const next = {};
-    if (safeData.sourceVideo && typeof safeData.sourceVideo === "object") {
-      const sourceVideo = sanitizeWorkspaceTopologyValue(safeData.sourceVideo);
-      if (sourceVideo && typeof sourceVideo === "object") next.sourceVideo = sourceVideo;
+    if (!strict) {
+      ["videoMatchUpdatedAt", "selectedSegmentId", "selectedCandidateId", "selectedBlockId"].forEach((key) => {
+        const value = normalizeWorkspaceTopologyPrimitive(safeData[key]);
+        if (value !== undefined) next[key] = value;
+      });
     }
-    [
-      "sourceVideoUrl",
-      "selectedSegmentId",
-      "selectedCandidateId",
-      "selectedBlockId",
-      "jsonInput",
-      "jsonError",
-      "timingSourceNodeId",
-      "videoMatchUpdatedAt",
-    ].forEach((key) => {
-      if (Object.prototype.hasOwnProperty.call(safeData, key)) {
-        const cleaned = sanitizeWorkspaceTopologyValue(safeData[key]);
-        if (cleaned !== undefined) next[key] = cleaned;
-      }
-    });
-    if (Array.isArray(safeData.matchSegments)) next.matchSegments = sanitizeWorkspaceTopologyValue(safeData.matchSegments) || [];
-    if (Array.isArray(safeData.videoBlocks)) next.videoBlocks = sanitizeWorkspaceTopologyValue(safeData.videoBlocks) || [];
-    if (safeData.timingContext && typeof safeData.timingContext === "object") {
-      const timingContext = sanitizeWorkspaceTopologyValue(safeData.timingContext);
-      try {
-        if (timingContext && JSON.stringify(timingContext).length <= WORKSPACE_TOPOLOGY_MAX_TIMING_CONTEXT_LENGTH) {
-          next.timingContext = timingContext;
-        }
-      } catch {
-        // skip malformed or circular timing context in the lightweight topology snapshot
-      }
-    }
+    const sourceVideo = buildWorkspaceTopologySourceVideo(safeData.sourceVideo, { strict });
+    if (Object.keys(sourceVideo).length) next.sourceVideo = sourceVideo;
     return next;
   }
 
-  const sanitized = sanitizeWorkspaceTopologyValue(safeData);
-  if (!sanitized || typeof sanitized !== "object" || Array.isArray(sanitized)) return {};
-
   if (nodeType === "manualTiming") {
-    delete sanitized.director_board;
-    delete sanitized.connectedAudio;
-    delete sanitized.connectedInputs;
-    delete sanitized.audio?.url;
+    if (strict) return {};
+    const next = {};
+    const audioDurationSec = pickWorkspaceTopologyPrimitive(safeData, ["audioDurationSec", "durationSec", "duration_sec"]);
+    const scenesCount = countWorkspaceTopologyArray(safeData, ["scenes", "timingScenes"]);
+    const blocksCount = countWorkspaceTopologyArray(safeData, ["blocks", "segments", "markers"]);
+    const status = pickWorkspaceTopologyPrimitive(safeData, ["status", "timingStatus"]);
+    const sourceLabel = pickWorkspaceTopologyPrimitive(safeData, ["sourceLabel", "label", "title"])
+      ?? pickWorkspaceTopologyPrimitive(safeData.audio || {}, ["filename", "name", "label"]);
+    if (audioDurationSec !== undefined) next.audioDurationSec = audioDurationSec;
+    if (scenesCount !== undefined) next.scenesCount = scenesCount;
+    if (blocksCount !== undefined) next.blocksCount = blocksCount;
+    if (status !== undefined) next.status = status;
+    if (sourceLabel !== undefined) next.sourceLabel = sourceLabel;
+    return next;
   }
 
-  return sanitized;
+  if (nodeType === "assemblyNode") {
+    if (strict) return {};
+    const next = {};
+    const assemblyBuildState = pickWorkspaceTopologyPrimitive(safeData, ["assemblyBuildState", "buildState", "status"]);
+    const assemblyProgressPercent = pickWorkspaceTopologyPrimitive(safeData, ["assemblyProgressPercent", "progressPercent", "progress"]);
+    const format = pickWorkspaceTopologyPrimitive(safeData, ["format", "outputFormat"]);
+    const durationSec = pickWorkspaceTopologyPrimitive(safeData, ["durationSec", "duration_sec", "duration"]);
+    if (assemblyBuildState !== undefined) next.assemblyBuildState = assemblyBuildState;
+    if (assemblyProgressPercent !== undefined) next.assemblyProgressPercent = assemblyProgressPercent;
+    if (format !== undefined) next.format = format;
+    if (durationSec !== undefined) next.durationSec = durationSec;
+    return next;
+  }
+
+  if (strict) return {};
+
+  const next = {};
+  Object.entries(safeData).forEach(([key, value]) => {
+    const primitive = normalizeWorkspaceTopologyPrimitive(value);
+    if (primitive !== undefined) next[key] = primitive;
+  });
+  return next;
+}
+
+function buildWorkspaceTopologyPayloadFromWorkspace(workspace = {}, { strict = false } = {}) {
+  const nodes = Array.isArray(workspace?.nodes) ? workspace.nodes : [];
+  const lightweightNodes = nodes
+    .filter((node) => node && typeof node.id === "string" && typeof node.type === "string")
+    .map((node) => ({
+      id: String(node.id || ""),
+      type: String(node.type || ""),
+      position: node.position && typeof node.position === "object"
+        ? {
+          x: normalizeWorkspaceTopologyNumber(node.position.x),
+          y: normalizeWorkspaceTopologyNumber(node.position.y),
+        }
+        : { x: 0, y: 0 },
+      width: normalizeWorkspaceTopologyNumber(node.width, undefined),
+      height: normalizeWorkspaceTopologyNumber(node.height, undefined),
+      data: buildWorkspaceTopologyNodeData(String(node.type || ""), node.data || {}, { strict }),
+    }))
+    .map((node) => {
+      const next = { ...node };
+      if (!Number.isFinite(next.width)) delete next.width;
+      if (!Number.isFinite(next.height)) delete next.height;
+      return next;
+    });
+
+  const lightweightEdges = Array.isArray(workspace?.edges)
+    ? workspace.edges
+      .filter((edge) => edge && typeof edge === "object" && edge.source && edge.target)
+      .map((edge) => ({
+        id: String(edge.id || `${edge.source}-${edge.target}`),
+        source: String(edge.source || ""),
+        sourceHandle: edge.sourceHandle ? String(edge.sourceHandle) : null,
+        target: String(edge.target || ""),
+        targetHandle: edge.targetHandle ? String(edge.targetHandle) : null,
+      }))
+    : [];
+
+  return {
+    nodes: lightweightNodes,
+    edges: lightweightEdges,
+    viewport: workspace?.viewport && typeof workspace.viewport === "object"
+      ? {
+        x: normalizeWorkspaceTopologyNumber(workspace.viewport.x),
+        y: normalizeWorkspaceTopologyNumber(workspace.viewport.y),
+        zoom: normalizeWorkspaceTopologyNumber(workspace.viewport.zoom, 1),
+      }
+      : null,
+    accountKey: String(workspace?.accountKey || ""),
+    persistedAt: String(workspace?.persistedAt || new Date().toISOString()),
+  };
 }
 
 function buildWorkspaceTopologyPayload(finalWorkspacePayload = {}) {
   const workspace = unwrapClipWorkspacePayload(finalWorkspacePayload);
-  const nodes = Array.isArray(workspace?.nodes) ? workspace.nodes : [];
-  const lightweightNodes = nodes
-    .filter((node) => node && typeof node.id === "string" && typeof node.type === "string")
-    .map((node) => {
-      const nextNode = {
-        id: String(node.id || ""),
-        type: String(node.type || ""),
-        position: node.position && typeof node.position === "object"
-          ? {
-            x: Number.isFinite(Number(node.position.x)) ? Number(node.position.x) : 0,
-            y: Number.isFinite(Number(node.position.y)) ? Number(node.position.y) : 0,
-          }
-          : { x: 0, y: 0 },
-        data: sanitizeWorkspaceTopologyDataForNode(String(node.type || ""), node.data || {}),
-      };
-      if (node.measured && typeof node.measured === "object") {
-        nextNode.measured = sanitizeWorkspaceTopologyValue(node.measured) || undefined;
-      }
-      if (Number.isFinite(Number(node.width))) nextNode.width = Number(node.width);
-      if (Number.isFinite(Number(node.height))) nextNode.height = Number(node.height);
-      return nextNode;
-    });
-  return {
-    nodes: lightweightNodes,
-    edges: Array.isArray(workspace?.edges) ? workspace.edges : [],
-    viewport: workspace?.viewport && typeof workspace.viewport === "object" ? workspace.viewport : null,
-    ui: workspace?.ui && typeof workspace.ui === "object" ? workspace.ui : {},
-    workspaceBinding: workspace?.workspaceBinding && typeof workspace.workspaceBinding === "object" ? workspace.workspaceBinding : {},
-    accountKey: String(workspace?.accountKey || ""),
-    persistedAt: String(workspace?.persistedAt || new Date().toISOString()),
-  };
+  let topologyPayload = buildWorkspaceTopologyPayloadFromWorkspace(workspace, { strict: false });
+  const topologyPayloadString = JSON.stringify({ workspace: topologyPayload });
+  if (topologyPayloadString.length <= WORKSPACE_TOPOLOGY_MAX_PAYLOAD_LENGTH) return topologyPayload;
+
+  topologyPayload = buildWorkspaceTopologyPayloadFromWorkspace(workspace, { strict: true });
+  const shrunkenPayloadString = JSON.stringify({ workspace: topologyPayload });
+  console.warn("[CLIP TOPOLOGY SHRUNK]", {
+    originalLength: topologyPayloadString.length,
+    shrunkenLength: shrunkenPayloadString.length,
+    limit: WORKSPACE_TOPOLOGY_MAX_PAYLOAD_LENGTH,
+    nodesCount: topologyPayload.nodes?.length || 0,
+    hasVideoMatchBoard: topologyPayload.nodes?.some((node) => node.type === "videoMatchBoard"),
+  });
+  return topologyPayload;
 }
 
 function serializeNodesForStorage(nodes) {
@@ -28156,20 +28254,26 @@ const hydrate = useCallback((source = "unknown") => {
     console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalWorkspacePayload));
     const topologyPayload = buildWorkspaceTopologyPayload(finalWorkspacePayload);
     const topologyPayloadString = JSON.stringify({ workspace: topologyPayload });
-    const topologyOk = safeSet(WORKSPACE_TOPOLOGY_STORE_KEY, topologyPayloadString);
+    const topologySave = safeSetWithQuotaEvictionForTopology(WORKSPACE_TOPOLOGY_STORE_KEY, topologyPayloadString, {
+      STORE_KEY,
+      WORKSPACE_STORE_KEY,
+    });
+    const topologyOk = topologySave.ok;
     console.warn("[CLIP TOPOLOGY SAVE RESULT]", {
       topologyOk,
       topologyPayloadLength: topologyPayloadString.length,
       nodesCount: topologyPayload.nodes?.length || 0,
       hasVideoMatchBoard: topologyPayload.nodes?.some((n) => n.type === "videoMatchBoard"),
       edgesCount: topologyPayload.edges?.length || 0,
+      evictedLegacy: topologySave.evictedLegacy,
+      evictedWorkspace: topologySave.evictedWorkspace,
     });
     const payloadToStore = { workspace: finalWorkspacePayload };
     const workspacePayloadString = JSON.stringify(payloadToStore);
     const legacyPayloadString = JSON.stringify(finalWorkspacePayload);
-    const workspaceOk = safeSet(WORKSPACE_STORE_KEY, workspacePayloadString);
+    const workspaceOk = topologyOk ? safeSet(WORKSPACE_STORE_KEY, workspacePayloadString) : false;
     // legacy mirror for backward compatibility
-    const legacyOk = safeSet(STORE_KEY, legacyPayloadString);
+    const legacyOk = topologyOk ? safeSet(STORE_KEY, legacyPayloadString) : false;
     console.warn("[CLIP STORAGE WRITE RESULT]", {
       accountKey,
       workspaceOk,
@@ -28179,7 +28283,7 @@ const hydrate = useCallback((source = "unknown") => {
       nodesCount: finalWorkspacePayload.nodes?.length || 0,
       hasVideoMatchBoard: finalWorkspacePayload.nodes?.some((n) => n.type === "videoMatchBoard"),
     });
-    if (workspaceOk || legacyOk || topologyOk) {
+    if (topologyOk) {
       const finalComparablePayload = { ...finalWorkspacePayload };
       delete finalComparablePayload.persistedAt;
       lastPersistedPayloadRef.current = JSON.stringify(finalComparablePayload);
@@ -28279,18 +28383,24 @@ const hydrate = useCallback((source = "unknown") => {
       console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload));
       const topologyPayload = buildWorkspaceTopologyPayload(finalPayload);
       const topologyPayloadString = JSON.stringify({ workspace: topologyPayload });
-      const topologyOk = safeSet(WORKSPACE_TOPOLOGY_STORE_KEY, topologyPayloadString);
+      const topologySave = safeSetWithQuotaEvictionForTopology(WORKSPACE_TOPOLOGY_STORE_KEY, topologyPayloadString, {
+        STORE_KEY,
+        WORKSPACE_STORE_KEY,
+      });
+      const topologyOk = topologySave.ok;
       console.warn("[CLIP TOPOLOGY SAVE RESULT]", {
         topologyOk,
         topologyPayloadLength: topologyPayloadString.length,
         nodesCount: topologyPayload.nodes?.length || 0,
         hasVideoMatchBoard: topologyPayload.nodes?.some((n) => n.type === "videoMatchBoard"),
         edgesCount: topologyPayload.edges?.length || 0,
+        evictedLegacy: topologySave.evictedLegacy,
+        evictedWorkspace: topologySave.evictedWorkspace,
       });
       const workspacePayloadString = JSON.stringify({ workspace: finalPayload });
       const legacyPayloadString = JSON.stringify(finalPayload);
-      const workspaceOk = safeSet(WORKSPACE_STORE_KEY, workspacePayloadString);
-      const legacyOk = safeSet(STORE_KEY, legacyPayloadString);
+      const workspaceOk = topologyOk ? safeSet(WORKSPACE_STORE_KEY, workspacePayloadString) : false;
+      const legacyOk = topologyOk ? safeSet(STORE_KEY, legacyPayloadString) : false;
       console.warn("[CLIP STORAGE WRITE RESULT]", {
         accountKey,
         workspaceOk,
@@ -28300,7 +28410,7 @@ const hydrate = useCallback((source = "unknown") => {
         nodesCount: finalPayload.nodes?.length || 0,
         hasVideoMatchBoard: finalPayload.nodes?.some((n) => n.type === "videoMatchBoard"),
       });
-      const ok = workspaceOk || legacyOk || topologyOk;
+      const ok = topologyOk;
       if (ok) {
         lastSuccessfulWorkspaceSaveRef.current = {
           accountKey,
