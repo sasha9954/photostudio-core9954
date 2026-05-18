@@ -1087,7 +1087,29 @@ const MANUAL_STATUS_VIDEO_URL_PATHS = [
   "url",
 ];
 
+function resolveManualVideoResultUrl(response = {}) {
+  return String(
+    response?.videoUrl
+    || response?.video_url
+    || response?.resultVideoUrl
+    || response?.result_video_url
+    || response?.generatedVideoUrl
+    || response?.generated_video_url
+    || response?.finalVideoUrl
+    || response?.final_video_url
+    || response?.url
+    || response?.output_url
+    || response?.outputUrl
+    || response?.result?.videoUrl
+    || response?.result?.video_url
+    || response?.result?.url
+    || ""
+  ).trim();
+}
+
 function resolveManualStatusVideoUrl(out = {}) {
+  const directResultUrl = resolveManualVideoResultUrl(out);
+  if (directResultUrl) return directResultUrl;
   for (const path of MANUAL_STATUS_VIDEO_URL_PATHS) {
     const value = String(readManualNestedValue(out, path) || "").trim();
     if (value) return value;
@@ -3925,8 +3947,15 @@ export default function ManualClipDirectorBoardEditor({
       const statusOut = await getManualSceneVideoStatus(safeJobId, endpoint);
       const rawStatus = String(statusOut?.status || statusOut?.state || statusOut?.result?.status || statusOut?.result?.state || statusOut?.data?.status || statusOut?.data?.state || "");
       const status = resolveManualVideoJobStatus(statusOut);
-      const doneVideoUrl = resolveManualStatusVideoUrl(statusOut);
+      const doneVideoUrl = resolveManualVideoResultUrl(statusOut) || resolveManualStatusVideoUrl(statusOut);
       const responseKeys = collectManualResponseKeys(statusOut);
+      console.info("[MANUAL BOARD VIDEO POLL RESPONSE]", {
+        sceneId,
+        status: statusOut?.status,
+        jobId: statusOut?.jobId || statusOut?.job_id,
+        videoUrl: statusOut?.videoUrl || statusOut?.video_url || statusOut?.resultVideoUrl || statusOut?.result_video_url || doneVideoUrl || "",
+        rawKeys: statusOut && typeof statusOut === "object" ? Object.keys(statusOut) : [],
+      });
       console.info("[MANUAL BOARD VIDEO POLL STATUS]", {
         sceneId,
         jobId,
@@ -3954,8 +3983,8 @@ export default function ManualClipDirectorBoardEditor({
 
         updateScene(targetSceneId, (currentScene = {}) => ({
           status: "video_ready",
-          video_status: "video_ready",
-          videoStatus: "video_ready",
+          video_status: "done",
+          videoStatus: "done",
           video_url: doneVideoUrl,
           videoUrl: doneVideoUrl,
           result_video_url: doneVideoUrl,
@@ -4002,9 +4031,13 @@ export default function ManualClipDirectorBoardEditor({
             videoUrl: doneVideoUrl,
             videoHasAudio,
           },
-        }), { reason: "video_done_apply_result", forcePersist: true });
+        }), { reason: "video_done", forcePersist: true });
         terminalVideoJobsRef.current.add(pollKey);
-        flushManualBoardAutosave("video_done_apply_result", { skipSignatureCheck: true });
+        flushManualBoardAutosave("video_done", { skipSignatureCheck: true });
+        console.info("[MANUAL BOARD VIDEO URL SAVED TO SCENE]", {
+          sceneId: targetSceneId,
+          videoUrl: doneVideoUrl,
+        });
         console.info("[MANUAL BOARD VIDEO RESULT APPLY]", {
           sceneId: targetSceneId,
           jobId,
@@ -4017,6 +4050,10 @@ export default function ManualClipDirectorBoardEditor({
 
       if (isDoneStatus && !doneVideoUrl) {
         videoPollErrorCountRef.current.delete(`${sceneId}:${jobId}`);
+        console.warn("[MANUAL BOARD VIDEO DONE WITHOUT URL]", {
+          sceneId,
+          response: statusOut,
+        });
         console.warn("[MANUAL BOARD VIDEO RESULT APPLY FAILED]", {
           sceneId,
           jobId,
@@ -4288,12 +4325,20 @@ export default function ManualClipDirectorBoardEditor({
         generatedAudioPolicy: routePayload.generatedAudioPolicy,
         generatedAudioGainDb: Number(routePayload.generatedAudioGainDb ?? scene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
       };
+      console.info("[MANUAL BOARD VIDEO START]", {
+        sceneId: scene?.scene_id,
+        route: scene?.route,
+        imageUrl: scene?.image_url || scene?.imageUrl || scene?.image_preview_url || "",
+        videoPrompt: scene?.video_prompt || scene?.videoPrompt || "",
+        negativePrompt: scene?.negative_prompt || scene?.negativePrompt || "",
+      });
       const out = await startManualSceneVideo(payload);
       const jobId = resolveVideoStartJobId(out);
       const statusEndpoint = resolveManualSceneVideoStatusEndpoint(jobId, out?.statusEndpoint || out?.status_endpoint || "");
       const queueStatus = String(out?.queueStatus || out?.queue_status || out?.status || "").toLowerCase();
       console.info("[MANUAL BOARD VIDEO START RESPONSE]", {
         sceneId: scene.scene_id,
+        response: out,
         jobId,
         statusEndpoint,
         queueStatus,
@@ -4438,6 +4483,17 @@ export default function ManualClipDirectorBoardEditor({
 
   useEffect(() => {
     if (!selectedScene) return;
+    console.info("[MANUAL BOARD DISPLAY VIDEO FIELD CHECK]", {
+      sceneId: selectedScene?.scene_id,
+      video_url: selectedScene?.video_url,
+      videoUrl: selectedScene?.videoUrl,
+      generated_video_url: selectedScene?.generated_video_url,
+      generatedVideoUrl: selectedScene?.generatedVideoUrl,
+      result_video_url: selectedScene?.result_video_url,
+      resultVideoUrl: selectedScene?.resultVideoUrl,
+      final_video_url: selectedScene?.final_video_url,
+      finalVideoUrl: selectedScene?.finalVideoUrl,
+    });
     console.info("[MANUAL BOARD DISPLAY MEDIA SOURCE]", {
       sceneId: String(selectedScene.scene_id || selectedScene.id || ""),
       displayImageUrl: selectedDisplayMedia.type === "image" ? selectedDisplayMedia.url : "",
