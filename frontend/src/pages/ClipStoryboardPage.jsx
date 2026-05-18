@@ -32,6 +32,8 @@ import {
 import VideoRefNode from "./clip_nodes/VideoRefNode";
 import ManualClipBoardNode from "./clip_nodes/manual/ManualClipBoardNode";
 import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
+import VideoMatchBoardNode from "./clip_nodes/video_match/VideoMatchBoardNode.jsx";
+import { buildVideoMatchTimingContextFromManualTimingNodeData } from "./clip_nodes/video_match/videoMatchBoardDomain.js";
 import ManualClipDirectorBoardEditor from "./manual_clip/ManualClipDirectorBoardEditor.jsx";
 import {
   readActiveManualClipBoardProject,
@@ -136,6 +138,9 @@ const PORT_COLORS = {
   storyboard_to_assembly: "var(--family-storyboard)",
   assembly: "var(--family-assembly)",
   brain: "var(--family-brain)",
+  timing_in: "var(--family-audio)",
+  manual_timing_out: "var(--family-audio)",
+  video_match_board: "#6dd5ff",
 };
 
 const HANDLE_BASE_STYLE = {
@@ -2741,6 +2746,7 @@ const EDGE_STYLE_BY_KIND = {
     animatedDash: true,
   },
   assembly: { color: PORT_COLORS.assembly, strokeWidth: 2.2, opacity: 0.95, animatedDash: true },
+  video_match_board: { color: PORT_COLORS.video_match_board, strokeWidth: 2.4, opacity: 1, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
   default: { color: "#8c8c8c", strokeWidth: 2.2, opacity: 0.96, animatedDash: true, filter: "drop-shadow(0 0 2px currentColor)" },
 };
 
@@ -2750,6 +2756,7 @@ function detectEdgeKind({ sourceHandle = "", targetHandle = "", sourceType = "",
   if (sourceType === "scenarioPipelineDebug" && sourceHandle === "storyboard_out" && targetType === "scenarioStoryboard" && targetHandle === "scenario_storyboard_in") return "scenario_storyboard_in";
 
   if (targetType === "introFrame" && targetHandle === INTRO_FRAME_STORY_HANDLE) return "intro_context";
+  if (sourceType === "manualTiming" && sourceHandle === "manual_timing_out" && targetType === "videoMatchBoard" && targetHandle === "timing_in") return "video_match_board";
 
   if (sourceType === "introFrame" && sourceHandle === "intro_frame_out" && targetType === "assemblyNode" && targetHandle === "assembly_intro") {
     return "intro_to_assembly";
@@ -26001,6 +26008,46 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
         }
 
 
+        if (n.type === "videoMatchBoard") {
+          const safeEdgesForConnections =
+            (typeof effectiveEdges !== "undefined" && Array.isArray(effectiveEdges))
+              ? effectiveEdges
+              : Array.isArray(edgesRef.current)
+                ? edgesRef.current
+                : [];
+          const nodesNowForConnections = Array.isArray(effectiveNodes) ? effectiveNodes : [];
+          const timingEdge = [...safeEdgesForConnections]
+            .reverse()
+            .find((edge) => edge?.target === n.id && String(edge?.targetHandle || "") === "timing_in") || null;
+          const sourceNode = timingEdge
+            ? nodesNowForConnections.find((nodeItem) => nodeItem.id === timingEdge.source)
+            : null;
+          const timingContext = sourceNode?.type === "manualTiming"
+            ? buildVideoMatchTimingContextFromManualTimingNodeData(sourceNode?.data || {}, sourceNode.id)
+            : (base.data?.timingContext || {});
+
+          return {
+            ...base,
+            data: {
+              ...base.data,
+              timingContext,
+              timingSourceNodeId: sourceNode?.type === "manualTiming" ? sourceNode.id : String(base.data?.timingSourceNodeId || ""),
+              onPatchNodeData: (nodeId, patch = {}) => {
+                setNodes((prev) => bindHandlers(prev.map((nodeItem) => (
+                  nodeItem.id === nodeId
+                    ? { ...nodeItem, data: { ...nodeItem.data, ...(patch || {}) } }
+                    : nodeItem
+                )), {
+                  nodesNow: prev,
+                  edgesNow: edgesRef.current || [],
+                  traceReason: "video-match-board:patch",
+                }));
+              },
+            },
+          };
+        }
+
+
         if (n.type === "aiScenarioDirectorV2") {
           const safeEdgesForConnections =
             (typeof effectiveEdges !== "undefined" && Array.isArray(effectiveEdges))
@@ -27348,6 +27395,8 @@ const hydrate = useCallback((source = "unknown") => {
       node = { id, type: "manualClipBoard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else if (type === "manualTiming") {
       node = { id, type: "manualTiming", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
+    } else if (type === "videoMatchBoard") {
+      node = { id, type: "videoMatchBoard", position: { x: centerX + jitterX, y: centerY + jitterY }, data: {} };
     } else {
       return;
     }
@@ -27725,6 +27774,7 @@ const hydrate = useCallback((source = "unknown") => {
       refGroup: RefGroupNode,
       manualClipBoard: ManualClipBoardNode,
       manualTiming: ManualTimingNode,
+      videoMatchBoard: VideoMatchBoardNode,
     }),
     []
   );
@@ -27844,6 +27894,34 @@ const hydrate = useCallback((source = "unknown") => {
             data: { kind: presentation.kind },
           }, cleaned);
           refreshNodeBindingsForEdges(nextEdges, "edges:connect:manual-timing");
+          return nextEdges;
+        }
+
+
+        if (dst.type === "videoMatchBoard") {
+          const h = params.targetHandle || "";
+          const sourceHandle = params.sourceHandle || "";
+          const ok =
+            h === "timing_in"
+            && src.type === "manualTiming"
+            && sourceHandle === "manual_timing_out";
+          if (!ok) return eds;
+          const cleaned = eds.filter((e) => !(e.target === params.target && (e.targetHandle || "") === h));
+          const presentation = getEdgePresentation({
+            sourceHandle,
+            targetHandle: h,
+            sourceType: src.type,
+            targetType: dst.type,
+          });
+          nextEdges = addEdge({
+            ...params,
+            type: "smoothstep",
+            className: presentation.className,
+            animated: presentation.animated,
+            style: presentation.style,
+            data: { kind: presentation.kind },
+          }, cleaned);
+          refreshNodeBindingsForEdges(nextEdges, "edges:connect:video-match-board");
           return nextEdges;
         }
 
@@ -29306,6 +29384,7 @@ const hydrate = useCallback((source = "unknown") => {
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("aiScenarioDirectorV2")}>🎬 AI Scenario Director V2</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("manualTiming")}>⏱️ Тайминг песни</button>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("manualClipBoard")}>✂️ AI-разбивка клипа</button>
+              <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("videoMatchBoard")}>🎯 Video Match Board</button>
               <div className="clipSB_drawerSep" />
               <div className="clipSB_drawerGroupTitle">DEBUG / TEST / SERVICE</div>
               <button className="clipSB_drawerItem" onClick={() => addNodeFromDrawer("scenarioStoryboard")}>🎞️ SCENARIO STORYBOARD</button>

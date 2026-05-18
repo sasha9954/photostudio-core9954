@@ -1,0 +1,196 @@
+.videoMatchPage {
+  min-height: 100%;
+  padding: 28px;
+  color: rgba(255,255,255,0.9);
+}
+.videoMatchHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+.videoMatchHeader h1 {
+  margin: 0;
+  font-size: 30px;
+}
+.videoMatchHeader p {
+  margin: 6px 0 0;
+  color: rgba(255,255,255,0.62);
+}
+.videoMatchGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+  gap: 16px;
+}
+.videoMatchPanel {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 18px;
+  background: rgba(9, 16, 28, 0.78);
+  box-shadow: 0 20px 55px rgba(0,0,0,0.22);
+  padding: 16px;
+}
+.videoMatchPanel h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+}
+.videoMatchPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.videoMatchUploadBtn {
+  cursor: pointer;
+}
+.videoMatchPlayerPanel {
+  grid-row: span 2;
+}
+.videoMatchVideoBox {
+  display: grid;
+  place-items: center;
+  min-height: 390px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  background: rgba(0,0,0,0.35);
+  overflow: hidden;
+}
+.videoMatchVideoBox video {
+  display: block;
+  width: 100%;
+  max-height: 62vh;
+  background: #000;
+}
+.videoMatchEmptyVideo,
+.videoMatchEmptyList {
+  color: rgba(255,255,255,0.55);
+  text-align: center;
+  padding: 24px;
+}
+.videoMatchTimelineMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 2px 8px;
+  color: rgba(255,255,255,0.62);
+  font-size: 13px;
+}
+.videoMatchTimeline {
+  position: relative;
+  height: 42px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.13);
+  background: linear-gradient(90deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03));
+  overflow: hidden;
+}
+.videoMatchTimelineProgress {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: rgba(109,213,255,0.18);
+  pointer-events: none;
+}
+.videoMatchTimelineBlock {
+  position: absolute;
+  top: 8px;
+  height: 26px;
+  min-width: 8px;
+  border: 1px solid rgba(255,255,255,0.5);
+  border-radius: 999px;
+  background: rgba(255, 196, 87, 0.68);
+  cursor: pointer;
+}
+.videoMatchTimelineBlock.isSelected {
+  background: rgba(109, 213, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(109, 213, 255, 0.22);
+}
+.videoMatchActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  color: rgba(255,255,255,0.68);
+}
+.videoMatchContextRows {
+  display: grid;
+  gap: 8px;
+  color: rgba(255,255,255,0.72);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.videoMatchJsonPanel textarea {
+  width: 100%;
+  min-height: 210px;
+  resize: vertical;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(0,0,0,0.24);
+  color: rgba(255,255,255,0.9);
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+}
+.videoMatchError {
+  margin-top: 10px;
+  color: #ffb4b4;
+  background: rgba(255, 70, 70, 0.11);
+  border: 1px solid rgba(255, 70, 70, 0.24);
+  border-radius: 12px;
+  padding: 10px;
+}
+.videoMatchBlocksList {
+  display: grid;
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+.videoMatchBlockCard {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.82);
+  padding: 11px;
+  cursor: pointer;
+}
+.videoMatchBlockCard.isSelected {
+  border-color: rgba(109, 213, 255, 0.72);
+  background: rgba(109, 213, 255, 0.13);
+}
+.videoMatchBlockCard span,
+.videoMatchBlockCard small {
+  color: rgba(255,255,255,0.62);
+}
+@media (max-width: 980px) {
+  .videoMatchGrid {
+    grid-template-columns: 1fr;
+  }
+  .videoMatchPlayerPanel {
+    grid-row: auto;
+  }
+}
+.videoMatchPage .clipSB_btn {
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.9);
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.videoMatchPage .clipSB_btnPrimary {
+  border-color: rgba(109,213,255,0.45);
+  background: rgba(109,213,255,0.18);
+}
+.videoMatchPage .clipSB_btnSecondary {
+  background: rgba(255,255,255,0.06);
+}
+.videoMatchPage .clipSB_btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
