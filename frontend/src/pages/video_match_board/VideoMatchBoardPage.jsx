@@ -184,7 +184,7 @@ export default function VideoMatchBoardPage() {
     setPreviewCandidateId("");
     setIsAssemblyPlaying(false);
     setIsPlaybackActive(false);
-    setAssembleAudioPath(String(initialProject?.audioPath || ""));
+    setAssembleAudioPath(String(initialProject?.assembleAudioPath || initialProject?.audioPath || ""));
     setAssembledPreview(null);
     setAssembleError("");
     playbackRef.current = null;
@@ -629,6 +629,9 @@ export default function VideoMatchBoardPage() {
         },
       });
       setAssembledPreview(response || null);
+      if (response?.warning === "audio_missing_backend_path") {
+        setAssembleError("MP4 собран без аудио: укажите реальный путь к mp3.");
+      }
     } catch (error) {
       setAssembleError(String(error?.message || error || "Не удалось собрать MP4"));
     } finally {
@@ -879,13 +882,31 @@ export default function VideoMatchBoardPage() {
           <div className="videoMatchContextRows">
             <label>
               Путь к аудио для сборки
-              <input type="text" value={assembleAudioPath} onChange={(event) => setAssembleAudioPath(event.target.value)} placeholder="C:\\path\\to\\practice_30sec_audio.mp3" />
+              <input
+                type="text"
+                value={assembleAudioPath}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setAssembleAudioPath(value);
+                  patchProject({ assembleAudioPath: value }, { lastGood: false });
+                }}
+                placeholder="C:\\path\\to\\practice_30sec_audio.mp3"
+              />
             </label>
+            <div className="videoMatchWarnings">
+              Для MP4-сборки нужен реальный путь к mp3 на диске. Загруженный через +Аудио blob используется только для предпросмотра.
+            </div>
             {assembleError ? <div className="videoMatchError">{assembleError}</div> : null}
             {assembledPreview?.ok && assembledPreviewOutputUrl ? (
               <div>
                 <a href={assembledPreviewOutputUrl} target="_blank" rel="noreferrer">▶ Смотреть MP4</a>{" "}
-                <a href={assembledPreviewOutputUrl} download>⬇ Скачать MP4</a>
+                <button
+                  className="clipSB_btn clipSB_btnSecondary"
+                  type="button"
+                  onClick={() => window.open(assembledPreviewOutputUrl, "_blank", "noopener,noreferrer")}
+                >
+                  ⬇ Скачать MP4
+                </button>
                 {assembledPreview.warning ? <div className="videoMatchWarnings">warning: {assembledPreview.warning}</div> : null}
               </div>
             ) : null}
