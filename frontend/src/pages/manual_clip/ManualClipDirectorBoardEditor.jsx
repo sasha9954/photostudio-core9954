@@ -432,8 +432,34 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
   const safeSourceNodeId = String(sourceNodeId || "").trim();
   const durableProject = options?.durableProject || null;
   const durableTried = options?.durableTried === true;
+  const durableBelongsToSource =
+    hasMeaningfulManualProject(durableProject)
+    && (!safeSourceNodeId || projectBelongsToSource(durableProject, safeSourceNodeId));
+  const forceResetBoard = options?.forceResetBoard === true;
   let navigationProjectForCandidates = navigationProject;
   let forcePreferDurableProject = false;
+  if (!forceResetBoard && durableTried && durableBelongsToSource) {
+    const durableStats = getManualClipBoardMaterialStats(durableProject);
+    const navStats = getManualClipBoardMaterialStats(navigationProject);
+
+    console.warn("[MANUAL BOARD DURABLE FOUND: PREFER OVER NAVIGATION]", {
+      sourceNodeId: safeSourceNodeId,
+      explicitNewProject: options?.explicitNewProject === true,
+      durableStats,
+      navStats,
+      durableProjectId: durableProject?.project_id || durableProject?.projectId || "",
+      navigationProjectId: navigationProject?.project_id || navigationProject?.projectId || "",
+    });
+
+    return mergePickedManualBoardTimelineIfNeeded(
+      { source: "backend-durable", project: durableProject },
+      [
+        { source: "backend-durable", project: durableProject },
+        { source: "navigation", project: navigationProject },
+      ],
+      "durable_found_prefer_over_navigation"
+    );
+  }
   if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
     if (!durableTried) {
       console.warn("[MANUAL BOARD EXPLICIT NEW WAITING DURABLE]", {
@@ -2083,18 +2109,33 @@ export default function ManualClipDirectorBoardEditor({
     if (sourceNodeIdFromRoute && durableBoardLoad.nodeId !== sourceNodeIdFromRoute) return;
     if (sourceNodeIdFromRoute && durableBoardLoad.loading) return;
     const durableProject = durableBoardLoad.nodeId === sourceNodeIdFromRoute ? durableBoardLoad.project : null;
-    const navStats = getManualClipBoardMaterialStats(embedded ? embeddedProject : navigationProject);
+    const hydrationNavigationProject = embedded ? embeddedProject : navigationProject;
+    const forceResetBoard = Boolean(
+      location.state?.forceResetBoard === true
+      || location.state?.manualBoardForceReset === true
+      || openState?.forceResetBoard === true
+    );
+    const navStats = getManualClipBoardMaterialStats(hydrationNavigationProject);
     const durableStats = getManualClipBoardMaterialStats(durableProject);
+    const hydrateOptions = {
+      explicitNewProject,
+      durableProject,
+      durableTried: durableBoardLoad.tried,
+      forceResetBoard,
+    };
     const parsedProject = embedded
-      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject, durableProject, durableTried: durableBoardLoad.tried })
-      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject, durableProject, durableTried: durableBoardLoad.tried });
+      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, hydrateOptions)
+      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, hydrateOptions);
     const pickedStats = getManualClipBoardMaterialStats(parsedProject);
     console.info("[MANUAL BOARD HYDRATE SOURCE FINAL]", {
       sourceNodeId: sourceNodeIdFromRoute,
       explicitNewProject,
+      forceResetBoard,
       shouldBypassDurableForFreshNewProject,
       durableTried: durableBoardLoad.tried,
       durableFound: hasMeaningfulManualProject(durableProject),
+      durableProjectId: durableProject?.project_id || durableProject?.projectId || "",
+      navigationProjectId: hydrationNavigationProject?.project_id || hydrationNavigationProject?.projectId || "",
       durableStats,
       navStats,
       pickedOwner: getManualProjectOwnerId(parsedProject),
