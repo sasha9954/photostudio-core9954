@@ -3746,6 +3746,9 @@ function buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload = {}) {
   const edges = Array.isArray(finalPayload?.edges) ? finalPayload.edges : [];
   return {
     nodesCount: nodes.length,
+    nodeTypes: nodes.map((n) => String(n?.type || "")),
+    nodeIds: nodes.map((n) => String(n?.id || "")),
+    persistedAt: String(finalPayload?.persistedAt || ""),
     hasVideoMatchBoard: nodes.some((n) => n.type === "videoMatchBoard"),
     videoMatchNodes: nodes.filter((n) => n.type === "videoMatchBoard").map((n) => ({
       id: n.id,
@@ -3756,6 +3759,79 @@ function buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload = {}) {
     })),
     edgesToVideoMatch: edges.filter((e) => e.targetHandle === "timing_in"),
   };
+}
+
+
+function getClipWorkspaceSnapshotMeta(payload = {}) {
+  const workspace = unwrapClipWorkspacePayload(payload) || {};
+  const nodes = Array.isArray(workspace?.nodes) ? workspace.nodes : [];
+  return {
+    nodesCount: nodes.length,
+    nodeTypes: nodes.map((nodeItem) => String(nodeItem?.type || "")),
+    nodeIds: nodes.map((nodeItem) => String(nodeItem?.id || "")).filter(Boolean),
+    persistedAt: String(workspace?.persistedAt || ""),
+  };
+}
+
+function parseClipWorkspaceStorageCandidate({ key, raw, source }) {
+  if (!raw) {
+    return {
+      key,
+      raw: "",
+      source,
+      parsedRaw: null,
+      workspace: null,
+      meta: { nodesCount: 0, nodeTypes: [], nodeIds: [], persistedAt: "" },
+      valid: false,
+      hasBrainNode: false,
+      persistedTime: 0,
+      error: "missing",
+    };
+  }
+  try {
+    const parsedRaw = JSON.parse(raw);
+    const workspace = unwrapClipWorkspacePayload(parsedRaw);
+    if (!workspace || typeof workspace !== "object") throw new Error("bad_workspace");
+    if (!Array.isArray(workspace?.nodes) || !Array.isArray(workspace?.edges)) throw new Error("bad_format");
+    const meta = getClipWorkspaceSnapshotMeta(workspace);
+    return {
+      key,
+      raw,
+      source,
+      parsedRaw,
+      workspace,
+      meta,
+      valid: true,
+      hasBrainNode: meta.nodeTypes.includes("brainNode"),
+      persistedTime: Date.parse(meta.persistedAt) || 0,
+    };
+  } catch (err) {
+    return {
+      key,
+      raw,
+      source,
+      parsedRaw: null,
+      workspace: null,
+      meta: { nodesCount: 0, nodeTypes: [], nodeIds: [], persistedAt: "" },
+      valid: false,
+      hasBrainNode: false,
+      persistedTime: 0,
+      error: String(err?.message || err || "parse_failed"),
+    };
+  }
+}
+
+function pickClipWorkspaceStorageCandidate(candidates = []) {
+  const validCandidates = candidates.filter((candidate) => candidate?.valid);
+  const modernCandidates = validCandidates.filter((candidate) => !candidate.hasBrainNode);
+  const pool = modernCandidates.length ? modernCandidates : validCandidates;
+  if (!pool.length) return null;
+  return pool.slice().sort((a, b) => {
+    if (b.persistedTime !== a.persistedTime) return b.persistedTime - a.persistedTime;
+    if (a.source === "workspaceV2" && b.source !== "workspaceV2") return -1;
+    if (b.source === "workspaceV2" && a.source !== "workspaceV2") return 1;
+    return 0;
+  })[0];
 }
 
 function normalizeScenarioRuntimeSnapshot(rawSnapshot, sourceKey = "") {
@@ -11358,6 +11434,8 @@ export default function ClipStoryboardPage() {
   const initialRestoreCompleteRef = useRef(false);
   const isHydratingRef = useRef(true);
   const hydrateInFlightRef = useRef(false);
+  const prevHydratedAccountKeyRef = useRef(null);
+  const lastSuccessfulWorkspaceSaveRef = useRef(null);
   const reactFlowInstanceRef = useRef(null);
   const viewportRef = useRef({ x: 0, y: 0, zoom: 1 });
   const pendingHydratedViewportRef = useRef(null);
@@ -26806,6 +26884,27 @@ return base;
   // }, [edges, bindHandlers, setNodes]);
 
 const hydrate = useCallback((source = "unknown") => {
+    console.debug("[CLIP HYDRATE START]", {
+      source,
+      accountKey,
+      didHydrate: didHydrateRef.current,
+      isHydrating: isHydratingRef.current,
+      initialRestoreComplete: initialRestoreCompleteRef.current,
+      currentNodesCount: Array.isArray(nodesRef.current) ? nodesRef.current.length : null,
+      currentNodeTypes: Array.isArray(nodesRef.current) ? nodesRef.current.map((n) => n.type) : [],
+      WORKSPACE_STORE_KEY,
+      STORE_KEY,
+    });
+
+    if (
+      source === "effect:account-change"
+      && prevHydratedAccountKeyRef.current === accountKey
+      && initialRestoreCompleteRef.current === true
+    ) {
+      console.debug("[CLIP HYDRATE SKIPPED SAME ACCOUNT]", { source, accountKey });
+      return;
+    }
+
     if (hydrateInFlightRef.current) {
       console.warn(`[CLIP WARN] hydrate re-entry blocked source=${source}`);
       return;
@@ -26835,6 +26934,7 @@ const hydrate = useCallback((source = "unknown") => {
       initialRestoreCompleteRef.current = true;
       setInitialRestoreComplete(true);
       hydrateInFlightRef.current = false;
+      prevHydratedAccountKeyRef.current = accountKey;
       return;
     }
 
@@ -26843,38 +26943,86 @@ const hydrate = useCallback((source = "unknown") => {
     setInitialRestoreComplete(false);
     isHydratingRef.current = true;
 
-    // Try workspace key first; if empty, try compatible legacy keys.
-    let raw = safeGet(WORKSPACE_STORE_KEY);
-    if (!raw) {
-      const candidates = [];
-      const add = (k) => {
-        if (k && !candidates.includes(k)) candidates.push(k);
-      };
+    const storageCandidates = [];
+    const addStorageCandidate = (key, candidateSource) => {
+      if (!key || storageCandidates.some((candidate) => candidate.key === key)) return;
+      storageCandidates.push(parseClipWorkspaceStorageCandidate({
+        key,
+        raw: safeGet(key),
+        source: candidateSource,
+      }));
+    };
 
-      add(WORKSPACE_STORE_KEY);
-      add(STORE_KEY);
+    addStorageCandidate(WORKSPACE_STORE_KEY, "workspaceV2");
+    addStorageCandidate(STORE_KEY, "legacyV1");
 
-      // legacy: without/with u_ prefix
-      if (accountKey.startsWith("u_")) add(`ps:clipStoryboard:v1:${accountKey.slice(2)}`);
-      else add(`ps:clipStoryboard:v1:u_${accountKey}`);
+    let workspaceV2Candidate = storageCandidates.find((candidate) => candidate?.source === "workspaceV2") || null;
+    let legacyV1Candidate = storageCandidates.find((candidate) => candidate?.source === "legacyV1") || null;
 
-      // legacy: email key
+    // compatible legacy keys are fallbacks only when the current account keys are absent/broken.
+    if (!workspaceV2Candidate?.valid && !legacyV1Candidate?.valid) {
+      if (accountKey.startsWith("u_")) addStorageCandidate(`ps:clipStoryboard:v1:${accountKey.slice(2)}`, "legacyCompat");
+      else addStorageCandidate(`ps:clipStoryboard:v1:u_${accountKey}`, "legacyCompat");
+
       const emailRaw = user?.email ? String(user.email).toLowerCase() : "";
-      if (emailRaw) add(`ps:clipStoryboard:v1:${emailRaw}`);
-
-      // guest key (if user worked before login)
-      add("ps:clipStoryboard:v1:guest");
-
-      for (const k of candidates) {
-        const v = safeGet(k);
-        if (v) {
-          raw = v;
-          // migrate into current key so next loads are stable
-          if (k !== WORKSPACE_STORE_KEY) safeSet(WORKSPACE_STORE_KEY, v);
-          break;
-        }
-      }
+      if (emailRaw) addStorageCandidate(`ps:clipStoryboard:v1:${emailRaw}`, "legacyCompat");
+      addStorageCandidate("ps:clipStoryboard:v1:guest", "legacyCompat");
+      workspaceV2Candidate = storageCandidates.find((candidate) => candidate?.source === "workspaceV2") || null;
+      legacyV1Candidate = storageCandidates.find((candidate) => candidate?.source === "legacyV1") || null;
     }
+
+    const pickedCandidate = pickClipWorkspaceStorageCandidate(storageCandidates);
+    console.debug("[CLIP HYDRATE STORAGE CANDIDATES]", {
+      hasWorkspaceV2: !!workspaceV2Candidate?.valid,
+      hasLegacyV1: !!legacyV1Candidate?.valid,
+      pickedSource: pickedCandidate?.source || null,
+      workspaceV2: {
+        nodesCount: workspaceV2Candidate?.meta?.nodesCount || 0,
+        nodeTypes: workspaceV2Candidate?.meta?.nodeTypes || [],
+        persistedAt: workspaceV2Candidate?.meta?.persistedAt || "",
+      },
+      legacyV1: {
+        nodesCount: legacyV1Candidate?.meta?.nodesCount || 0,
+        nodeTypes: legacyV1Candidate?.meta?.nodeTypes || [],
+        persistedAt: legacyV1Candidate?.meta?.persistedAt || "",
+      },
+    });
+
+    if (pickedCandidate?.hasBrainNode) {
+      console.warn("[CLIP HYDRATE] picked legacy brainNode snapshot because no modern workspace candidate exists", {
+        source: pickedCandidate.source,
+        key: pickedCandidate.key,
+        nodeTypes: pickedCandidate.meta.nodeTypes,
+      });
+    }
+
+    const lastSave = lastSuccessfulWorkspaceSaveRef.current;
+    if (
+      pickedCandidate
+      && lastSave
+      && lastSave.accountKey === accountKey
+      && pickedCandidate.meta.nodesCount < Number(lastSave.nodesCount || 0)
+      && pickedCandidate.persistedTime > 0
+      && Date.parse(lastSave.persistedAt || "") > pickedCandidate.persistedTime
+    ) {
+      console.warn("[CLIP HYDRATE] skipped stale snapshot after successful workspace save", {
+        source,
+        accountKey,
+        pickedSource: pickedCandidate.source,
+        pickedPersistedAt: pickedCandidate.meta.persistedAt,
+        pickedNodesCount: pickedCandidate.meta.nodesCount,
+        lastSuccessfulWorkspaceSave: lastSave,
+      });
+      didHydrateRef.current = true;
+      initialRestoreCompleteRef.current = true;
+      setInitialRestoreComplete(true);
+      isHydratingRef.current = false;
+      hydrateInFlightRef.current = false;
+      prevHydratedAccountKeyRef.current = accountKey;
+      return;
+    }
+
+    const raw = pickedCandidate?.raw || "";
     if (!raw) {
       console.info(`[CLIP TRACE] hydrate apply nodesBefore=${nodesCountRef.current} nodesAfter=${defaultNodes.length} edgesAfter=${defaultEdges.length}`);
       setNodes(bindHandlers(defaultNodes, { nodesNow: defaultNodes, edgesNow: defaultEdges, traceReason: "hydrate:defaults" }));
@@ -26906,6 +27054,7 @@ const hydrate = useCallback((source = "unknown") => {
         setInitialRestoreComplete(true);
         isHydratingRef.current = false;
         hydrateInFlightRef.current = false;
+        prevHydratedAccountKeyRef.current = accountKey;
       }, 0);
       return;
     }
@@ -27453,6 +27602,7 @@ const hydrate = useCallback((source = "unknown") => {
         setInitialRestoreComplete(true);
         isHydratingRef.current = false;
         hydrateInFlightRef.current = false;
+        prevHydratedAccountKeyRef.current = accountKey;
       }, 0);
     }
   }, [
@@ -27811,6 +27961,13 @@ const hydrate = useCallback((source = "unknown") => {
       const finalComparablePayload = { ...finalWorkspacePayload };
       delete finalComparablePayload.persistedAt;
       lastPersistedPayloadRef.current = JSON.stringify(finalComparablePayload);
+      lastSuccessfulWorkspaceSaveRef.current = {
+        accountKey,
+        persistedAt: String(finalWorkspacePayload?.persistedAt || ""),
+        nodeIds: serialNodes.map((nodeItem) => String(nodeItem?.id || "")).filter(Boolean),
+        nodeTypes: serialNodes.map((nodeItem) => String(nodeItem?.type || "")),
+        nodesCount: serialNodes.length,
+      };
       console.info("[CLIP STORAGE] persist state", {
         accountKey,
         WORKSPACE_STORE_KEY,
@@ -27898,7 +28055,16 @@ const hydrate = useCallback((source = "unknown") => {
       }
       console.debug("[VIDEO MATCH WORKSPACE FINAL SAVE]", buildVideoMatchWorkspaceFinalSaveDebugPayload(finalPayload));
       const ok = safeSet(WORKSPACE_STORE_KEY, JSON.stringify({ workspace: finalPayload })) || safeSet(STORE_KEY, JSON.stringify(finalPayload));
-      if (ok) setLastSavedAt(Date.now());
+      if (ok) {
+        lastSuccessfulWorkspaceSaveRef.current = {
+          accountKey,
+          persistedAt: String(finalPayload?.persistedAt || ""),
+          nodeIds: serialNodes.map((nodeItem) => String(nodeItem?.id || "")).filter(Boolean),
+          nodeTypes: serialNodes.map((nodeItem) => String(nodeItem?.type || "")),
+          nodesCount: serialNodes.length,
+        };
+        setLastSavedAt(Date.now());
+      }
     };
 
     window.addEventListener("beforeunload", onBeforeUnload);
