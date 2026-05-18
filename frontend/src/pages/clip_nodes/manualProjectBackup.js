@@ -336,6 +336,27 @@ export function queueManualClipBoardProjectDurableSave(project = {}, options = {
   }
 }
 
+let lastManualBoardDurableSaveSignature = "";
+
+function buildManualBoardDurableSaveSignature(project = {}, reason = "") {
+  return JSON.stringify({
+    owner: getManualProjectOwnerId(project),
+    project_id: project?.project_id || project?.projectId || "",
+    updatedAt: project?.updatedAt || "",
+    revision: project?.revision || 0,
+    selectedSceneId: project?.selectedSceneId || "",
+    reason,
+    stats: getManualClipBoardMaterialStats(project),
+  });
+}
+
+function queueManualBoardDurableSaveOnce(project = {}, options = {}) {
+  const signature = buildManualBoardDurableSaveSignature(project, options?.reason || "");
+  if (signature && signature === lastManualBoardDurableSaveSignature) return false;
+  lastManualBoardDurableSaveSignature = signature;
+  return queueManualClipBoardProjectDurableSave(project, options);
+}
+
 export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {}) {
   const safeNodeId = String(nodeId || "").trim();
   if (!safeNodeId) return null;
@@ -2148,8 +2169,12 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   const durableCandidateProject = fullSerialized.length <= 24 * 1024 * 1024
     ? fullStorageProject
     : storageProject;
+  queueManualBoardDurableSaveOnce(durableCandidateProject, {
+    reason,
+    source: "manual_board_before_localstorage_quota_safe",
+  });
   const queueDurableSaveAfterLocalSuccess = (projectForDurable, sourceSuffix = "") => {
-    queueManualClipBoardProjectDurableSave(projectForDurable, {
+    queueManualBoardDurableSaveOnce(projectForDurable, {
       reason,
       source: sourceSuffix || (
         useLightweightPersist
@@ -2261,7 +2286,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
         const lightweightDurableCandidate = fullSerialized.length <= 24 * 1024 * 1024
           ? fullStorageProject
           : lightweightProject;
-        queueManualClipBoardProjectDurableSave(lightweightDurableCandidate, {
+        queueManualBoardDurableSaveOnce(lightweightDurableCandidate, {
           reason,
           source: fullSerialized.length <= 24 * 1024 * 1024
             ? "manual_board_persist_lightweight_local_full_backend"

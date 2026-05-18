@@ -430,26 +430,46 @@ function mergePickedManualBoardTimelineIfNeeded(picked = null, candidates = [], 
 
 function readManualActiveProject(sourceNodeId = "", navigationProject = null, options = {}) {
   const safeSourceNodeId = String(sourceNodeId || "").trim();
-  if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
-    logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId: safeSourceNodeId });
-    console.info("[MANUAL BOARD EMBEDDED PICK]", {
-      sourceNodeId: safeSourceNodeId,
-      ownerNodeId: getManualProjectOwnerId(navigationProject),
-      picked: "navigationProject",
-      project_id: manualBoardProjectId(navigationProject),
-      input_signature: manualBoardInputSignature(navigationProject),
-      audio_signature: String(navigationProject?.audio_signature || navigationProject?.audioSignature || "").trim(),
-      audio: {
-        url: String(navigationProject?.audio?.url || navigationProject?.audio_url || navigationProject?.audioUrl || "").trim(),
-        name: String(navigationProject?.audio?.name || navigationProject?.audio?.filename || navigationProject?.audio_name || "").trim(),
-        duration_sec: Number(navigationProject?.audio?.duration_sec || navigationProject?.audio_duration_sec || 0) || 0,
-      },
-      explicitNewProject: true,
-      stats: getManualClipBoardMaterialStats(navigationProject),
-    });
-    return navigationProject;
-  }
   const durableProject = options?.durableProject || null;
+  if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
+    const durableStats = getManualClipBoardMaterialStats(durableProject);
+    const navStats = getManualClipBoardMaterialStats(navigationProject);
+    const durableHasMoreMedia = Boolean(
+      hasMeaningfulManualProject(durableProject)
+      && (
+        (durableStats?.scenesWithImage || durableStats?.imageCount || durableStats?.images || 0) > (navStats?.scenesWithImage || navStats?.imageCount || navStats?.images || 0)
+        || (durableStats?.scenesWithVideo || durableStats?.videoCount || durableStats?.videos || 0) > (navStats?.scenesWithVideo || navStats?.videoCount || navStats?.videos || 0)
+        || (durableStats?.generatedVideos || durableStats?.videoCount || durableStats?.videos || 0) > (navStats?.generatedVideos || navStats?.videoCount || navStats?.videos || 0)
+        || (durableStats?.generatedImages || durableStats?.imageCount || durableStats?.images || 0) > (navStats?.generatedImages || navStats?.imageCount || navStats?.images || 0)
+      )
+    );
+
+    if (!durableHasMoreMedia) {
+      logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS NAVIGATION PROJECT]", navigationProject, { sourceNodeId: safeSourceNodeId });
+      console.info("[MANUAL BOARD EMBEDDED PICK]", {
+        sourceNodeId: safeSourceNodeId,
+        ownerNodeId: getManualProjectOwnerId(navigationProject),
+        picked: "navigationProject",
+        project_id: manualBoardProjectId(navigationProject),
+        input_signature: manualBoardInputSignature(navigationProject),
+        audio_signature: String(navigationProject?.audio_signature || navigationProject?.audioSignature || "").trim(),
+        audio: {
+          url: String(navigationProject?.audio?.url || navigationProject?.audio_url || navigationProject?.audioUrl || "").trim(),
+          name: String(navigationProject?.audio?.name || navigationProject?.audio?.filename || navigationProject?.audio_name || "").trim(),
+          duration_sec: Number(navigationProject?.audio?.duration_sec || navigationProject?.audio_duration_sec || 0) || 0,
+        },
+        explicitNewProject: true,
+        stats: navStats,
+      });
+      return navigationProject;
+    }
+
+    console.warn("[MANUAL BOARD EXPLICIT NEW IGNORED: DURABLE HAS MORE MEDIA]", {
+      sourceNodeId: safeSourceNodeId,
+      navStats,
+      durableStats,
+    });
+  }
   const lastGoodProject = readLastGoodManualClipBoardProject();
   const emergencyProject = readEmergencyManualClipBoardProjectForNode(safeSourceNodeId);
   const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
@@ -2001,12 +2021,28 @@ export default function ManualClipDirectorBoardEditor({
       || openState?.manualBoardExplicitNewProject === true
       || ["manual_new_project_from_audio_split", "manual_new_project_from_audio_split_open_embedded"].includes(String((embeddedProject || navigationProject)?.lastPersistReason || ""))
     );
-    if (sourceNodeIdFromRoute && !explicitNewProject && durableBoardLoad.nodeId !== sourceNodeIdFromRoute) return;
-    if (sourceNodeIdFromRoute && !explicitNewProject && durableBoardLoad.loading) return;
+    const hasFreshNavigationProject = hasMeaningfulManualProject(navigationProject || embeddedProject);
+    const freshNavigationCandidate = embeddedProject || navigationProject;
+    const shouldBypassDurableForFreshNewProject = Boolean(
+      explicitNewProject
+      && hasFreshNavigationProject
+      && String(freshNavigationCandidate?.lastPersistReason || "").includes("manual_new_project_from_audio_split")
+    );
+    if (sourceNodeIdFromRoute && !shouldBypassDurableForFreshNewProject && durableBoardLoad.nodeId !== sourceNodeIdFromRoute) return;
+    if (sourceNodeIdFromRoute && !shouldBypassDurableForFreshNewProject && durableBoardLoad.loading) return;
     const durableProject = durableBoardLoad.nodeId === sourceNodeIdFromRoute ? durableBoardLoad.project : null;
     const parsedProject = embedded
       ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject, durableProject })
       : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject, durableProject });
+    console.info("[MANUAL BOARD HYDRATE SOURCE FINAL]", {
+      sourceNodeId: sourceNodeIdFromRoute,
+      explicitNewProject,
+      durableTried: durableBoardLoad.tried,
+      durableFound: hasMeaningfulManualProject(durableProject),
+      pickedOwner: getManualProjectOwnerId(parsedProject),
+      pickedProjectId: parsedProject?.project_id || parsedProject?.projectId || "",
+      pickedStats: getManualClipBoardMaterialStats(parsedProject),
+    });
     if (!hasMeaningfulManualProject(parsedProject)) {
       setProject(null);
       setSelectedSceneId("");
@@ -2015,9 +2051,22 @@ export default function ManualClipDirectorBoardEditor({
     }
     try {
       const parsed = unwrapManualProjectBackupJson(parsedProject);
-      const forcedProjectId = String(location.state?.manualBoardForceProjectId || location.state?.forceProjectId || openState?.forceProjectId || "").trim();
-      const forcedInputSignature = String(location.state?.manualBoardForceInputSignature || location.state?.forceInputSignature || openState?.forceInputSignature || "").trim();
-      const forcedAudioSignature = String(location.state?.manualBoardForceAudioSignature || location.state?.forceAudioSignature || openState?.forceAudioSignature || "").trim();
+      const clearedExplicitOpenState = explicitNewProject
+        ? {
+          ...(openState || {}),
+          manualBoardExplicitNewProject: false,
+          forceProjectId: "",
+          forceInputSignature: "",
+          forceAudioSignature: "",
+          updatedAt: Date.now(),
+        }
+        : openState;
+      if (explicitNewProject) {
+        writeManualClipBoardOpenState(clearedExplicitOpenState);
+      }
+      const forcedProjectId = String(location.state?.manualBoardForceProjectId || location.state?.forceProjectId || clearedExplicitOpenState?.forceProjectId || "").trim();
+      const forcedInputSignature = String(location.state?.manualBoardForceInputSignature || location.state?.forceInputSignature || clearedExplicitOpenState?.forceInputSignature || "").trim();
+      const forcedAudioSignature = String(location.state?.manualBoardForceAudioSignature || location.state?.forceAudioSignature || clearedExplicitOpenState?.forceAudioSignature || "").trim();
       const projectFormat = resolveProjectAspectFormat(parsed);
       const storyBlocks = Array.isArray(parsed?.story_blocks) ? parsed.story_blocks.map(normalizeStoryBlock) : [];
       const storyBlockLookup = buildStoryBlockLookup(storyBlocks);
