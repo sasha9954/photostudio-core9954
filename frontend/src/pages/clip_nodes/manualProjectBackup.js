@@ -349,13 +349,20 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
     || reason === "manual_new_project_from_audio_split";
 
   if (existingHasMedia && incomingHasNoMedia && (!options?.allowEmptyDurableOverwrite || isInitialOpenSkeletonReason)) {
+    const incomingRefs = findManualBoardMediaRefs(safeProject, { maxDepth: 8 }).slice(0, 20);
+    const existingRefs = findManualBoardMediaRefs(existingDurableProject, { maxDepth: 8 }).slice(0, 20);
+
     console.warn("[manual board durable save skipped: incoming would drop media]", {
       nodeId,
       reason,
       incomingMediaStats,
       existingMediaStats,
+      incomingRefsCount: incomingRefs.length,
+      incomingRefs,
+      existingRefsCount: existingRefs.length,
+      existingRefs,
     });
-    return true;
+    return "skipped_preserve_media";
   }
 
   const durableProject = sanitizeManualClipBoardProjectForStorage({
@@ -364,10 +371,13 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
     durable_source: String(options?.source || "manual_board_backend_durable"),
   });
   const mediaDebugStats = getManualBoardMediaDebugStats(safeProject);
+  const mediaRefs = findManualBoardMediaRefs(safeProject, { maxDepth: 8 }).slice(0, 20);
   console.info("[manual board durable save payload media debug]", {
     nodeId,
     reason: reason || safeProject?.lastPersistReason || "",
     mediaDebugStats,
+    refsCount: mediaRefs.length,
+    refs: mediaRefs,
   });
   const response = await fetchJson("/api/manual-board/save", {
     method: "POST",
@@ -386,6 +396,8 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
       nodeId,
       reason: reason || safeProject?.lastPersistReason || "manual_board_backend_durable_save",
       mediaDebugStats,
+      refsCount: mediaRefs.length,
+      refs: mediaRefs,
     });
   }
   return Boolean(response?.ok);
@@ -394,7 +406,16 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
 export function queueManualClipBoardProjectDurableSave(project = {}, options = {}) {
   try {
     saveManualClipBoardProjectDurable(project, options).then((ok) => {
-      if (ok) {
+      if (ok === "skipped_preserve_media") {
+        console.warn("[manual board durable persist] backend write skipped to preserve media", {
+          nodeId: getManualProjectOwnerId(project),
+          reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
+          mediaDebugStats: getManualBoardMediaDebugStats(project),
+        });
+        return;
+      }
+
+      if (ok === true) {
         console.info("[manual board durable persist] backend write ok", {
           nodeId: getManualProjectOwnerId(project),
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
@@ -437,7 +458,16 @@ function queueManualBoardDurableSaveOnce(project = {}, options = {}) {
   pendingManualBoardDurableSaveSignature = signature;
   try {
     saveManualClipBoardProjectDurable(project, options).then((ok) => {
-      if (ok) {
+      if (ok === "skipped_preserve_media") {
+        console.warn("[manual board durable persist] backend write skipped to preserve media", {
+          nodeId: getManualProjectOwnerId(project),
+          reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
+          mediaDebugStats: getManualBoardMediaDebugStats(project),
+        });
+        return;
+      }
+
+      if (ok === true) {
         lastManualBoardDurableSaveSignature = signature;
         console.info("[manual board durable persist] backend write ok", {
           nodeId: getManualProjectOwnerId(project),
@@ -483,9 +513,13 @@ export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {
       found: response?.found,
       stats: getManualClipBoardMaterialStats(project),
     });
+    const mediaRefs = findManualBoardMediaRefs(project, { maxDepth: 8 }).slice(0, 20);
+
     console.info("[manual board durable load media debug]", {
       nodeId: safeNodeId,
       mediaDebugStats: getManualBoardMediaDebugStats(project),
+      refsCount: mediaRefs.length,
+      refs: mediaRefs,
     });
   }
   return project;
