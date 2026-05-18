@@ -1,3 +1,5 @@
+import { fetchJson } from "../../services/api.js";
+
 export const MANUAL_TIMING_ACTIVE_PROJECT_KEY = "manual_timing_active_project";
 export const MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY = "manual_timing_active_project_id";
 export const MANUAL_CLIP_BOARD_ACTIVE_PROJECT_KEY = "manual_clip_board_active_project";
@@ -7,12 +9,8 @@ export const MANUAL_CLIP_BOARD_OPEN_STATE_KEY = "photostudio_manual_director_ope
 export const MANUAL_CLIP_BOARD_LAST_GOOD_SESSION_KEY = "photostudio_manual_director_last_good_board";
 export const MANUAL_CLIP_BOARD_EMERGENCY_DOWNLOADED_ONCE_KEY = "manual_board_emergency_downloaded_once";
 
-
 const MANUAL_STORAGE_MAX_STRING_LENGTH = 200000;
 export const MANUAL_STORAGE_MAX_SAFE_LENGTH = 1200000;
-// TODO(manual-board-storage): move durable Manual Director Board saves from
-// localStorage to IndexedDB or a backend file/db store. localStorage remains a
-// compatibility layer and emergency fallback until that migration lands.
 const MANUAL_STORAGE_DANGEROUS_KEY_RE = /(raw|debug|blob|base64|binary|provider|response|payload|(^|[_-])file($|[_-]))/i;
 const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "scene_id",
@@ -288,6 +286,71 @@ export function getManualClipBoardCanonicalStorageKey() {
 
 export function canUseLegacyManualProjectStorage() {
   return getManualProjectAccountScopeId() === "guest";
+}
+
+export async function saveManualClipBoardProjectDurable(project = {}, options = {}) {
+  const safeProject = project && typeof project === "object" ? project : {};
+  const nodeId = getManualProjectOwnerId(safeProject);
+  if (!nodeId || !hasMeaningfulManualProject(safeProject)) return false;
+  const durableProject = {
+    ...buildManualProjectBackupJson(safeProject, { source: "manual_board_backend_durable" }),
+    source: String(safeProject.source || safeProject.ownerNodeType || "manual_board_backend_durable"),
+    durable_source: String(options?.source || "manual_board_backend_durable"),
+  };
+  const response = await fetchJson("/api/manual-board/save", {
+    method: "POST",
+    timeoutMs: Number(options?.timeoutMs || 12000),
+    body: {
+      accountKey: getManualProjectAccountScopeId(),
+      nodeId,
+      project: {
+        ...durableProject,
+        lastPersistReason: String(options?.reason || safeProject.lastPersistReason || durableProject.lastPersistReason || "manual_board_backend_durable_save"),
+      },
+    },
+  });
+  return Boolean(response?.ok);
+}
+
+export function queueManualClipBoardProjectDurableSave(project = {}, options = {}) {
+  try {
+    saveManualClipBoardProjectDurable(project, options).then((ok) => {
+      if (ok) {
+        console.info("[manual board durable persist] backend write ok", {
+          nodeId: getManualProjectOwnerId(project),
+          reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
+          stats: getManualClipBoardMaterialStats(project),
+        });
+      }
+    }).catch((error) => {
+      console.warn("[manual board durable persist] backend write failed; local fallback remains", {
+        nodeId: getManualProjectOwnerId(project),
+        reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
+        errorName: error?.name,
+        errorMessage: error?.message,
+      });
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {}) {
+  const safeNodeId = String(nodeId || "").trim();
+  if (!safeNodeId) return null;
+  const qs = new URLSearchParams({ accountKey: getManualProjectAccountScopeId() });
+  const response = await fetchJson(`/api/manual-board/load/${encodeURIComponent(safeNodeId)}?${qs.toString()}`, {
+    timeoutMs: Number(options?.timeoutMs || 12000),
+  });
+  const project = response?.project && typeof response.project === "object" ? unwrapManualProjectBackupJson(response.project) : null;
+  if (!hasMeaningfulManualProject(project)) return null;
+  console.info("[manual board durable hydrate] backend load ok", {
+    nodeId: safeNodeId,
+    found: response?.found,
+    stats: getManualClipBoardMaterialStats(project),
+  });
+  return project;
 }
 
 export function getManualTimingProjectStorageKey(nodeId = "") {
@@ -2081,6 +2144,7 @@ export function persistManualClipBoardProject(project = {}, options = {}) {
   );
   logManualBoardTimingSaveDebug(storageProject, storageMode);
   const storageStats = getManualClipBoardMaterialStats(storageProject);
+  queueManualClipBoardProjectDurableSave(storageProject, { reason, source: "manual_board_persist" });
   try {
     serialized = JSON.stringify(storageProject);
     localStorage.setItem(getManualClipBoardCanonicalStorageKey(), serialized);
@@ -2470,6 +2534,7 @@ export function forceWriteManualClipBoardProjectForNode(project = {}, options = 
   logManualBoardTimingSaveDebug(storageProject, storageMode);
   const stats = getManualClipBoardMaterialStats(safeProject);
   const storageStats = getManualClipBoardMaterialStats(storageProject);
+  queueManualClipBoardProjectDurableSave(storageProject, { reason, source: "manual_board_force_write" });
   const localStorageApproxBytesBeforeWrite = getLocalStorageApproxBytes();
   let serialized = "";
 

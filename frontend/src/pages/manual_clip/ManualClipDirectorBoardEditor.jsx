@@ -19,6 +19,7 @@ import {
   getManualClipBoardMaterialStats,
   getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
+  loadManualClipBoardProjectDurable,
   readLastGoodManualClipBoardProject,
   readEmergencyManualClipBoardProjectForNode,
   readCanonicalManualClipBoardProject,
@@ -448,6 +449,7 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     });
     return navigationProject;
   }
+  const durableProject = options?.durableProject || null;
   const lastGoodProject = readLastGoodManualClipBoardProject();
   const emergencyProject = readEmergencyManualClipBoardProjectForNode(safeSourceNodeId);
   const nodeProject = readManualClipBoardProjectForNode(safeSourceNodeId);
@@ -455,6 +457,7 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
   const canonicalProject = readCanonicalManualClipBoardProject();
   const openState = readManualClipBoardOpenState();
   const candidates = [
+    { source: "backend-durable", project: durableProject },
     { source: "session-last-good", project: lastGoodProject },
     { source: "emergency", project: emergencyProject },
     { source: "navigation", project: navigationProject },
@@ -1769,6 +1772,7 @@ export default function ManualClipDirectorBoardEditor({
   const [autosaveStatus, setAutosaveStatus] = useState("Сохранено");
   const [autosaveError, setAutosaveError] = useState("");
   const [showEmergencyBackupButton, setShowEmergencyBackupButton] = useState(false);
+  const [durableBoardLoad, setDurableBoardLoad] = useState({ nodeId: "", loading: false, project: null, tried: false });
 
   const isManualTimingProjectSource = (candidateProject = projectRef.current || project || {}) => {
     const ownerNodeType = String(candidateProject?.ownerNodeType || location.state?.ownerNodeType || "").trim().toLowerCase();
@@ -1959,6 +1963,36 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   useEffect(() => {
+    const safeSourceNodeId = String(sourceNodeIdFromRoute || "").trim();
+    if (!safeSourceNodeId) {
+      setDurableBoardLoad({ nodeId: "", loading: false, project: null, tried: true });
+      return;
+    }
+    let cancelled = false;
+    setDurableBoardLoad((prev) => ({
+      nodeId: safeSourceNodeId,
+      loading: prev.nodeId === safeSourceNodeId && prev.tried ? false : true,
+      project: prev.nodeId === safeSourceNodeId ? prev.project : null,
+      tried: prev.nodeId === safeSourceNodeId ? prev.tried : false,
+    }));
+    loadManualClipBoardProjectDurable(safeSourceNodeId)
+      .then((durableProject) => {
+        if (cancelled) return;
+        setDurableBoardLoad({ nodeId: safeSourceNodeId, loading: false, project: durableProject, tried: true });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn("[manual board durable hydrate] backend load failed; falling back to browser storage", {
+          sourceNodeId: safeSourceNodeId,
+          errorName: error?.name,
+          errorMessage: error?.message,
+        });
+        setDurableBoardLoad({ nodeId: safeSourceNodeId, loading: false, project: null, tried: true });
+      });
+    return () => { cancelled = true; };
+  }, [sourceNodeIdFromRoute]);
+
+  useEffect(() => {
     const navigationProject = location.state?.director_board || location.state?.project || null;
     const openState = readManualClipBoardOpenState();
     const explicitNewProject = Boolean(
@@ -1967,9 +2001,12 @@ export default function ManualClipDirectorBoardEditor({
       || openState?.manualBoardExplicitNewProject === true
       || ["manual_new_project_from_audio_split", "manual_new_project_from_audio_split_open_embedded"].includes(String((embeddedProject || navigationProject)?.lastPersistReason || ""))
     );
+    if (sourceNodeIdFromRoute && !explicitNewProject && durableBoardLoad.nodeId !== sourceNodeIdFromRoute) return;
+    if (sourceNodeIdFromRoute && !explicitNewProject && durableBoardLoad.loading) return;
+    const durableProject = durableBoardLoad.nodeId === sourceNodeIdFromRoute ? durableBoardLoad.project : null;
     const parsedProject = embedded
-      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject })
-      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject });
+      ? readManualActiveProject(sourceNodeIdFromRoute, embeddedProject, { explicitNewProject, durableProject })
+      : readManualActiveProject(sourceNodeIdFromRoute, navigationProject, { explicitNewProject, durableProject });
     if (!hasMeaningfulManualProject(parsedProject)) {
       setProject(null);
       setSelectedSceneId("");
@@ -2119,7 +2156,7 @@ export default function ManualClipDirectorBoardEditor({
     } finally {
       didHydrateRef.current = true;
     }
-  }, [embedded, embeddedProject, sourceNodeIdFromRoute, location.state]);
+  }, [embedded, embeddedProject, sourceNodeIdFromRoute, location.state, durableBoardLoad]);
 
   useEffect(() => {
     projectRef.current = project;
