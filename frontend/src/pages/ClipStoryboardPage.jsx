@@ -9399,6 +9399,26 @@ function serializeNodesForStorage(nodes) {
   return serializedNodes;
 }
 
+function debugVideoMatchWorkspaceSaveCheck(nodesToSave = [], edgesToSave = [], nodesForTypeLookup = []) {
+  const nodesById = new Map(
+    (Array.isArray(nodesForTypeLookup) ? nodesForTypeLookup : [])
+      .map((nodeItem) => [String(nodeItem?.id || ""), String(nodeItem?.type || "")])
+      .filter(([nodeId]) => Boolean(nodeId))
+  );
+  console.debug("[VIDEO MATCH WORKSPACE SAVE CHECK]", {
+    nodesCount: nodesToSave.length,
+    hasVideoMatchBoard: nodesToSave.some((n) => n.type === "videoMatchBoard"),
+    videoMatchNodes: nodesToSave.filter((n) => n.type === "videoMatchBoard").map((n) => ({
+      id: n.id,
+      type: n.type,
+      dataKeys: Object.keys(n.data || {}),
+      blocks: Array.isArray(n.data?.videoBlocks) ? n.data.videoBlocks.length : 0,
+      segments: Array.isArray(n.data?.matchSegments) ? n.data.matchSegments.length : 0
+    })),
+    edgesToVideoMatch: edgesToSave.filter((e) => e.targetHandle === "timing_in" || e.targetType === "videoMatchBoard" || nodesById.get(String(e.target || "")) === "videoMatchBoard")
+  });
+}
+
 function notify(detail) {
   try {
     window.dispatchEvent(new CustomEvent("ps:notify", { detail }));
@@ -27029,6 +27049,17 @@ const hydrate = useCallback((source = "unknown") => {
             data,
           };
         });
+      console.debug("[VIDEO MATCH WORKSPACE HYDRATE CHECK]", {
+        savedNodesCount: savedNodes.length,
+        hasSavedVideoMatchBoard: savedNodes.some((n) => n.type === "videoMatchBoard"),
+        savedVideoMatchNodes: savedNodes.filter((n) => n.type === "videoMatchBoard").map((n) => ({
+          id: n.id,
+          type: n.type,
+          dataKeys: Object.keys(n.data || {})
+        })),
+        cleanNodesCount: cleanNodes.length,
+        hasCleanVideoMatchBoard: cleanNodes.some((n) => n.type === "videoMatchBoard")
+      });
       const cleanNodesById = new Map(cleanNodes.map((nodeItem) => [nodeItem.id, nodeItem]));
       const cleanEdges = savedEdges
         .filter((e) => e && typeof e.id === "string" && e.source && e.target)
@@ -27442,7 +27473,9 @@ const hydrate = useCallback((source = "unknown") => {
 
     setNodes((prev) => {
       const nextNodes = prev.concat(node);
-      return bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "node:add" });
+      const reboundNodes = bindHandlers(nextNodes, { nodesNow: nextNodes, edgesNow: edgesRef.current || [], traceReason: "node:add" });
+      nodesRef.current = reboundNodes;
+      return reboundNodes;
     });
     setDrawerOpen(false);
   }, [setNodes, bindHandlers]);
@@ -27583,6 +27616,7 @@ const hydrate = useCallback((source = "unknown") => {
     // strip handlers from data
     const serialNodes = serializeNodesForStorage(nodes);
     const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
+    debugVideoMatchWorkspaceSaveCheck(serialNodes, serialEdges, nodes);
     if (CLIP_TRACE_COMFY_REFS) {
       const tracedNodes = serialNodes
         .filter((nodeItem) => ["refNode", "refCharacter2", "refCharacter3"].includes(String(nodeItem?.type || "")))
@@ -27724,8 +27758,11 @@ const hydrate = useCallback((source = "unknown") => {
       if (isHydratingRef.current) return;
       if (!initialRestoreCompleteRef.current) return;
 
-      const serialNodes = serializeNodesForStorage(nodes);
-      const serialEdges = edges.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
+      const nodesSnapshot = Array.isArray(nodesRef.current) ? nodesRef.current : nodes;
+      const edgesSnapshot = Array.isArray(edgesRef.current) ? edgesRef.current : edges;
+      const serialNodes = serializeNodesForStorage(nodesSnapshot);
+      const serialEdges = edgesSnapshot.map((e) => ({ id: e.id, source: e.source, sourceHandle: e.sourceHandle || null, target: e.target, targetHandle: e.targetHandle || null }));
+      debugVideoMatchWorkspaceSaveCheck(serialNodes, serialEdges, nodesSnapshot);
       const payload = {
         nodes: serialNodes,
         edges: serialEdges,
