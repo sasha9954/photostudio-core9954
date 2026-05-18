@@ -2360,6 +2360,67 @@ export default function ManualClipDirectorBoardEditor({
       || location.state?.manualBoardForceReset === true
       || openState?.forceResetBoard === true
     );
+    const currentProject = projectRef.current;
+    const alreadyHydrated = didHydrateRef.current === true;
+    const currentHasMeaningfulProject = hasMeaningfulManualProject(currentProject);
+
+    const currentIdentity = currentHasMeaningfulProject
+      ? getManualBoardStrictProjectIdentity(currentProject)
+      : null;
+
+    const incomingIdentity = hasMeaningfulManualProject(hydrationNavigationProject)
+      ? getManualBoardStrictProjectIdentity(hydrationNavigationProject)
+      : null;
+
+    const durableIdentity = hasMeaningfulManualProject(durableProject)
+      ? getManualBoardStrictProjectIdentity(durableProject)
+      : null;
+
+    const sameIncomingAsCurrent =
+      currentHasMeaningfulProject
+      && hasMeaningfulManualProject(hydrationNavigationProject)
+      && manualBoardStrictIdentityMatches(currentProject, hydrationNavigationProject);
+
+    const sameDurableAsCurrent =
+      currentHasMeaningfulProject
+      && hasMeaningfulManualProject(durableProject)
+      && manualBoardStrictIdentityMatches(currentProject, durableProject);
+
+    const incomingProjectChangesIdentity = Boolean(
+      currentHasMeaningfulProject
+      && hasMeaningfulManualProject(hydrationNavigationProject)
+      && !manualBoardStrictIdentityMatches(currentProject, hydrationNavigationProject)
+    );
+
+    const isSourceNodeChange = Boolean(
+      currentIdentity?.sourceNodeId
+      && sourceNodeIdFromRoute
+      && currentIdentity.sourceNodeId !== sourceNodeIdFromRoute
+    );
+
+    if (
+      alreadyHydrated
+      && currentHasMeaningfulProject
+      && !explicitNewProject
+      && !forceResetBoard
+      && !incomingProjectChangesIdentity
+      && !isSourceNodeChange
+      && (sameIncomingAsCurrent || sameDurableAsCurrent)
+    ) {
+      console.warn("[MANUAL BOARD HYDRATE SKIP: CURRENT EDITING STATE PROTECTED]", {
+        sourceNodeId: sourceNodeIdFromRoute,
+        currentIdentity,
+        incomingIdentity,
+        durableIdentity,
+        incomingProjectChangesIdentity,
+        isSourceNodeChange,
+        currentStats: getManualClipBoardMaterialStats(currentProject),
+        incomingStats: getManualClipBoardMaterialStats(hydrationNavigationProject),
+        durableStats: getManualClipBoardMaterialStats(durableProject),
+      });
+      return;
+    }
+
     const navStats = getManualClipBoardMaterialStats(hydrationNavigationProject);
     const durableStats = getManualClipBoardMaterialStats(durableProject);
     const hydrateOptions = {
@@ -2453,6 +2514,22 @@ export default function ManualClipDirectorBoardEditor({
       const incomingRevision = getManualBoardRevision(hydratedProject);
       const currentRevision = getManualBoardRevision(currentHydratedProject || {});
       const hasCurrentProject = hasMeaningfulManualProject(currentHydratedProject);
+      const currentPromptStats = getManualBoardSceneStateDebugStats(currentHydratedProject || {});
+      const incomingPromptStats = getManualBoardSceneStateDebugStats(hydratedProject || {});
+      const shouldSkipPromptRegressionHydrate = Boolean(
+        !explicitNewProject
+        && !forceResetBoard
+        && hasCurrentProject
+        && currentPromptStats.scenesWithPrompt > incomingPromptStats.scenesWithPrompt
+      );
+      if (shouldSkipPromptRegressionHydrate) {
+        console.warn("[MANUAL BOARD HYDRATE SKIP PROMPT REGRESSION]", {
+          incomingReason,
+          currentScenesWithPrompt: currentPromptStats.scenesWithPrompt,
+          incomingScenesWithPrompt: incomingPromptStats.scenesWithPrompt,
+        });
+        return;
+      }
       const shouldSkipHydrate = Boolean(
         !explicitNewProject
         && hasCurrentProject
