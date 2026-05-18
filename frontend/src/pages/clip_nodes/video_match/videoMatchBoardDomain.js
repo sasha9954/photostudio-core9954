@@ -42,7 +42,8 @@ function safeWriteJson(key, value) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     return true;
-  } catch {
+  } catch (error) {
+    console.error("[VIDEO MATCH PROJECT SAVE ERROR]", { key, error });
     return false;
   }
 }
@@ -105,6 +106,102 @@ export function buildVideoMatchTimingContextFromManualTimingNodeData(data = {}, 
     sourceNodeId: nodeId,
     updatedAt: source.updatedAt || Date.now(),
   });
+}
+
+
+function hasVideoMatchSourceVideoMetadata(sourceVideo = {}) {
+  if (!sourceVideo || typeof sourceVideo !== "object") return false;
+  return Boolean(String(sourceVideo.filename || "").trim())
+    || Number(sourceVideo.duration_sec || sourceVideo.durationSec || 0) > 0
+    || Number(sourceVideo.size || 0) > 0
+    || Boolean(String(sourceVideo.type || sourceVideo.mimeType || "").trim());
+}
+
+function countVideoMatchCandidates(segments = []) {
+  if (!Array.isArray(segments)) return 0;
+  return segments.reduce((total, segment) => total + (Array.isArray(segment?.candidates) ? segment.candidates.length : 0), 0);
+}
+
+function hasVideoMatchTimingContext(timingContext = {}) {
+  if (!timingContext || typeof timingContext !== "object") return false;
+  return Boolean(String(timingContext.sourceAudioUrl || timingContext.audioUrl || "").trim())
+    || Number(timingContext.audioDurationSec || timingContext.audio_duration_sec || 0) > 0
+    || (Array.isArray(timingContext.timingScenes) && timingContext.timingScenes.length > 0)
+    || (Array.isArray(timingContext.scenes) && timingContext.scenes.length > 0)
+    || (Array.isArray(timingContext.segments) && timingContext.segments.length > 0)
+    || Boolean(timingContext.podcastEditManifest || timingContext.composerEditManifest);
+}
+
+export function getVideoMatchProjectStats(project = {}) {
+  const source = project && typeof project === "object" ? project : {};
+  const matchSegments = Array.isArray(source.matchSegments) ? source.matchSegments : [];
+  const videoBlocks = Array.isArray(source.videoBlocks) ? source.videoBlocks : [];
+  const hasJsonInput = String(source.jsonInput || "").trim().length > 0;
+  const matchSegmentsCount = matchSegments.length;
+  const videoBlocksCount = videoBlocks.length;
+  const candidatesTotal = countVideoMatchCandidates(matchSegments);
+  const hasSourceVideoMetadata = hasVideoMatchSourceVideoMetadata(source.sourceVideo);
+  const hasSourceVideoUrl = String(source.sourceVideoUrl || "").trim().length > 0;
+  const hasTimingContext = hasVideoMatchTimingContext(source.timingContext);
+  const materialScore = [
+    hasJsonInput ? 20 : 0,
+    matchSegmentsCount * 10,
+    videoBlocksCount * 8,
+    candidatesTotal * 4,
+    hasSourceVideoMetadata ? 12 : 0,
+    hasSourceVideoUrl ? 3 : 0,
+    hasTimingContext ? 6 : 0,
+  ].reduce((sum, value) => sum + value, 0);
+  return {
+    hasJsonInput,
+    matchSegmentsCount,
+    videoBlocksCount,
+    candidatesTotal,
+    hasSourceVideoMetadata,
+    hasSourceVideoUrl,
+    hasTimingContext,
+    materialScore,
+  };
+}
+
+function hasAnyVideoMatchMaterials(stats = {}) {
+  return Boolean(stats.hasJsonInput)
+    || Number(stats.matchSegmentsCount || 0) > 0
+    || Number(stats.videoBlocksCount || 0) > 0
+    || Number(stats.candidatesTotal || 0) > 0
+    || Boolean(stats.hasSourceVideoMetadata)
+    || Boolean(stats.hasTimingContext);
+}
+
+export function shouldSkipVideoMatchPersistToProtectMaterials(nextProject = {}, existingProject = {}, options = {}) {
+  if (options?.explicitReset || options?.forceReplace || options?.allowMaterialLoss) return false;
+  if (!existingProject || typeof existingProject !== "object") return false;
+  const nextStats = getVideoMatchProjectStats(nextProject);
+  const existingStats = getVideoMatchProjectStats(existingProject);
+  if (!hasAnyVideoMatchMaterials(existingStats)) return false;
+
+  const losesMaterials = (existingStats.hasJsonInput && !nextStats.hasJsonInput)
+    || Number(nextStats.matchSegmentsCount || 0) < Number(existingStats.matchSegmentsCount || 0)
+    || Number(nextStats.videoBlocksCount || 0) < Number(existingStats.videoBlocksCount || 0)
+    || Number(nextStats.candidatesTotal || 0) < Number(existingStats.candidatesTotal || 0)
+    || (existingStats.hasSourceVideoMetadata && !nextStats.hasSourceVideoMetadata)
+    || (existingStats.hasTimingContext && !nextStats.hasTimingContext);
+  const materiallyPoorer = Number(nextStats.materialScore || 0) < Number(existingStats.materialScore || 0);
+  const onlyBlobUrlWasCleared = existingStats.hasSourceVideoUrl
+    && !nextStats.hasSourceVideoUrl
+    && String(existingProject?.sourceVideoUrl || "").startsWith("blob:")
+    && !losesMaterials;
+
+  if (!onlyBlobUrlWasCleared && (losesMaterials || materiallyPoorer)) {
+    console.warn("[VIDEO MATCH PERSIST SKIPPED PROTECT_MATERIALS]", {
+      nodeId: nextProject?.nodeId || existingProject?.nodeId || "",
+      nextStats,
+      existingStats,
+      options,
+    });
+    return true;
+  }
+  return false;
 }
 
 export function getDefaultVideoMatchBoardProject(nodeId = "", extra = {}) {
@@ -304,6 +401,7 @@ export function persistVideoMatchBoardProject(project = {}, options = {}) {
     updatedAt: Date.now(),
   };
   const nodeId = String(safeProject.nodeId || safeProject.sourceNodeId || "default").trim() || "default";
+  const existingProject = readVideoMatchBoardProjectForNode(nodeId);
   safeProject.nodeId = nodeId;
   safeProject.sourceNodeId = String(safeProject.sourceNodeId || nodeId);
   safeProject.timingContext = normalizeVideoMatchTimingContext(safeProject.timingContext || {});
@@ -321,10 +419,36 @@ export function persistVideoMatchBoardProject(project = {}, options = {}) {
   safeProject.selectedSegmentId = String(selectedSegment?.id || selectedBlock?.segmentId || safeProject.selectedSegmentId || "").trim();
   safeProject.selectedCandidateId = String(selectedBlock?.candidateId || selectedBlock?.id || selectedSegment?.selectedCandidateId || safeProject.selectedCandidateId || "").trim();
   safeProject.selectedBlockId = String(selectedBlock?.id || safeProject.selectedBlockId || "").trim();
-  safeWriteJson(getVideoMatchBoardNodeStorageKey(nodeId), safeProject);
-  safeWriteJson(getVideoMatchBoardActiveProjectStorageKey(), safeProject);
-  try { localStorage.setItem(getVideoMatchBoardActiveProjectIdStorageKey(), String(safeProject.projectId || nodeId)); } catch {}
-  if (options?.lastGood !== false) safeWriteJson(getVideoMatchBoardLastGoodStorageKey(nodeId), safeProject);
-  if (options?.emergency) safeWriteJson(getVideoMatchBoardEmergencyStorageKey(nodeId), safeProject);
+
+  const nextStats = getVideoMatchProjectStats(safeProject);
+  const existingStats = getVideoMatchProjectStats(existingProject);
+  if (shouldSkipVideoMatchPersistToProtectMaterials(safeProject, existingProject, options)) {
+    console.info("[VIDEO MATCH PROJECT SAVE RESULT]", {
+      nodeId,
+      saveOk: false,
+      nextStats,
+      existingStats,
+      savedStats: existingStats,
+      reason: "protect_materials",
+    });
+    return existingProject;
+  }
+
+  const writeResults = [
+    safeWriteJson(getVideoMatchBoardNodeStorageKey(nodeId), safeProject),
+    safeWriteJson(getVideoMatchBoardActiveProjectStorageKey(), safeProject),
+  ];
+  try { localStorage.setItem(getVideoMatchBoardActiveProjectIdStorageKey(), String(safeProject.projectId || nodeId)); } catch (error) { console.error("[VIDEO MATCH PROJECT SAVE ERROR]", { key: getVideoMatchBoardActiveProjectIdStorageKey(), error }); }
+  if (options?.lastGood !== false) writeResults.push(safeWriteJson(getVideoMatchBoardLastGoodStorageKey(nodeId), safeProject));
+  if (options?.emergency) writeResults.push(safeWriteJson(getVideoMatchBoardEmergencyStorageKey(nodeId), safeProject));
+  const saveOk = writeResults.every(Boolean);
+  console.info("[VIDEO MATCH PROJECT SAVE RESULT]", {
+    nodeId,
+    saveOk,
+    nextStats,
+    existingStats,
+    savedStats: getVideoMatchProjectStats(safeProject),
+    reason: saveOk ? "saved" : "write_failed",
+  });
   return safeProject;
 }

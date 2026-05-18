@@ -3,10 +3,12 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   getDefaultVideoMatchBoardProject,
   getVideoMatchBoardEmergencyStorageKey,
+  getVideoMatchProjectStats,
   buildVideoBlocksFromMatchSegments,
   parseVideoMatchBoardJson,
   persistVideoMatchBoardProject,
   readVideoMatchBoardProjectForNode,
+  shouldSkipVideoMatchPersistToProtectMaterials,
 } from "../clip_nodes/video_match/videoMatchBoardDomain.js";
 import "./VideoMatchBoardPage.css";
 
@@ -45,7 +47,30 @@ export default function VideoMatchBoardPage() {
   const objectUrlRef = useRef("");
 
   const initialProject = useMemo(() => {
-    return location.state?.project || readVideoMatchBoardProjectForNode(nodeId) || getDefaultVideoMatchBoardProject(nodeId);
+    const stateProject = location.state?.project || null;
+    const savedProject = readVideoMatchBoardProjectForNode(nodeId);
+    const hasStateProject = Boolean(stateProject);
+    const stateStats = getVideoMatchProjectStats(stateProject);
+    const savedStats = getVideoMatchProjectStats(savedProject);
+    let picked = "default";
+    let nextProject = getDefaultVideoMatchBoardProject(nodeId);
+
+    if (savedProject && (!stateProject || shouldSkipVideoMatchPersistToProtectMaterials(stateProject, savedProject))) {
+      picked = "saved";
+      nextProject = savedProject;
+    } else if (stateProject) {
+      picked = "state";
+      nextProject = stateProject;
+    }
+
+    console.info("[VIDEO MATCH PAGE HYDRATE]", {
+      nodeId,
+      hasStateProject,
+      stateStats,
+      savedStats,
+      picked,
+    });
+    return nextProject;
   }, [location.state?.project, nodeId]);
 
   const [project, setProject] = useState(initialProject);
@@ -85,6 +110,13 @@ export default function VideoMatchBoardPage() {
   useEffect(() => () => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!String(initialProject?.sourceVideoUrl || "").startsWith("blob:")) return;
+    setSourceVideoLoadMessage("Загрузите source video заново");
+    patchProject({ sourceVideoUrl: "" }, { lastGood: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialProject?.sourceVideoUrl]);
 
   const onVideoFileChange = (file) => {
     if (!file) return;
