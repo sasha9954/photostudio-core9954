@@ -33,7 +33,10 @@ import VideoRefNode from "./clip_nodes/VideoRefNode";
 import ManualClipBoardNode from "./clip_nodes/manual/ManualClipBoardNode";
 import ManualTimingNode from "./clip_nodes/manual_timing/ManualTimingNode";
 import VideoMatchBoardNode from "./clip_nodes/video_match/VideoMatchBoardNode.jsx";
-import { buildVideoMatchTimingContextFromManualTimingNodeData } from "./clip_nodes/video_match/videoMatchBoardDomain.js";
+import {
+  buildVideoMatchTimingContextFromManualTimingNodeData,
+  readVideoMatchBoardProjectForNode,
+} from "./clip_nodes/video_match/videoMatchBoardDomain.js";
 import ManualClipDirectorBoardEditor from "./manual_clip/ManualClipDirectorBoardEditor.jsx";
 import {
   readActiveManualClipBoardProject,
@@ -9211,6 +9214,30 @@ function buildComfySceneContextPrompt({ scene = {}, mode = "clip", stylePreset =
     !isVideo ? COMFY_IMAGE_NO_TEXT_RULE : "",
   ].filter(Boolean);
   return parts.join("\n");
+}
+
+
+function mergeSavedVideoMatchBoardData(nodeId = "", data = {}, timingContextOverride = null) {
+  const baseData = data && typeof data === "object" ? data : {};
+  const savedProject = readVideoMatchBoardProjectForNode(nodeId);
+  const saved = savedProject && typeof savedProject === "object" ? savedProject : null;
+  const hasTimingOverride = timingContextOverride && typeof timingContextOverride === "object";
+
+  const merged = { ...baseData };
+  if (saved) {
+    if (saved.sourceVideo && typeof saved.sourceVideo === "object") merged.sourceVideo = saved.sourceVideo;
+    if (Object.prototype.hasOwnProperty.call(saved, "sourceVideoUrl")) merged.sourceVideoUrl = String(saved.sourceVideoUrl || "");
+    if (Array.isArray(saved.videoBlocks)) merged.videoBlocks = saved.videoBlocks;
+    if (Object.prototype.hasOwnProperty.call(saved, "selectedBlockId")) merged.selectedBlockId = String(saved.selectedBlockId || "");
+    if (Object.prototype.hasOwnProperty.call(saved, "jsonInput")) merged.jsonInput = String(saved.jsonInput || "");
+    if (Object.prototype.hasOwnProperty.call(saved, "jsonError")) merged.jsonError = String(saved.jsonError || "");
+    if (!hasTimingOverride && saved.timingContext && typeof saved.timingContext === "object") {
+      merged.timingContext = saved.timingContext;
+    }
+    merged.videoMatchUpdatedAt = saved.updatedAt || merged.videoMatchUpdatedAt || Date.now();
+  }
+  if (hasTimingOverride) merged.timingContext = timingContextOverride;
+  return { mergedData: merged, savedProject: saved };
 }
 
 function stripFunctionsDeep(value) {
@@ -26022,16 +26049,16 @@ console.debug("[SCENARIO APPLY RESPONSE]", {
           const sourceNode = timingEdge
             ? nodesNowForConnections.find((nodeItem) => nodeItem.id === timingEdge.source)
             : null;
-          const timingContext = sourceNode?.type === "manualTiming"
+          const connectedTimingContext = sourceNode?.type === "manualTiming"
             ? buildVideoMatchTimingContextFromManualTimingNodeData(sourceNode?.data || {}, sourceNode.id)
-            : (base.data?.timingContext || {});
+            : null;
+          const { mergedData } = mergeSavedVideoMatchBoardData(n.id, base.data || {}, connectedTimingContext);
 
           return {
             ...base,
             data: {
-              ...base.data,
-              timingContext,
-              timingSourceNodeId: sourceNode?.type === "manualTiming" ? sourceNode.id : String(base.data?.timingSourceNodeId || ""),
+              ...mergedData,
+              timingSourceNodeId: sourceNode?.type === "manualTiming" ? sourceNode.id : String(mergedData?.timingSourceNodeId || ""),
               onPatchNodeData: (nodeId, patch = {}) => {
                 setNodes((prev) => bindHandlers(prev.map((nodeItem) => (
                   nodeItem.id === nodeId
@@ -26980,6 +27007,15 @@ const hydrate = useCallback((source = "unknown") => {
               type: n.type,
               position: n.position,
               data: sanitizeNarrativeTesterNodeData(n.type, data),
+            };
+          }
+
+          if (n.type === "videoMatchBoard") {
+            return {
+              id: n.id,
+              type: n.type,
+              position: n.position,
+              data: mergeSavedVideoMatchBoardData(n.id, data).mergedData,
             };
           }
 
