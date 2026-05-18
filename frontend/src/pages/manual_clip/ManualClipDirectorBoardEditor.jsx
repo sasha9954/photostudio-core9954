@@ -2503,13 +2503,23 @@ export default function ManualClipDirectorBoardEditor({
       const parsedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
       const currentSelectedSceneId = String(selectedSceneIdRef.current || "").trim();
       const openStateSelectedSceneId = String(openState?.selectedSceneId || "").trim();
-      const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId)
-        ? parsedSelectedSceneId
-        : scenes.some((scene) => scene.scene_id === currentSelectedSceneId)
-          ? currentSelectedSceneId
-          : scenes.some((scene) => scene.scene_id === openStateSelectedSceneId)
-            ? openStateSelectedSceneId
-            : String(scenes[0]?.scene_id || "");
+      const selectedSceneIdForHydrate = didHydrateRef.current === true
+        ? (
+          scenes.some((scene) => scene.scene_id === currentSelectedSceneId)
+            ? currentSelectedSceneId
+            : scenes.some((scene) => scene.scene_id === openStateSelectedSceneId)
+              ? openStateSelectedSceneId
+              : scenes.some((scene) => scene.scene_id === parsedSelectedSceneId)
+                ? parsedSelectedSceneId
+                : String(scenes[0]?.scene_id || "")
+        )
+        : (
+          scenes.some((scene) => scene.scene_id === parsedSelectedSceneId)
+            ? parsedSelectedSceneId
+            : scenes.some((scene) => scene.scene_id === openStateSelectedSceneId)
+              ? openStateSelectedSceneId
+              : String(scenes[0]?.scene_id || "")
+        );
       console.info("[MANUAL BOARD HYDRATE RAW SCENE MEDIA DEBUG]", {
         selectedSceneId: selectedSceneIdForHydrate,
         rawMediaDebugStats: getManualBoardMediaDebugStats(parsed),
