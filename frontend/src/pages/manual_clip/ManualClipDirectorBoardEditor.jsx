@@ -206,6 +206,24 @@ function mergeManualScenePatchPreservingPromptModel(existingScene = {}, patch = 
     ...safePatch,
   };
 
+  if (allowEmptyPromptModelOverwrite) {
+    const patchHasVideoPrompt = Object.prototype.hasOwnProperty.call(safePatch, "video_prompt");
+    const patchHasNegativePrompt = Object.prototype.hasOwnProperty.call(safePatch, "negative_prompt");
+    if (patchHasVideoPrompt) {
+      merged.videoPrompt = safePatch.video_prompt;
+      merged.i2v_prompt_en = safePatch.video_prompt;
+      merged.final_video_prompt = safePatch.video_prompt;
+      merged.finalVideoPrompt = safePatch.video_prompt;
+      merged.positive_prompt = safePatch.video_prompt;
+      merged.positivePrompt = safePatch.video_prompt;
+    }
+    if (patchHasNegativePrompt) {
+      merged.negativePrompt = safePatch.negative_prompt;
+      merged.i2v_negative_prompt_en = safePatch.negative_prompt;
+      merged.videoNegativePrompt = safePatch.negative_prompt;
+    }
+  }
+
   if (!allowEmptyPromptModelOverwrite) {
     promptModelKeys.forEach((key) => {
       const existingValue = existingScene?.[key];
@@ -2085,6 +2103,7 @@ export default function ManualClipDirectorBoardEditor({
   const autosaveTimerRef = useRef(null);
   const lastAutosaveSignatureRef = useRef("");
   const lastPersistedProjectRef = useRef(null);
+  const manualBoardDirtyRef = useRef(false);
   const lastGoodBoardRef = useRef(null);
   const emergencyBackupDownloadedRef = useRef(false);
   const lastEmergencyAutoDownloadAtRef = useRef(0);
@@ -2403,9 +2422,7 @@ export default function ManualClipDirectorBoardEditor({
       && currentHasMeaningfulProject
       && !explicitNewProject
       && !forceResetBoard
-      && !incomingProjectChangesIdentity
       && !isSourceNodeChange
-      && (sameIncomingAsCurrent || sameDurableAsCurrent)
     ) {
       console.warn("[MANUAL BOARD HYDRATE SKIP: CURRENT EDITING STATE PROTECTED]", {
         sourceNodeId: sourceNodeIdFromRoute,
@@ -2647,7 +2664,7 @@ export default function ManualClipDirectorBoardEditor({
   }, [selectedSceneId]);
 
   const flushManualBoardAutosave = (reason = "manual_board_autosave", options = {}) => {
-    const { updateStatus = true, skipSignatureCheck = false } = options || {};
+    const { updateStatus = true, skipSignatureCheck = false, allowMaterialLoss = false } = options || {};
     if (autosaveTimerRef.current) {
       window.clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
@@ -2679,6 +2696,7 @@ export default function ManualClipDirectorBoardEditor({
     const nextDiagnostics = getManualBoardMediaDiagnostics(safeProject, safeProject.selectedSceneId);
     if (
       hasMeaningfulManualProject(persistedBaseline)
+      && !allowMaterialLoss
       && !isManualExplicitMediaLossReason(reason)
       && (
         nextDiagnostics.scenesWithImage < currentDiagnostics.scenesWithImage
@@ -2711,6 +2729,7 @@ export default function ManualClipDirectorBoardEditor({
       const storageErrorAfterSave = getLastManualClipBoardStorageError();
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
       lastPersistedProjectRef.current = safeProject;
+      manualBoardDirtyRef.current = false;
       rememberManualBoardLastGood(safeProject);
       if (updateStatus) {
         setProject(safeProject);
@@ -2778,6 +2797,7 @@ export default function ManualClipDirectorBoardEditor({
       return;
     }
     if (autosaveTimerRef.current) window.clearTimeout(autosaveTimerRef.current);
+    manualBoardDirtyRef.current = true;
     setAutosaveStatus("Есть несохранённые изменения");
     setAutosaveError("");
     console.info("[MANUAL BOARD AUTOSAVE SCHEDULED]", {
@@ -2831,12 +2851,6 @@ export default function ManualClipDirectorBoardEditor({
       updatedAt: Date.now(),
       lastPersistReason: "manual_force_save_button",
     });
-    const forceSaveBaseline = lastGoodBoardRef.current || lastPersistedProjectRef.current || readManualClipBoardProjectForNode(ownerNodeId);
-    const forceSaveBeforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
-    safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, forceSaveBaseline || currentProject, safeProject);
-    if (forceSaveBeforeTimeline.scenesWithTiming === 0 && getManualProjectTimelineDiagnostics(forceSaveBaseline || currentProject).scenesWithTiming > 0) {
-      logManualBoardRuntimeTimelineRegression("manual_force_save_button", forceSaveBaseline || currentProject, safeProject);
-    }
     logManualBoardRuntimeTimelineDebug("manual_force_save_button", safeProject, "before_persist");
     projectRef.current = safeProject;
     setProject(safeProject);
@@ -2865,6 +2879,7 @@ export default function ManualClipDirectorBoardEditor({
     if (readbackOk) {
       lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
       lastPersistedProjectRef.current = safeProject;
+      manualBoardDirtyRef.current = false;
       setAutosaveStatus("Сохранено");
       setAutosaveError("");
       setShowEmergencyBackupButton(false);
@@ -2900,6 +2915,7 @@ export default function ManualClipDirectorBoardEditor({
     selectedSceneIdRef.current = safeProject.selectedSceneId;
     persistAndBroadcastDirectorProject(safeProject, { reason });
     lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
+    manualBoardDirtyRef.current = false;
     setAutosaveStatus("Сохранено");
     setProject(safeProject);
     return true;
@@ -2907,10 +2923,24 @@ export default function ManualClipDirectorBoardEditor({
 
   useEffect(() => {
     const persistBeforeLeave = () => {
-      flushManualBoardAutosave("before_unload", {
-        updateStatus: false,
-        skipSignatureCheck: true,
+      if (manualBoardDirtyRef.current !== true) return;
+      const currentProject = projectRef.current;
+      if (!hasMeaningfulManualProject(currentProject)) return;
+      const safeProject = normalizeDirectorProjectOwner({
+        ...currentProject,
+        selectedSceneId: selectedSceneIdRef.current || currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "",
+        updatedAt: Date.now(),
+        lastPersistReason: "pagehide_dirty_draft",
       });
+      const wrote = forceWriteManualClipBoardProjectForNode(safeProject, { reason: "pagehide_dirty_draft" });
+      if (wrote) {
+        projectRef.current = safeProject;
+        selectedSceneIdRef.current = safeProject.selectedSceneId;
+        lastAutosaveSignatureRef.current = buildManualBoardAutosaveSignature(safeProject);
+        lastPersistedProjectRef.current = safeProject;
+        manualBoardDirtyRef.current = false;
+        rememberManualBoardLastGood(safeProject);
+      }
     };
 
     window.addEventListener("pagehide", persistBeforeLeave);
@@ -3540,12 +3570,14 @@ export default function ManualClipDirectorBoardEditor({
         patchSceneState: getManualBoardSceneStateDebugStats({ ...projectRef.current, scenes: [patch] }),
         patchKeys: Object.keys(patch || {}),
       });
-      const nextScene = mergeManualScenePreservingMedia(
-        existingScene,
-        mergeManualScenePatchPreservingPromptModel(existingScene, patch || {}, {
-          allowEmptyPromptModelOverwrite: options?.allowEmptyPromptModelOverwrite === true,
-        })
-      );
+      const persistReason = options?.reason || "update_scene";
+      const isDeletionUpdate = /delete.*(video|photo|image)|remove.*(video|photo|image)|clear.*(video|photo|image)|user_delete/i.test(persistReason);
+      const promptSafePatch = mergeManualScenePatchPreservingPromptModel(existingScene, patch || {}, {
+        allowEmptyPromptModelOverwrite: options?.allowEmptyPromptModelOverwrite === true,
+      });
+      const nextScene = (options?.allowMediaLoss === true || isDeletionUpdate)
+        ? withManualSceneMediaAliases({ ...(existingScene || {}), ...promptSafePatch })
+        : mergeManualScenePreservingMedia(existingScene, promptSafePatch);
       console.info("[MANUAL BOARD UPDATE_SCENE MERGED DEBUG]", {
         sceneId,
         mergedSceneState: getManualBoardSceneStateDebugStats({ ...projectRef.current, scenes: [nextScene] }),
@@ -3581,9 +3613,19 @@ export default function ManualClipDirectorBoardEditor({
     selectedSceneIdRef.current = nextProject.selectedSceneId;
     setProject(nextProject);
 
-    if (didHydrateRef.current && hasMeaningfulManualProject(nextProject) && !isManualPollLocalOnlyReason(persistReason) && options?.autosave !== false) {
+    if (options?.autosave === false) {
+      manualBoardDirtyRef.current = true;
+      setAutosaveStatus("Есть несохранённые изменения");
+      setAutosaveError("");
+      return;
+    }
+
+    if (didHydrateRef.current && hasMeaningfulManualProject(nextProject) && !isManualPollLocalOnlyReason(persistReason)) {
       if (options?.forcePersist) {
-        const saved = flushManualBoardAutosave(persistReason, { skipSignatureCheck: true });
+        const saved = flushManualBoardAutosave(persistReason, {
+          skipSignatureCheck: true,
+          allowMaterialLoss: options?.allowMediaLoss === true || options?.allowMaterialLoss === true,
+        });
         if (!saved) {
           const storageError = getLastManualClipBoardStorageError();
           const isQuotaError = storageError?.reason === "quota_exceeded";
@@ -3635,8 +3677,11 @@ export default function ManualClipDirectorBoardEditor({
       scene.scene_id,
       (currentScene = {}) => clearVideoPatch(currentScene),
       {
-        reason: "delete_scene_video_user",
+        reason: "user_delete_video",
+        allowMediaLoss: true,
         allowMaterialLoss: true,
+        allowEmptyPromptModelOverwrite: true,
+        autosave: false,
         explicitReset: true,
       }
     );
@@ -3691,8 +3736,11 @@ export default function ManualClipDirectorBoardEditor({
     if (!scene?.scene_id) return;
     if (scene.video_url && !window.confirm("Удаление первого кадра также удалит видео этой сцены. Продолжить?")) return;
     updateScene(scene.scene_id, (currentScene = {}) => clearStartFramePatch(currentScene), {
-      reason: "delete_first_last_start_image_user",
+      reason: "user_delete_photo",
+      allowMediaLoss: true,
       allowMaterialLoss: true,
+      allowEmptyPromptModelOverwrite: true,
+      autosave: false,
       explicitReset: true,
     });
   };
@@ -3701,8 +3749,11 @@ export default function ManualClipDirectorBoardEditor({
     if (!scene?.scene_id) return;
     if (scene.video_url && !window.confirm("Удаление последнего кадра также удалит видео этой сцены. Продолжить?")) return;
     updateScene(scene.scene_id, (currentScene = {}) => clearEndFramePatch(currentScene), {
-      reason: "delete_first_last_end_image_user",
+      reason: "user_delete_photo",
+      allowMediaLoss: true,
       allowMaterialLoss: true,
+      allowEmptyPromptModelOverwrite: true,
+      autosave: false,
       explicitReset: true,
     });
   };
@@ -3716,8 +3767,11 @@ export default function ManualClipDirectorBoardEditor({
       ...clearManualStalePromptFields(),
       status: "draft",
     }), {
-      reason: "delete_scene_photo_user",
+      reason: "user_delete_photo",
+      allowMediaLoss: true,
       allowMaterialLoss: true,
+      allowEmptyPromptModelOverwrite: true,
+      autosave: false,
       explicitReset: true,
     });
   };
@@ -3792,7 +3846,7 @@ export default function ManualClipDirectorBoardEditor({
           status: resolveManualSceneStatus({ ...nextScene, ...(shouldClearVideoAfterUpload ? { video_url: "", videoUrl: "" } : {}) }),
           error: "",
         };
-      });
+      }, { reason: "photo_upload_done", forcePersist: true, allowMediaLoss: shouldClearVideoAfterUpload });
     } catch (err) {
       updateScene(sceneId, {
         image_upload_status: "error",
@@ -3862,7 +3916,7 @@ export default function ManualClipDirectorBoardEditor({
           error: "",
           status: resolveManualSceneStatus(nextScene),
         };
-      });
+      }, { reason: "photo_upload_done", forcePersist: true });
     } catch (err) {
       updateScene(scene.scene_id, {
         image_upload_status: "error",
@@ -3986,7 +4040,7 @@ export default function ManualClipDirectorBoardEditor({
         mmaudio_status: "done",
         mmaudio_error: "",
         status: "video_ready",
-      }, { reason: "manual_mmaudio_gain_done" });
+      }, { reason: "mmaudio_done", forcePersist: true });
     } catch (err) {
       updateScene(sceneId, {
         mmaudio_gain_status: "error",
@@ -5025,13 +5079,31 @@ export default function ManualClipDirectorBoardEditor({
           /> : null}
         </div>
 
-        <label className="manualPromptBlock">Video / motion prompt<textarea value={selectedScene.video_prompt} onChange={(e) => {
-          const nextScene = { ...selectedScene, video_prompt: e.target.value };
-          updateScene(selectedScene.scene_id, { video_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
+        <label className="manualPromptBlock">Video / motion prompt<textarea value={selectedScene.video_prompt || ""} onChange={(e) => {
+          const value = e.target.value;
+          const nextScene = { ...selectedScene, video_prompt: value };
+          updateScene(
+            selectedScene.scene_id,
+            { video_prompt: value, status: resolveManualSceneStatus(nextScene) },
+            {
+              reason: "prompt_user_edit",
+              allowEmptyPromptModelOverwrite: true,
+              autosave: false,
+            }
+          );
         }} /></label>
-        <label className="manualNegativePromptBlock">Negative Prompt<textarea value={selectedScene.negative_prompt} onChange={(e) => {
-          const nextScene = { ...selectedScene, negative_prompt: e.target.value };
-          updateScene(selectedScene.scene_id, { negative_prompt: e.target.value, status: resolveManualSceneStatus(nextScene) });
+        <label className="manualNegativePromptBlock">Negative Prompt<textarea value={selectedScene.negative_prompt || ""} onChange={(e) => {
+          const value = e.target.value;
+          const nextScene = { ...selectedScene, negative_prompt: value };
+          updateScene(
+            selectedScene.scene_id,
+            { negative_prompt: value, status: resolveManualSceneStatus(nextScene) },
+            {
+              reason: "prompt_user_edit",
+              allowEmptyPromptModelOverwrite: true,
+              autosave: false,
+            }
+          );
         }} /></label>
         {selectedScene.route === "i2v_text" ? <section className="manualSoundBox">
           <strong>Текст сцены</strong>
