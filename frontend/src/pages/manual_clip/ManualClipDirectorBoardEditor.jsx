@@ -17,6 +17,7 @@ import {
   forceWriteManualClipBoardProjectForNode,
   getLastManualClipBoardStorageError,
   getManualBoardMediaDebugStats,
+  getManualBoardSceneStateDebugStats,
   getManualClipBoardMaterialStats,
   getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
@@ -1366,13 +1367,62 @@ function stripBlockedManualSceneDataUrls(scene = {}, project = {}, sceneIndex = 
   return nextScene;
 }
 
+
+function preserveManualScenePromptAndModelFields(normalized = {}, rawScene = {}) {
+  const promptModelKeys = [
+    "prompt",
+    "image_prompt",
+    "imagePrompt",
+    "photo_prompt",
+    "photoPrompt",
+    "video_prompt",
+    "videoPrompt",
+    "final_video_prompt",
+    "finalVideoPrompt",
+    "positive_prompt",
+    "positivePrompt",
+    "negative_prompt",
+    "negativePrompt",
+    "user_prompt",
+    "userPrompt",
+    "custom_prompt",
+    "customPrompt",
+    "selected_model",
+    "selectedModel",
+    "model",
+    "model_id",
+    "modelId",
+    "image_model",
+    "imageModel",
+    "video_model",
+    "videoModel",
+    "generator_model",
+    "generatorModel",
+    "provider",
+    "generation_settings",
+    "generationSettings",
+    "model_settings",
+    "modelSettings",
+  ];
+
+  const out = { ...normalized };
+  promptModelKeys.forEach((key) => {
+    if ((out[key] === undefined || out[key] === null || out[key] === "") && rawScene[key] !== undefined && rawScene[key] !== null) {
+      out[key] = rawScene[key];
+    }
+  });
+  return out;
+}
+
 function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = {}) {
-  const cleanInputScene = stripBlockedManualSceneDataUrls(scene, project, idx);
+  const rawScene = scene && typeof scene === "object" ? scene : {};
+  const cleanInputScene = stripBlockedManualSceneDataUrls(rawScene, project, idx);
   const start = Number(cleanInputScene.start_sec || 0);
   const end = Number(cleanInputScene.end_sec || start);
   const blockId = String(cleanInputScene.story_block_id || "").trim();
   const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
   const normalizedScene = {
+    ...cleanInputScene,
     scene_id: String(cleanInputScene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
     index: Number(cleanInputScene.index || idx + 1),
     route: ROUTES.includes(cleanInputScene.route) ? cleanInputScene.route : "i2v",
@@ -1512,7 +1562,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     video_request_payload_preview: cleanInputScene.video_request_payload_preview || cleanInputScene.videoRequestPayloadPreview || null,
     videoRequestPayloadPreview: cleanInputScene.videoRequestPayloadPreview || cleanInputScene.video_request_payload_preview || null,
   };
-  return withManualSceneMediaAliases(normalizedScene);
+  return preserveManualScenePromptAndModelFields(withManualSceneMediaAliases(normalizedScene), cleanInputScene);
 }
 
 const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
@@ -2184,6 +2234,11 @@ export default function ManualClipDirectorBoardEditor({
         selectedSceneId: selectedSceneIdForHydrate,
         rawMediaDebugStats: getManualBoardMediaDebugStats(parsed),
         normalizedMediaDebugStats: getManualBoardMediaDebugStats({ ...parsed, scenes }),
+      });
+      console.info("[MANUAL BOARD HYDRATE RAW SCENE STATE DEBUG]", {
+        selectedSceneId: selectedSceneIdForHydrate,
+        rawSceneStateDebugStats: getManualBoardSceneStateDebugStats(parsed),
+        normalizedSceneStateDebugStats: getManualBoardSceneStateDebugStats({ ...parsed, scenes }),
       });
       let hydratedProject = normalizeDirectorProjectOwner({
         ...normalizeManualBoardProjectAudioCompat(parsed),

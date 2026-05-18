@@ -132,6 +132,37 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "manualSelected",
   "manualRoute",
   "manualPrompt",
+  "prompt",
+  "image_prompt",
+  "imagePrompt",
+  "photo_prompt",
+  "photoPrompt",
+  "videoPrompt",
+  "final_video_prompt",
+  "finalVideoPrompt",
+  "positive_prompt",
+  "positivePrompt",
+  "negativePrompt",
+  "user_prompt",
+  "userPrompt",
+  "custom_prompt",
+  "customPrompt",
+  "selected_model",
+  "selectedModel",
+  "model",
+  "model_id",
+  "modelId",
+  "image_model",
+  "imageModel",
+  "video_model",
+  "videoModel",
+  "generator_model",
+  "generatorModel",
+  "provider",
+  "generation_settings",
+  "generationSettings",
+  "model_settings",
+  "modelSettings",
 ]);
 
 const MANUAL_STORAGE_SCENE_LIGHTWEIGHT_KEYS = new Set([
@@ -141,7 +172,15 @@ const MANUAL_STORAGE_SCENE_LIGHTWEIGHT_KEYS = new Set([
   "audio_slice_url", "audio_slice_duration_sec",
   "route", "renderMode", "lipSync", "format", "aspect_ratio",
   "source_image_prompt_en", "source_image_prompt_ru", "i2v_prompt_en", "i2v_negative_prompt_en",
-  "video_prompt", "negative_prompt", "sound_prompt", "negative_audio_prompt",
+  "prompt", "image_prompt", "imagePrompt", "photo_prompt", "photoPrompt",
+  "video_prompt", "videoPrompt", "final_video_prompt", "finalVideoPrompt",
+  "positive_prompt", "positivePrompt", "negative_prompt", "negativePrompt",
+  "user_prompt", "userPrompt", "custom_prompt", "customPrompt",
+  "selected_model", "selectedModel", "model", "model_id", "modelId",
+  "image_model", "imageModel", "video_model", "videoModel",
+  "generator_model", "generatorModel", "provider",
+  "generation_settings", "generationSettings", "model_settings", "modelSettings",
+  "sound_prompt", "negative_audio_prompt",
   "speech_text", "voice_profile", "voice_mode", "voice_language", "delivery_style",
   "image_url", "imageUrl", "start_image_url", "startImageUrl", "end_image_url", "endImageUrl",
   "video_url", "videoUrl", "result_video_url", "resultVideoUrl", "generated_video_url", "generatedVideoUrl",
@@ -254,6 +293,98 @@ export function logManualBoardMediaRefs(label = "[MANUAL BOARD MEDIA REFS]", pro
     console.warn(`${label} failed`, { error: error?.message || String(error || "unknown") });
     return [];
   }
+}
+
+
+export function getManualBoardSceneStateDebugStats(project = {}) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+
+  const sceneRows = scenes.map((scene) => ({
+    scene_id: scene?.scene_id || scene?.id || "",
+
+    prompt: scene?.prompt || "",
+    image_prompt: scene?.image_prompt || "",
+    imagePrompt: scene?.imagePrompt || "",
+    photo_prompt: scene?.photo_prompt || "",
+    photoPrompt: scene?.photoPrompt || "",
+    video_prompt: scene?.video_prompt || "",
+    videoPrompt: scene?.videoPrompt || "",
+    final_video_prompt: scene?.final_video_prompt || "",
+    finalVideoPrompt: scene?.finalVideoPrompt || "",
+    positive_prompt: scene?.positive_prompt || "",
+    positivePrompt: scene?.positivePrompt || "",
+    negative_prompt: scene?.negative_prompt || "",
+    negativePrompt: scene?.negativePrompt || "",
+    user_prompt: scene?.user_prompt || "",
+    userPrompt: scene?.userPrompt || "",
+    custom_prompt: scene?.custom_prompt || "",
+    customPrompt: scene?.customPrompt || "",
+
+    selected_model: scene?.selected_model || "",
+    selectedModel: scene?.selectedModel || "",
+    model: scene?.model || "",
+    model_id: scene?.model_id || "",
+    modelId: scene?.modelId || "",
+    image_model: scene?.image_model || "",
+    imageModel: scene?.imageModel || "",
+    video_model: scene?.video_model || "",
+    videoModel: scene?.videoModel || "",
+    generator_model: scene?.generator_model || "",
+    generatorModel: scene?.generatorModel || "",
+    provider: scene?.provider || "",
+    route: scene?.route || "",
+  }));
+
+  const scenesWithPrompt = sceneRows.filter((row) => (
+    row.prompt
+    || row.image_prompt
+    || row.imagePrompt
+    || row.photo_prompt
+    || row.photoPrompt
+    || row.video_prompt
+    || row.videoPrompt
+    || row.final_video_prompt
+    || row.finalVideoPrompt
+    || row.positive_prompt
+    || row.positivePrompt
+    || row.user_prompt
+    || row.userPrompt
+    || row.custom_prompt
+    || row.customPrompt
+  )).length;
+
+  const scenesWithModel = sceneRows.filter((row) => (
+    row.selected_model
+    || row.selectedModel
+    || row.model
+    || row.model_id
+    || row.modelId
+    || row.image_model
+    || row.imageModel
+    || row.video_model
+    || row.videoModel
+    || row.generator_model
+    || row.generatorModel
+    || row.provider
+  )).length;
+
+  return {
+    scenesCount: scenes.length,
+    scenesWithPrompt,
+    scenesWithModel,
+    firstScene: sceneRows[0] || null,
+    selectedScene: sceneRows.find((row) => row.scene_id === project?.selectedSceneId) || null,
+    projectSelectedModel: {
+      selected_model: project?.selected_model || "",
+      selectedModel: project?.selectedModel || "",
+      active_model: project?.active_model || "",
+      activeModel: project?.activeModel || "",
+      selectedImageModel: project?.selectedImageModel || "",
+      selectedVideoModel: project?.selectedVideoModel || "",
+      generationSettings: project?.generationSettings || null,
+      modelSettings: project?.modelSettings || null,
+    },
+  };
 }
 
 export function getManualBoardMediaDebugStats(project = {}) {
@@ -371,11 +502,13 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
     durable_source: String(options?.source || "manual_board_backend_durable"),
   });
   const mediaDebugStats = getManualBoardMediaDebugStats(safeProject);
+  const sceneStateDebugStats = getManualBoardSceneStateDebugStats(safeProject);
   const mediaRefs = findManualBoardMediaRefs(safeProject, { maxDepth: 8 }).slice(0, 20);
   console.info("[manual board durable save payload media debug]", {
     nodeId,
     reason: reason || safeProject?.lastPersistReason || "",
     mediaDebugStats,
+    sceneStateDebugStats,
     refsCount: mediaRefs.length,
     refs: mediaRefs,
   });
@@ -396,6 +529,7 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
       nodeId,
       reason: reason || safeProject?.lastPersistReason || "manual_board_backend_durable_save",
       mediaDebugStats,
+      sceneStateDebugStats,
       refsCount: mediaRefs.length,
       refs: mediaRefs,
     });
@@ -518,6 +652,7 @@ export async function loadManualClipBoardProjectDurable(nodeId = {}, options = {
     console.info("[manual board durable load media debug]", {
       nodeId: safeNodeId,
       mediaDebugStats: getManualBoardMediaDebugStats(project),
+      sceneStateDebugStats: getManualBoardSceneStateDebugStats(project),
       refsCount: mediaRefs.length,
       refs: mediaRefs,
     });
