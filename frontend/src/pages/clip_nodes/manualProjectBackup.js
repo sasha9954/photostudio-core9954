@@ -550,8 +550,27 @@ export async function saveManualClipBoardProjectDurable(project = {}, options = 
   const reason = String(options?.reason || safeProject?.lastPersistReason || "");
   const isInitialOpenSkeletonReason = reason === "manual_new_project_from_audio_split_open_embedded"
     || reason === "manual_new_project_from_audio_split";
+  const sameStrictIdentityAsExisting = existingDurableProject
+    ? manualBoardStrictIdentityMatches(safeProject, existingDurableProject)
+    : true;
 
-  if (existingHasMedia && incomingHasNoMedia && (!options?.allowEmptyDurableOverwrite || isInitialOpenSkeletonReason)) {
+  if (existingHasMedia && incomingHasNoMedia && !sameStrictIdentityAsExisting) {
+    console.info("[MANUAL BOARD NEW PROJECT ALLOWED TO OVERWRITE OLD DURABLE]", {
+      nodeId,
+      reason,
+      incomingIdentity: getManualBoardStrictProjectIdentity(safeProject),
+      existingIdentity: getManualBoardStrictProjectIdentity(existingDurableProject),
+      incomingMediaStats,
+      existingMediaStats,
+    });
+  }
+
+  if (
+    existingHasMedia
+    && incomingHasNoMedia
+    && sameStrictIdentityAsExisting
+    && (!options?.allowEmptyDurableOverwrite || isInitialOpenSkeletonReason)
+  ) {
     const incomingRefs = findManualBoardMediaRefs(safeProject, { maxDepth: 8 }).slice(0, 20);
     const existingRefs = findManualBoardMediaRefs(existingDurableProject, { maxDepth: 8 }).slice(0, 20);
 
@@ -1044,6 +1063,34 @@ function getManualProjectProjectId(project = {}) {
 
 export function getManualProjectInputSignature(project = {}) {
   return String(project?.input_signature || project?.inputSignature || computeManualProjectInputSignature(project)).trim();
+}
+
+export function getManualBoardStrictProjectIdentity(project = {}) {
+  const audio = project?.audio || project?.audio_metadata || {};
+  return {
+    projectId: String(project?.project_id || project?.projectId || "").trim(),
+    inputSignature: String(project?.input_signature || project?.inputSignature || "").trim(),
+    audioSignature: String(project?.audio_signature || project?.audioSignature || "").trim(),
+    audioUrl: String(audio?.url || project?.audio_url || project?.audioUrl || "").trim(),
+    audioDurationSec: Number(audio?.duration_sec || project?.audio_duration_sec || 0) || 0,
+    sourceNodeId: String(project?.sourceNodeId || project?.nodeId || project?.ownerNodeId || "").trim(),
+  };
+}
+
+export function manualBoardStrictIdentityMatches(a = {}, b = {}) {
+  const ia = getManualBoardStrictProjectIdentity(a);
+  const ib = getManualBoardStrictProjectIdentity(b);
+
+  if (ia.projectId && ib.projectId && ia.projectId !== ib.projectId) return false;
+  if (ia.inputSignature && ib.inputSignature && ia.inputSignature !== ib.inputSignature) return false;
+  if (ia.audioSignature && ib.audioSignature && ia.audioSignature !== ib.audioSignature) return false;
+  if (ia.audioUrl && ib.audioUrl && ia.audioUrl !== ib.audioUrl) return false;
+
+  if (ia.audioDurationSec && ib.audioDurationSec) {
+    if (Math.abs(ia.audioDurationSec - ib.audioDurationSec) > 0.05) return false;
+  }
+
+  return true;
 }
 
 export function manualClipBoardProjectsShareIdentity(a = {}, b = {}) {

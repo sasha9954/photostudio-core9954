@@ -18,6 +18,7 @@ import {
   getLastManualClipBoardStorageError,
   getManualBoardMediaDebugStats,
   getManualBoardSceneStateDebugStats,
+  getManualBoardStrictProjectIdentity,
   getManualClipBoardMaterialStats,
   getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
@@ -28,6 +29,7 @@ import {
   rememberLastGoodManualClipBoardProject,
   getManualProjectOwnerId,
   hasMeaningfulManualProject,
+  manualBoardStrictIdentityMatches,
   persistManualClipBoardProject,
   readActiveManualClipBoardProject,
   readManualClipBoardProjectForNode,
@@ -531,15 +533,40 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
     hasMeaningfulManualProject(durableProject)
     && (!safeSourceNodeId || projectBelongsToSource(durableProject, safeSourceNodeId));
   const forceResetBoard = options?.forceResetBoard === true;
+  const explicitNewProject = options?.explicitNewProject === true;
+  const hasIncomingNavigationProject = hasMeaningfulManualProject(navigationProject);
+  const durableMatchesIncoming = hasIncomingNavigationProject
+    ? manualBoardStrictIdentityMatches(durableProject, navigationProject)
+    : true;
   let navigationProjectForCandidates = navigationProject;
   let forcePreferDurableProject = false;
-  if (!forceResetBoard && durableTried && durableBelongsToSource) {
+
+  if (explicitNewProject && hasIncomingNavigationProject && durableTried && durableBelongsToSource && !durableMatchesIncoming) {
+    const durableIdentity = getManualBoardStrictProjectIdentity(durableProject);
+    const incomingIdentity = getManualBoardStrictProjectIdentity(navigationProject);
+
+    console.warn("[MANUAL BOARD DURABLE REJECTED FOR NEW PROJECT: IDENTITY MISMATCH]", {
+      sourceNodeId: safeSourceNodeId,
+      durableIdentity,
+      incomingIdentity,
+    });
+    console.warn("[MANUAL BOARD NEW PROJECT CLEAN START]", {
+      sourceNodeId: safeSourceNodeId,
+      incomingIdentity,
+      rejectedDurableIdentity: durableIdentity,
+    });
+
+    return navigationProject;
+  }
+
+  if (!forceResetBoard && durableTried && durableBelongsToSource && (!explicitNewProject || durableMatchesIncoming)) {
     const durableStats = getManualClipBoardMaterialStats(durableProject);
     const navStats = getManualClipBoardMaterialStats(navigationProject);
 
     console.warn("[MANUAL BOARD DURABLE FOUND: PREFER OVER NAVIGATION]", {
       sourceNodeId: safeSourceNodeId,
-      explicitNewProject: options?.explicitNewProject === true,
+      explicitNewProject,
+      durableIdentityMatchesIncoming: durableMatchesIncoming,
       durableStats,
       navStats,
       durableProjectId: durableProject?.project_id || durableProject?.projectId || "",
@@ -555,7 +582,7 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
       "durable_found_prefer_over_navigation"
     );
   }
-  if (options?.explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
+  if (explicitNewProject && hasMeaningfulManualProject(navigationProject)) {
     if (!durableTried) {
       console.warn("[MANUAL BOARD EXPLICIT NEW WAITING DURABLE]", {
         sourceNodeId: safeSourceNodeId,
