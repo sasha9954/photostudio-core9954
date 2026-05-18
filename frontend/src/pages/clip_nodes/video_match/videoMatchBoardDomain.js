@@ -3,6 +3,7 @@ import { getAccountScopedStorageKey } from "../manualProjectBackup.js";
 export const VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY = "VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY";
 export const VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY = "VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY";
 export const VIDEO_MATCH_BOARD_SCHEMA_V1 = "video_match_board_v1";
+export const VIDEO_MATCH_BOARD_SCHEMA_V2 = "video_match_board_v2";
 
 function getVideoMatchBoardAccountScopedStorageKey(baseKey = "") {
   return getAccountScopedStorageKey(baseKey);
@@ -44,6 +45,20 @@ function safeWriteJson(key, value) {
   } catch {
     return false;
   }
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function toNullableFiniteNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function toBool(value) {
+  return value === true;
 }
 
 export function normalizeVideoMatchTimingContext(raw = {}) {
@@ -90,13 +105,16 @@ export function getDefaultVideoMatchBoardProject(nodeId = "", extra = {}) {
   const now = Date.now();
   return {
     projectId: `video_match_board_${safeNodeId}`,
-    schema: VIDEO_MATCH_BOARD_SCHEMA_V1,
+    schema: VIDEO_MATCH_BOARD_SCHEMA_V2,
     nodeId: safeNodeId,
     sourceNodeId: safeNodeId,
     sourceVideo: { filename: "", duration_sec: 0 },
     sourceVideoUrl: "",
     timingContext: normalizeVideoMatchTimingContext(extra.timingContext || {}),
+    matchSegments: [],
     videoBlocks: [],
+    selectedSegmentId: "",
+    selectedCandidateId: "",
     selectedBlockId: "",
     jsonInput: "",
     jsonError: "",
@@ -106,19 +124,118 @@ export function getDefaultVideoMatchBoardProject(nodeId = "", extra = {}) {
   };
 }
 
-export function normalizeVideoBlock(match = {}, sourceVideoUrl = "") {
-  const id = String(match.id || `match_${Date.now()}`).trim();
+export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourceVideoUrl = "", index = 0) {
+  const source = candidate && typeof candidate === "object" ? candidate : {};
+  const segmentId = String(segment.id || segment.audioSceneId || segment.audio_scene_id || `segment_${String(index + 1).padStart(3, "0")}`).trim();
+  const id = String(source.id || source.candidateId || source.candidate_id || `${segmentId}_candidate_${String(index + 1).padStart(2, "0")}`).trim();
+  const warnings = Array.isArray(source.warnings) ? source.warnings.map((warning) => String(warning || "").trim()).filter(Boolean) : [];
   return {
     id,
-    audioSceneId: String(match.audio_scene_id || match.audioSceneId || "").trim(),
-    targetStartSec: Number(match.target_t0 ?? match.targetStartSec ?? 0) || 0,
-    targetEndSec: Number(match.target_t1 ?? match.targetEndSec ?? 0) || 0,
-    sourceVideoStartSec: Number(match.video_t0 ?? match.sourceVideoStartSec ?? 0) || 0,
-    sourceVideoEndSec: Number(match.video_t1 ?? match.sourceVideoEndSec ?? 0) || 0,
+    candidateId: id,
+    segmentId,
+    videoStartSec: toFiniteNumber(source.video_t0 ?? source.videoStartSec ?? source.sourceVideoStartSec, 0),
+    videoEndSec: toFiniteNumber(source.video_t1 ?? source.videoEndSec ?? source.sourceVideoEndSec, 0),
+    sourceVideoStartSec: toFiniteNumber(source.video_t0 ?? source.videoStartSec ?? source.sourceVideoStartSec, 0),
+    sourceVideoEndSec: toFiniteNumber(source.video_t1 ?? source.videoEndSec ?? source.sourceVideoEndSec, 0),
+    fitMode: String(source.fit_mode || source.fitMode || "").trim(),
+    confidence: toNullableFiniteNumber(source.confidence),
+    matchReason: String(source.match_reason || source.matchReason || "").trim(),
+    visualType: String(source.visual_type || source.visualType || "").trim(),
+    shotType: String(source.shot_type || source.shotType || "").trim(),
+    emotion: String(source.emotion || "").trim(),
+    action: String(source.action || "").trim(),
+    containsFace: toBool(source.contains_face ?? source.containsFace),
+    mouthVisible: toBool(source.mouth_visible ?? source.mouthVisible),
+    lipSyncCandidate: toBool(source.lip_sync_candidate ?? source.lipSyncCandidate),
+    dialoguePresent: toBool(source.dialogue_present ?? source.dialoguePresent),
+    motionLevel: String(source.motion_level || source.motionLevel || "").trim(),
+    cameraMotion: String(source.camera_motion || source.cameraMotion || "").trim(),
+    thumbnail: String(source.thumbnail || "").trim(),
+    warnings,
+    sourceVideoUrl: String(source.sourceVideoUrl || sourceVideoUrl || "").trim(),
+  };
+}
+
+export function normalizeVideoMatchSegment(segment = {}, index = 0, sourceVideoUrl = "") {
+  const source = segment && typeof segment === "object" ? segment : {};
+  const audioSceneId = String(source.audio_scene_id || source.audioSceneId || source.id || `segment_${String(index + 1).padStart(3, "0")}`).trim();
+  const id = audioSceneId || `segment_${String(index + 1).padStart(3, "0")}`;
+  const baseSegment = { id, audioSceneId };
+  const rawCandidates = Array.isArray(source.candidates) ? source.candidates : [];
+  const candidates = rawCandidates.map((candidate, candidateIndex) => normalizeVideoMatchCandidate(candidate, baseSegment, sourceVideoUrl, candidateIndex));
+  const selectedCandidateId = String(source.selected_candidate_id || source.selectedCandidateId || source.selectedCandidate?.id || candidates[0]?.id || "").trim();
+  return {
+    id,
+    audioSceneId,
+    audio_scene_id: audioSceneId,
+    targetStartSec: toFiniteNumber(source.target_t0 ?? source.targetStartSec, 0),
+    targetEndSec: toFiniteNumber(source.target_t1 ?? source.targetEndSec, 0),
+    text: String(source.text || "").trim(),
+    mood: String(source.mood || "").trim(),
+    visualNeed: String(source.visual_need || source.visualNeed || "").trim(),
+    selectedCandidateId,
+    selected_candidate_id: selectedCandidateId,
+    candidates,
+  };
+}
+
+export function normalizeVideoBlock(match = {}, sourceVideoUrl = "") {
+  const id = String(match.id || match.candidateId || `match_${Date.now()}`).trim();
+  return {
+    id,
+    segmentId: String(match.segmentId || match.audioSceneId || match.audio_scene_id || "").trim(),
+    candidateId: String(match.candidateId || match.id || "").trim(),
+    audioSceneId: String(match.audio_scene_id || match.audioSceneId || match.segmentId || "").trim(),
+    targetStartSec: toFiniteNumber(match.target_t0 ?? match.targetStartSec, 0),
+    targetEndSec: toFiniteNumber(match.target_t1 ?? match.targetEndSec, 0),
+    sourceVideoStartSec: toFiniteNumber(match.video_t0 ?? match.sourceVideoStartSec ?? match.videoStartSec, 0),
+    sourceVideoEndSec: toFiniteNumber(match.video_t1 ?? match.sourceVideoEndSec ?? match.videoEndSec, 0),
     sourceVideoUrl: String(match.sourceVideoUrl || sourceVideoUrl || "").trim(),
     matchReason: String(match.match_reason || match.matchReason || "").trim(),
-    confidence: Number.isFinite(Number(match.confidence)) ? Number(match.confidence) : null,
+    confidence: toNullableFiniteNumber(match.confidence),
   };
+}
+
+export function buildVideoBlocksFromMatchSegments(matchSegments = [], sourceVideoUrl = "") {
+  if (!Array.isArray(matchSegments)) return [];
+  return matchSegments
+    .map((segment, index) => {
+      const normalizedSegment = normalizeVideoMatchSegment(segment, index, sourceVideoUrl);
+      const selectedCandidate = normalizedSegment.candidates.find((candidate) => candidate.id === normalizedSegment.selectedCandidateId) || normalizedSegment.candidates[0];
+      if (!selectedCandidate) return null;
+      return normalizeVideoBlock({
+        id: selectedCandidate.id,
+        candidateId: selectedCandidate.id,
+        segmentId: normalizedSegment.id,
+        audioSceneId: normalizedSegment.audioSceneId,
+        targetStartSec: normalizedSegment.targetStartSec,
+        targetEndSec: normalizedSegment.targetEndSec,
+        sourceVideoStartSec: selectedCandidate.sourceVideoStartSec,
+        sourceVideoEndSec: selectedCandidate.sourceVideoEndSec,
+        sourceVideoUrl: selectedCandidate.sourceVideoUrl || sourceVideoUrl,
+        matchReason: selectedCandidate.matchReason,
+        confidence: selectedCandidate.confidence,
+      }, sourceVideoUrl);
+    })
+    .filter(Boolean);
+}
+
+function normalizeV1MatchAsSegment(match = {}, index = 0, sourceVideoUrl = "") {
+  const source = match && typeof match === "object" ? match : {};
+  const audioSceneId = String(source.audio_scene_id || source.audioSceneId || source.segmentId || `seg_${String(index + 1).padStart(2, "0")}`).trim();
+  const candidateId = String(source.id || source.candidate_id || `${audioSceneId}_candidate_01`).trim();
+  return normalizeVideoMatchSegment({
+    audio_scene_id: audioSceneId,
+    target_t0: source.target_t0 ?? source.targetStartSec ?? 0,
+    target_t1: source.target_t1 ?? source.targetEndSec ?? 0,
+    selected_candidate_id: candidateId,
+    candidates: [{
+      ...source,
+      id: candidateId,
+      video_t0: source.video_t0 ?? source.sourceVideoStartSec ?? source.videoStartSec ?? 0,
+      video_t1: source.video_t1 ?? source.sourceVideoEndSec ?? source.videoEndSec ?? 0,
+    }],
+  }, index, sourceVideoUrl);
 }
 
 export function parseVideoMatchBoardJson(jsonText = "", sourceVideoUrl = "") {
@@ -129,13 +246,28 @@ export function parseVideoMatchBoardJson(jsonText = "", sourceVideoUrl = "") {
     return { ok: false, error: `Невалидный JSON: ${String(error?.message || error)}` };
   }
   if (!parsed || typeof parsed !== "object") return { ok: false, error: "JSON должен быть объектом." };
-  if (parsed.schema !== VIDEO_MATCH_BOARD_SCHEMA_V1) return { ok: false, error: `schema должен быть ${VIDEO_MATCH_BOARD_SCHEMA_V1}.` };
-  if (!Array.isArray(parsed.matches)) return { ok: false, error: "matches должен быть массивом." };
-  const blocks = parsed.matches.map((match, index) => normalizeVideoBlock({ id: match?.id || `match_${String(index + 1).padStart(3, "0")}`, ...(match || {}) }, sourceVideoUrl));
+  if (![VIDEO_MATCH_BOARD_SCHEMA_V1, VIDEO_MATCH_BOARD_SCHEMA_V2].includes(parsed.schema)) {
+    return { ok: false, error: `schema должен быть ${VIDEO_MATCH_BOARD_SCHEMA_V1} или ${VIDEO_MATCH_BOARD_SCHEMA_V2}.` };
+  }
+
+  let matchSegments = [];
+  if (parsed.schema === VIDEO_MATCH_BOARD_SCHEMA_V1) {
+    if (!Array.isArray(parsed.matches)) return { ok: false, error: "matches должен быть массивом." };
+    matchSegments = parsed.matches.map((match, index) => normalizeV1MatchAsSegment(match, index, sourceVideoUrl));
+  } else {
+    if (!Array.isArray(parsed.segments)) return { ok: false, error: "segments должен быть массивом." };
+    matchSegments = parsed.segments.map((segment, index) => normalizeVideoMatchSegment(segment, index, sourceVideoUrl));
+  }
+
+  const videoBlocks = buildVideoBlocksFromMatchSegments(matchSegments, sourceVideoUrl);
   return {
     ok: true,
+    schema: parsed.schema,
     sourceVideo: parsed.source_video && typeof parsed.source_video === "object" ? parsed.source_video : {},
-    videoBlocks: blocks,
+    matchSegments,
+    videoBlocks,
+    selectedSegmentId: matchSegments[0]?.id || "",
+    selectedCandidateId: matchSegments[0]?.selectedCandidateId || "",
   };
 }
 
@@ -158,7 +290,20 @@ export function persistVideoMatchBoardProject(project = {}, options = {}) {
   safeProject.nodeId = nodeId;
   safeProject.sourceNodeId = String(safeProject.sourceNodeId || nodeId);
   safeProject.timingContext = normalizeVideoMatchTimingContext(safeProject.timingContext || {});
-  safeProject.videoBlocks = Array.isArray(safeProject.videoBlocks) ? safeProject.videoBlocks.map((block) => normalizeVideoBlock(block, safeProject.sourceVideoUrl)) : [];
+  safeProject.matchSegments = Array.isArray(safeProject.matchSegments)
+    ? safeProject.matchSegments.map((segment, index) => normalizeVideoMatchSegment(segment, index, safeProject.sourceVideoUrl))
+    : [];
+  safeProject.videoBlocks = safeProject.matchSegments.length
+    ? buildVideoBlocksFromMatchSegments(safeProject.matchSegments, safeProject.sourceVideoUrl)
+    : (Array.isArray(safeProject.videoBlocks) ? safeProject.videoBlocks.map((block) => normalizeVideoBlock(block, safeProject.sourceVideoUrl)) : []);
+  const selectedBlock = safeProject.videoBlocks.find((block) => block.id === safeProject.selectedBlockId) || safeProject.videoBlocks[0] || null;
+  const selectedSegment = safeProject.matchSegments.find((segment) => segment.id === safeProject.selectedSegmentId)
+    || safeProject.matchSegments.find((segment) => segment.id === selectedBlock?.segmentId)
+    || safeProject.matchSegments[0]
+    || null;
+  safeProject.selectedSegmentId = String(selectedSegment?.id || selectedBlock?.segmentId || safeProject.selectedSegmentId || "").trim();
+  safeProject.selectedCandidateId = String(selectedBlock?.candidateId || selectedBlock?.id || selectedSegment?.selectedCandidateId || safeProject.selectedCandidateId || "").trim();
+  safeProject.selectedBlockId = String(selectedBlock?.id || safeProject.selectedBlockId || "").trim();
   safeWriteJson(getVideoMatchBoardNodeStorageKey(nodeId), safeProject);
   safeWriteJson(getVideoMatchBoardActiveProjectStorageKey(), safeProject);
   try { localStorage.setItem(getVideoMatchBoardActiveProjectIdStorageKey(), String(safeProject.projectId || nodeId)); } catch {}

@@ -50,6 +50,9 @@ export default function VideoMatchBoardNode({ id, data }) {
   }, [refreshStoredProject]);
 
   const timingContext = model.timingContext || storedProject?.timingContext || {};
+  const savedSegments = Array.isArray(storedProject?.matchSegments) ? storedProject.matchSegments : [];
+  const modelSegments = Array.isArray(model.matchSegments) ? model.matchSegments : [];
+  const matchSegments = savedSegments.length ? savedSegments : modelSegments;
   const savedBlocks = Array.isArray(storedProject?.videoBlocks) ? storedProject.videoBlocks : [];
   const modelBlocks = Array.isArray(model.videoBlocks) ? model.videoBlocks : [];
   const blocks = savedBlocks.length ? savedBlocks : modelBlocks;
@@ -60,6 +63,8 @@ export default function VideoMatchBoardNode({ id, data }) {
     ? String(storedProject?.sourceVideoUrl || "")
     : String(model.sourceVideoUrl || "");
   const selectedBlockId = storedProject?.selectedBlockId || model.selectedBlockId || blocks[0]?.id || "";
+  const selectedSegmentId = storedProject?.selectedSegmentId || model.selectedSegmentId || matchSegments[0]?.id || "";
+  const selectedCandidateId = storedProject?.selectedCandidateId || model.selectedCandidateId || matchSegments[0]?.selectedCandidateId || blocks[0]?.candidateId || "";
   const jsonInput = Object.prototype.hasOwnProperty.call(storedProject || {}, "jsonInput")
     ? String(storedProject?.jsonInput || "")
     : String(model.jsonInput || "");
@@ -71,12 +76,13 @@ export default function VideoMatchBoardNode({ id, data }) {
     || (Array.isArray(timingContext?.segments) && timingContext.segments.length > 0);
 
   const statusText = useMemo(() => {
+    if (matchSegments.length) return `segments: ${matchSegments.length} · blocks: ${blocks.length}`;
     if (blocks.length) return `blocks: ${blocks.length}`;
     if (sourceVideo?.filename) return "video loaded";
     if (jsonInput) return "json ready";
     if (hasTiming) return "timing context ready";
     return "empty";
-  }, [blocks.length, sourceVideo?.filename, jsonInput, hasTiming]);
+  }, [matchSegments.length, blocks.length, sourceVideo?.filename, jsonInput, hasTiming]);
 
   const onOpenBoard = () => {
     const project = persistVideoMatchBoardProject({
@@ -87,7 +93,10 @@ export default function VideoMatchBoardNode({ id, data }) {
       sourceVideo: sourceVideo || { filename: "", duration_sec: 0 },
       sourceVideoUrl,
       timingContext,
+      matchSegments,
       videoBlocks: blocks,
+      selectedSegmentId,
+      selectedCandidateId,
       selectedBlockId,
       jsonInput,
       jsonError,
@@ -98,7 +107,10 @@ export default function VideoMatchBoardNode({ id, data }) {
         sourceVideo: project.sourceVideo,
         sourceVideoUrl: project.sourceVideoUrl,
         timingContext: project.timingContext,
+        matchSegments: project.matchSegments,
         videoBlocks: project.videoBlocks,
+        selectedSegmentId: project.selectedSegmentId,
+        selectedCandidateId: project.selectedCandidateId,
         selectedBlockId: project.selectedBlockId,
         jsonInput: project.jsonInput,
         jsonError: project.jsonError,
@@ -119,7 +131,10 @@ export default function VideoMatchBoardNode({ id, data }) {
         <div className="videoMatchBoardNode_meta">Audio: {timingContext?.sourceAudioUrl ? "есть" : "—"}</div>
         <div className="videoMatchBoardNode_meta">Audio duration: {formatDuration(timingContext?.audioDurationSec)}</div>
         <div className="videoMatchBoardNode_meta">Timing scenes: {Array.isArray(timingContext?.timingScenes) ? timingContext.timingScenes.length : 0}</div>
+        <div className="videoMatchBoardNode_meta">Segments: {matchSegments.length || "—"}</div>
+        <div className="videoMatchBoardNode_meta">Blocks: {blocks.length || "—"}</div>
         <div className="videoMatchBoardNode_meta">Video: {sourceVideo?.filename || "—"}</div>
+        <div className="videoMatchBoardNode_meta">Audio timing: {hasTiming ? "ready" : "—"}</div>
         <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onOpenBoard}>Открыть Video Match Board</button>
       </div>
       <Handle type="source" position={Position.Right} id="video_match_board_out" />
