@@ -19187,6 +19187,35 @@ def clip_video_status(job_id: str):
         response_job["videoUrl"] = None
     if recovered_from_disk:
         response_job["recoveredFromDisk"] = True
+    response_status = str(response_job.get("status") or "").strip().lower()
+    if response_status in {"done", "success", "ready", "completed"}:
+        result = response_job.get("result") if isinstance(response_job.get("result"), dict) else {}
+        video_url = str(
+            response_job.get("videoUrl")
+            or response_job.get("video_url")
+            or response_job.get("resultVideoUrl")
+            or response_job.get("result_video_url")
+            or result.get("videoUrl")
+            or result.get("video_url")
+            or result.get("url")
+            or ""
+        ).strip()
+        output_path = str(response_job.get("outputPath") or response_job.get("output_path") or result.get("outputPath") or result.get("output_path") or "").strip()
+        output_url = str(response_job.get("outputUrl") or response_job.get("output_url") or result.get("outputUrl") or result.get("output_url") or "").strip()
+        print(
+            "[MANUAL VIDEO BACKEND STATUS DONE] "
+            + json.dumps(
+                {
+                    "jobId": safe_job_id,
+                    "status": response_status,
+                    "videoUrl": video_url,
+                    "outputPath": output_path,
+                    "outputUrl": output_url,
+                    "rawResultKeys": list(result.keys()),
+                },
+                ensure_ascii=False,
+            )
+        )
     return {"ok": True, **response_job}
 
 
