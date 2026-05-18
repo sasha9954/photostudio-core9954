@@ -29,6 +29,11 @@ function getBlockWidth(block, duration) {
   return Math.max(0.8, Math.min(100, ((end - start) / dur) * 100));
 }
 
+function getValidDurationSec(value) {
+  const duration = Number(value || 0);
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
+}
+
 export default function VideoMatchBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -84,6 +89,7 @@ export default function VideoMatchBoardPage() {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     const url = URL.createObjectURL(file);
     objectUrlRef.current = url;
+    setVideoDurationSec(0);
     setSourceVideoLoadMessage("");
     patchProject({
       sourceVideoUrl: url,
@@ -121,18 +127,30 @@ export default function VideoMatchBoardPage() {
       patchProject({ jsonError: result.error }, { lastGood: false });
       return;
     }
+
+    const videoElementDurationSec = getValidDurationSec(videoRef.current?.duration);
+    const stateVideoDurationSec = getValidDurationSec(videoDurationSec);
+    const loadedVideoDurationSec = videoElementDurationSec || (sourceVideoUrl ? stateVideoDurationSec : 0);
+    const jsonDurationSec = getValidDurationSec(result.sourceVideo?.duration_sec);
+    const nextDurationSec = loadedVideoDurationSec || jsonDurationSec;
+    const currentFilename = String(project.sourceVideo?.filename || "").trim();
+    const maxBlockEndSec = Math.max(0, ...result.videoBlocks.map((block) => Number(block.sourceVideoEndSec || 0)));
+    const durationWarning = loadedVideoDurationSec > 0 && maxBlockEndSec > loadedVideoDurationSec
+      ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
+      : "";
+
     const nextSourceVideo = {
       ...(project.sourceVideo || {}),
-      filename: result.sourceVideo?.filename || project.sourceVideo?.filename || "source.mp4",
-      duration_sec: Number(result.sourceVideo?.duration_sec || project.sourceVideo?.duration_sec || videoDurationSec || 0),
+      filename: currentFilename || result.sourceVideo?.filename || "source.mp4",
+      duration_sec: Number(nextDurationSec.toFixed(3)),
     };
     patchProject({
       sourceVideo: nextSourceVideo,
       videoBlocks: result.videoBlocks,
       selectedBlockId: result.videoBlocks[0]?.id || "",
-      jsonError: "",
+      jsonError: durationWarning,
     });
-    if (Number(nextSourceVideo.duration_sec || 0) > 0) setVideoDurationSec(Number(nextSourceVideo.duration_sec));
+    if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
   };
 
   const onPlaySelectedBlock = async () => {
@@ -160,7 +178,8 @@ export default function VideoMatchBoardPage() {
     }
   };
 
-  const sampleJson = `{"schema":"video_match_board_v1","source_video":{"filename":"source.mp4","duration_sec":123.4},"matches":[{"id":"match_001","audio_scene_id":"seg_01","target_t0":0,"target_t1":4.8,"video_t0":120.4,"video_t1":125.2,"match_reason":"reason","confidence":0.86}]}`;
+  const sampleDurationSec = Math.max(getValidDurationSec(videoDurationSec), 130);
+  const sampleJson = `{"schema":"video_match_board_v1","source_video":{"filename":"source.mp4","duration_sec":${Number(sampleDurationSec.toFixed(3))}},"matches":[{"id":"match_001","audio_scene_id":"seg_01","target_t0":0,"target_t1":4.8,"video_t0":120.4,"video_t1":125.2,"match_reason":"reason","confidence":0.86}]}`;
 
   return (
     <div className="videoMatchPage">
