@@ -38,6 +38,7 @@ const MANUAL_STORAGE_SCENE_ALLOWED_KEYS = new Set([
   "video_prompt",
   "negative_prompt",
   "sound_prompt",
+  "negative_audio_prompt",
   "image_url",
   "imageUrl",
   "image_preview_url",
@@ -545,6 +546,7 @@ export function queueManualClipBoardProjectDurableSave(project = {}, options = {
           nodeId: getManualProjectOwnerId(project),
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
           mediaDebugStats: getManualBoardMediaDebugStats(project),
+          sceneStateDebugStats: getManualBoardSceneStateDebugStats(project),
         });
         return;
       }
@@ -555,6 +557,7 @@ export function queueManualClipBoardProjectDurableSave(project = {}, options = {
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
           stats: getManualClipBoardMaterialStats(project),
           mediaDebugStats: getManualBoardMediaDebugStats(project),
+          sceneStateDebugStats: getManualBoardSceneStateDebugStats(project),
         });
       }
     }).catch((error) => {
@@ -583,6 +586,8 @@ function buildManualBoardDurableSaveSignature(project = {}, reason = "") {
     selectedSceneId: project?.selectedSceneId || "",
     reason,
     stats: getManualClipBoardMaterialStats(project),
+    mediaStats: getManualBoardMediaDebugStats(project),
+    sceneStateStats: getManualBoardSceneStateDebugStats(project),
   });
 }
 
@@ -597,6 +602,7 @@ function queueManualBoardDurableSaveOnce(project = {}, options = {}) {
           nodeId: getManualProjectOwnerId(project),
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
           mediaDebugStats: getManualBoardMediaDebugStats(project),
+          sceneStateDebugStats: getManualBoardSceneStateDebugStats(project),
         });
         return;
       }
@@ -608,6 +614,7 @@ function queueManualBoardDurableSaveOnce(project = {}, options = {}) {
           reason: options?.reason || project?.lastPersistReason || "manual_board_backend_durable_save",
           stats: getManualClipBoardMaterialStats(project),
           mediaDebugStats: getManualBoardMediaDebugStats(project),
+          sceneStateDebugStats: getManualBoardSceneStateDebugStats(project),
         });
       }
     }).catch((error) => {
