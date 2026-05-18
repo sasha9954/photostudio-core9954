@@ -1,17 +1,31 @@
+import { getAccountScopedStorageKey } from "../manualProjectBackup.js";
+
 export const VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY = "VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY";
 export const VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY = "VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY";
 export const VIDEO_MATCH_BOARD_SCHEMA_V1 = "video_match_board_v1";
 
+function getVideoMatchBoardAccountScopedStorageKey(baseKey = "") {
+  return getAccountScopedStorageKey(baseKey);
+}
+
 export function getVideoMatchBoardNodeStorageKey(nodeId = "") {
-  return `video_match_board:node:${String(nodeId || "default").trim() || "default"}`;
+  return getVideoMatchBoardAccountScopedStorageKey(`video_match_board:node:${String(nodeId || "default").trim() || "default"}`);
 }
 
 export function getVideoMatchBoardLastGoodStorageKey(nodeId = "") {
-  return `video_match_board:last_good:${String(nodeId || "default").trim() || "default"}`;
+  return getVideoMatchBoardAccountScopedStorageKey(`video_match_board:last_good:${String(nodeId || "default").trim() || "default"}`);
 }
 
 export function getVideoMatchBoardEmergencyStorageKey(nodeId = "") {
-  return `video_match_board:emergency:${String(nodeId || "default").trim() || "default"}`;
+  return getVideoMatchBoardAccountScopedStorageKey(`video_match_board:emergency:${String(nodeId || "default").trim() || "default"}`);
+}
+
+function getVideoMatchBoardActiveProjectStorageKey() {
+  return getVideoMatchBoardAccountScopedStorageKey(VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY);
+}
+
+function getVideoMatchBoardActiveProjectIdStorageKey() {
+  return getVideoMatchBoardAccountScopedStorageKey(VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY);
 }
 
 export function safeReadVideoMatchJson(key) {
@@ -129,7 +143,7 @@ export function readVideoMatchBoardProjectForNode(nodeId = "") {
   const safeNodeId = String(nodeId || "").trim();
   const nodeProject = safeReadVideoMatchJson(getVideoMatchBoardNodeStorageKey(safeNodeId));
   if (nodeProject) return nodeProject;
-  const activeProject = safeReadVideoMatchJson(VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY);
+  const activeProject = safeReadVideoMatchJson(getVideoMatchBoardActiveProjectStorageKey());
   if (activeProject && (!safeNodeId || String(activeProject.nodeId || "") === safeNodeId)) return activeProject;
   return null;
 }
@@ -146,8 +160,8 @@ export function persistVideoMatchBoardProject(project = {}, options = {}) {
   safeProject.timingContext = normalizeVideoMatchTimingContext(safeProject.timingContext || {});
   safeProject.videoBlocks = Array.isArray(safeProject.videoBlocks) ? safeProject.videoBlocks.map((block) => normalizeVideoBlock(block, safeProject.sourceVideoUrl)) : [];
   safeWriteJson(getVideoMatchBoardNodeStorageKey(nodeId), safeProject);
-  safeWriteJson(VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY, safeProject);
-  try { localStorage.setItem(VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY, String(safeProject.projectId || nodeId)); } catch {}
+  safeWriteJson(getVideoMatchBoardActiveProjectStorageKey(), safeProject);
+  try { localStorage.setItem(getVideoMatchBoardActiveProjectIdStorageKey(), String(safeProject.projectId || nodeId)); } catch {}
   if (options?.lastGood !== false) safeWriteJson(getVideoMatchBoardLastGoodStorageKey(nodeId), safeProject);
   if (options?.emergency) safeWriteJson(getVideoMatchBoardEmergencyStorageKey(nodeId), safeProject);
   return safeProject;
