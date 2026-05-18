@@ -742,6 +742,31 @@ function isGeneratedSoundRoute(route = "") {
   return GENERATED_SOUND_ROUTES.has(String(route || "").trim());
 }
 
+function getManualSceneSelectedModel(scene = {}) {
+  return String(
+    scene.selectedModel
+    || scene.selected_model
+    || scene.generationModel
+    || scene.generation_model
+    || scene.providerModel
+    || scene.provider_model
+    || scene.modelId
+    || scene.model_id
+    || scene.model
+    || ""
+  ).trim();
+}
+
+function getManualSceneSelectedProvider(scene = {}) {
+  return String(
+    scene.selectedProvider
+    || scene.provider
+    || scene.imageProvider
+    || scene.videoProvider
+    || ""
+  ).trim();
+}
+
 
 function normalizeStoryBlock(block = {}, idx = 0) {
   const id = String(block?.block_id || block?.id || block?.story_block_id || `block_${idx + 1}`).trim();
@@ -2981,6 +3006,19 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
+  const selectedGenerationModel = getManualSceneSelectedModel(selectedScene);
+  const selectedGenerationProvider = getManualSceneSelectedProvider(selectedScene);
+  const selectedGenerationModelOptions = useMemo(() => {
+    const options = new Set();
+    if (selectedGenerationModel) options.add(selectedGenerationModel);
+    scenes.forEach((scene) => {
+      const model = getManualSceneSelectedModel(scene);
+      if (model) options.add(model);
+    });
+    const projectModel = getManualSceneSelectedModel(project || {});
+    if (projectModel) options.add(projectModel);
+    return Array.from(options);
+  }, [project, scenes, selectedGenerationModel]);
   const selectedMMAudioGainDb = useMemo(() => {
     const raw = selectedScene?.mmaudio_gain_db ?? selectedScene?.generatedAudioGainDb ?? selectedScene?.generated_audio_gain_db;
     const parsed = Number(raw);
@@ -4745,6 +4783,28 @@ export default function ManualClipDirectorBoardEditor({
               return routePatch;
             }, { reason: route !== selectedScene.route ? "route_change_clear_video" : "route_change" });
           }}>{ROUTES.map((route) => <option key={route} value={route}>{route}</option>)}</select>
+        </label>
+
+        <label>Model
+          <select value={selectedGenerationModel} onChange={(e) => {
+            const value = e.target.value;
+            const provider = selectedGenerationProvider;
+            updateScene(selectedScene.scene_id, {
+              selectedProvider: provider || "comfy_remote",
+              provider: provider || "comfy_remote",
+              selectedModel: value,
+              selected_model: value,
+              generationModel: value,
+              generation_model: value,
+              providerModel: value,
+              provider_model: value,
+            }, {
+              reason: "selected_model_user",
+            });
+          }}>
+            <option value="">Выберите модель</option>
+            {selectedGenerationModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
+          </select>
         </label>
 
         <div className="manualTimingReadonly">
