@@ -1411,6 +1411,70 @@ function isEmptyImportedMaterialValue(value) {
   return String(value).trim() === "";
 }
 
+function firstImportedSceneNumber(...values) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return 0;
+}
+
+function getImportedSceneTimingValues(scene = {}) {
+  const safeScene = scene && typeof scene === "object" ? scene : {};
+  const safeTiming = safeScene.timing && typeof safeScene.timing === "object" ? safeScene.timing : {};
+  const topTiming = {
+    start_sec: firstImportedSceneNumber(safeScene.start_sec, safeScene.startSec),
+    end_sec: firstImportedSceneNumber(safeScene.end_sec, safeScene.endSec),
+    duration_sec: firstImportedSceneNumber(safeScene.duration_sec, safeScene.durationSec),
+    speech_start_sec: firstImportedSceneNumber(safeScene.speech_start_sec, safeScene.speechStartSec),
+    speech_end_sec: firstImportedSceneNumber(safeScene.speech_end_sec, safeScene.speechEndSec),
+  };
+  const nestedTiming = {
+    start_sec: firstImportedSceneNumber(safeTiming.start_sec, safeTiming.startSec),
+    end_sec: firstImportedSceneNumber(safeTiming.end_sec, safeTiming.endSec),
+    duration_sec: firstImportedSceneNumber(safeTiming.duration_sec, safeTiming.durationSec),
+    speech_start_sec: firstImportedSceneNumber(safeTiming.speech_start_sec, safeTiming.speechStartSec),
+    speech_end_sec: firstImportedSceneNumber(safeTiming.speech_end_sec, safeTiming.speechEndSec),
+  };
+  const topHasTiming = topTiming.end_sec > 0 || topTiming.duration_sec > 0;
+  const nestedHasTiming = nestedTiming.end_sec > 0 || nestedTiming.duration_sec > 0;
+  const timing = topHasTiming || !nestedHasTiming ? topTiming : nestedTiming;
+  return {
+    ...timing,
+    duration_sec: timing.duration_sec > 0 ? timing.duration_sec : Math.max(0, timing.end_sec - timing.start_sec),
+  };
+}
+
+function importedSceneHasRealTiming(scene = {}) {
+  const timing = getImportedSceneTimingValues(scene);
+  return timing.end_sec > 0 || timing.duration_sec > 0;
+}
+
+function preserveCurrentSceneTimelineIfIncomingIsEmpty(nextScene = {}, currentScene = {}, incomingScene = {}) {
+  if (!importedSceneHasRealTiming(currentScene) || importedSceneHasRealTiming(incomingScene)) return nextScene;
+  const timing = getImportedSceneTimingValues(currentScene);
+  return {
+    ...nextScene,
+    start_sec: timing.start_sec,
+    end_sec: timing.end_sec,
+    duration_sec: timing.duration_sec,
+    speech_start_sec: timing.speech_start_sec,
+    speech_end_sec: timing.speech_end_sec,
+    timing: {
+      ...((nextScene?.timing && typeof nextScene.timing === "object") ? nextScene.timing : {}),
+      ...timing,
+    },
+    story_block_id: nextScene?.story_block_id || currentScene?.story_block_id || "",
+    story_block_title_ru: nextScene?.story_block_title_ru || currentScene?.story_block_title_ru || "",
+    source_phrase_ids: Array.isArray(nextScene?.source_phrase_ids) && nextScene.source_phrase_ids.length
+      ? nextScene.source_phrase_ids
+      : (Array.isArray(currentScene?.source_phrase_ids) ? currentScene.source_phrase_ids : []),
+    audio_slice_url: nextScene?.audio_slice_url || currentScene?.audio_slice_url || "",
+    audio_slice_duration_sec: firstImportedSceneNumber(nextScene?.audio_slice_duration_sec, currentScene?.audio_slice_duration_sec),
+  };
+}
+
 function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScenes = []) {
   const currentById = new Map((Array.isArray(currentScenes) ? currentScenes : []).map((scene) => [String(scene?.scene_id || scene?.id || "").trim(), scene]));
   return (Array.isArray(importedScenes) ? importedScenes : []).map((incomingScene) => {
@@ -1438,7 +1502,7 @@ function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScen
       nextScene.video_has_audio = true;
     }
 
-    return nextScene;
+    return preserveCurrentSceneTimelineIfIncomingIsEmpty(nextScene, currentScene, incomingScene);
   });
 }
 
