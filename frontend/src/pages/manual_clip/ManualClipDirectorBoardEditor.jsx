@@ -16,6 +16,7 @@ import {
   computeManualProjectInputSignature,
   forceWriteManualClipBoardProjectForNode,
   getLastManualClipBoardStorageError,
+  getManualBoardMediaDebugStats,
   getManualClipBoardMaterialStats,
   getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
@@ -2179,6 +2180,11 @@ export default function ManualClipDirectorBoardEditor({
       }) : [];
       const parsedSelectedSceneId = String(parsed?.selectedSceneId || "").trim();
       const selectedSceneIdForHydrate = scenes.some((scene) => scene.scene_id === parsedSelectedSceneId) ? parsedSelectedSceneId : String(scenes[0]?.scene_id || "");
+      console.info("[MANUAL BOARD HYDRATE RAW SCENE MEDIA DEBUG]", {
+        selectedSceneId: selectedSceneIdForHydrate,
+        rawMediaDebugStats: getManualBoardMediaDebugStats(parsed),
+        normalizedMediaDebugStats: getManualBoardMediaDebugStats({ ...parsed, scenes }),
+      });
       let hydratedProject = normalizeDirectorProjectOwner({
         ...normalizeManualBoardProjectAudioCompat(parsed),
         ...(forcedProjectId ? { project_id: forcedProjectId, projectId: forcedProjectId } : {}),
