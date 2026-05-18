@@ -20,6 +20,7 @@ import {
   getManualClipBoardSnapshotSize,
   logManualBoardMediaRefs,
   loadManualClipBoardProjectDurable,
+  saveManualClipBoardProjectDurable,
   readLastGoodManualClipBoardProject,
   readEmergencyManualClipBoardProjectForNode,
   readCanonicalManualClipBoardProject,
@@ -524,7 +525,29 @@ function readManualActiveProject(sourceNodeId = "", navigationProject = null, op
 
 function persistManualProject(nextProject = {}, options = {}) {
   if (!hasMeaningfulManualProject(nextProject)) return false;
-  return persistManualClipBoardProject(nextProject, options);
+  const persisted = persistManualClipBoardProject(nextProject, options);
+  if (persisted) {
+    const reason = String(options?.reason || nextProject?.lastPersistReason || "manual_director_persist");
+    saveManualClipBoardProjectDurable(nextProject, { reason, source: "manual_board_editor_autosave" })
+      .then((ok) => {
+        if (ok) {
+          console.info("[MANUAL BOARD DURABLE SAVE DONE]", {
+            nodeId: getManualProjectOwnerId(nextProject),
+            reason,
+            stats: getManualClipBoardMaterialStats(nextProject),
+          });
+        }
+      })
+      .catch((error) => {
+        console.warn("[MANUAL BOARD DURABLE SAVE FAILED]", {
+          nodeId: getManualProjectOwnerId(nextProject),
+          reason,
+          errorName: error?.name,
+          errorMessage: error?.message,
+        });
+      });
+  }
+  return persisted;
 }
 
 function dispatchManualDirectorBoardUpdate(sourceNodeId = "", project = {}) {
