@@ -41,13 +41,6 @@ import {
 import "./ManualClipDirectorPage.css";
 
 const ROUTES = ["ia2v", "i2v", "i2v_sound", "i2v_text", "first_last", "first_last_sound"];
-const MANUAL_GENERATION_MODEL_OPTIONS = [
-  "i2v",
-  "ltx23_i2v_sound_clean",
-  "f_l",
-  "first_last_sound_clean",
-  "lip_sync_music",
-];
 const I2V_SOUND_GAIN_DEFAULT_DB = -6;
 const I2V_SOUND_GAIN_MIN_DB = -18;
 const I2V_SOUND_GAIN_MAX_DB = 10;
@@ -3015,23 +3008,6 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const selectedScene = useMemo(() => scenes.find((s) => s.scene_id === selectedSceneId) || scenes[0] || null, [scenes, selectedSceneId]);
-  const selectedGenerationModel = getManualSceneSelectedModel(selectedScene);
-  const selectedGenerationProvider = getManualSceneSelectedProvider(selectedScene);
-  const selectedGenerationModelOptions = useMemo(() => {
-    const options = new Set(MANUAL_GENERATION_MODEL_OPTIONS);
-
-    if (selectedGenerationModel) options.add(selectedGenerationModel);
-
-    scenes.forEach((scene) => {
-      const model = getManualSceneSelectedModel(scene);
-      if (model) options.add(model);
-    });
-
-    const projectModel = getManualSceneSelectedModel(project || {});
-    if (projectModel) options.add(projectModel);
-
-    return Array.from(options);
-  }, [project, scenes, selectedGenerationModel]);
   const selectedMMAudioGainDb = useMemo(() => {
     const raw = selectedScene?.mmaudio_gain_db ?? selectedScene?.generatedAudioGainDb ?? selectedScene?.generated_audio_gain_db;
     const parsed = Number(raw);
@@ -4798,33 +4774,6 @@ export default function ManualClipDirectorBoardEditor({
           }}>{ROUTES.map((route) => <option key={route} value={route}>{route}</option>)}</select>
         </label>
 
-        <label>Model
-          <select value={selectedGenerationModel} onChange={(e) => {
-            const value = e.target.value;
-            const provider = selectedGenerationProvider;
-            console.info("[MANUAL BOARD MODEL SELECTED]", {
-              sceneId: selectedScene.scene_id,
-              model: value,
-              provider: provider || "comfy_remote",
-              route: selectedScene.route,
-            });
-            updateScene(selectedScene.scene_id, {
-              selectedProvider: provider || "comfy_remote",
-              provider: provider || "comfy_remote",
-              selectedModel: value,
-              selected_model: value,
-              generationModel: value,
-              generation_model: value,
-              providerModel: value,
-              provider_model: value,
-            }, {
-              reason: "selected_model_user",
-            });
-          }}>
-            <option value="">Выберите модель</option>
-            {selectedGenerationModelOptions.map((model) => <option key={model} value={model}>{model}</option>)}
-          </select>
-        </label>
 
         <div className="manualTimingReadonly">
           <div>scene_id: {selectedScene.scene_id}</div>
