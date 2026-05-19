@@ -4151,5 +4151,13 @@
   background: rgba(15,20,36,0.5);
 }
 .manualTimingVocalPanelActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.manualTimingVocalModeSelect { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.manualTimingVocalModeSelect select {
+  background: rgba(10,14,28,0.9);
+  color: #eaf1ff;
+  border: 1px solid rgba(140,160,220,0.45);
+  border-radius: 8px;
+  padding: 4px 8px;
+}
 .manualTimingVocalPanelStatus { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; opacity: .95; }
 .manualTimingVocalWarning { color: #ffb17a; }
