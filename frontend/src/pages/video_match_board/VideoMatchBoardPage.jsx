@@ -740,6 +740,13 @@ export default function VideoMatchBoardPage() {
         ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
         : "";
 
+      if (!safeMatchSegments.length) {
+        patchProject({
+          jsonError: "JSON parsed, but no matchSegments were created. Check schema video_match_board_v2 / segments.",
+        }, { lastGood: false });
+        return;
+      }
+
       const normalizedSourceVideo = normalizeVideoMatchSourceVideo({
         ...result,
         sourceVideo: result.sourceVideo,
@@ -748,7 +755,7 @@ export default function VideoMatchBoardPage() {
       const keptRuntimeSourceVideoUrl = String(runtimeSourceVideoUrlRef.current || "").startsWith("blob:") ? runtimeSourceVideoUrlRef.current : "";
       const keptRuntimeAudioPreviewUrl = String(runtimeAudioPreviewUrlRef.current || "").startsWith("blob:") ? runtimeAudioPreviewUrlRef.current : "";
       const importedAt = Date.now();
-      const nextProject = persistVideoMatchBoardProject({
+      const importDraft = {
         ...getDefaultVideoMatchBoardProject(nodeId),
         schema: result.schema,
         sourceVideoUrl: "",
@@ -777,9 +784,9 @@ export default function VideoMatchBoardPage() {
         importedAt,
         sourceNodeId: nodeId,
         nodeId,
-      }, { forceReplace: true, allowMaterialLoss: true });
-      nextProject.importSignature = buildVideoMatchImportSignature(nextProject);
-      const importedProject = persistVideoMatchBoardProject(nextProject, { forceReplace: true, allowMaterialLoss: true });
+      };
+      importDraft.importSignature = buildVideoMatchImportSignature(importDraft);
+      const importedProject = persistVideoMatchBoardProject(importDraft, { forceReplace: true, allowMaterialLoss: true });
       importedProject.sourceVideoUrl = keptRuntimeSourceVideoUrl;
       importedProject.audioPreviewUrl = keptRuntimeAudioPreviewUrl;
       console.info("[VIDEO MATCH IMPORT COMMIT]", {
@@ -794,8 +801,8 @@ export default function VideoMatchBoardPage() {
       console.log("[VIDEO MATCH IMPORT SOURCE VIDEO]", {
         inputSourceVideo: result.sourceVideo,
         inputSource_video: result.source_video,
-        normalizedSourceVideo: nextProject.sourceVideo,
-        sourceVideoPath: nextProject.sourceVideoPath,
+        normalizedSourceVideo: importDraft.sourceVideo,
+        sourceVideoPath: importDraft.sourceVideoPath,
       });
       setProject(importedProject);
       if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
