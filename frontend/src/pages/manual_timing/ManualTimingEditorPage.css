@@ -1523,6 +1523,11 @@
   white-space: nowrap;
 }
 
+.manualTimingQuickBoardBtn {
+  border-color: rgba(250, 204, 21, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(250, 204, 21, 0.18);
+}
+
 .manualTimingAdvancedPanel {
   display: grid;
   gap: 10px;

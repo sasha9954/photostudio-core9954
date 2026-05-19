@@ -2675,7 +2675,16 @@ export default function ManualTimingEditorPage() {
       || (isPodcastDialogue && hasNonEmptyArray(project.speakers) && hasNonEmptyArray(project.topic_blocks) && scenes.every(sceneHasCompletePodcastPassFields))
     );
   const storyPassReadyForDirector = passReadyForDirector;
+  const quickBoardScenesReady = scenes.length > 0 && scenes.every((scene) => {
+    const startSec = Number(scene?.start_sec ?? scene?.target_t0);
+    const endSec = Number(scene?.end_sec ?? scene?.target_t1);
+    return Number.isFinite(startSec) && Number.isFinite(endSec) && endSec >= startSec;
+  });
+  const quickBoardReady = Boolean(audio?.url || project?.audio_url || project?.audio_path) && quickBoardScenesReady;
   const openDirectorBoardTitle = passReadyForDirector ? "Открыть режиссёрскую доску" : `Сначала примените ${workflowLabels.pass} JSON и подтвердите тайминг`;
+  const quickBoardTitle = scenes.length
+    ? "Создать режиссёрскую доску напрямую из текущего ручного тайминга"
+    : "Сначала нарежьте хотя бы одну сцену";
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
     () => scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null,
@@ -5732,6 +5741,138 @@ export default function ManualTimingEditorPage() {
     });
   };
 
+  const onCreateQuickDirectorBoard = () => {
+    if (!quickBoardReady) {
+      setCopyStatus(scenes.length ? "Проверьте аудио и тайминги сцен" : "Сначала нарежьте хотя бы одну сцену");
+      window.setTimeout(() => setCopyStatus(""), 2600);
+      return;
+    }
+    const ownerNodeId = finalOwnerNodeId;
+    const projectFormat = String(project.format || project.aspect_ratio || "9:16");
+    const hasAsrPhrases = Array.isArray(audioPhrases) && audioPhrases.length > 0;
+    const quickScenes = scenes.map((scene, index) => {
+      const startSec = Number(scene?.start_sec ?? scene?.target_t0 ?? 0) || 0;
+      const endSecBase = Number(scene?.end_sec ?? scene?.target_t1 ?? startSec);
+      const endSec = Number.isFinite(endSecBase) ? endSecBase : startSec;
+      const durationSec = Math.max(0, Number(scene?.duration_sec ?? (endSec - startSec)) || 0);
+      const sceneId = String(scene?.scene_id || scene?.id || `scene_${index + 1}`);
+      const originalText = String(scene?.original_text || scene?.text_original || "").trim();
+      const translatedTextRu = String(scene?.translated_text_ru || scene?.text_ru || "").trim();
+      const normalizedPhraseIds = normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds);
+      return {
+        scene_id: sceneId,
+        id: sceneId,
+        index,
+        start_sec: startSec,
+        end_sec: endSec,
+        duration_sec: durationSec,
+        target_t0: Number(scene?.target_t0 ?? startSec),
+        target_t1: Number(scene?.target_t1 ?? endSec),
+        source_phrase_ids: normalizedPhraseIds,
+        original_text: originalText,
+        text_original: originalText,
+        translated_text_ru: translatedTextRu,
+        contains_vocal: Boolean(scene?.contains_vocal),
+        source: "manual_timing_quick_board",
+        board_mode: "quick",
+        quick_board: true,
+        route: "i2v",
+        route_hint: scene?.contains_vocal ? "can_use_lipsync" : "",
+        video_prompt: "",
+        negative_prompt: "",
+        sound_prompt: "",
+        notes: "",
+        format: projectFormat,
+        aspect_ratio: projectFormat,
+      };
+    });
+    const handoffAudio = normalizeManualTimingProjectAudioForHandoff(project, audio);
+    const quickProject = applyManualTimingProjectAudioCompat({
+      ...project,
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      ownerNodeType: "manualTiming",
+      source: "manual_timing_quick_board",
+      board_mode: "quick",
+      quick_board: true,
+      format: projectFormat,
+      aspect_ratio: projectFormat,
+      audio_url: handoffAudio.url || project.audio_url || "",
+      audio_path: String(project.audio_path || project?.audio?.path || ""),
+      audio_duration_sec: Number(handoffAudio.duration_sec || project.audio_duration_sec || 0) || 0,
+      audio: handoffAudio,
+      audio_phrases: audioPhrases,
+      scenes: quickScenes,
+      selectedSceneId: quickScenes[0]?.scene_id || "",
+      created_at: new Date().toISOString(),
+      updatedAt: Date.now(),
+      lastPersistReason: "manual_timing_quick_board_create",
+    }, handoffAudio);
+    const inputSignature = computeManualProjectInputSignature(quickProject);
+    const audioSignature = computeManualProjectInputSignature(quickProject, { audioOnly: true });
+    const storySignature = computeManualProjectInputSignature(quickProject, { storyOnly: true });
+    const projectId = `manual_quick_${ownerNodeId}_${inputSignature}_${Date.now()}`;
+    const finalQuickProject = sanitizeManualNewBoardProject({
+      ...quickProject,
+      project_id: projectId,
+      projectId,
+      input_signature: inputSignature,
+      inputSignature,
+      audio_signature: audioSignature,
+      audioSignature,
+      story_signature: storySignature,
+      storySignature,
+    });
+    console.log("[MANUAL TIMING QUICK BOARD CREATE]", {
+      sceneCount: quickScenes.length,
+      audioDurationSec: Number(finalQuickProject?.audio_duration_sec || finalQuickProject?.audio?.duration_sec || 0) || 0,
+      boardMode: "quick",
+      hasStoryPassFields: scenes.some(sceneHasCompleteStoryPassFields),
+      hasAsrPhrases,
+    });
+    const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, finalQuickProject, {
+      forceReplace: true,
+      explicitReset: true,
+      allowMaterialLoss: true,
+      reason: "manual_timing_quick_board_create",
+      routePath: STORYBOARD_ROUTE,
+    }) || finalQuickProject;
+    const replacedProjectId = String(replacedProject?.project_id || replacedProject?.projectId || "").trim();
+    const replacedInputSignature = String(replacedProject?.input_signature || replacedProject?.inputSignature || "").trim();
+    const replacedAudioSignature = String(replacedProject?.audio_signature || replacedProject?.audioSignature || "").trim();
+    writeManualClipBoardOpenState({
+      isOpen: true,
+      sourceNodeId: ownerNodeId,
+      selectedSceneId: String(replacedProject?.selectedSceneId || replacedProject?.scenes?.[0]?.scene_id || "").trim(),
+      project_id: replacedProjectId,
+      input_signature: replacedInputSignature,
+      audio_signature: replacedAudioSignature,
+      forceProjectId: replacedProjectId,
+      forceInputSignature: replacedInputSignature,
+      forceAudioSignature: replacedAudioSignature,
+      routePath: STORYBOARD_ROUTE,
+      updatedAt: Date.now(),
+    });
+    persistManualTimingProject(replacedProject);
+    setActiveBoardProject(replacedProject);
+    navigate(STORYBOARD_ROUTE, {
+      state: {
+        openManualDirectorBoard: true,
+        closeLegacyScenarioEditors: true,
+        sourceNodeId: ownerNodeId,
+        ownerNodeId,
+        manualBoardForceProjectId: replacedProjectId,
+        manualBoardForceInputSignature: replacedInputSignature,
+        manualBoardForceAudioSignature: replacedAudioSignature,
+        forceProjectId: replacedProjectId,
+        forceInputSignature: replacedInputSignature,
+        forceAudioSignature: replacedAudioSignature,
+        director_board: replacedProject,
+        project: replacedProject,
+      },
+    });
+  };
+
   const onCopyTimingJson = async () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const payload = buildManualTimingExportJson(project);
@@ -7710,6 +7851,12 @@ export default function ManualTimingEditorPage() {
               disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)}
               title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}
             >{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
+            <button
+              className="clipSB_btn clipSB_btnSecondary manualTimingQuickBoardBtn"
+              onClick={onCreateQuickDirectorBoard}
+              disabled={mainActionsDisabled || !quickBoardReady || Boolean(handoffStatus)}
+              title={quickBoardTitle}
+            >⚡ Быстрая доска</button>
             {hasActiveBoardProject ? <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Создать новую доску</button> : null}
           </div>
           <div className="manualTimingWorkflowStatusLine">
