@@ -7203,11 +7203,18 @@ export default function ManualTimingEditorPage() {
                 <input type="file" accept="application/json,.json,text/plain" onChange={onImportJsonFile} disabled={!isProjectModeSelected} />
               </label>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadCurrentTimingBackup}>Скачать бэкап тайминга</button>
+              <button
+                className="clipSB_btn manualTimingVideoJsonButton"
+                type="button"
+                onClick={onDownloadVideoMatchSeedJson}
+                disabled={mainActionsDisabled}
+              >
+                📷 JSON для видео
+              </button>
               {!isStoryVoiceover ? <div className="manualTimingJsonPassGroup">
                 <span>{workflowLabels.panelTitle}</span>
                 <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
                 <button className="clipSB_btn clipSB_btnPrimary" onClick={applyImportedTimingJsonFromMode} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
-                <button className="clipSB_btn manualTimingVideoJsonButton" onClick={onDownloadVideoMatchSeedJson} disabled={mainActionsDisabled}>📷 JSON для видео</button>
               </div> : null}
             </div>
             {isStoryVoiceover ? <div className="manualTimingAiStages">
@@ -7218,7 +7225,6 @@ export default function ManualTimingEditorPage() {
                 </div>
                 <div className="manualTimingAiStageActions">
                   <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
-                  <button className="clipSB_btn manualTimingVideoJsonButton manualTimingAiStageButton" onClick={onDownloadVideoMatchSeedJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>📷 JSON для видео</button>
                   <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
                 </div>
               </div>
