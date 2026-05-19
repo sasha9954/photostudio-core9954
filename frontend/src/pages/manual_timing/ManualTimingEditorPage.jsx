@@ -5830,10 +5830,12 @@ export default function ManualTimingEditorPage() {
       const startSec = Number(scene?.start_sec ?? scene?.startSec ?? 0) || 0;
       const endSecRaw = Number(scene?.end_sec ?? scene?.endSec ?? startSec) || startSec;
       const endSec = Math.max(startSec, endSecRaw);
+      const fallbackSegId = `seg_${String(index + 1).padStart(2, "0")}`;
+      const rawSceneId = String(scene?.scene_id || scene?.sceneId || "").trim();
       const text = String(scene?.text || scene?.original_text || scene?.originalText || "").trim();
       const originalText = String(scene?.original_text || scene?.originalText || "").trim();
       return {
-        audio_scene_id: String(scene?.scene_id || `scene_${index + 1}`),
+        audio_scene_id: rawSceneId || fallbackSegId,
         target_t0: roundTimingSec(startSec),
         target_t1: roundTimingSec(endSec),
         duration_sec: roundTimingSec(Math.max(0, endSec - startSec)),
@@ -5857,6 +5859,14 @@ export default function ManualTimingEditorPage() {
         mime_type: String(normalizedAudioMetadata?.mime_type || normalizedAudioMetadata?.mimeType || ""),
         duration_sec: roundTimingSec(audioDurationSec),
       },
+      project_meta: {
+        project_mode: String(sourceProject?.project_mode || sourceProject?.projectMode || ""),
+        project_kind: String(sourceProject?.project_kind || sourceProject?.projectKind || ""),
+        split_type: String(sourceProject?.split_type || sourceProject?.splitType || ""),
+        format: String(sourceProject?.format || sourceProject?.aspect_ratio || sourceProject?.aspectRatio || ""),
+        timing_status: String(sourceProject?.timing_status || sourceProject?.timingStatus || ""),
+        scenes_count: segments.length,
+      },
       audio_duration_sec: roundTimingSec(audioDurationSec),
       audio_map: {
         source_of_truth: "audio_map",
@@ -5864,16 +5874,14 @@ export default function ManualTimingEditorPage() {
         segments,
       },
       instructions_for_chatgpt: [
-        "Этот JSON является audio_map seed для Video Match Board.",
-        "ChatGPT должен разобрать timing segments.",
-        "Не менять target_t0/target_t1.",
-        "audio_map является source of truth.",
-        "ChatGPT должен подготовить video_match_job_v1 для Codex.",
-        "ChatGPT должен спросить или использовать source_video paths.",
-        "ChatGPT должен заложить универсальные visual roles.",
-        "Не использовать story-specific hardcode.",
-        "Если готовый video_index уже есть, использовать match_audio без rebuild_index.",
-        "build_index делать один раз на source video.",
+        "When this JSON is sent back to ChatGPT, treat it as a Video Match seed.",
+        "ChatGPT must prepare a Codex video matching job.",
+        "Preserve target_t0/target_t1 exactly.",
+        "audio_map is the source of truth.",
+        "If source video has already been indexed, use match_audio against existing video_index.",
+        "If source video is new, create build_index job first.",
+        "Use universal visual roles, not project-specific hardcode.",
+        "Do not hardcode orchard/farm/garden rules.",
       ],
       video_match_policy: {
         universal_visual_roles: [
@@ -5902,6 +5910,12 @@ export default function ManualTimingEditorPage() {
         candidates_per_scene: 3,
         do_not_change_audio_timings: true,
         source_of_truth: "audio_map",
+        index_strategy: {
+          build_index_once: true,
+          reuse_video_index_if_exists: true,
+          match_audio_against_existing_index: true,
+          modes: ["build_index", "match_audio"],
+        },
       },
       output_expectations: [
         "video_match_board_v2.json",
@@ -5914,6 +5928,11 @@ export default function ManualTimingEditorPage() {
   const onDownloadVideoMatchSeedJson = () => {
     if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
     const payload = buildManualTimingVideoMatchSeedJson(project);
+    if (!payload.audio_map?.segments?.length) {
+      setCopyStatus("Нет сцен для Video Match JSON");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
     const filename = buildManualTimingVideoMatchSeedFilename(new Date());
     downloadManualTimingJsonFile(payload, filename);
     setCopyStatus("JSON для видео скачан");
