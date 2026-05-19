@@ -468,7 +468,9 @@ export function parseVideoMatchBoardJson(jsonText = "", sourceVideoUrl = "") {
   return {
     ok: true,
     schema: parsed.schema,
-    sourceVideo: parsed.source_video && typeof parsed.source_video === "object" ? parsed.source_video : {},
+    sourceVideo: normalizeVideoMatchSourceVideo(parsed),
+    source_video: parsed.source_video && typeof parsed.source_video === "object" ? parsed.source_video : {},
+    sourceVideoPath: String(parsed.sourceVideoPath || parsed.source_video_path || "").trim(),
     matchSegments,
     videoBlocks,
     selectedSegmentId: matchSegments[0]?.id || "",
