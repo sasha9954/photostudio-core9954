@@ -543,9 +543,12 @@ function mergeManualTimingIntoDirectorBoardProject(timingProject = {}, directorB
     const merged = { ...safeScene };
 
     MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELDS.forEach((field) => {
-      if (Object.prototype.hasOwnProperty.call(boardScene, field)) {
-        merged[field] = boardScene[field];
+      if (!Object.prototype.hasOwnProperty.call(boardScene, field)) return;
+      if (["route", "audio_slice_url", "audio_slice_duration_sec"].includes(field)) {
+        const timingValue = merged[field];
+        if (timingValue !== undefined && timingValue !== null && String(timingValue).trim() !== "") return;
       }
+      merged[field] = boardScene[field];
     });
 
     if (!Object.prototype.hasOwnProperty.call(merged, "route")) {
