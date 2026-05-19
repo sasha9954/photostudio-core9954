@@ -3202,6 +3202,18 @@ export default function ManualClipDirectorBoardEditor({
     if (!blockId) return null;
     return storyBlocks.find((block) => String(block?.block_id || "") === blockId || String(block?.id || "") === blockId) || null;
   }, [selectedScene?.story_block_id, storyBlocks]);
+  useEffect(() => {
+    if (!selectedScene) return;
+    const storyBlockId = String(selectedScene?.story_block_id || selectedScene?.storyBlockId || "").trim();
+    console.info("[MANUAL BOARD SCENE BLOCK COLOR DEBUG]", {
+      sceneId: String(selectedScene?.scene_id || selectedScene?.id || "").trim(),
+      storyBlockId,
+      sceneStoryBlockColor: String(selectedScene?.story_block_color || selectedScene?.storyBlockColor || "").trim(),
+      sceneBlockColor: String(selectedScene?.block_color || selectedScene?.blockColor || "").trim(),
+      sceneColor: String(selectedScene?.color || "").trim(),
+      projectStoryBlocksCount: Array.isArray(project?.story_blocks) ? project.story_blocks.length : 0,
+    });
+  }, [project?.story_blocks, selectedScene]);
   const selectedSceneIndex = useMemo(() => scenes.findIndex((s) => s.scene_id === selectedScene?.scene_id), [scenes, selectedScene]);
   const storyPositionText = selectedScene
     ? (selectedScene.story_position_ru || buildStoryPositionFallback(selectedScene, selectedSceneIndex >= 0 ? selectedSceneIndex : 0, scenes.length))
@@ -4382,10 +4394,11 @@ export default function ManualClipDirectorBoardEditor({
   const onExtractSceneAudioSlice = async (scene) => {
     const sceneId = String(scene?.scene_id || "").trim();
     if (!sceneId) return;
+    const currentProject = projectRef.current || project || {};
     const sourceAudioUrl = String(
-      projectRef.current?.audio?.url
-      || projectRef.current?.audio_url
-      || projectRef.current?.audioUrl
+      currentProject?.audio?.url
+      || currentProject?.audio_url
+      || currentProject?.audioUrl
       || audioUrl
       || ""
     ).trim();
@@ -4412,8 +4425,23 @@ export default function ManualClipDirectorBoardEditor({
       return;
     }
     const endpoint = "/api/assets/podcast-audio/extract-phrase-to-asset";
-    const sourceNodeId = String(nodeId || projectRef.current?.nodeId || projectRef.current?.sourceNodeId || "manual_board").trim() || "manual_board";
-    console.info("[MANUAL BOARD AUDIO SLICE EXTRACT START]", { sceneId, sourceAudioUrl, startSec, endSec, durationSec, endpoint });
+    const sourceNodeId = String(
+      currentProject?.nodeId
+      || currentProject?.sourceNodeId
+      || currentProject?.ownerNodeId
+      || scene?.sourceNodeId
+      || scene?.ownerNodeId
+      || "manual_board"
+    ).trim() || "manual_board";
+    console.info("[MANUAL BOARD AUDIO SLICE EXTRACT START]", {
+      sceneId,
+      sourceNodeId,
+      sourceAudioUrl,
+      startSec,
+      endSec,
+      durationSec,
+      endpoint,
+    });
     try {
       const out = await fetchJson(endpoint, {
         method: "POST",

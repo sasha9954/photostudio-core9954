@@ -5912,7 +5912,34 @@ export default function ManualTimingEditorPage() {
 
     const ownerNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
+    const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
+    const storyBlockById = new Map(
+      storyBlocks
+        .map((block) => [String(block?.block_id || block?.id || "").trim(), block])
+        .filter(([blockId]) => blockId)
+    );
+    function findStoryBlockForScene(scene) {
+      const sceneId = String(scene?.scene_id || scene?.id || "").trim();
+      const directBlockId = String(scene?.story_block_id || scene?.storyBlockId || "").trim();
+      if (directBlockId && storyBlockById.has(directBlockId)) return storyBlockById.get(directBlockId);
+      return storyBlocks.find((block) => {
+        const ids = Array.isArray(block?.scene_ids) ? block.scene_ids : [];
+        return ids.map((id) => String(id || "").trim()).includes(sceneId);
+      }) || null;
+    }
     const quickScenes = scenes.map((scene, index) => {
+      const block = findStoryBlockForScene(scene);
+      const blockId = String(scene?.story_block_id || scene?.storyBlockId || block?.block_id || block?.id || "").trim();
+      const blockTitle = String(scene?.story_block_title_ru || scene?.storyBlockTitleRu || block?.title_ru || block?.title || blockId || "").trim();
+      const blockColor = String(
+        scene?.story_block_color
+        || scene?.block_color
+        || scene?.storyBlockColor
+        || block?.color
+        || block?.block_color
+        || block?.story_block_color
+        || ""
+      ).trim();
       const startSec = Number(scene?.start_sec ?? scene?.target_t0 ?? 0) || 0;
       const endSecBase = Number(scene?.end_sec ?? scene?.target_t1 ?? startSec);
       const endSec = Number.isFinite(endSecBase) ? endSecBase : startSec;
@@ -5934,15 +5961,20 @@ export default function ManualTimingEditorPage() {
         original_text: originalText,
         text_original: originalText,
         translated_text_ru: translatedTextRu,
-        story_block_id: String(scene?.story_block_id || "").trim(),
-        story_block_title_ru: String(scene?.story_block_title_ru || "").trim(),
-        story_block_position_ru: String(scene?.story_block_position_ru || "").trim(),
-        story_block_index: Number(scene?.story_block_index || 0) || 0,
-        story_block_order: Number(scene?.story_block_order || 0) || 0,
-        story_block_color: String(scene?.story_block_color || "").trim(),
-        block_color: String(scene?.block_color || "").trim(),
-        scene_role_in_block_ru: String(scene?.scene_role_in_block_ru || "").trim(),
-        block_progress_ru: String(scene?.block_progress_ru || "").trim(),
+        story_block_id: blockId,
+        storyBlockId: blockId,
+        story_block_title_ru: blockTitle,
+        storyBlockTitleRu: blockTitle,
+        story_block_position_ru: String(scene?.story_block_position_ru || block?.story_block_position_ru || "").trim(),
+        story_block_index: Number(scene?.story_block_index ?? block?.story_block_index ?? 0) || 0,
+        story_block_order: Number(scene?.story_block_order ?? block?.story_block_order ?? 0) || 0,
+        story_block_color: blockColor,
+        storyBlockColor: blockColor,
+        block_color: blockColor,
+        blockColor,
+        color: blockColor,
+        scene_role_in_block_ru: String(scene?.scene_role_in_block_ru || block?.scene_role_in_block_ru || "").trim(),
+        block_progress_ru: String(scene?.block_progress_ru || block?.block_progress_ru || "").trim(),
         audio_slice_url: "",
         audio_slice_duration_sec: 0,
         audio_extracted: false,
@@ -5984,9 +6016,17 @@ export default function ManualTimingEditorPage() {
       audioPath: handoffAudioPath,
       audioDurationSec: handoffAudioDurationSec,
     });
-    const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
+    const quickStoryBlocks = storyBlocks.map((block, index) => ({
+      ...block,
+      block_id: String(block?.block_id || block?.id || `block_${index + 1}`).trim(),
+      id: String(block?.id || block?.block_id || `block_${index + 1}`).trim(),
+      title_ru: String(block?.title_ru || block?.title || "").trim(),
+      color: String(block?.color || block?.block_color || block?.story_block_color || "").trim(),
+      block_color: String(block?.block_color || block?.color || block?.story_block_color || "").trim(),
+      scene_ids: Array.isArray(block?.scene_ids) ? block.scene_ids : [],
+    }));
     const scenesWithStoryBlockId = quickScenes.filter((scene) => String(scene?.story_block_id || "").trim()).length;
-    const scenesWithBlockColor = quickScenes.filter((scene) => String(scene?.story_block_color || scene?.block_color || "").trim()).length;
+    const scenesWithBlockColor = quickScenes.filter((scene) => String(scene?.story_block_color || scene?.block_color || scene?.storyBlockColor || scene?.blockColor || "").trim()).length;
     console.info("[MANUAL TIMING QUICK BOARD AUDIO HANDOFF]", {
       hasAudioUrl: Boolean(handoffAudioUrl),
       audioUrl: handoffAudioUrl,
@@ -5998,6 +6038,12 @@ export default function ManualTimingEditorPage() {
       storyBlocksCount: storyBlocks.length,
       scenesWithStoryBlockId,
       scenesWithBlockColor,
+      firstBlocks: quickStoryBlocks.slice(0, 3).map((block) => ({
+        block_id: block?.block_id,
+        title_ru: block?.title_ru,
+        color: block?.color,
+        block_color: block?.block_color,
+      })),
     });
     const quickProject = applyManualTimingProjectAudioCompat({
       nodeId: ownerNodeId,
@@ -6016,7 +6062,7 @@ export default function ManualTimingEditorPage() {
       audio_duration_sec: handoffAudioDurationSec,
       audioDurationSec: handoffAudioDurationSec,
       audio: handoffAudioUrl ? handoffAudio : normalizeManualTimingProjectAudioForHandoff(project, audio),
-      story_blocks: storyBlocks,
+      story_blocks: quickStoryBlocks,
       audio_phrases: audioPhrases,
       scenes: quickScenes,
       selectedSceneId: quickScenes[0]?.scene_id || "",
