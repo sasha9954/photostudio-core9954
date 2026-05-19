@@ -4374,6 +4374,7 @@ export default function ManualClipDirectorBoardEditor({
 
   const onExtractSceneAudioSlice = async (scene) => {
     const sceneId = String(scene?.scene_id || "").trim();
+    if (!sceneId) return;
     const sourceAudioUrl = String(projectRef.current?.audio?.url || projectRef.current?.audio_url || projectRef.current?.audioUrl || "").trim();
     if (!sourceAudioUrl) {
       updateScene(sceneId, {
@@ -4397,12 +4398,13 @@ export default function ManualClipDirectorBoardEditor({
     try {
       const out = await fetchJson(endpoint, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sourceAudioUrl,
           sourceStartSec: startSec,
           sourceEndSec: endSec,
           durationSec,
-          label: String(sceneId || "scene").trim(),
+          label: sceneId,
           sourceNodeId,
         }),
       });
