@@ -876,3 +876,27 @@
   font-size: 11px;
   line-height: 1.25;
 }
+
+.videoMatchOverrideUploadBtn {
+  border-color: rgba(216, 180, 254, 0.45);
+  background: linear-gradient(135deg, rgba(88, 28, 135, 0.72), rgba(30, 41, 59, 0.88));
+  color: #f3e8ff;
+}
+.videoMatchCandidateCard.isOverride {
+  border-color: rgba(216, 180, 254, 0.72);
+  background: rgba(88, 28, 135, 0.16);
+}
+.videoMatchCandidateBadge {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #f3e8ff;
+  background: rgba(168, 85, 247, 0.2);
+  border: 1px solid rgba(216, 180, 254, 0.35);
+}
+.videoMatchStripSegment.isOverride {
+  box-shadow: 0 0 0 2px rgba(216, 180, 254, 0.35), 0 0 18px rgba(168, 85, 247, 0.22);
+}

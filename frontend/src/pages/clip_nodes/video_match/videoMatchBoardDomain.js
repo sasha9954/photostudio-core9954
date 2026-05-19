@@ -256,6 +256,11 @@ export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourc
     cameraMotion: String(source.camera_motion || source.cameraMotion || "").trim(),
     thumbnail: String(source.thumbnail || "").trim(),
     warnings,
+    candidateType: String(source.candidateType || source.candidate_type || "").trim(),
+    sourceKind: String(source.sourceKind || source.source_kind || "").trim(),
+    overrideVideoPath: String(source.overrideVideoPath || source.override_video_path || "").trim(),
+    overrideVideoUrl: String(source.overrideVideoUrl || source.override_video_url || "").trim(),
+    overrideDurationSec: toNullableFiniteNumber(source.overrideDurationSec ?? source.override_duration_sec),
     sourceVideoUrl: String(source.sourceVideoUrl || sourceVideoUrl || "").trim(),
   };
 }
@@ -305,6 +310,10 @@ export function normalizeVideoBlock(match = {}, sourceVideoUrl = "") {
     sourceVideoUrl: String(match.sourceVideoUrl || sourceVideoUrl || "").trim(),
     matchReason: String(match.match_reason || match.matchReason || "").trim(),
     confidence: toNullableFiniteNumber(match.confidence),
+    candidateType: String(match.candidateType || match.candidate_type || "").trim(),
+    sourceKind: String(match.sourceKind || match.source_kind || "").trim(),
+    overrideVideoPath: String(match.overrideVideoPath || match.override_video_path || "").trim(),
+    overrideVideoUrl: String(match.overrideVideoUrl || match.override_video_url || "").trim(),
   };
 }
 
@@ -325,10 +334,17 @@ export function buildVideoBlocksFromMatchSegments(matchSegments = [], sourceVide
         targetStartSec: normalizedSegment.targetStartSec,
         targetEndSec: normalizedSegment.targetEndSec,
         sourceVideoStartSec: selectedCandidate.sourceVideoStartSec,
-        sourceVideoEndSec: selectedCandidate.sourceVideoEndSec,
+        sourceVideoEndSec: selectedCandidate.overrideVideoPath
+          ? toFiniteNumber(selectedCandidate.overrideDurationSec ?? selectedCandidate.sourceVideoEndSec, selectedCandidate.sourceVideoEndSec)
+          : selectedCandidate.sourceVideoEndSec,
         sourceVideoUrl: selectedCandidate.sourceVideoUrl || sourceVideoUrl,
         matchReason: selectedCandidate.matchReason,
         confidence: selectedCandidate.confidence,
+        candidateType: selectedCandidate.candidateType,
+        sourceKind: selectedCandidate.overrideVideoPath ? "override_video" : selectedCandidate.sourceKind,
+        overrideVideoPath: selectedCandidate.overrideVideoPath,
+        overrideVideoUrl: selectedCandidate.overrideVideoUrl,
+        sourceVideoStartSec: selectedCandidate.overrideVideoPath ? 0 : selectedCandidate.sourceVideoStartSec,
       }, sourceVideoUrl);
     })
     .filter(Boolean);

@@ -86,6 +86,10 @@ function isBrowserSafeThumbnail(thumbnail = "") {
     || raw.startsWith("blob:");
 }
 
+function isOverrideCandidate(candidate = {}) {
+  return candidate?.sourceKind === "override_video" || Boolean(candidate?.overrideVideoUrl || candidate?.overrideVideoPath);
+}
+
 export default function VideoMatchBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -96,6 +100,7 @@ export default function VideoMatchBoardPage() {
   const playbackRef = useRef(null);
   const objectUrlRef = useRef("");
   const audioObjectUrlRef = useRef("");
+  const overrideUploadInputRef = useRef(null);
 
   const initialProject = useMemo(() => {
     const stateProject = location.state?.project || null;
@@ -477,6 +482,21 @@ export default function VideoMatchBoardPage() {
 
   const onPreviewCandidate = async (segment = {}, candidate = {}) => {
     setPreviewCandidateId(candidate.id || "");
+    if (isOverrideCandidate(candidate) && candidate.overrideVideoUrl && videoRef.current) {
+      const overrideUrl = resolveOutputUrl(candidate.overrideVideoUrl);
+      playbackRef.current = null;
+      setIsAssemblyPlaying(false);
+      setIsPlaybackActive(true);
+      if (audioRef.current) audioRef.current.pause();
+      patchProject({ selectedSegmentId: segment.id || "", selectedCandidateId: candidate.id || "" }, { lastGood: false });
+      videoRef.current.muted = false;
+      videoRef.current.src = overrideUrl;
+      videoRef.current.currentTime = 0;
+      const didPlay = await videoRef.current.play().then(() => true).catch(() => false);
+      if (!didPlay) setIsPlaybackActive(false);
+      return;
+    }
+    if (videoRef.current && sourceVideoUrl && videoRef.current.src !== sourceVideoUrl) videoRef.current.src = sourceVideoUrl;
     const start = Math.max(0, Number(candidate.sourceVideoStartSec || 0));
     const end = Math.max(start, Number(candidate.sourceVideoEndSec || start));
     playbackRef.current = { mode: "video_range", end, blocks: [], index: 0, currentBlockId: candidate.id || "" };
@@ -486,6 +506,39 @@ export default function VideoMatchBoardPage() {
     patchProject({ selectedSegmentId: segment.id || "", selectedCandidateId: candidate.id || "" }, { lastGood: false });
     const didPlay = await playSourceRange(start, end, { muted: false });
     if (!didPlay) setIsPlaybackActive(false);
+  };
+
+  const onUploadOverrideVideo = async (file) => {
+    if (!file || !selectedSegment) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("nodeId", nodeId);
+    formData.append("segmentId", selectedSegment.id || selectedSegment.audioSceneId || "");
+    formData.append("candidateType", "user_override");
+    try {
+      const response = await fetch(`${API_BASE}/api/video-match/override-upload`, { method: "POST", credentials: "include", body: formData });
+      const data = await response.json();
+      if (!response.ok || !data?.ok) throw new Error(data?.detail?.message || data?.message || "upload failed");
+      const durationSec = Number(data.durationSec || 0);
+      const segmentId = selectedSegment.id || selectedSegment.audioSceneId;
+      const candidateId = `${segmentId}_override_${Date.now()}`;
+      const nextSegments = matchSegments.map((segment) => {
+        if (segment.id !== selectedSegment.id) return segment;
+        const overrideCandidate = {
+          id: candidateId, candidateType: "user_override", sourceKind: "override_video",
+          overrideVideoPath: data.overrideVideoPath, overrideVideoUrl: data.overrideVideoUrl, overrideDurationSec: durationSec,
+          sourceVideoStartSec: 0, sourceVideoEndSec: durationSec, video_t0: 0, video_t1: durationSec, fit_mode: "override",
+          confidence: 1, matchReason: "Пользовательская замена видео / lip-sync override.", match_reason: "Пользовательская замена видео / lip-sync override.",
+          visualType: "user_override", visual_type: "user_override", shotType: "custom", shot_type: "custom", warnings: [],
+        };
+        return { ...segment, candidates: [...(Array.isArray(segment.candidates) ? segment.candidates : []), overrideCandidate], selectedCandidateId: candidateId, selected_candidate_id: candidateId };
+      });
+      const nextBlocks = buildVideoBlocksFromMatchSegments(nextSegments, sourceVideoUrl);
+      const nextBlock = nextBlocks.find((block) => block.segmentId === selectedSegment.id && block.candidateId === candidateId) || null;
+      patchProject({ matchSegments: nextSegments, videoBlocks: nextBlocks, selectedSegmentId: selectedSegment.id, selectedCandidateId: candidateId, selectedBlockId: nextBlock?.id || "" });
+    } catch (error) {
+      patchProject({ jsonError: `Не удалось загрузить override: ${String(error?.message || error)}` }, { lastGood: false });
+    }
   };
 
   const onVideoFileChange = (file) => {
@@ -625,6 +678,10 @@ export default function VideoMatchBoardPage() {
             targetEndSec: Number(block.targetEndSec || 0),
             sourceVideoStartSec: Number(block.sourceVideoStartSec || 0),
             sourceVideoEndSec: Number(block.sourceVideoEndSec || 0),
+            candidateType: block.candidateType || "",
+            sourceKind: block.sourceKind || "",
+            overrideVideoPath: block.overrideVideoPath || "",
+            overrideVideoUrl: block.overrideVideoUrl || "",
           })),
         },
       });
@@ -862,7 +919,7 @@ export default function VideoMatchBoardPage() {
               <button
                 key={block.id}
                 type="button"
-                className={`videoMatchStripSegment ${block.id === project.selectedBlockId ? "isSelected" : ""} ${block.id === currentPlayingBlockId ? "isCurrent" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""}`}
+                className={`videoMatchStripSegment ${block.id === project.selectedBlockId ? "isSelected" : ""} ${block.id === currentPlayingBlockId ? "isCurrent" : ""} ${isAssemblyPlaying && block.id === project.selectedBlockId ? "isPlaying" : ""} ${block.sourceKind === "override_video" ? "isOverride" : ""}`}
                 style={{ "--strip-color-index": index % 8 }}
                 onClick={() => onSelectBlock(block)}
                 title={`${block.audioSceneId || block.segmentId}: video ${formatSec(block.sourceVideoStartSec)}–${formatSec(block.sourceVideoEndSec)}с · candidate ${block.candidateId || block.id}`}
@@ -918,6 +975,8 @@ export default function VideoMatchBoardPage() {
             <h2>Сцена / Варианты</h2>
             <span>{selectedSegmentCandidates.length} вариантов</span>
           </div>
+          <input ref={overrideUploadInputRef} type="file" accept="video/*" hidden onChange={(event) => { onUploadOverrideVideo(event.target.files?.[0]); event.target.value = ""; }} />
+          <button className="clipSB_btn clipSB_btnSecondary videoMatchOverrideUploadBtn" type="button" disabled={!selectedSegment} onClick={() => overrideUploadInputRef.current?.click()}>🎭 Заменить видео</button>
           {selectedSegment ? (
             <>
               <div className="videoMatchSceneInfo">
@@ -934,11 +993,13 @@ export default function VideoMatchBoardPage() {
                   const isCandidateSelected = candidate.id === selectedSegment.selectedCandidateId;
                   const isPreviewCandidate = candidate.id === previewCandidateId;
                   return (
-                    <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""}`}>
+                    <div key={candidate.id} className={`videoMatchCandidateCard ${isCandidateSelected ? "isSelected" : ""} ${isPreviewCandidate ? "isPreview" : ""} ${isOverrideCandidate(candidate) ? "isOverride" : ""}`}>
                       {isBrowserSafeThumbnail(candidate.thumbnail) ? <img src={candidate.thumbnail} alt={`${candidate.id} thumbnail`} /> : null}
                       <div className="videoMatchCandidateBody">
                         <b>{candidate.id}{isCandidateSelected ? " · выбрано" : ""}{isPreviewCandidate ? " · просмотр" : ""}</b>
                         <span>видео: {formatSec(candidate.sourceVideoStartSec)}–{formatSec(candidate.sourceVideoEndSec)} · уверенность: {candidate.confidence ?? "—"}</span>
+                        {isOverrideCandidate(candidate) ? <span className="videoMatchCandidateBadge">свой клип · lip-sync override</span> : null}
+                        {isOverrideCandidate(candidate) ? <small>длина клипа: {formatSec(candidate.overrideDurationSec || candidate.sourceVideoEndSec)}с / цель: {formatSec((selectedSegment?.targetEndSec || 0) - (selectedSegment?.targetStartSec || 0))}с</small> : null}
                         {candidate.matchReason ? <small>{candidate.matchReason}</small> : null}
                         {candidate.warnings?.length ? <small className="videoMatchWarnings">Предупреждения: {candidate.warnings.join("; ")}</small> : null}
                       </div>
