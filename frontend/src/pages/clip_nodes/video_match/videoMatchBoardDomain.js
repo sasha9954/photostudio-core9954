@@ -324,6 +324,9 @@ export function buildVideoBlocksFromMatchSegments(matchSegments = [], sourceVide
       const normalizedSegment = normalizeVideoMatchSegment(segment, index, sourceVideoUrl);
       const selectedCandidate = normalizedSegment.candidates.find((candidate) => candidate.id === normalizedSegment.selectedCandidateId) || normalizedSegment.candidates[0];
       if (!selectedCandidate) return null;
+      const isOverride = selectedCandidate.sourceKind === "override_video"
+        || selectedCandidate.overrideVideoPath
+        || selectedCandidate.overrideVideoUrl;
       return normalizeVideoBlock({
         id: selectedCandidate.id,
         candidateId: selectedCandidate.id,
@@ -333,18 +336,17 @@ export function buildVideoBlocksFromMatchSegments(matchSegments = [], sourceVide
         story_scene_id: normalizedSegment.story_scene_id,
         targetStartSec: normalizedSegment.targetStartSec,
         targetEndSec: normalizedSegment.targetEndSec,
-        sourceVideoStartSec: selectedCandidate.sourceVideoStartSec,
-        sourceVideoEndSec: selectedCandidate.overrideVideoPath
+        sourceVideoStartSec: isOverride ? 0 : selectedCandidate.sourceVideoStartSec,
+        sourceVideoEndSec: isOverride
           ? toFiniteNumber(selectedCandidate.overrideDurationSec ?? selectedCandidate.sourceVideoEndSec, selectedCandidate.sourceVideoEndSec)
           : selectedCandidate.sourceVideoEndSec,
         sourceVideoUrl: selectedCandidate.sourceVideoUrl || sourceVideoUrl,
         matchReason: selectedCandidate.matchReason,
         confidence: selectedCandidate.confidence,
         candidateType: selectedCandidate.candidateType,
-        sourceKind: selectedCandidate.overrideVideoPath ? "override_video" : selectedCandidate.sourceKind,
+        sourceKind: isOverride ? "override_video" : selectedCandidate.sourceKind,
         overrideVideoPath: selectedCandidate.overrideVideoPath,
         overrideVideoUrl: selectedCandidate.overrideVideoUrl,
-        sourceVideoStartSec: selectedCandidate.overrideVideoPath ? 0 : selectedCandidate.sourceVideoStartSec,
       }, sourceVideoUrl);
     })
     .filter(Boolean);
