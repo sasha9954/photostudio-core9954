@@ -245,11 +245,28 @@ export default function VideoMatchBoardPage() {
     if (audioRef.current) audioRef.current.pause();
   };
 
+  const restoreSourceVideoElement = () => {
+    if (!videoRef.current || !sourceVideoUrl) return;
+    const currentSrc = String(videoRef.current.src || "");
+    const expectedSrc = String(sourceVideoUrl || "");
+    const resolvedExpectedSrc = (() => {
+      try {
+        return new URL(expectedSrc, window.location.href).href;
+      } catch {
+        return expectedSrc;
+      }
+    })();
+    if (currentSrc !== expectedSrc && currentSrc !== resolvedExpectedSrc) {
+      videoRef.current.src = sourceVideoUrl;
+    }
+  };
+
   const playSourceRange = async (start = 0, end = 0, { muted = false } = {}) => {
     if (!sourceVideoUrl || !videoRef.current) {
       showMissingSourceVideoMessage();
       return false;
     }
+    restoreSourceVideoElement();
     videoRef.current.muted = Boolean(muted);
     videoRef.current.currentTime = Math.max(0, Number(start || 0));
     try {
@@ -330,6 +347,7 @@ export default function VideoMatchBoardPage() {
 
   const playAssemblyFromBlock = async (startBlock = null) => {
     if (!assemblyBlocks.length) return;
+    restoreSourceVideoElement();
     if (!sourceVideoUrl || !videoRef.current) {
       showMissingSourceVideoMessage();
       return;
@@ -496,7 +514,7 @@ export default function VideoMatchBoardPage() {
       if (!didPlay) setIsPlaybackActive(false);
       return;
     }
-    if (videoRef.current && sourceVideoUrl && videoRef.current.src !== sourceVideoUrl) videoRef.current.src = sourceVideoUrl;
+    restoreSourceVideoElement();
     const start = Math.max(0, Number(candidate.sourceVideoStartSec || 0));
     const end = Math.max(start, Number(candidate.sourceVideoEndSec || start));
     playbackRef.current = { mode: "video_range", end, blocks: [], index: 0, currentBlockId: candidate.id || "" };
