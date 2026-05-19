@@ -324,6 +324,7 @@ export function getDefaultManualTimingNodeData() {
     audio_source: "",
     vocal_asr_source: null,
     vocal_asr_split_preset: "song_lines",
+    vocal_asr_gaps: [],
     timing_status: "empty",
     markers: [],
     story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
@@ -2674,6 +2675,11 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     ? normalizedStoryBlocks.filter((block) => String(block.block_id || "") !== MANUAL_TIMING_UNKNOWN_STORY_BLOCK.block_id)
     : normalizedStoryBlocks;
   const audioPhrases = normalizeManualTimingAudioPhrases(safeRaw.audio_phrases || safeRaw.audioPhrases || safeBase.audio_phrases);
+  const vocalAsrGaps = Array.isArray(safeRaw.vocal_asr_gaps)
+    ? safeRaw.vocal_asr_gaps
+    : (Array.isArray(safeRaw?.asr_phrase_map?.gaps)
+      ? safeRaw.asr_phrase_map.gaps
+      : (Array.isArray(safeBase.vocal_asr_gaps) ? safeBase.vocal_asr_gaps : []));
   const rawScenes = Array.isArray(safeRaw.scenes) ? safeRaw.scenes : [];
   const importedScenes = rawScenes
     .map((scene, idx) => normalizeManualTimingSceneForImport(scene, idx))
@@ -2733,6 +2739,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
       || safeBase.vocalAsrSplitPreset
       || "song_lines"
     ),
+    vocal_asr_gaps: vocalAsrGaps,
     audio_phrases: audioPhrases,
     scenes,
     manual_timing_workflow: normalizeManualTimingWorkflowWithInferredFallback(safeRaw, safeBase, inferenceProject),
@@ -3044,6 +3051,9 @@ export function buildManualTimingExportJson(project = {}) {
     vocal_asr_source: safeProject.vocal_asr_source || safeProject.vocalAsrSource || null,
     vocal_asr_split_preset: String(safeProject.vocal_asr_split_preset || safeProject.vocalAsrSplitPreset || "song_lines"),
     audio_phrases,
+    vocal_asr_gaps: Array.isArray(safeProject?.vocal_asr_gaps)
+      ? safeProject.vocal_asr_gaps
+      : (Array.isArray(safeProject?.asr_phrase_map?.gaps) ? safeProject.asr_phrase_map.gaps : []),
     scenes,
   };
 }
