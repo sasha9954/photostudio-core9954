@@ -2581,6 +2581,10 @@ export default function ManualTimingEditorPage() {
   const selectedScenePreSilenceSec = selectedScene ? Number(selectedScene.pre_silence_sec ?? Math.max(0, selectedSceneSpeechStartSec - selectedSceneStartSec)) : 0;
   const selectedScenePostSilenceSec = selectedScene ? Number(selectedScene.post_silence_sec ?? Math.max(0, selectedSceneEndSec - selectedSceneSpeechEndSec)) : 0;
   const selectedSceneSourcePhraseIds = selectedScene && Array.isArray(selectedScene.source_phrase_ids) ? selectedScene.source_phrase_ids : [];
+  const vocalAsrGaps = useMemo(
+    () => (Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : Array.isArray(project?.asr_phrase_map?.gaps) ? project.asr_phrase_map.gaps : []).filter((gap) => String(gap?.type || "") === "unrecognized_vocal"),
+    [project?.vocal_asr_gaps, project?.asr_phrase_map?.gaps]
+  );
   const selectedSceneDurationWarning = selectedScene
     ? getManualTimingSceneDurationWarning(selectedScene)
     : null;
@@ -2716,6 +2720,33 @@ export default function ManualTimingEditorPage() {
         }).filter(Boolean);
       });
   }, [audioPhrases, durationSec, scenes]);
+  const vocalGapTimelineMarkers = useMemo(() => {
+    if (!(durationSec > 0) || !vocalAsrGaps.length) return [];
+    return vocalAsrGaps.flatMap((gap) => {
+      const ranges = mapSourceRangeToTimelineRanges(Number(gap?.start_sec || 0), Number(gap?.end_sec || 0), scenes);
+      if (!ranges.length) return [];
+      return ranges.map((range, rangeIndex) => {
+        const start = clampTime(range.start_sec, durationSec);
+        const end = clampTime(range.end_sec, durationSec);
+        if (!(end > start)) return null;
+        return {
+          ...gap,
+          marker_id: `${String(gap?.gap_id || "asr_gap")}_${rangeIndex}_${range.scene_id || "scene"}`,
+          start_sec: start,
+          end_sec: end,
+          left: `${Math.max(0, Math.min(100, (start / durationSec) * 100))}%`,
+          width: `${Math.max(0.45, Math.min(100, ((end - start) / durationSec) * 100))}%`,
+        };
+      }).filter(Boolean);
+    });
+  }, [durationSec, scenes, vocalAsrGaps]);
+  const selectedSceneOverlappingVocalGaps = useMemo(() => {
+    if (!selectedScene) return [];
+    const sceneStart = Number(selectedScene.start_sec || 0);
+    const sceneEnd = Number(selectedScene.end_sec || 0);
+    return vocalAsrGaps.filter((gap) => Number(gap?.end_sec || 0) > sceneStart && Number(gap?.start_sec || 0) < sceneEnd);
+  }, [selectedScene, vocalAsrGaps]);
+  const selectedSceneHasAsrMissingWarning = Boolean(selectedScene && !selectedSceneSourcePhraseIds.length && selectedSceneOverlappingVocalGaps.length);
 
   const timelineBlockRanges = useMemo(() => {
     if (!(durationSec > 0) || !storyBlocks.length) return [];
@@ -5108,7 +5139,14 @@ export default function ManualTimingEditorPage() {
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
       const vocalPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "vocal_stem_asr", translation_ru: String(phrase?.translation_ru || ""), meaning_ru: String(phrase?.meaning_ru || "") })));
-      persist({ ...project, audio_phrases: vocalPhrases, vocal_asr_split_preset: vocalAsrSplitPreset, asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now() } });
+      const asrGaps = Array.isArray(data?.asr_gaps) ? data.asr_gaps : [];
+      persist({
+        ...project,
+        audio_phrases: vocalPhrases,
+        vocal_asr_gaps: asrGaps,
+        vocal_asr_split_preset: vocalAsrSplitPreset,
+        asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now(), gaps: asrGaps },
+      });
       setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз. Теперь можно резать сцены по фразам на шкале.`);
     } catch (error) {
       setAsrStatus(`Ошибка ASR по вокалу: ${error?.message || error}`);
@@ -5176,13 +5214,24 @@ export default function ManualTimingEditorPage() {
       if (!confirmed) return;
     }
     const audioDurationSec = Number(audio.duration_sec || durationSec || Math.max(...audioPhrases.map((phrase) => Number(phrase.end_sec || 0)), 0));
-    const nextScenes = buildGapAwareScenesFromAudioPhrases(audioPhrases, {
+    const nextScenesRaw = buildGapAwareScenesFromAudioPhrases(audioPhrases, {
       audioDurationSec,
       targetSceneDurationSec: { min: 4, preferred: 6, max: 9 },
       maxSceneDurationSec: 10,
       minSceneDurationSec: 2,
       projectKind: nextKind,
       route: "i2v",
+    });
+    const nextScenes = nextScenesRaw.map((scene) => {
+      const sourceIds = normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds);
+      const overlapsGap = vocalAsrGaps.some((gap) => Number(gap?.end_sec || 0) > Number(scene?.start_sec || 0) && Number(gap?.start_sec || 0) < Number(scene?.end_sec || 0));
+      if (sourceIds.length || !overlapsGap) return scene;
+      return {
+        ...scene,
+        contains_vocal: true,
+        asr_missing: true,
+        warning: "Вокал есть, ASR не распознал текст",
+      };
     });
     const coverage = validateSceneCoverage(nextScenes, audioDurationSec);
     const draftBlocks = buildDraftStoryBlocksFromGapAwareScenes(nextScenes);
@@ -7047,6 +7096,14 @@ export default function ManualTimingEditorPage() {
                     title={`${phrase.phrase_id}: ${formatTimingSec(phrase.timeline_start_sec ?? phrase.start_sec)} – ${formatTimingSec(phrase.timeline_end_sec ?? phrase.end_sec)} · source ${formatTimingSec(phrase.source_start_sec ?? phrase.start_sec)} – ${formatTimingSec(phrase.source_end_sec ?? phrase.end_sec)} · ${pickManualTimingAudioPhraseOriginalText(phrase) || "ASR phrase"}`}
                   />)}
                 </div> : null}
+                {vocalGapTimelineMarkers.length ? <div className="manualTimingAsrGapTrack" aria-label="ASR gaps with vocal activity">
+                  {vocalGapTimelineMarkers.map((gap) => <div
+                    key={`asr-gap-${gap.marker_id}`}
+                    className="manualTimingAsrGapMarker"
+                    style={{ left: gap.left, width: gap.width }}
+                    title={`${gap.gap_id || "gap"} · вокал не распознан · ${formatTimingSec(gap.start_sec)} – ${formatTimingSec(gap.end_sec)}`}
+                  >вокал не распознан</div>)}
+                </div> : null}
                 {scenes.map((scene, idx) => {
                   const isOpenTail = scene.scene_id === openTailSceneId;
                   const isActive = selectedScene?.scene_id === scene.scene_id;
@@ -7086,6 +7143,7 @@ export default function ManualTimingEditorPage() {
             <span><i className="legendTail" /> ещё не отрезано</span>
             <span><i className="legendCandidate" /> следующий отрезок</span>
             {audioPhrases.length ? <span><i className="legendAsrPhrase" /> ASR phrase map</span> : null}
+            {vocalGapTimelineMarkers.length ? <span><i className="legendAsrGap" /> вокал не распознан</span> : null}
             {SHOW_MISSING_PHRASE_TOOLS && audioPhrases.length ? <span><i className="legendMissingPhrase" /> пропущенная фраза</span> : null}
           </div>
           <div className="manualTimingTrackToolbox">
@@ -7554,6 +7612,7 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingStatusItem"><span>Паузы pre / post</span><strong className="manualTimingStatusValue">{selectedScene ? `${formatTimingSec(selectedScenePreSilenceSec)} / ${formatTimingSec(selectedScenePostSilenceSec)}` : "—"}</strong></div>
             <div className="manualTimingStatusItem"><span>source_phrase_ids</span><strong className="manualTimingStatusValue">{selectedSceneSourcePhraseIds.length ? selectedSceneSourcePhraseIds.join(", ") : "—"}</strong></div>
           </div>
+          {selectedSceneHasAsrMissingWarning ? <div className="manualTimingSceneAsrMissingWarning">Вокал звучит, но ASR не дал текста. Можно разрезать по слуху или повторить ASR в режиме короткие фразы / другой model_size.</div> : null}
         </div>
           </div>
         </details>
