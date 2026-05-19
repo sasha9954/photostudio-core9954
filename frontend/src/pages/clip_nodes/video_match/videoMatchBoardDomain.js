@@ -69,6 +69,42 @@ function toBool(value) {
   return false;
 }
 
+export function normalizeVideoMatchSourceVideo(input = {}) {
+  const source = input && typeof input === "object" ? input : {};
+  const sourceVideo = source.sourceVideo && typeof source.sourceVideo === "object"
+    ? source.sourceVideo
+    : (source.source_video && typeof source.source_video === "object" ? source.source_video : {});
+  const path = String(
+    sourceVideo.path
+    || source.sourceVideoPath
+    || source.source_video_path
+    || source.source_video?.path
+    || "",
+  ).trim();
+  const filename = String(
+    sourceVideo.filename
+    || sourceVideo.name
+    || source.sourceVideoFilename
+    || source.source_video?.filename
+    || "",
+  ).trim();
+  const durationSec = Number(
+    sourceVideo.durationSec
+    || sourceVideo.duration_sec
+    || source.sourceVideoDurationSec
+    || source.source_video?.duration_sec
+    || 0,
+  );
+  return {
+    ...sourceVideo,
+    path,
+    filename,
+    name: filename,
+    durationSec,
+    duration_sec: durationSec,
+  };
+}
+
 export function normalizeVideoMatchTimingContext(raw = {}) {
   const source = raw && typeof raw === "object" ? raw : {};
   const audio = source.audio && typeof source.audio === "object" ? source.audio : {};
@@ -179,6 +215,20 @@ export function shouldSkipVideoMatchPersistToProtectMaterials(nextProject = {}, 
   const nextStats = getVideoMatchProjectStats(nextProject);
   const existingStats = getVideoMatchProjectStats(existingProject);
   if (!hasAnyVideoMatchMaterials(existingStats)) return false;
+  const nextSourcePath = String(
+    nextProject?.sourceVideo?.path
+    || nextProject?.sourceVideoPath
+    || nextProject?.source_video?.path
+    || "",
+  ).trim();
+  const existingSourcePath = String(
+    existingProject?.sourceVideo?.path
+    || existingProject?.sourceVideoPath
+    || existingProject?.source_video?.path
+    || "",
+  ).trim();
+  if (nextSourcePath) return false;
+  if (String(existingSourcePath).startsWith("blob:") && nextSourcePath && !String(nextSourcePath).startsWith("blob:")) return false;
 
   const losesMaterials = (existingStats.hasJsonInput && !nextStats.hasJsonInput)
     || Number(nextStats.matchSegmentsCount || 0) < Number(existingStats.matchSegmentsCount || 0)
