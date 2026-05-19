@@ -591,11 +591,45 @@ function mergeManualTimingIntoDirectorBoardProject(timingProject = {}, directorB
   return mergedProject;
 }
 
+
+function isDirectorBoardProject(value = null) {
+  const project = value && typeof value === "object" ? value : {};
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const hasBoardSceneFields = scenes.some((scene = {}) => (
+    Object.prototype.hasOwnProperty.call(scene, "video_prompt")
+    || Object.prototype.hasOwnProperty.call(scene, "image_url")
+    || Object.prototype.hasOwnProperty.call(scene, "video_url")
+    || Object.prototype.hasOwnProperty.call(scene, "status")
+    || Object.prototype.hasOwnProperty.call(scene, "route")
+  ));
+  const lastPersistReason = String(project?.lastPersistReason || project?.last_persist_reason || "").trim();
+  return Boolean(
+    project?.board_mode !== undefined
+    || project?.quick_board === true
+    || project?.ownerNodeType !== undefined
+    || hasBoardSceneFields
+    || lastPersistReason.includes("manual_timing_quick_board_create")
+    || lastPersistReason.includes("manual_new_project_from_audio_split")
+  );
+}
+
 function readActiveProject() {
   try {
     const raw = localStorage.getItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY))
       || (canUseLegacyManualProjectStorage() ? localStorage.getItem(MANUAL_TIMING_ACTIVE_PROJECT_KEY) : null);
-    return raw ? JSON.parse(raw) : null;
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (isDirectorBoardProject(parsed)) {
+      console.warn("[MANUAL TIMING STORAGE REJECTED BOARD_PROJECT]", {
+        reason: "active_storage",
+        project_id: String(parsed?.project_id || parsed?.projectId || "").trim(),
+        source: String(parsed?.source || "").trim(),
+        board_mode: parsed?.board_mode,
+        quick_board: parsed?.quick_board,
+        scenesCount: Array.isArray(parsed?.scenes) ? parsed.scenes.length : 0,
+      });
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
@@ -2990,6 +3024,25 @@ export default function ManualTimingEditorPage() {
     const ownerNodeId = requestedOwnerNodeId || finalOwnerNodeId;
     const hydrateKey = `${location?.key || "manual-timing"}:${ownerNodeId}`;
     if (!shouldHydrateReturn || !ownerNodeId || storyboardReturnHydrateKeyRef.current === hydrateKey) return;
+
+    const returnManualTimingProject = navState.returnManualTimingProject && typeof navState.returnManualTimingProject === "object"
+      ? navState.returnManualTimingProject
+      : null;
+    if (navState.returnFromStoryboard === true && returnManualTimingProject) {
+      const normalizedReturnProject = repairManualTimingInvalidSourceMaps(normalizeStoredManualTimingProject(returnManualTimingProject, ownerNodeId));
+      setProject(normalizedReturnProject);
+      persistManualTimingProject(normalizedReturnProject);
+      setActiveBoardProject(getManualTimingBoardForOwnerMatchingProject(ownerNodeId, normalizedReturnProject, { logStale: true }));
+      console.info("[MANUAL TIMING RETURN HYDRATE PICK]", {
+        ownerNodeId,
+        source: "return_snapshot",
+        project_id: String(normalizedReturnProject?.project_id || normalizedReturnProject?.projectId || "").trim(),
+        scenesCount: Array.isArray(normalizedReturnProject?.scenes) ? normalizedReturnProject.scenes.length : 0,
+        audioDurationSec: Number(normalizedReturnProject?.audio?.duration_sec || normalizedReturnProject?.audio_duration_sec || 0) || 0,
+      });
+      storyboardReturnHydrateKeyRef.current = hydrateKey;
+      return;
+    }
 
     const storedProject = readManualTimingProjectForNode(ownerNodeId);
     const incomingProject = getIncomingManualTimingProjectFromLocation(location, storedProject || project, ownerNodeId);
@@ -5701,6 +5754,54 @@ export default function ManualTimingEditorPage() {
       })),
     });
 
+    const timingReturnProject = {
+      ...project,
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
+      updatedAt: Date.now(),
+      lastPersistReason: "manual_timing_before_open_board",
+    };
+    console.info("[MANUAL TIMING BEFORE BOARD PERSIST]", {
+      ownerNodeId,
+      project_id: String(timingReturnProject?.project_id || timingReturnProject?.projectId || "").trim(),
+      input_signature: String(timingReturnProject?.input_signature || timingReturnProject?.inputSignature || "").trim(),
+      audio_signature: String(timingReturnProject?.audio_signature || timingReturnProject?.audioSignature || "").trim(),
+      scenesCount: Array.isArray(timingReturnProject?.scenes) ? timingReturnProject.scenes.length : 0,
+      reason: "manual_new_project_from_audio_split",
+    });
+    persistManualTimingProject(timingReturnProject);
+
+    const sourceManualTimingReturnProject = {
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      project_id: String(project?.project_id || project?.projectId || "").trim(),
+      input_signature: String(project?.input_signature || project?.inputSignature || "").trim(),
+      audio_signature: String(project?.audio_signature || project?.audioSignature || "").trim(),
+      selectedSceneId: String(project?.selectedSceneId || scenes[0]?.scene_id || "").trim(),
+      audio: normalizeManualTimingProjectAudioForHandoff(project, audio),
+      audio_url: String(project?.audio_url || project?.audioUrl || project?.audio?.url || "").trim(),
+      audio_duration_sec: Number(project?.audio_duration_sec || project?.audioDurationSec || project?.audio?.duration_sec || 0) || 0,
+      scenes: Array.isArray(project?.scenes) ? project.scenes : [],
+      story_blocks: Array.isArray(project?.story_blocks) ? project.story_blocks : [],
+      audio_phrases: Array.isArray(project?.audio_phrases) ? project.audio_phrases : [],
+      timing_status: String(project?.timing_status || "").trim(),
+      format: String(project?.format || project?.aspect_ratio || "9:16"),
+      aspect_ratio: String(project?.aspect_ratio || project?.format || "9:16"),
+    };
+    projectSnapshot = {
+      ...projectSnapshot,
+      source_manual_timing_project_id: sourceManualTimingReturnProject.project_id,
+      sourceManualTimingProjectId: sourceManualTimingReturnProject.project_id,
+      source_manual_timing_input_signature: sourceManualTimingReturnProject.input_signature,
+      sourceManualTimingInputSignature: sourceManualTimingReturnProject.input_signature,
+      source_manual_timing_audio_signature: sourceManualTimingReturnProject.audio_signature,
+      sourceManualTimingAudioSignature: sourceManualTimingReturnProject.audio_signature,
+      source_manual_timing_selected_scene_id: sourceManualTimingReturnProject.selectedSceneId,
+      sourceManualTimingSelectedSceneId: sourceManualTimingReturnProject.selectedSceneId,
+      source_manual_timing_return_project: sourceManualTimingReturnProject,
+    };
+
     const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectSnapshot, {
       forceReplace: true,
       explicitReset: true,
@@ -5727,7 +5828,6 @@ export default function ManualTimingEditorPage() {
     });
     console.info('[MANUAL BOARD CANONICAL ROUTE] route="/studio/storyboard"', { sourceNodeId: ownerNodeId });
     dispatchManualTimingDirectorBoardUpdate(replacedProject, ownerNodeId);
-    persistManualTimingProject(replacedProject);
     setActiveBoardProject(replacedProject);
     if (!handoffWarning) setCopyStatus("Проект передан в режиссёрскую доску");
     setHandoffStatus("");
@@ -5839,6 +5939,41 @@ export default function ManualTimingEditorPage() {
       updatedAt: Date.now(),
       lastPersistReason: "manual_timing_quick_board_create",
     }, handoffAudio);
+    const timingReturnProject = {
+      ...project,
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
+      updatedAt: Date.now(),
+      lastPersistReason: "manual_timing_before_open_board",
+    };
+    console.info("[MANUAL TIMING BEFORE BOARD PERSIST]", {
+      ownerNodeId,
+      project_id: String(timingReturnProject?.project_id || timingReturnProject?.projectId || "").trim(),
+      input_signature: String(timingReturnProject?.input_signature || timingReturnProject?.inputSignature || "").trim(),
+      audio_signature: String(timingReturnProject?.audio_signature || timingReturnProject?.audioSignature || "").trim(),
+      scenesCount: Array.isArray(timingReturnProject?.scenes) ? timingReturnProject.scenes.length : 0,
+      reason: "manual_timing_quick_board_create",
+    });
+    persistManualTimingProject(timingReturnProject);
+
+    const sourceManualTimingReturnProject = {
+      nodeId: ownerNodeId,
+      sourceNodeId: ownerNodeId,
+      project_id: String(project?.project_id || project?.projectId || "").trim(),
+      input_signature: String(project?.input_signature || project?.inputSignature || "").trim(),
+      audio_signature: String(project?.audio_signature || project?.audioSignature || "").trim(),
+      selectedSceneId: String(project?.selectedSceneId || scenes[0]?.scene_id || "").trim(),
+      audio: normalizeManualTimingProjectAudioForHandoff(project, audio),
+      audio_url: String(project?.audio_url || project?.audioUrl || project?.audio?.url || "").trim(),
+      audio_duration_sec: Number(project?.audio_duration_sec || project?.audioDurationSec || project?.audio?.duration_sec || 0) || 0,
+      scenes: Array.isArray(project?.scenes) ? project.scenes : [],
+      story_blocks: Array.isArray(project?.story_blocks) ? project.story_blocks : [],
+      audio_phrases: Array.isArray(project?.audio_phrases) ? project.audio_phrases : [],
+      timing_status: String(project?.timing_status || "").trim(),
+      format: String(project?.format || project?.aspect_ratio || "9:16"),
+      aspect_ratio: String(project?.aspect_ratio || project?.format || "9:16"),
+    };
     const inputSignature = computeManualProjectInputSignature(quickProject);
     const audioSignature = computeManualProjectInputSignature(quickProject, { audioOnly: true });
     const storySignature = computeManualProjectInputSignature(quickProject, { storyOnly: true });
@@ -5853,6 +5988,15 @@ export default function ManualTimingEditorPage() {
       audioSignature,
       story_signature: storySignature,
       storySignature,
+      source_manual_timing_project_id: sourceManualTimingReturnProject.project_id,
+      sourceManualTimingProjectId: sourceManualTimingReturnProject.project_id,
+      source_manual_timing_input_signature: sourceManualTimingReturnProject.input_signature,
+      sourceManualTimingInputSignature: sourceManualTimingReturnProject.input_signature,
+      source_manual_timing_audio_signature: sourceManualTimingReturnProject.audio_signature,
+      sourceManualTimingAudioSignature: sourceManualTimingReturnProject.audio_signature,
+      source_manual_timing_selected_scene_id: sourceManualTimingReturnProject.selectedSceneId,
+      sourceManualTimingSelectedSceneId: sourceManualTimingReturnProject.selectedSceneId,
+      source_manual_timing_return_project: sourceManualTimingReturnProject,
     });
     console.log("[MANUAL TIMING QUICK BOARD CREATE]", {
       sceneCount: quickScenes.length,
@@ -5885,7 +6029,6 @@ export default function ManualTimingEditorPage() {
       routePath: STORYBOARD_ROUTE,
       updatedAt: Date.now(),
     });
-    persistManualTimingProject(replacedProject);
     setActiveBoardProject(replacedProject);
     navigate(STORYBOARD_ROUTE, {
       state: {
