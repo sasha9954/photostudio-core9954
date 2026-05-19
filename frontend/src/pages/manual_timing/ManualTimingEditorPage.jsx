@@ -983,6 +983,10 @@ function buildManualTimingPassDownloadFilename(passType = "", project = {}) {
   return `manual_timing_${safePassType}_${audioName}_${durationSec}s_${formatManualTimingBackupTimestamp(new Date())}.json`;
 }
 
+function buildManualTimingVideoMatchSeedFilename(createdAt = new Date()) {
+  return `manual_timing_video_match_seed_${formatManualTimingBackupTimestamp(createdAt)}.json`;
+}
+
 function buildManualTimingCurrentProjectBackupFilename(project = {}, createdAt = new Date()) {
   const audioName = sanitizeManualTimingBackupFilenamePart(getManualTimingCurrentProjectAudioName(project));
   const durationSec = Math.max(0, Math.round(getManualTimingCurrentProjectAudioDuration(project)));
@@ -5816,6 +5820,106 @@ export default function ManualTimingEditorPage() {
 
   const onCopyBlockStoryboardPassJson = async () => copyManualTimingPassJson("block_storyboard", buildManualTimingBlockStoryboardPassJson);
 
+  const buildManualTimingVideoMatchSeedJson = (sourceProject = {}) => {
+    const normalizedScenes = Array.isArray(sourceProject?.scenes) ? sourceProject.scenes : [];
+    const normalizedAudioMetadata = sourceProject?.audio_metadata || sourceProject?.audioMetadata || {};
+    const audioInfo = sourceProject?.audio || {};
+    const audioDurationSec = Number(sourceProject?.audio_duration_sec ?? sourceProject?.audioDurationSec ?? durationSec) || 0;
+    const safeAutoHint = "auto";
+    const segments = normalizedScenes.map((scene, index) => {
+      const startSec = Number(scene?.start_sec ?? scene?.startSec ?? 0) || 0;
+      const endSecRaw = Number(scene?.end_sec ?? scene?.endSec ?? startSec) || startSec;
+      const endSec = Math.max(startSec, endSecRaw);
+      const text = String(scene?.text || scene?.original_text || scene?.originalText || "").trim();
+      const originalText = String(scene?.original_text || scene?.originalText || "").trim();
+      return {
+        audio_scene_id: String(scene?.scene_id || `scene_${index + 1}`),
+        target_t0: roundTimingSec(startSec),
+        target_t1: roundTimingSec(endSec),
+        duration_sec: roundTimingSec(Math.max(0, endSec - startSec)),
+        text: text || "",
+        original_text: originalText || text || "",
+        section: String(scene?.section || "").trim() || safeAutoHint,
+        energy: String(scene?.energy || "").trim() || safeAutoHint,
+        emotion: String(scene?.emotion || "").trim() || safeAutoHint,
+        speaker: String(scene?.speaker || scene?.voice || "").trim() || "",
+        voice: String(scene?.voice || scene?.speaker || "").trim() || "",
+        notes: String(scene?.notes || "").trim() || "",
+      };
+    });
+
+    return {
+      schema: "manual_timing_to_video_match_job_seed_v1",
+      created_at: new Date().toISOString(),
+      source_audio: {
+        name: String(audioInfo?.name || audioInfo?.filename || normalizedAudioMetadata?.name || normalizedAudioMetadata?.filename || ""),
+        url: String(audioInfo?.url || ""),
+        mime_type: String(normalizedAudioMetadata?.mime_type || normalizedAudioMetadata?.mimeType || ""),
+        duration_sec: roundTimingSec(audioDurationSec),
+      },
+      audio_duration_sec: roundTimingSec(audioDurationSec),
+      audio_map: {
+        source_of_truth: "audio_map",
+        do_not_change_audio_timings: true,
+        segments,
+      },
+      instructions_for_chatgpt: [
+        "Этот JSON является audio_map seed для Video Match Board.",
+        "ChatGPT должен разобрать timing segments.",
+        "Не менять target_t0/target_t1.",
+        "audio_map является source of truth.",
+        "ChatGPT должен подготовить video_match_job_v1 для Codex.",
+        "ChatGPT должен спросить или использовать source_video paths.",
+        "ChatGPT должен заложить универсальные visual roles.",
+        "Не использовать story-specific hardcode.",
+        "Если готовый video_index уже есть, использовать match_audio без rebuild_index.",
+        "build_index делать один раз на source video.",
+      ],
+      video_match_policy: {
+        universal_visual_roles: [
+          "establishing",
+          "subject_action",
+          "detail",
+          "movement",
+          "reaction",
+          "transition",
+          "climax",
+          "closing",
+        ],
+        matching_logic: {
+          intro: "establishing/calm world",
+          verse: "story/detail/movement/reaction",
+          build: "increasing motion/intensity",
+          "chorus/peak": "strongest action/emotion/human movement/dramatic detail",
+          outro: "closing/release",
+        },
+        adaptive_duration_guidance: {
+          "15_sec": "4-7 scenes",
+          "30_sec": "8-14 scenes",
+          "60_sec": "16-28 scenes",
+          "180_sec": "45-75 scenes",
+        },
+        candidates_per_scene: 3,
+        do_not_change_audio_timings: true,
+        source_of_truth: "audio_map",
+      },
+      output_expectations: [
+        "video_match_board_v2.json",
+        "video_index_v2.json если строился новый индекс",
+        "warnings_report.txt",
+      ],
+    };
+  };
+
+  const onDownloadVideoMatchSeedJson = () => {
+    if (mainActionsDisabled) { setCopyStatus("Режим проекта не выбран"); return; }
+    const payload = buildManualTimingVideoMatchSeedJson(project);
+    const filename = buildManualTimingVideoMatchSeedFilename(new Date());
+    downloadManualTimingJsonFile(payload, filename);
+    setCopyStatus("JSON для видео скачан");
+    window.setTimeout(() => setCopyStatus(""), 2200);
+  };
+
 
   const parseJsonImportText = () => JSON.parse(jsonImportText || "{}");
 
@@ -7084,6 +7188,7 @@ export default function ManualTimingEditorPage() {
                 <span>{workflowLabels.panelTitle}</span>
                 <button className="clipSB_btn clipSB_btnPrimary" onClick={onCopyModePassJson} disabled={mainActionsDisabled}>{workflowLabels.copyPass}</button>
                 <button className="clipSB_btn clipSB_btnPrimary" onClick={applyImportedTimingJsonFromMode} disabled={mainActionsDisabled || !jsonImportText.trim()}>{workflowLabels.applyPass}</button>
+                <button className="clipSB_btn manualTimingVideoJsonButton" onClick={onDownloadVideoMatchSeedJson} disabled={mainActionsDisabled}>📷 JSON для видео</button>
               </div> : null}
             </div>
             {isStoryVoiceover ? <div className="manualTimingAiStages">
@@ -7094,6 +7199,7 @@ export default function ManualTimingEditorPage() {
                 </div>
                 <div className="manualTimingAiStageActions">
                   <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onCopyModePassJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.copy_label_ru}</button>
+                  <button className="clipSB_btn manualTimingVideoJsonButton manualTimingAiStageButton" onClick={onDownloadVideoMatchSeedJson} disabled={mainActionsDisabled || !semanticStoryCutReady}>📷 JSON для видео</button>
                   <button className="clipSB_btn clipSB_btnPrimary manualTimingAiStageButton" onClick={onApplyStoryCutJson} disabled={mainActionsDisabled || !jsonImportText.trim() || !semanticStoryCutReady}>{MANUAL_TIMING_AI_PASS_BY_TYPE.semantic_story_cut.apply_label_ru}</button>
                 </div>
               </div>

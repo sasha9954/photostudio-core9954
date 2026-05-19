@@ -3515,6 +3515,16 @@
   pointer-events: none;
 }
 
+.manualTimingVideoJsonButton {
+  background: linear-gradient(135deg, #2563eb, #0ea5e9) !important;
+  border: 1px solid rgba(191, 219, 254, 0.55) !important;
+  color: #eff6ff !important;
+}
+
+.manualTimingVideoJsonButton:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
 @media (max-width: 920px) {
   .manualTimingJsonActionsV21 .manualTimingJsonPassGroup {
     flex: 1 1 100%;
