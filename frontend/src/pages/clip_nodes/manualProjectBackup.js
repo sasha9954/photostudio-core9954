@@ -1990,6 +1990,7 @@ export function replaceManualClipBoardProjectForNode(nodeId = "", newProject = {
   );
   const safeProject = {
     ...(newProject || {}),
+    project_runtime_type: "manual_director_board",
     nodeId: safeNodeId,
     sourceNodeId: safeNodeId,
     selectedSceneId: firstSceneId,
