@@ -5155,6 +5155,7 @@ export default function ManualTimingEditorPage() {
         audio_phrases: vocalPhrases,
         vocal_asr_gaps: asrGaps,
         vocal_asr_split_preset: vocalAsrSplitPreset,
+        vocal_asr_language: vocalAsrLanguage,
         asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now(), gaps: asrGaps },
       });
       setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз. Теперь можно резать сцены по фразам на шкале.`);
@@ -6000,7 +6001,8 @@ export default function ManualTimingEditorPage() {
           end_sec: roundTimingSec(endSec),
           text_original: String(pickManualTimingAudioPhraseOriginalText(phrase) || "").trim(),
           text: String(phrase?.text || "").trim(),
-          language: String(phrase?.language || "en"),
+          source_language: String(phrase?.source_language || phrase?.language || sourceProject?.vocal_asr_language || "auto").trim(),
+          language: String(phrase?.language || phrase?.source_language || sourceProject?.vocal_asr_language || "auto").trim(),
           confidence: Number(phrase?.confidence || 0) || 0,
           source: String(phrase?.source || ""),
           translation_ru: String(phrase?.translation_ru || phrase?.text_ru || "").trim(),
@@ -7597,7 +7599,7 @@ export default function ManualTimingEditorPage() {
                     По таймингу сейчас внутри: <b>{timingSceneId || "—"}</b>. Это подсказка, не привязка.
                   </div>
                   <div className="manualTimingAudioPhraseTextGrid">
-                    <div><span>{String(phrase?.source_language || phrase?.language || "").trim() ? `Оригинал (${String(phrase?.source_language || phrase?.language).trim()})` : "Оригинал"}</span><p>{pickManualTimingAudioPhraseOriginalText(phrase) || "—"}</p></div>
+                    <div><span>{(() => { const lang = String(phrase?.source_language || phrase?.language || "").trim().toLowerCase(); const allowed = new Set(["en", "ru", "uk", "de", "fr"]); return !lang || lang === "auto" || !allowed.has(lang) ? "Оригинал" : `Оригинал (${lang})`; })()}</span><p>{pickManualTimingAudioPhraseOriginalText(phrase) || "—"}</p></div>
                     <div><span>Перевод</span><p>{String(phrase?.translation_ru || phrase?.text_ru || "").trim() || "перевод пока не заполнен"}</p></div>
                     <div><span>Смысл</span><p>{String(phrase?.meaning_ru || phrase?.note_ru || "").trim() || "—"}</p></div>
                   </div>
