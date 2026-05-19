@@ -1035,6 +1035,7 @@ function buildManualTimingCurrentProjectBackupPayload(project = {}, createdAt = 
     audio_phrases: project?.audio_phrases || [],
     vocal_asr_source: project?.vocal_asr_source || null,
     vocal_asr_split_preset: project?.vocal_asr_split_preset || "song_lines",
+    vocal_asr_language: project?.vocal_asr_language || "auto",
     vocal_asr_gaps: project?.vocal_asr_gaps || project?.asr_phrase_map?.gaps || [],
     markers: project?.markers || [],
     scenes: project?.scenes || [],
@@ -2205,18 +2206,18 @@ function createManualTimingHistorySnapshot(project, currentTimeSec = 0, label = 
 
 
 function pickManualTimingAudioPhraseOriginalText(phrase = {}) {
+  const translationRu = String(phrase?.translation_ru || phrase?.translationRu || "").trim();
+  const sourceLanguage = String(phrase?.source_language || phrase?.sourceLanguage || phrase?.language || "").trim().toLowerCase();
+  const textRu = String(phrase?.text_ru || phrase?.textRu || "").trim();
   return String(
     phrase?.text_original
     || phrase?.textOriginal
+    || phrase?.original_text
+    || phrase?.originalText
     || phrase?.text
     || phrase?.text_en
     || phrase?.textEn
-    || phrase?.text_de
-    || phrase?.textDe
-    || phrase?.text_fr
-    || phrase?.textFr
-    || phrase?.original_text
-    || phrase?.originalText
+    || ((sourceLanguage === "ru" && !translationRu) ? textRu : "")
     || ""
   ).trim();
 }
@@ -2345,15 +2346,20 @@ function buildManualTimingAsrTranslationPassJson(project = {}) {
     start_sec: phrase.start_sec,
     end_sec: phrase.end_sec,
     text_original: pickManualTimingAudioPhraseOriginalText(phrase),
-    text_ru: pickManualTimingAudioPhraseRuText(phrase),
+    source_language: String(phrase?.source_language || phrase?.language || project?.vocal_asr_language || "auto"),
+    translation_ru: String(phrase?.translation_ru || phrase?.text_ru || ""),
+    meaning_ru: String(phrase?.meaning_ru || ""),
   }));
 
   return {
     split_type: "manual_timing_asr_translation_pass",
     pass_type: "asr_translation",
-    instruction_ru: "Заполни только audio_phrases[].text_ru русским переводом исходной ASR-фразы. Не меняй phrase_id, start_sec, end_sec и порядок фраз.",
+    source_language: String(project?.vocal_asr_language || "auto"),
+    target_language: "ru",
+    instruction_ru: "Переведи audio_phrases[].text_original на target_language. Не меняй phrase_id/start_sec/end_sec/order.",
     audio_duration_sec: Number(project?.audio?.duration_sec || project?.audio_duration_sec || 0),
     audio_phrases: audioPhrases,
+    vocal_asr_gaps: Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [],
   };
 }
 
@@ -2368,19 +2374,21 @@ function mergeManualTimingAsrTranslationPhrases(currentPhrases = [], importedPhr
     importedPhrases.forEach((phrase) => {
       if (!phrase || typeof phrase !== "object") return;
       const phraseId = pickManualTimingAudioPhraseImportId(phrase);
-      const importedRu = pickManualTimingAudioPhraseRuText(phrase);
-      if (!phraseId || !importedRu) return;
-      importedById.set(phraseId, importedRu);
+      const importedRu = String(phrase?.translation_ru || phrase?.text_ru || phrase?.textRu || "").trim();
+      const importedMeaning = String(phrase?.meaning_ru || phrase?.meaningRu || "").trim();
+      if (!phraseId || (!importedRu && !importedMeaning)) return;
+      importedById.set(phraseId, { importedRu, importedMeaning });
     });
   }
   let updatedCount = 0;
   const nextPhrases = normalizedCurrent.map((phrase) => {
-    const importedRu = importedById.get(String(phrase.phrase_id || "").trim());
-    if (!importedRu) return phrase;
-    const currentRu = pickManualTimingAudioPhraseRuText(phrase);
-    if (currentRu === importedRu) return phrase;
+    const imported = importedById.get(String(phrase.phrase_id || "").trim());
+    if (!imported) return phrase;
+    const currentRu = String(phrase?.translation_ru || phrase?.text_ru || "").trim();
+    const currentMeaning = String(phrase?.meaning_ru || "").trim();
+    if (currentRu === imported.importedRu && currentMeaning === imported.importedMeaning) return phrase;
     updatedCount += 1;
-    return { ...phrase, text_ru: importedRu, translation_ru: importedRu };
+    return { ...phrase, text_ru: imported.importedRu || currentRu, translation_ru: imported.importedRu || currentRu, meaning_ru: imported.importedMeaning || currentMeaning };
   });
   return { audio_phrases: nextPhrases, updatedCount };
 }
@@ -2500,6 +2508,7 @@ export default function ManualTimingEditorPage() {
   const isTimingAudioUploading = audioUploadStatus === "uploading";
   const vocalAsrSource = project?.vocal_asr_source && typeof project.vocal_asr_source === "object" ? project.vocal_asr_source : null;
   const vocalAsrSplitPreset = String(project?.vocal_asr_split_preset || "song_lines");
+  const vocalAsrLanguage = String(project?.vocal_asr_language || "auto");
   const vocalAsrDurationMismatch = vocalAsrSource
     ? Math.abs(Number(vocalAsrSource.duration_sec || 0) - Number(audio.duration_sec || 0)) > 0.25
     : false;
@@ -5135,11 +5144,11 @@ export default function ManualTimingEditorPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: "en", ...preset }),
+        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: vocalAsrLanguage === "auto" ? "" : vocalAsrLanguage, ...preset }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
-      const vocalPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "vocal_stem_asr", translation_ru: String(phrase?.translation_ru || ""), meaning_ru: String(phrase?.meaning_ru || "") })));
+      const vocalPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "vocal_stem_asr", text_original: String(phrase?.text_original || phrase?.original_text || phrase?.text || phrase?.text_en || ""), original_text: String(phrase?.original_text || phrase?.text_original || phrase?.text || phrase?.text_en || ""), source_language: String(phrase?.source_language || phrase?.language || data?.asr?.language || vocalAsrLanguage || ""), language: String(phrase?.language || phrase?.source_language || data?.asr?.language || vocalAsrLanguage || ""), translation_ru: String(phrase?.translation_ru || ""), meaning_ru: String(phrase?.meaning_ru || "") })));
       const asrGaps = Array.isArray(data?.asr_gaps) ? data.asr_gaps : [];
       persist({
         ...project,
@@ -7482,6 +7491,17 @@ export default function ManualTimingEditorPage() {
                   <option value="short_phrases">короткие фразы</option>
                 </select>
               </label>
+              <label className="manualTimingVocalModeSelect">
+                <span>ASR язык</span>
+                <select value={vocalAsrLanguage} onChange={(event) => persist({ ...project, vocal_asr_language: String(event.target.value || "auto") })}>
+                  <option value="auto">auto / авто</option>
+                  <option value="en">en / English</option>
+                  <option value="ru">ru / Русский</option>
+                  <option value="uk">uk / Українська</option>
+                  <option value="de">de / Deutsch</option>
+                  <option value="fr">fr / Français</option>
+                </select>
+              </label>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onCreateVocalAsrPhraseMap} disabled={!vocalAsrSource?.url || String(asrStatus || "").startsWith("ASR по вокалу:")}>ASR по вокалу</button>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled title="Следующий шаг: перевод vocal ASR фраз">🌍 Перевести фразы</button>
             </div>
@@ -7577,9 +7597,9 @@ export default function ManualTimingEditorPage() {
                     По таймингу сейчас внутри: <b>{timingSceneId || "—"}</b>. Это подсказка, не привязка.
                   </div>
                   <div className="manualTimingAudioPhraseTextGrid">
-                    <div><span>original</span><p>{pickManualTimingAudioPhraseOriginalText(phrase) || "—"}</p></div>
-                    <div><span>text_ru</span><p>{pickManualTimingAudioPhraseRuText(phrase) || "перевод пока не заполнен"}</p></div>
-                    <div><span>note_ru</span><p>{String(phrase.note_ru || "").trim() || "—"}</p></div>
+                    <div><span>{String(phrase?.source_language || phrase?.language || "").trim() ? `Оригинал (${String(phrase?.source_language || phrase?.language).trim()})` : "Оригинал"}</span><p>{pickManualTimingAudioPhraseOriginalText(phrase) || "—"}</p></div>
+                    <div><span>Перевод</span><p>{String(phrase?.translation_ru || phrase?.text_ru || "").trim() || "перевод пока не заполнен"}</p></div>
+                    <div><span>Смысл</span><p>{String(phrase?.meaning_ru || phrase?.note_ru || "").trim() || "—"}</p></div>
                   </div>
                   <div className="manualTimingAudioPhraseActions">
                     <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => { setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.start_sec, phrase.end_sec); }} disabled={!audio.url}>▶ фраза</button>

@@ -20,7 +20,7 @@ router = APIRouter(prefix="/manual-timing")
 
 class ManualTimingAudioPhrasesIn(BaseModel):
     audio_url: str | None = Field(default=None, alias="audioUrl")
-    language: str = "en"
+    language: str = "auto"
     split_mode: str = "pause_based"
     min_pause_sec: float = 0.45
     max_phrase_sec: float = 8.0
@@ -108,7 +108,7 @@ def _download_audio_to_temp(audio_url: str, temp_paths: list[str]) -> str:
 
 def _settings_from_values(
     *,
-    language: str = "en",
+    language: str = "auto",
     split_mode: str = "pause_based",
     min_pause_sec: float = 0.45,
     max_phrase_sec: float = 8.0,
@@ -117,7 +117,7 @@ def _settings_from_values(
     model_size: str | None = None,
 ) -> ManualTimingAsrSettings:
     return ManualTimingAsrSettings(
-        language=language or "en",
+        language=language or "auto",
         split_mode=split_mode or "pause_based",
         min_pause_sec=float(min_pause_sec or 0.45),
         max_phrase_sec=float(max_phrase_sec or 8.0),
@@ -141,7 +141,7 @@ async def create_manual_timing_audio_phrases(
     request: Request,
     audio_file: Annotated[UploadFile | None, File(alias="audio_file")] = None,
     audio_url: Annotated[str | None, Form()] = None,
-    language: Annotated[str, Form()] = "en",
+    language: Annotated[str, Form()] = "auto",
     split_mode: Annotated[str, Form()] = "pause_based",
     min_pause_sec: Annotated[float, Form()] = 0.45,
     max_phrase_sec: Annotated[float, Form()] = 8.0,
