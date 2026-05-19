@@ -4696,6 +4696,18 @@ export default function ManualClipDirectorBoardEditor({
       reason: "back_to_manual_timing",
       updatedAt: Date.now(),
     });
+    const returnManualTimingProject = currentProject?.source_manual_timing_return_project || null;
+    const returnManualTimingProjectId = String(currentProject?.source_manual_timing_project_id || currentProject?.sourceManualTimingProjectId || "").trim();
+    const returnManualTimingInputSignature = String(currentProject?.source_manual_timing_input_signature || currentProject?.sourceManualTimingInputSignature || "").trim();
+    const returnManualTimingAudioSignature = String(currentProject?.source_manual_timing_audio_signature || currentProject?.sourceManualTimingAudioSignature || "").trim();
+    const returnManualTimingSelectedSceneId = String(currentProject?.source_manual_timing_selected_scene_id || currentProject?.sourceManualTimingSelectedSceneId || "").trim();
+    console.info("[MANUAL BOARD BACK RETURN TIMING SNAPSHOT]", {
+      ownerNodeId,
+      hasReturnManualTimingProject: Boolean(returnManualTimingProject),
+      returnProjectId: returnManualTimingProjectId,
+      returnInputSignature: returnManualTimingInputSignature,
+      returnAudioSignature: returnManualTimingAudioSignature,
+    });
     console.info("[MANUAL BOARD BACK TO TIMING]", {
       sourceNodeId: ownerNodeId,
       ownerNodeId,
@@ -4709,6 +4721,11 @@ export default function ManualClipDirectorBoardEditor({
         returnFromStoryboard: true,
         openManualTimingNode: true,
         focusManualTimingNodeId: ownerNodeId,
+        returnManualTimingProject,
+        returnManualTimingProjectId,
+        returnManualTimingInputSignature,
+        returnManualTimingAudioSignature,
+        returnManualTimingSelectedSceneId,
         ...forceState,
         forceProjectId: forceState.manualBoardForceProjectId,
         forceInputSignature: forceState.manualBoardForceInputSignature,
