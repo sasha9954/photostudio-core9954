@@ -511,6 +511,7 @@ function normalizeManualTimingProjectAudioForHandoff(project = {}, stateAudio = 
       || normalized.filename
       || ""
     ).trim();
+
     return {
       url: normalized.url,
       name,
@@ -1026,6 +1027,7 @@ function buildManualTimingCurrentProjectBackupPayload(project = {}, createdAt = 
     audio_metadata: project?.audio_metadata,
     audio_duration_sec: project?.audio_duration_sec ?? getManualTimingCurrentProjectAudioDuration(project),
     audio_phrases: project?.audio_phrases || [],
+    vocal_asr_source: project?.vocal_asr_source || null,
     markers: project?.markers || [],
     scenes: project?.scenes || [],
     story_blocks: project?.story_blocks || [],
@@ -5061,7 +5063,11 @@ export default function ManualTimingEditorPage() {
   const onUploadVocalForAsr = async (event) => {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file || !audio.url) return;
+    if (!file) return;
+    if (!audio.url) {
+      setAsrStatus("Сначала загрузите основную песню, потом вокал для ASR.");
+      return;
+    }
     setAudioUploadStatus("uploading");
     try {
       const [metadata, uploadedAsset] = await Promise.all([readAudioFileMetadata(file), uploadManualTimingAudioAsset(file)]);
@@ -5103,15 +5109,29 @@ export default function ManualTimingEditorPage() {
           return p1 > s0 + 0.001 && p0 < s1 - 0.001;
         });
         const sourceIds = overlap.map((phrase) => String(phrase?.phrase_id || "")).filter(Boolean);
-        const firstPhrase = overlap[0] || null;
+        const joinedOriginalText = overlap
+          .map((phrase) => pickManualTimingAudioPhraseOriginalText(phrase))
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        const joinedTranslationRu = overlap
+          .map((phrase) => String(phrase?.translation_ru || phrase?.text_ru || ""))
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+        const joinedMeaningRu = overlap
+          .map((phrase) => String(phrase?.meaning_ru || phrase?.meaning_hint_ru || ""))
+          .filter(Boolean)
+          .join(" ")
+          .trim();
         return {
           ...scene,
           source_phrase_ids: sourceIds,
-          original_text: firstPhrase ? pickManualTimingAudioPhraseOriginalText(firstPhrase) : String(scene?.original_text || ""),
-          source_text_en: firstPhrase ? pickManualTimingAudioPhraseOriginalText(firstPhrase) : String(scene?.source_text_en || ""),
-          translated_text_ru: firstPhrase ? String(firstPhrase?.translation_ru || "") : String(scene?.translated_text_ru || ""),
-          meaning_hint_ru: firstPhrase ? String(firstPhrase?.meaning_ru || "") : String(scene?.meaning_hint_ru || ""),
-          contains_vocal: sourceIds.length > 0 ? true : Boolean(scene?.contains_vocal),
+          original_text: joinedOriginalText || String(scene?.original_text || ""),
+          source_text_en: joinedOriginalText || String(scene?.source_text_en || ""),
+          translated_text_ru: joinedTranslationRu || String(scene?.translated_text_ru || ""),
+          meaning_hint_ru: joinedMeaningRu || String(scene?.meaning_hint_ru || ""),
+          contains_vocal: sourceIds.length > 0,
         };
       });
       persist({ ...project, audio_phrases: vocalPhrases, scenes: nextScenes, asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now() } });
@@ -5903,6 +5923,7 @@ export default function ManualTimingEditorPage() {
 
   const buildManualTimingVideoMatchSeedJson = (sourceProject = {}) => {
     const normalizedScenes = Array.isArray(sourceProject?.scenes) ? sourceProject.scenes : [];
+    const normalizedAudioPhrases = Array.isArray(sourceProject?.audio_phrases) ? sourceProject.audio_phrases : [];
     const normalizedAudioMetadata = sourceProject?.audio_metadata || sourceProject?.audioMetadata || {};
     const audioInfo = sourceProject?.audio || {};
     const audioDurationSec = Number(sourceProject?.audio_duration_sec ?? sourceProject?.audioDurationSec ?? durationSec) || 0;
@@ -5933,6 +5954,32 @@ export default function ManualTimingEditorPage() {
         contains_vocal: Boolean(scene?.contains_vocal),
       };
     });
+    const vocalAsrOffsetSec = Number(sourceProject?.vocal_asr_source?.offset_sec || 0) || 0;
+    const hasVocalAsrOffsetSec = sourceProject?.vocal_asr_source?.offset_sec !== undefined && sourceProject?.vocal_asr_source?.offset_sec !== null;
+    const lyricsPhraseMap = normalizedAudioPhrases
+      .filter((phrase) => String(phrase?.source || "") === "vocal_stem_asr")
+      .map((phrase) => {
+        const startSec = Number(phrase?.start_sec || 0);
+        const endSec = Math.max(startSec, Number(phrase?.end_sec || startSec));
+        return {
+          phrase_id: String(phrase?.phrase_id || ""),
+          start_sec: roundTimingSec(startSec),
+          end_sec: roundTimingSec(endSec),
+          text_original: String(pickManualTimingAudioPhraseOriginalText(phrase) || "").trim(),
+          text: String(phrase?.text || "").trim(),
+          language: String(phrase?.language || "en"),
+          confidence: Number(phrase?.confidence || 0) || 0,
+          source: String(phrase?.source || ""),
+          translation_ru: String(phrase?.translation_ru || phrase?.text_ru || "").trim(),
+          meaning_ru: String(phrase?.meaning_ru || phrase?.meaning_hint_ru || "").trim(),
+          ...(hasVocalAsrOffsetSec
+            ? {
+              timeline_start_sec: roundTimingSec(startSec + vocalAsrOffsetSec),
+              timeline_end_sec: roundTimingSec(endSec + vocalAsrOffsetSec),
+            }
+            : {}),
+        };
+      });
 
     return {
       schema: "manual_timing_to_video_match_job_seed_v1",
@@ -5963,6 +6010,7 @@ export default function ManualTimingEditorPage() {
         duration_sec: roundTimingSec(Number(sourceProject.vocal_asr_source?.duration_sec || 0)),
         aligned_to_master_audio: Boolean(sourceProject.vocal_asr_source?.aligned_to_master_audio),
       } : null,
+      lyrics_phrase_map: lyricsPhraseMap,
       lyrics_asr_policy: {
         asr_source: "vocal_stem",
         main_audio_is_master: true,
