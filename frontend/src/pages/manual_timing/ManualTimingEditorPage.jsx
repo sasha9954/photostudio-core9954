@@ -2572,6 +2572,7 @@ export default function ManualTimingEditorPage() {
     return getManualTimingBoardForOwnerMatchingProject(finalOwnerNodeId, initialProjectRef.current);
   });
   const [newBoardConfirm, setNewBoardConfirm] = useState(null);
+  const [quickBoardChoiceConfirm, setQuickBoardChoiceConfirm] = useState(false);
   const [groupSelectedSceneIds, setGroupSelectedSceneIds] = useState([]);
   const [isPhraseInspectorCollapsed, setIsPhraseInspectorCollapsed] = useState(false);
   const [storyBlockDialog, setStoryBlockDialog] = useState({
@@ -2584,6 +2585,7 @@ export default function ManualTimingEditorPage() {
     confirmMoveExisting: false,
   });
   const newBoardConfirmResolverRef = useRef(null);
+  const quickBoardChoiceResolverRef = useRef(null);
   const currentTimeRef = useRef(0);
   const silenceRepairSignatureRef = useRef("");
   const storyboardReturnHydrateKeyRef = useRef("");
@@ -2683,7 +2685,9 @@ export default function ManualTimingEditorPage() {
   const quickBoardReady = Boolean(audio?.url || project?.audio_url || project?.audio_path) && quickBoardScenesReady;
   const openDirectorBoardTitle = passReadyForDirector ? "Открыть режиссёрскую доску" : `Сначала примените ${workflowLabels.pass} JSON и подтвердите тайминг`;
   const quickBoardTitle = scenes.length
-    ? "Создать режиссёрскую доску напрямую из текущего ручного тайминга"
+    ? (hasActiveBoardProject
+      ? "Есть сохранённая доска. Можно открыть старую или создать новую быструю."
+      : "Создать режиссёрскую доску напрямую из текущей ручной нарезки.")
     : "Сначала нарежьте хотя бы одну сцену";
   const selectedSceneText = useMemo(() => getSceneStoryText(scenes.find((scene) => scene.scene_id === project.selectedSceneId) || scenes[0] || null), [scenes, project.selectedSceneId]);
   const selectedScene = useMemo(
@@ -5451,6 +5455,22 @@ export default function ManualTimingEditorPage() {
     if (typeof resolver === "function") resolver(choice);
   };
 
+  const requestQuickBoardChoiceConfirmation = () => new Promise((resolve) => {
+    if (!hasActiveBoardProject) {
+      resolve("create_new");
+      return;
+    }
+    quickBoardChoiceResolverRef.current = resolve;
+    setQuickBoardChoiceConfirm(true);
+  });
+
+  const resolveQuickBoardChoiceConfirmation = (choice) => {
+    const resolver = quickBoardChoiceResolverRef.current;
+    quickBoardChoiceResolverRef.current = null;
+    setQuickBoardChoiceConfirm(false);
+    if (typeof resolver === "function") resolver(choice);
+  };
+
   const buildDirectorProjectSnapshot = () => {
     const sourceNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
@@ -5741,15 +5761,29 @@ export default function ManualTimingEditorPage() {
     });
   };
 
-  const onCreateQuickDirectorBoard = () => {
+  const onCreateQuickDirectorBoard = async () => {
     if (!quickBoardReady) {
       setCopyStatus(scenes.length ? "Проверьте аудио и тайминги сцен" : "Сначала нарежьте хотя бы одну сцену");
       window.setTimeout(() => setCopyStatus(""), 2600);
       return;
     }
+    const choice = await requestQuickBoardChoiceConfirmation();
+    console.info("[MANUAL TIMING QUICK BOARD CHOICE]", {
+      hasActiveBoardProject,
+      action: choice,
+    });
+    if (choice === "cancel") {
+      setCopyStatus("Открытие быстрой доски отменено.");
+      window.setTimeout(() => setCopyStatus(""), 2200);
+      return;
+    }
+    if (choice === "open_existing") {
+      onOpenDirectorBoard();
+      return;
+    }
+
     const ownerNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
-    const hasAsrPhrases = Array.isArray(audioPhrases) && audioPhrases.length > 0;
     const quickScenes = scenes.map((scene, index) => {
       const startSec = Number(scene?.start_sec ?? scene?.target_t0 ?? 0) || 0;
       const endSecBase = Number(scene?.end_sec ?? scene?.target_t1 ?? startSec);
@@ -5782,13 +5816,10 @@ export default function ManualTimingEditorPage() {
         negative_prompt: "",
         sound_prompt: "",
         notes: "",
-        format: projectFormat,
-        aspect_ratio: projectFormat,
       };
     });
     const handoffAudio = normalizeManualTimingProjectAudioForHandoff(project, audio);
     const quickProject = applyManualTimingProjectAudioCompat({
-      ...project,
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       ownerNodeType: "manualTiming",
@@ -5825,10 +5856,10 @@ export default function ManualTimingEditorPage() {
     });
     console.log("[MANUAL TIMING QUICK BOARD CREATE]", {
       sceneCount: quickScenes.length,
-      audioDurationSec: Number(finalQuickProject?.audio_duration_sec || finalQuickProject?.audio?.duration_sec || 0) || 0,
+      projectId,
       boardMode: "quick",
-      hasStoryPassFields: scenes.some(sceneHasCompleteStoryPassFields),
-      hasAsrPhrases,
+      forceReplace: true,
+      explicitReset: true,
     });
     const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, finalQuickProject, {
       forceReplace: true,
@@ -5850,6 +5881,7 @@ export default function ManualTimingEditorPage() {
       forceProjectId: replacedProjectId,
       forceInputSignature: replacedInputSignature,
       forceAudioSignature: replacedAudioSignature,
+      manualBoardExplicitNewProject: true,
       routePath: STORYBOARD_ROUTE,
       updatedAt: Date.now(),
     });
@@ -5867,6 +5899,7 @@ export default function ManualTimingEditorPage() {
         forceProjectId: replacedProjectId,
         forceInputSignature: replacedInputSignature,
         forceAudioSignature: replacedAudioSignature,
+        manualBoardExplicitNewProject: true,
         director_board: replacedProject,
         project: replacedProject,
       },
@@ -8044,6 +8077,17 @@ export default function ManualTimingEditorPage() {
           <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={() => resolveNewBoardReplaceConfirmation("backup")}>Скачать backup и создать новый</button>
           <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => resolveNewBoardReplaceConfirmation("create")}>Создать новый без backup</button>
           <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => resolveNewBoardReplaceConfirmation("cancel")}>Отмена</button>
+        </div>
+      </div>
+    </div> : null}
+    {quickBoardChoiceConfirm ? <div className="manualTimingNewBoardOverlay" role="presentation" onClick={() => resolveQuickBoardChoiceConfirmation("cancel")}>
+      <div className="manualTimingNewBoardDialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <h3>⚡ Быстрая доска</h3>
+        <p>Есть сохранённая доска. Можно открыть старую или создать новую быструю.</p>
+        <div className="manualTimingNewBoardActions">
+          <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={() => resolveQuickBoardChoiceConfirmation("open_existing")}>Открыть старую доску</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => resolveQuickBoardChoiceConfirmation("create_new")}>Создать новую быструю доску</button>
+          <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => resolveQuickBoardChoiceConfirmation("cancel")}>Отмена</button>
         </div>
       </div>
     </div> : null}
