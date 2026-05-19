@@ -3516,13 +3516,19 @@
 }
 
 .manualTimingVideoJsonButton {
-  background: linear-gradient(135deg, #2563eb, #0ea5e9) !important;
-  border: 1px solid rgba(191, 219, 254, 0.55) !important;
-  color: #eff6ff !important;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(12, 74, 110, 0.92), rgba(2, 6, 23, 0.98)) !important;
+  border: 1px solid rgba(96, 165, 250, 0.42) !important;
+  color: #dbeafe !important;
+  box-shadow: 0 8px 22px rgba(2, 6, 23, 0.28), inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
 .manualTimingVideoJsonButton:hover:not(:disabled) {
-  filter: brightness(1.05);
+  filter: brightness(1.08);
+  border-color: rgba(125, 211, 252, 0.58) !important;
+}
+
+.manualTimingVideoJsonButton:disabled {
+  opacity: 0.45;
 }
 
 @media (max-width: 920px) {
