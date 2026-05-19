@@ -256,6 +256,7 @@ export default function VideoMatchBoardPage() {
 
   const restoreSourceVideoElement = () => {
     if (!videoRef.current || !sourceVideoUrl) return;
+    activeVideoSourceKindRef.current = "source";
     const currentSrc = String(videoRef.current.src || "");
     const expectedSrc = String(sourceVideoUrl || "");
     const resolvedExpectedSrc = (() => {
@@ -266,7 +267,6 @@ export default function VideoMatchBoardPage() {
       }
     })();
     if (currentSrc !== expectedSrc && currentSrc !== resolvedExpectedSrc) {
-      activeVideoSourceKindRef.current = "source";
       videoRef.current.src = sourceVideoUrl;
     }
   };
@@ -359,7 +359,9 @@ export default function VideoMatchBoardPage() {
     };
     setIsAssemblyPlaying(false);
     setIsPlaybackActive(true);
-    const didStartVideo = await playSourceRange(getBlockSourceStart(block), getBlockSourceEnd(block), { muted: true });
+    const didStartVideo = (isOverrideBlock(block) && block.overrideVideoUrl)
+      ? await playOverrideRange(block, { muted: true })
+      : await playSourceRange(getBlockSourceStart(block), getBlockSourceEnd(block), { muted: true });
     if (!didStartVideo) {
       setIsPlaybackActive(false);
       return false;
