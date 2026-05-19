@@ -25,6 +25,8 @@ class ManualTimingAsrSettings:
     padding_sec: float = 0.0
     model_size: str = "small"
     split_on_punctuation: bool = True
+    split_by_long_gap: bool = True
+    split_by_max_duration: bool = True
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -48,6 +50,10 @@ def _clamp_settings(settings: ManualTimingAsrSettings) -> ManualTimingAsrSetting
     padding = max(0.0, min(0.15, _safe_float(settings.padding_sec, 0.0)))
     language = (settings.language or "en").strip().lower() or "en"
     split_mode = (settings.split_mode or "pause_based").strip().lower() or "pause_based"
+    if split_mode in {"song_lines", "short_phrases"}:
+        min_pause = 0.26 if split_mode == "song_lines" else 0.22
+        max_phrase = 3.6 if split_mode == "song_lines" else 3.0
+        min_phrase = 0.6 if split_mode == "song_lines" else 0.5
     model_size = (settings.model_size or os.getenv("MANUAL_TIMING_ASR_MODEL") or "small").strip() or "small"
     return ManualTimingAsrSettings(
         language=language,
@@ -58,6 +64,8 @@ def _clamp_settings(settings: ManualTimingAsrSettings) -> ManualTimingAsrSetting
         padding_sec=padding,
         model_size=model_size,
         split_on_punctuation=bool(getattr(settings, "split_on_punctuation", True)),
+        split_by_long_gap=bool(getattr(settings, "split_by_long_gap", True)),
+        split_by_max_duration=bool(getattr(settings, "split_by_max_duration", True)),
     )
 
 
@@ -203,7 +211,7 @@ def split_words_to_phrases(words: list[dict[str, Any]], settings: ManualTimingAs
         punctuation_boundary = safe.split_on_punctuation and current_duration >= safe.min_phrase_sec and _is_punctuation_boundary(prev)
         max_boundary = current_duration_if_added > safe.max_phrase_sec and (punctuation_boundary or current_duration >= safe.max_phrase_sec * 0.85)
 
-        if pause_boundary or punctuation_boundary or max_boundary:
+        if ((safe.split_by_long_gap and pause_boundary) or punctuation_boundary or (safe.split_by_max_duration and max_boundary)):
             close_current()
             current = [word]
         else:
@@ -226,6 +234,62 @@ def split_words_to_phrases(words: list[dict[str, Any]], settings: ManualTimingAs
     duration_limit = max(0.0, _safe_float(audio_duration_sec, 0.0))
     result: list[dict[str, Any]] = []
     for idx, phrase_words in enumerate(merged, start=1):
+        start = _safe_float(phrase_words[0].get("start_sec"), 0.0) - safe.padding_sec
+        end = _safe_float(phrase_words[-1].get("end_sec"), 0.0) + safe.padding_sec
+        if duration_limit > 0:
+            start = max(0.0, min(duration_limit, start))
+            end = max(0.0, min(duration_limit, end))
+        if end <= start:
+            continue
+        result.append({
+            "phrase_id": f"phr_{idx:03d}",
+            "start_sec": _round_sec(start),
+            "end_sec": _round_sec(end),
+            "text_en": _phrase_text(phrase_words),
+            "text_ru": "",
+            "meaning_ru": "",
+            "status": "asr_raw",
+            "confidence": _word_confidence(phrase_words),
+        })
+    if safe.max_phrase_sec > 0:
+        result = _split_long_phrases(result, ordered, safe, duration_limit)
+    return result
+
+
+def _split_long_phrases(
+    phrases: list[dict[str, Any]],
+    ordered_words: list[dict[str, Any]],
+    safe: ManualTimingAsrSettings,
+    duration_limit: float,
+) -> list[dict[str, Any]]:
+    refined_word_groups: list[list[dict[str, Any]]] = []
+    max_duration = min(4.0, safe.max_phrase_sec)
+    for phrase in phrases:
+        start = _safe_float(phrase.get("start_sec"), 0.0)
+        end = _safe_float(phrase.get("end_sec"), start)
+        duration = end - start
+        phrase_words = [w for w in ordered_words if _safe_float(w.get("start_sec"), 0.0) >= start - 0.001 and _safe_float(w.get("end_sec"), 0.0) <= end + 0.001]
+        if duration <= max_duration or len(phrase_words) < 2:
+            refined_word_groups.append(phrase_words if phrase_words else [])
+            continue
+        current: list[dict[str, Any]] = []
+        for word in phrase_words:
+            if not current:
+                current = [word]
+                continue
+            prev = current[-1]
+            gap = _safe_float(word.get("start_sec"), 0.0) - _safe_float(prev.get("end_sec"), 0.0)
+            seg_duration_if_added = _safe_float(word.get("end_sec"), 0.0) - _safe_float(current[0].get("start_sec"), 0.0)
+            should_split = (gap >= safe.min_pause_sec and seg_duration_if_added >= safe.min_phrase_sec) or seg_duration_if_added > safe.max_phrase_sec
+            if should_split:
+                refined_word_groups.append(current)
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            refined_word_groups.append(current)
+    result: list[dict[str, Any]] = []
+    for idx, phrase_words in enumerate([g for g in refined_word_groups if g], start=1):
         start = _safe_float(phrase_words[0].get("start_sec"), 0.0) - safe.padding_sec
         end = _safe_float(phrase_words[-1].get("end_sec"), 0.0) + safe.padding_sec
         if duration_limit > 0:

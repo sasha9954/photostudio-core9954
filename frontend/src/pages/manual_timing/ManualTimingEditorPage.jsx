@@ -623,6 +623,12 @@ function buildVocalAsrSourcePatch(uploadedAsset = {}, file = null, durationSec =
   };
 }
 
+const VOCAL_ASR_SPLIT_PRESETS = {
+  large: { split_mode: "pause_based", min_pause_sec: 0.45, max_phrase_sec: 8.0, min_phrase_sec: 1.2 },
+  song_lines: { split_mode: "song_lines", min_pause_sec: 0.26, max_phrase_sec: 3.6, min_phrase_sec: 0.6 },
+  short_phrases: { split_mode: "short_phrases", min_pause_sec: 0.22, max_phrase_sec: 3.0, min_phrase_sec: 0.5 },
+};
+
 function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = getEmptyManualTimingAudio(), audioSource = "") {
   const safeAudio = normalizeManualTimingAudio(nextAudio);
   const durationSec = Number(safeAudio.duration_sec || 0);
@@ -2491,6 +2497,7 @@ export default function ManualTimingEditorPage() {
   const { routeSourceNodeId, projectSourceNodeId, fallbackOwnerNodeId, finalOwnerNodeId } = manualTimingOwner;
   const isTimingAudioUploading = audioUploadStatus === "uploading";
   const vocalAsrSource = project?.vocal_asr_source && typeof project.vocal_asr_source === "object" ? project.vocal_asr_source : null;
+  const vocalAsrSplitPreset = String(project?.vocal_asr_split_preset || "song_lines");
   const vocalAsrDurationMismatch = vocalAsrSource
     ? Math.abs(Number(vocalAsrSource.duration_sec || 0) - Number(audio.duration_sec || 0)) > 0.25
     : false;
@@ -5090,52 +5097,18 @@ export default function ManualTimingEditorPage() {
     if (!vocalAsrSource?.url) return;
     setAsrStatus("ASR по вокалу: распознаю фразы…");
     try {
+      const preset = VOCAL_ASR_SPLIT_PRESETS[vocalAsrSplitPreset] || VOCAL_ASR_SPLIT_PRESETS.song_lines;
       const res = await fetch(`${API_BASE}/api/manual-timing/audio-phrases`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: "en", split_mode: "pause_based", min_pause_sec: 0.45, max_phrase_sec: 8.0, min_phrase_sec: 1.2 }),
+        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: "en", ...preset }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
-      const offsetSec = Number(vocalAsrSource?.offset_sec || 0) || 0;
       const vocalPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "vocal_stem_asr", translation_ru: String(phrase?.translation_ru || ""), meaning_ru: String(phrase?.meaning_ru || "") })));
-      const nextScenes = scenes.map((scene) => {
-        const s0 = Number(scene?.start_sec || 0);
-        const s1 = Number(scene?.end_sec || s0);
-        const overlap = vocalPhrases.filter((phrase) => {
-          const p0 = Number(phrase?.start_sec || 0) + offsetSec;
-          const p1 = Number(phrase?.end_sec || p0) + offsetSec;
-          return p1 > s0 + 0.001 && p0 < s1 - 0.001;
-        });
-        const sourceIds = overlap.map((phrase) => String(phrase?.phrase_id || "")).filter(Boolean);
-        const joinedOriginalText = overlap
-          .map((phrase) => pickManualTimingAudioPhraseOriginalText(phrase))
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-        const joinedTranslationRu = overlap
-          .map((phrase) => String(phrase?.translation_ru || phrase?.text_ru || ""))
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-        const joinedMeaningRu = overlap
-          .map((phrase) => String(phrase?.meaning_ru || phrase?.meaning_hint_ru || ""))
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-        return {
-          ...scene,
-          source_phrase_ids: sourceIds,
-          original_text: joinedOriginalText || String(scene?.original_text || ""),
-          source_text_en: joinedOriginalText || String(scene?.source_text_en || ""),
-          translated_text_ru: joinedTranslationRu || String(scene?.translated_text_ru || ""),
-          meaning_hint_ru: joinedMeaningRu || String(scene?.meaning_hint_ru || ""),
-          contains_vocal: sourceIds.length > 0,
-        };
-      });
-      persist({ ...project, audio_phrases: vocalPhrases, scenes: nextScenes, asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now() } });
-      setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз.`);
+      persist({ ...project, audio_phrases: vocalPhrases, vocal_asr_split_preset: vocalAsrSplitPreset, asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now() } });
+      setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз. Теперь можно резать сцены по фразам на шкале.`);
     } catch (error) {
       setAsrStatus(`Ошибка ASR по вокалу: ${error?.message || error}`);
     }
@@ -6010,6 +5983,7 @@ export default function ManualTimingEditorPage() {
         duration_sec: roundTimingSec(Number(sourceProject.vocal_asr_source?.duration_sec || 0)),
         aligned_to_master_audio: Boolean(sourceProject.vocal_asr_source?.aligned_to_master_audio),
       } : null,
+      vocal_asr_split_preset: String(sourceProject?.vocal_asr_split_preset || "song_lines"),
       lyrics_phrase_map: lyricsPhraseMap,
       lyrics_asr_policy: {
         asr_source: "vocal_stem",
@@ -7058,7 +7032,17 @@ export default function ManualTimingEditorPage() {
                     type="button"
                     className="manualTimingPhraseMarker"
                     style={phrase.style}
-                    onClick={(event) => { event.stopPropagation(); setSelectedMissingPhraseId(phrase.phrase_id); playRange(phrase.timeline_start_sec ?? phrase.start_sec, phrase.timeline_end_sec ?? phrase.end_sec, "phrase_preview"); }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const phraseStart = Number(phrase.timeline_start_sec ?? phrase.start_sec ?? 0) || 0;
+                      setSelectedMissingPhraseId(phrase.phrase_id);
+                      setAudioTime(phraseStart, { pause: true, clearBound: true });
+                    }}
+                    onDoubleClick={(event) => {
+                      event.stopPropagation();
+                      const phraseStart = Number(phrase.timeline_start_sec ?? phrase.start_sec ?? 0) || 0;
+                      setAudioTime(phraseStart, { pause: true, clearBound: true });
+                    }}
                     title={`${phrase.phrase_id}: ${formatTimingSec(phrase.timeline_start_sec ?? phrase.start_sec)} – ${formatTimingSec(phrase.timeline_end_sec ?? phrase.end_sec)} · source ${formatTimingSec(phrase.source_start_sec ?? phrase.start_sec)} – ${formatTimingSec(phrase.source_end_sec ?? phrase.end_sec)} · ${pickManualTimingAudioPhraseOriginalText(phrase) || "ASR phrase"}`}
                   />)}
                 </div> : null}
@@ -7421,6 +7405,17 @@ export default function ManualTimingEditorPage() {
               <label className="clipSB_btn clipSB_btnSecondary">
                 Загрузить вокал
                 <input type="file" accept="audio/*" onChange={onUploadVocalForAsr} hidden />
+              </label>
+              <label className="manualTimingVocalModeSelect">
+                <span>ASR режим</span>
+                <select
+                  value={vocalAsrSplitPreset}
+                  onChange={(event) => persist({ ...project, vocal_asr_split_preset: String(event.target.value || "song_lines") })}
+                >
+                  <option value="large">крупно</option>
+                  <option value="song_lines">строки песни</option>
+                  <option value="short_phrases">короткие фразы</option>
+                </select>
               </label>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onCreateVocalAsrPhraseMap} disabled={!vocalAsrSource?.url || String(asrStatus || "").startsWith("ASR по вокалу:")}>ASR по вокалу</button>
             </div>
