@@ -74,6 +74,13 @@ def get_audio_duration_sec(audio_path: str) -> float:
     return _round_sec(len(segment) / 1000.0)
 
 
+def _audio_rms_for_range(audio: AudioSegment, start_sec: float, end_sec: float) -> float:
+    start_ms = max(0, int(round(_safe_float(start_sec, 0.0) * 1000.0)))
+    end_ms = max(start_ms + 1, int(round(_safe_float(end_sec, start_sec) * 1000.0)))
+    chunk = audio[start_ms:end_ms]
+    return _safe_float(getattr(chunk, "rms", 0.0), 0.0)
+
+
 def _normalize_word(raw: Any, idx: int) -> dict[str, Any] | None:
     text = _WORD_CLEAN_RE.sub(" ", str(getattr(raw, "word", "") or "")).strip()
     start = _safe_float(getattr(raw, "start", None), -1.0)
@@ -315,8 +322,10 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
     duration = get_audio_duration_sec(audio_path)
     words, metadata = transcribe_words_faster_whisper(audio_path, safe)
     phrases = split_words_to_phrases(words, safe, audio_duration_sec=duration)
+    asr_gaps = _detect_unrecognized_vocal_gaps(audio_path, phrases, duration)
     metadata["phrase_count"] = len(phrases)
     metadata["word_count"] = len(words)
+    metadata["gap_count"] = len(asr_gaps)
     logger.info(
         "Manual Timing ASR phrase map: model=%s device=%s compute_type=%s duration=%.3fs phrase_count=%s word_count=%s",
         metadata.get("model_size"),
@@ -331,6 +340,7 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
         "audio_duration_sec": duration,
         "words": words,
         "audio_phrases": phrases,
+        "asr_gaps": asr_gaps,
         "asr": metadata,
         "split_settings": {
             "split_mode": safe.split_mode,
@@ -341,3 +351,44 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
             "split_on_punctuation": safe.split_on_punctuation,
         },
     }
+
+
+def _detect_unrecognized_vocal_gaps(
+    audio_path: str,
+    phrases: list[dict[str, Any]],
+    audio_duration_sec: float,
+    *,
+    min_gap_sec: float = 0.8,
+) -> list[dict[str, Any]]:
+    ordered = sorted(
+        [p for p in phrases if _safe_float(p.get("end_sec"), 0.0) > _safe_float(p.get("start_sec"), 0.0)],
+        key=lambda item: (_safe_float(item.get("start_sec"), 0.0), _safe_float(item.get("end_sec"), 0.0)),
+    )
+    if len(ordered) < 2:
+        return []
+    audio = AudioSegment.from_file(audio_path)
+    silence_rms_threshold = max(20.0, _safe_float(getattr(audio, "rms", 0.0), 0.0) * 0.18)
+    gaps: list[dict[str, Any]] = []
+    for idx in range(1, len(ordered)):
+        prev_end = _safe_float(ordered[idx - 1].get("end_sec"), 0.0)
+        next_start = _safe_float(ordered[idx].get("start_sec"), 0.0)
+        gap_duration = next_start - prev_end
+        if gap_duration <= min_gap_sec:
+            continue
+        start_sec = max(0.0, min(_safe_float(audio_duration_sec, next_start), prev_end))
+        end_sec = max(start_sec, min(_safe_float(audio_duration_sec, next_start), next_start))
+        if end_sec - start_sec <= min_gap_sec:
+            continue
+        gap_rms = _audio_rms_for_range(audio, start_sec, end_sec)
+        if gap_rms <= silence_rms_threshold:
+            continue
+        gaps.append({
+            "gap_id": f"gap_{len(gaps) + 1:03d}",
+            "start_sec": _round_sec(start_sec),
+            "end_sec": _round_sec(end_sec),
+            "duration_sec": _round_sec(end_sec - start_sec),
+            "type": "unrecognized_vocal",
+            "note": "Vocal audio present but ASR produced no words",
+            "rms": round(gap_rms, 3),
+        })
+    return gaps
