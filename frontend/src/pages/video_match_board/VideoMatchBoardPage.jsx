@@ -9,6 +9,7 @@ import {
   parseVideoMatchBoardJson,
   persistVideoMatchBoardProject,
   readVideoMatchBoardProjectForNode,
+  normalizeVideoMatchSourceVideo,
   shouldSkipVideoMatchPersistToProtectMaterials,
 } from "../clip_nodes/video_match/videoMatchBoardDomain.js";
 import "./VideoMatchBoardPage.css";
@@ -222,7 +223,18 @@ export default function VideoMatchBoardPage() {
   useEffect(() => {
     if (!String(initialProject?.sourceVideoUrl || "").startsWith("blob:")) return;
     setSourceVideoLoadMessage("Загрузите source video заново");
-    patchProject({ sourceVideoUrl: "" }, { lastGood: false });
+    patchProject({
+      sourceVideoUrl: "",
+      sourceVideo: {
+        ...(initialProject?.sourceVideo || {}),
+        path: String(initialProject?.sourceVideo?.path || "").startsWith("blob:") ? "" : String(initialProject?.sourceVideo?.path || ""),
+      },
+      source_video: {
+        ...(initialProject?.source_video || {}),
+        path: String(initialProject?.source_video?.path || "").startsWith("blob:") ? "" : String(initialProject?.source_video?.path || ""),
+      },
+      sourceVideoPath: String(initialProject?.sourceVideoPath || "").startsWith("blob:") ? "" : String(initialProject?.sourceVideoPath || ""),
+    }, { lastGood: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProject?.sourceVideoUrl]);
 
@@ -610,6 +622,7 @@ export default function VideoMatchBoardPage() {
 
   const onVideoFileChange = (file) => {
     if (!file) return;
+    const chosenPath = String(file.path || file.webkitRelativePath || file.name || "").trim();
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     const url = URL.createObjectURL(file);
     objectUrlRef.current = url;
@@ -618,11 +631,23 @@ export default function VideoMatchBoardPage() {
     patchProject({
       sourceVideoUrl: url,
       sourceVideo: {
+        ...(project.sourceVideo || {}),
+        path: chosenPath,
         filename: file.name || "source.mp4",
+        name: file.name || "source.mp4",
+        durationSec: 0,
         duration_sec: 0,
         type: file.type || "video/mp4",
         size: file.size || 0,
       },
+      source_video: {
+        ...(project.source_video || {}),
+        path: chosenPath,
+        filename: file.name || "source.mp4",
+        duration_sec: 0,
+      },
+      sourceVideoPath: chosenPath,
+      jsonError: "",
     });
   };
 
@@ -697,23 +722,47 @@ export default function VideoMatchBoardPage() {
         ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
         : "";
 
-      const nextSourceVideo = {
-        ...(result.sourceVideo || {}),
-        ...(project.sourceVideo || {}),
-        filename: currentFilename || result.sourceVideo?.filename || "source.mp4",
-        path: project.sourceVideo?.path || result.sourceVideo?.path || "",
-        duration_sec: Number(nextDurationSec.toFixed(3)),
-      };
-      patchProject({
+      const normalizedSourceVideo = normalizeVideoMatchSourceVideo({
+        ...result,
+        sourceVideo: result.sourceVideo,
+      });
+      const normalizedPath = String(normalizedSourceVideo.path || "").trim();
+      const safeSourceVideoUrl = String(project.sourceVideoUrl || "").startsWith("blob:") ? "" : String(project.sourceVideoUrl || "");
+      const nextProject = persistVideoMatchBoardProject({
+        ...getDefaultVideoMatchBoardProject(nodeId),
         schema: result.schema,
-        sourceVideo: nextSourceVideo,
+        sourceVideoUrl: safeSourceVideoUrl,
+        sourceVideo: {
+          ...normalizedSourceVideo,
+          filename: normalizedSourceVideo.filename || currentFilename || "source.mp4",
+          name: normalizedSourceVideo.filename || currentFilename || "source.mp4",
+          durationSec: Number(nextDurationSec.toFixed(3)),
+          duration_sec: Number(nextDurationSec.toFixed(3)),
+        },
+        source_video: {
+          ...(project.source_video || {}),
+          path: normalizedPath,
+          filename: normalizedSourceVideo.filename || currentFilename || "source.mp4",
+          duration_sec: Number(nextDurationSec.toFixed(3)),
+        },
+        sourceVideoPath: normalizedPath,
         matchSegments: result.matchSegments,
         videoBlocks: result.videoBlocks,
         selectedSegmentId: result.selectedSegmentId,
         selectedCandidateId: result.selectedCandidateId,
         selectedBlockId: result.videoBlocks[0]?.id || "",
+        jsonInput: project.jsonInput || "",
         jsonError: durationWarning,
+        sourceNodeId: nodeId,
+        nodeId,
+      }, { forceReplace: true, allowMaterialLoss: true });
+      console.log("[VIDEO MATCH IMPORT SOURCE VIDEO]", {
+        inputSourceVideo: result.sourceVideo,
+        inputSource_video: result.source_video,
+        normalizedSourceVideo: nextProject.sourceVideo,
+        sourceVideoPath: nextProject.sourceVideoPath,
       });
+      setProject(nextProject);
       if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
     } catch (error) {
       patchProject({ jsonError: String(error?.message || error || "JSON parse error") }, { lastGood: false });
@@ -722,9 +771,21 @@ export default function VideoMatchBoardPage() {
 
   const onAssembleMp4 = async () => {
     if (!assemblyBlocks.length) return;
-    const sourceVideoPath = String(project?.sourceVideo?.path || "").trim();
+    const sourceVideoPath = String(
+      project?.sourceVideo?.path
+      || project?.source_video?.path
+      || project?.sourceVideoPath
+      || project?.source_video_path
+      || "",
+    ).trim();
     if (!sourceVideoPath) {
-      setAssembleError("Для сборки нужен sourceVideo.path из JSON.");
+      setAssembleError("Для сборки нужен sourceVideo.path из JSON или загрузите source video заново");
+      console.log("[VIDEO MATCH ASSEMBLY MISSING SOURCE]", {
+        sourceVideo: project.sourceVideo,
+        source_video: project.source_video,
+        sourceVideoPath: project.sourceVideoPath,
+        keys: Object.keys(project || {}),
+      });
       return;
     }
     setIsAssemblingMp4(true);
@@ -735,6 +796,8 @@ export default function VideoMatchBoardPage() {
         method: "POST",
         body: {
           sourceVideoPath,
+          sourceVideo: project?.sourceVideo || {},
+          source_video: project?.source_video || {},
           audioPath: assembleAudioPath || project?.timingContext?.sourceAudioPath || "",
           audioUrl: project?.timingContext?.sourceAudioUrl || "",
           outputFormat: "16:9",
