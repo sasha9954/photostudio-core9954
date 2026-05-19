@@ -4372,6 +4372,72 @@ export default function ManualClipDirectorBoardEditor({
     }
   }
 
+  const onExtractSceneAudioSlice = async (scene) => {
+    const sceneId = String(scene?.scene_id || "").trim();
+    const sourceAudioUrl = String(projectRef.current?.audio?.url || projectRef.current?.audio_url || projectRef.current?.audioUrl || "").trim();
+    if (!sourceAudioUrl) {
+      updateScene(sceneId, {
+        error: "В доске нет основного аудио. Вернитесь в тайминг и создайте быструю доску заново.",
+      });
+      return;
+    }
+    const startSec = Number(scene?.start_sec);
+    const endSec = Number(scene?.end_sec);
+    const explicitDuration = Number(scene?.duration_sec);
+    const durationSec = Number.isFinite(explicitDuration) && explicitDuration > 0
+      ? explicitDuration
+      : (Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec ? endSec - startSec : 0);
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec || durationSec <= 0) {
+      updateScene(sceneId, { error: "Не удалось определить диапазон сцены для нарезки аудио." });
+      return;
+    }
+    const endpoint = "/api/assets/podcast-audio/extract-phrase-to-asset";
+    const sourceNodeId = String(nodeId || projectRef.current?.nodeId || projectRef.current?.sourceNodeId || "manual_board").trim() || "manual_board";
+    console.info("[MANUAL BOARD AUDIO SLICE EXTRACT START]", { sceneId, sourceAudioUrl, startSec, endSec, durationSec, endpoint });
+    try {
+      const out = await fetchJson(endpoint, {
+        method: "POST",
+        body: JSON.stringify({
+          sourceAudioUrl,
+          sourceStartSec: startSec,
+          sourceEndSec: endSec,
+          durationSec,
+          label: String(sceneId || "scene").trim(),
+          sourceNodeId,
+        }),
+      });
+      const audioSliceUrl = String(out?.url || out?.assetUrl || out?.asset_url || out?.publicUrl || out?.public_url || "").trim();
+      const rawDuration = Number(out?.duration_sec ?? out?.durationSec ?? durationSec);
+      const audioSliceDurationSec = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : durationSec;
+      if (!audioSliceUrl) throw new Error(String(out?.detail || out?.hint || "audio_slice_url_empty"));
+      const nextScene = {
+        ...scene,
+        audio_slice_url: audioSliceUrl,
+        audioSliceUrl: audioSliceUrl,
+        audio_slice_duration_sec: audioSliceDurationSec,
+        audioSliceDurationSec: audioSliceDurationSec,
+        audio_extracted: true,
+        audio_source_mode: "audio_slice_asset",
+        error: "",
+      };
+      updateScene(sceneId, {
+        audio_slice_url: audioSliceUrl,
+        audioSliceUrl: audioSliceUrl,
+        audio_slice_duration_sec: audioSliceDurationSec,
+        audioSliceDurationSec: audioSliceDurationSec,
+        audio_extracted: true,
+        audio_source_mode: "audio_slice_asset",
+        error: "",
+        status: resolveManualSceneStatus(nextScene),
+      });
+      console.info("[MANUAL BOARD AUDIO SLICE EXTRACT DONE]", { sceneId, audioSliceUrl, audioSliceDurationSec });
+    } catch (err) {
+      const message = String(err?.message || "audio_slice_extract_failed");
+      updateScene(sceneId, { error: message });
+      console.error("[MANUAL BOARD AUDIO SLICE EXTRACT ERROR]", { sceneId, error: message });
+    }
+  };
+
   const onCreateVideo = async (scene) => {
     const runningStatus = String(scene?.status || "").toLowerCase();
     const runningKey = String(scene?.scene_id || "").trim();
@@ -4411,8 +4477,8 @@ export default function ManualClipDirectorBoardEditor({
       return;
     }
 
-    if (scene.route === "ia2v" && (!scene.audio_slice_url || !scene.audio_extracted)) {
-      updateScene(scene.scene_id, { error: "Для ia2v сначала нажмите «Изъять аудио»", status: scene.status || "draft" });
+    if (scene.route === "ia2v" && !String(scene.audio_slice_url || scene.audioSliceUrl || "").trim()) {
+      updateScene(scene.scene_id, { error: "Для lip-sync сначала нажмите ‘Изъять аудио’.", status: scene.status || "draft" });
       return;
     }
 
@@ -5176,22 +5242,7 @@ export default function ManualClipDirectorBoardEditor({
         </section> : null}
 
         <div className="manualDirectorButtons">
-          {selectedScene.route === "ia2v" ? <button className="clipSB_btn" onClick={() => {
-            if (!selectedScene.audio_slice_url) {
-              if (!audioUrl) {
-                updateScene(selectedScene.scene_id, { error: "Аудио сцены не нарезано, а аудио проекта отсутствует" });
-                return;
-              }
-              updateScene(selectedScene.scene_id, { error: "Сцена проигрывается из основного аудио. Для генерации lip-sync можно нарезать audio slice." });
-              return;
-            }
-            const nextScene = { ...selectedScene, audio_extracted: true };
-            updateScene(selectedScene.scene_id, {
-              audio_extracted: true,
-              error: "",
-              status: resolveManualSceneStatus(nextScene),
-            });
-          }}>{selectedScene.audio_extracted ? "Переизъять аудио" : "Изъять аудио"}</button> : null}
+          {selectedScene.route === "ia2v" ? <button className="clipSB_btn" onClick={() => onExtractSceneAudioSlice(selectedScene)}>{selectedScene.audio_slice_url ? "Переизъять аудио" : "Изъять аудио"}</button> : null}
           {selectedScene.route === "ia2v" && selectedScene.audio_slice_url ? <span className="manualAudioReady">Аудио сцены готово</span> : null}
           {selectedScene.route === "ia2v" && selectedScene.audio_extracted ? <span className="manualAudioExtracted">Аудио изъято · готово к ia2v</span> : null}
           <button className="clipSB_btn" disabled={selectedImageAspectMismatch || ["video_queued", "video_running"].includes(String(selectedScene.status || "").toLowerCase())} onClick={() => onCreateVideo(selectedScene)}>
