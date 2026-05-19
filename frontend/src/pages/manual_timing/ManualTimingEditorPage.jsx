@@ -5925,6 +5925,21 @@ export default function ManualTimingEditorPage() {
         original_text: originalText,
         text_original: originalText,
         translated_text_ru: translatedTextRu,
+        story_block_id: String(scene?.story_block_id || "").trim(),
+        story_block_title_ru: String(scene?.story_block_title_ru || "").trim(),
+        story_block_position_ru: String(scene?.story_block_position_ru || "").trim(),
+        story_block_index: Number(scene?.story_block_index || 0) || 0,
+        story_block_order: Number(scene?.story_block_order || 0) || 0,
+        story_block_color: String(scene?.story_block_color || "").trim(),
+        block_color: String(scene?.block_color || "").trim(),
+        scene_role_in_block_ru: String(scene?.scene_role_in_block_ru || "").trim(),
+        block_progress_ru: String(scene?.block_progress_ru || "").trim(),
+        audio_slice_url: "",
+        audio_slice_duration_sec: 0,
+        audio_extracted: false,
+        audio_source_mode: "master_audio_range",
+        audio_range_start_sec: startSec,
+        audio_range_end_sec: endSec,
         contains_vocal: Boolean(scene?.contains_vocal),
         source: "manual_timing_quick_board",
         board_mode: "quick",
@@ -5938,6 +5953,31 @@ export default function ManualTimingEditorPage() {
       };
     });
     const handoffAudio = normalizeManualTimingProjectAudioForHandoff(project, audio);
+    const handoffAudioUrl = String(handoffAudio?.url || "").trim();
+    const handoffAudioPath = String(
+      project?.audio_path
+      || project?.audioPath
+      || project?.audio?.path
+      || project?.audio?.asset_path
+      || project?.audio?.backend_asset_path
+      || ""
+    ).trim();
+    const handoffAudioDurationSec = Number(handoffAudio?.duration_sec || project?.audio_duration_sec || project?.audioDurationSec || 0) || 0;
+    const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
+    const scenesWithStoryBlockId = quickScenes.filter((scene) => String(scene?.story_block_id || "").trim()).length;
+    const scenesWithBlockColor = quickScenes.filter((scene) => String(scene?.story_block_color || scene?.block_color || "").trim()).length;
+    console.info("[MANUAL TIMING QUICK BOARD AUDIO HANDOFF]", {
+      hasAudioUrl: Boolean(handoffAudioUrl),
+      audioUrl: handoffAudioUrl,
+      audioPath: handoffAudioPath,
+      audioDurationSec: handoffAudioDurationSec,
+      sceneCount: quickScenes.length,
+    });
+    console.info("[MANUAL TIMING QUICK BOARD BLOCKS HANDOFF]", {
+      storyBlocksCount: storyBlocks.length,
+      scenesWithStoryBlockId,
+      scenesWithBlockColor,
+    });
     const quickProject = applyManualTimingProjectAudioCompat({
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
@@ -5947,10 +5987,14 @@ export default function ManualTimingEditorPage() {
       quick_board: true,
       format: projectFormat,
       aspect_ratio: projectFormat,
-      audio_url: handoffAudio.url || project.audio_url || "",
-      audio_path: String(project.audio_path || project?.audio?.path || ""),
-      audio_duration_sec: Number(handoffAudio.duration_sec || project.audio_duration_sec || 0) || 0,
-      audio: handoffAudio,
+      audio_url: handoffAudioUrl || project.audio_url || "",
+      audioUrl: handoffAudioUrl || project.audioUrl || "",
+      audio_path: handoffAudioPath,
+      audioPath: handoffAudioPath,
+      audio_duration_sec: handoffAudioDurationSec,
+      audioDurationSec: handoffAudioDurationSec,
+      audio: handoffAudioUrl ? handoffAudio : normalizeManualTimingProjectAudioForHandoff(project, audio),
+      story_blocks: storyBlocks,
       audio_phrases: audioPhrases,
       scenes: quickScenes,
       selectedSceneId: quickScenes[0]?.scene_id || "",
