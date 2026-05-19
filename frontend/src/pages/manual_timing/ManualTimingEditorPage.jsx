@@ -528,6 +528,13 @@ function sanitizeManualNewBoardProject(projectSnapshot = {}) {
     scenes: cleanScenes,
     selectedScene: null,
     selectedSceneId: cleanScenes[0]?.scene_id || "",
+    audio: sourceProject?.audio || cleanRoot?.audio || null,
+    audio_url: sourceProject?.audio_url || sourceProject?.audioUrl || cleanRoot?.audio_url || "",
+    audioUrl: sourceProject?.audioUrl || sourceProject?.audio_url || cleanRoot?.audioUrl || "",
+    audio_path: sourceProject?.audio_path || sourceProject?.audioPath || cleanRoot?.audio_path || "",
+    audioPath: sourceProject?.audioPath || sourceProject?.audio_path || cleanRoot?.audioPath || "",
+    audio_duration_sec: sourceProject?.audio_duration_sec ?? sourceProject?.audioDurationSec ?? cleanRoot?.audio_duration_sec ?? 0,
+    audioDurationSec: sourceProject?.audioDurationSec ?? sourceProject?.audio_duration_sec ?? cleanRoot?.audioDurationSec ?? 0,
   };
 }
 
@@ -5760,6 +5767,7 @@ export default function ManualTimingEditorPage() {
 
     const timingReturnProject = {
       ...project,
+      project_runtime_type: "manual_timing",
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       selectedSceneId: project.selectedSceneId || scenes[0]?.scene_id || "",
@@ -5777,6 +5785,7 @@ export default function ManualTimingEditorPage() {
     persistManualTimingProject(timingReturnProject);
 
     const sourceManualTimingReturnProject = {
+      project_runtime_type: "manual_timing",
       nodeId: ownerNodeId,
       sourceNodeId: ownerNodeId,
       project_id: String(project?.project_id || project?.projectId || "").trim(),
@@ -5963,6 +5972,18 @@ export default function ManualTimingEditorPage() {
       || ""
     ).trim();
     const handoffAudioDurationSec = Number(handoffAudio?.duration_sec || project?.audio_duration_sec || project?.audioDurationSec || 0) || 0;
+    const wasBlobAudio = handoffAudioUrl.startsWith("blob:");
+    if (wasBlobAudio) {
+      setCopyStatus("Аудио ещё не сохранено на сервер. Сначала загрузите/сохраните аудио, затем создайте быструю доску.");
+      window.setTimeout(() => setCopyStatus(""), 4200);
+      return;
+    }
+    console.info("[QUICK BOARD AUDIO ASSET RESOLVED]", {
+      wasBlob: wasBlobAudio,
+      finalAudioUrl: handoffAudioUrl,
+      audioPath: handoffAudioPath,
+      audioDurationSec: handoffAudioDurationSec,
+    });
     const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
     const scenesWithStoryBlockId = quickScenes.filter((scene) => String(scene?.story_block_id || "").trim()).length;
     const scenesWithBlockColor = quickScenes.filter((scene) => String(scene?.story_block_color || scene?.block_color || "").trim()).length;
@@ -5985,6 +6006,7 @@ export default function ManualTimingEditorPage() {
       source: "manual_timing_quick_board",
       board_mode: "quick",
       quick_board: true,
+      project_runtime_type: "manual_director_board",
       format: projectFormat,
       aspect_ratio: projectFormat,
       audio_url: handoffAudioUrl || project.audio_url || "",
@@ -6002,6 +6024,12 @@ export default function ManualTimingEditorPage() {
       updatedAt: Date.now(),
       lastPersistReason: "manual_timing_quick_board_create",
     }, handoffAudio);
+    console.info("[QUICK BOARD AUDIO BEFORE SANITIZE]", {
+      handoffAudio,
+      handoffAudioUrl,
+      handoffAudioPath,
+      handoffAudioDurationSec,
+    });
     const timingReturnProject = {
       ...project,
       nodeId: ownerNodeId,
@@ -6041,7 +6069,7 @@ export default function ManualTimingEditorPage() {
     const audioSignature = computeManualProjectInputSignature(quickProject, { audioOnly: true });
     const storySignature = computeManualProjectInputSignature(quickProject, { storyOnly: true });
     const projectId = `manual_quick_${ownerNodeId}_${inputSignature}_${Date.now()}`;
-    const finalQuickProject = sanitizeManualNewBoardProject({
+    const sanitizedQuickProject = sanitizeManualNewBoardProject({
       ...quickProject,
       project_id: projectId,
       projectId,
@@ -6061,6 +6089,26 @@ export default function ManualTimingEditorPage() {
       sourceManualTimingSelectedSceneId: sourceManualTimingReturnProject.selectedSceneId,
       source_manual_timing_return_project: sourceManualTimingReturnProject,
     });
+    console.info("[QUICK BOARD AUDIO AFTER SANITIZE]", {
+      audio: sanitizedQuickProject?.audio,
+      audio_url: sanitizedQuickProject?.audio_url,
+      audioUrl: sanitizedQuickProject?.audioUrl,
+      audio_path: sanitizedQuickProject?.audio_path,
+      audioPath: sanitizedQuickProject?.audioPath,
+      audio_duration_sec: sanitizedQuickProject?.audio_duration_sec,
+      audioDurationSec: sanitizedQuickProject?.audioDurationSec,
+    });
+    const finalQuickProject = applyManualTimingProjectAudioCompat({
+      ...sanitizedQuickProject,
+      project_runtime_type: "manual_director_board",
+      audio: handoffAudio,
+      audio_url: handoffAudioUrl,
+      audioUrl: handoffAudioUrl,
+      audio_path: handoffAudioPath,
+      audioPath: handoffAudioPath,
+      audio_duration_sec: handoffAudioDurationSec,
+      audioDurationSec: handoffAudioDurationSec,
+    }, handoffAudio);
     console.log("[MANUAL TIMING QUICK BOARD CREATE]", {
       sceneCount: quickScenes.length,
       projectId,
@@ -6075,6 +6123,15 @@ export default function ManualTimingEditorPage() {
       reason: "manual_timing_quick_board_create",
       routePath: STORYBOARD_ROUTE,
     }) || finalQuickProject;
+    console.info("[QUICK BOARD AUDIO AFTER REPLACE]", {
+      audio: replacedProject?.audio,
+      audio_url: replacedProject?.audio_url,
+      audioUrl: replacedProject?.audioUrl,
+      audio_path: replacedProject?.audio_path,
+      audioPath: replacedProject?.audioPath,
+      audio_duration_sec: replacedProject?.audio_duration_sec,
+      audioDurationSec: replacedProject?.audioDurationSec,
+    });
     const replacedProjectId = String(replacedProject?.project_id || replacedProject?.projectId || "").trim();
     const replacedInputSignature = String(replacedProject?.input_signature || replacedProject?.inputSignature || "").trim();
     const replacedAudioSignature = String(replacedProject?.audio_signature || replacedProject?.audioSignature || "").trim();

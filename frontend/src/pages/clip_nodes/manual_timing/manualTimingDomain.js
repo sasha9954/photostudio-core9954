@@ -276,10 +276,22 @@ export function readManualTimingProjectForNode(nodeId = "") {
 
 export function persistManualTimingProject(project = {}) {
   const safeProject = project && typeof project === "object" ? project : {};
+  const runtimeType = String(safeProject?.project_runtime_type || "").trim();
+  if (runtimeType && runtimeType !== "manual_timing") {
+    console.warn("[MANUAL TIMING PERSIST REJECTED RUNTIME TYPE]", {
+      runtimeType,
+      projectId: String(safeProject?.project_id || safeProject?.projectId || "").trim(),
+    });
+    return;
+  }
+  const projectToPersist = {
+    ...safeProject,
+    project_runtime_type: "manual_timing",
+  };
   try {
-    const serialized = JSON.stringify(safeProject);
+    const serialized = JSON.stringify(projectToPersist);
     localStorage.setItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY), serialized);
-    const nodeId = String(safeProject?.nodeId || "").trim();
+    const nodeId = String(projectToPersist?.nodeId || "").trim();
     if (nodeId) {
       localStorage.setItem(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_ID_KEY), nodeId);
       localStorage.setItem(getAccountScopedStorageKey(getManualTimingProjectStorageKey(nodeId)), serialized);

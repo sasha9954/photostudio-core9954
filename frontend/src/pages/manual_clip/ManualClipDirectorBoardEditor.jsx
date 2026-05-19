@@ -2576,10 +2576,17 @@ export default function ManualClipDirectorBoardEditor({
       if (explicitNewProject) {
         consumedExplicitNewProjectRef.current = true;
       }
-      console.info("[MANUAL BOARD AUDIO HYDRATE]", {
-        project_id: hydratedProject.project_id || hydratedProject.projectId || "",
-        audio: getManualBoardAudioInfo(hydratedProject),
-        audioUrlResolved: String(hydratedProject.audio?.url || hydratedProject.audio_url || hydratedProject.audioUrl || "").trim(),
+      const resolvedAudioUrl = String(hydratedProject.audio?.url || hydratedProject.audio_url || hydratedProject.audioUrl || "").trim();
+      console.info("[MANUAL BOARD AUDIO RESOLVE]", {
+        projectId: hydratedProject.project_id || hydratedProject.projectId || "",
+        audioObjectUrl: hydratedProject?.audio?.url || "",
+        audio_url: hydratedProject?.audio_url || "",
+        audioUrl: hydratedProject?.audioUrl || "",
+        resolvedAudioUrl,
+        audioDurationSec: Number(hydratedProject?.audio?.duration_sec || hydratedProject?.audio_duration_sec || hydratedProject?.audioDurationSec || 0) || 0,
+        sourceNodeId: hydratedProject?.sourceNodeId || hydratedProject?.nodeId || "",
+        boardMode: hydratedProject?.board_mode,
+        quickBoard: hydratedProject?.quick_board,
       });
       const hydrateMediaDiagnostics = getManualBoardMediaDiagnostics(hydratedProject, selectedSceneIdForHydrate);
       console.info("[MANUAL BOARD HYDRATE MEDIA FIELDS]", {
@@ -4375,10 +4382,22 @@ export default function ManualClipDirectorBoardEditor({
   const onExtractSceneAudioSlice = async (scene) => {
     const sceneId = String(scene?.scene_id || "").trim();
     if (!sceneId) return;
-    const sourceAudioUrl = String(projectRef.current?.audio?.url || projectRef.current?.audio_url || projectRef.current?.audioUrl || "").trim();
+    const sourceAudioUrl = String(
+      projectRef.current?.audio?.url
+      || projectRef.current?.audio_url
+      || projectRef.current?.audioUrl
+      || audioUrl
+      || ""
+    ).trim();
     if (!sourceAudioUrl) {
       updateScene(sceneId, {
         error: "В доске нет основного аудио. Вернитесь в тайминг и создайте быструю доску заново.",
+      });
+      return;
+    }
+    if (sourceAudioUrl.startsWith("blob:")) {
+      updateScene(sceneId, {
+        error: "Аудио проекта ещё не сохранено на сервер. Для lip-sync нужен server audio asset.",
       });
       return;
     }
