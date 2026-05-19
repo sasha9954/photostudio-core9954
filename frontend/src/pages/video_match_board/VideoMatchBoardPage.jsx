@@ -711,13 +711,29 @@ export default function VideoMatchBoardPage() {
   const onApplyJson = () => {
     try {
       const result = parseVideoMatchBoardJson(project.jsonInput || "", sourceVideoUrl);
+      console.log("[VIDEO MATCH APPLY JSON RESULT]", {
+        ok: result?.ok,
+        error: result?.error,
+        hasVideoBlocks: Array.isArray(result?.videoBlocks),
+        videoBlocksCount: result?.videoBlocks?.length,
+        hasMatchSegments: Array.isArray(result?.matchSegments),
+        matchSegmentsCount: result?.matchSegments?.length,
+        keys: Object.keys(result || {}),
+      });
+      if (!result || result.error || result.ok === false) {
+        patchProject({ jsonError: String(result?.error || "JSON parse error") }, { lastGood: false });
+        return;
+      }
+
+      const safeVideoBlocks = Array.isArray(result.videoBlocks) ? result.videoBlocks : [];
+      const safeMatchSegments = Array.isArray(result.matchSegments) ? result.matchSegments : [];
       const videoElementDurationSec = getValidDurationSec(videoRef.current?.duration);
       const stateVideoDurationSec = getValidDurationSec(videoDurationSec);
       const loadedVideoDurationSec = videoElementDurationSec || (sourceVideoUrl ? stateVideoDurationSec : 0);
       const jsonDurationSec = getValidDurationSec(result.sourceVideo?.duration_sec);
       const nextDurationSec = loadedVideoDurationSec || jsonDurationSec;
       const currentFilename = String(project.sourceVideo?.filename || "").trim();
-      const maxBlockEndSec = Math.max(0, ...result.videoBlocks.map((block) => Number(block.sourceVideoEndSec || 0)));
+      const maxBlockEndSec = Math.max(0, ...safeVideoBlocks.map((block) => Number(block.sourceVideoEndSec || 0)));
       const durationWarning = loadedVideoDurationSec > 0 && maxBlockEndSec > loadedVideoDurationSec
         ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
         : "";
@@ -746,11 +762,11 @@ export default function VideoMatchBoardPage() {
           duration_sec: Number(nextDurationSec.toFixed(3)),
         },
         sourceVideoPath: normalizedPath,
-        matchSegments: result.matchSegments,
-        videoBlocks: result.videoBlocks,
+        matchSegments: safeMatchSegments,
+        videoBlocks: safeVideoBlocks,
         selectedSegmentId: result.selectedSegmentId,
         selectedCandidateId: result.selectedCandidateId,
-        selectedBlockId: result.videoBlocks[0]?.id || "",
+        selectedBlockId: safeVideoBlocks[0]?.id || "",
         jsonInput: project.jsonInput || "",
         jsonError: durationWarning,
         sourceNodeId: nodeId,
