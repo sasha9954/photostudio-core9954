@@ -1035,6 +1035,7 @@ function buildManualTimingCurrentProjectBackupPayload(project = {}, createdAt = 
     audio_phrases: project?.audio_phrases || [],
     vocal_asr_source: project?.vocal_asr_source || null,
     vocal_asr_split_preset: project?.vocal_asr_split_preset || "song_lines",
+    vocal_asr_gaps: project?.vocal_asr_gaps || project?.asr_phrase_map?.gaps || [],
     markers: project?.markers || [],
     scenes: project?.scenes || [],
     story_blocks: project?.story_blocks || [],
@@ -2746,7 +2747,7 @@ export default function ManualTimingEditorPage() {
     const sceneEnd = Number(selectedScene.end_sec || 0);
     return vocalAsrGaps.filter((gap) => Number(gap?.end_sec || 0) > sceneStart && Number(gap?.start_sec || 0) < sceneEnd);
   }, [selectedScene, vocalAsrGaps]);
-  const selectedSceneHasAsrMissingWarning = Boolean(selectedScene && !selectedSceneSourcePhraseIds.length && selectedSceneOverlappingVocalGaps.length);
+  const selectedSceneHasAsrMissingWarning = Boolean(selectedScene && selectedSceneOverlappingVocalGaps.length);
 
   const timelineBlockRanges = useMemo(() => {
     if (!(durationSec > 0) || !storyBlocks.length) return [];
@@ -7097,12 +7098,17 @@ export default function ManualTimingEditorPage() {
                   />)}
                 </div> : null}
                 {vocalGapTimelineMarkers.length ? <div className="manualTimingAsrGapTrack" aria-label="ASR gaps with vocal activity">
-                  {vocalGapTimelineMarkers.map((gap) => <div
+                  {vocalGapTimelineMarkers.map((gap) => <button
                     key={`asr-gap-${gap.marker_id}`}
+                    type="button"
                     className="manualTimingAsrGapMarker"
                     style={{ left: gap.left, width: gap.width }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setAudioTime(gap.start_sec, { pause: true, clearBound: true });
+                    }}
                     title={`${gap.gap_id || "gap"} · вокал не распознан · ${formatTimingSec(gap.start_sec)} – ${formatTimingSec(gap.end_sec)}`}
-                  >вокал не распознан</div>)}
+                  >вокал не распознан</button>)}
                 </div> : null}
                 {scenes.map((scene, idx) => {
                   const isOpenTail = scene.scene_id === openTailSceneId;
@@ -7612,7 +7618,7 @@ export default function ManualTimingEditorPage() {
             <div className="manualTimingStatusItem"><span>Паузы pre / post</span><strong className="manualTimingStatusValue">{selectedScene ? `${formatTimingSec(selectedScenePreSilenceSec)} / ${formatTimingSec(selectedScenePostSilenceSec)}` : "—"}</strong></div>
             <div className="manualTimingStatusItem"><span>source_phrase_ids</span><strong className="manualTimingStatusValue">{selectedSceneSourcePhraseIds.length ? selectedSceneSourcePhraseIds.join(", ") : "—"}</strong></div>
           </div>
-          {selectedSceneHasAsrMissingWarning ? <div className="manualTimingSceneAsrMissingWarning">Вокал звучит, но ASR не дал текста. Можно разрезать по слуху или повторить ASR в режиме короткие фразы / другой model_size.</div> : null}
+          {selectedSceneHasAsrMissingWarning ? <div className="manualTimingSceneAsrMissingWarning">В этой сцене есть участок вокала, который ASR не распознал. Проверь по слуху или повтори ASR в режиме короткие фразы / другой model_size.</div> : null}
         </div>
           </div>
         </details>

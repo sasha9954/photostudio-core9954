@@ -1445,6 +1445,8 @@
 
 .manualTimingAsrGapMarker {
   position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
   top: 0;
   height: 14px;
   min-width: 30px;
