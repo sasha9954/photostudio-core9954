@@ -322,6 +322,7 @@ export function getDefaultManualTimingNodeData() {
       duration_ms: 0,
     },
     audio_source: "",
+    vocal_asr_source: null,
     timing_status: "empty",
     markers: [],
     story_blocks: [MANUAL_TIMING_UNKNOWN_STORY_BLOCK],
@@ -2723,6 +2724,7 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
     speakers: Array.isArray(safeRaw.speakers) ? safeRaw.speakers : (Array.isArray(safeBase.speakers) ? safeBase.speakers : []),
     topic_blocks: Array.isArray(safeRaw.topic_blocks) ? safeRaw.topic_blocks : (Array.isArray(safeBase.topic_blocks) ? safeBase.topic_blocks : []),
     audio_mode: String(safeRaw.audio_mode || safeBase.audio_mode || ""),
+    vocal_asr_source: safeRaw.vocal_asr_source || safeRaw.vocalAsrSource || safeBase.vocal_asr_source || safeBase.vocalAsrSource || null,
     audio_phrases: audioPhrases,
     scenes,
     manual_timing_workflow: normalizeManualTimingWorkflowWithInferredFallback(safeRaw, safeBase, inferenceProject),
@@ -3031,6 +3033,7 @@ export function buildManualTimingExportJson(project = {}) {
     speakers: Array.isArray(safeProject.speakers) ? safeProject.speakers : [],
     topic_blocks: Array.isArray(safeProject.topic_blocks) ? safeProject.topic_blocks : [],
     audio_mode: String(safeProject.audio_mode || ""),
+    vocal_asr_source: safeProject.vocal_asr_source || safeProject.vocalAsrSource || null,
     audio_phrases,
     scenes,
   };
