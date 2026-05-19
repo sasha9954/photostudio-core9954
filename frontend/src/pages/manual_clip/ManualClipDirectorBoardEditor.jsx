@@ -3406,6 +3406,14 @@ export default function ManualClipDirectorBoardEditor({
 
   const playSceneRange = () => {
     if (!selectedScene) return;
+    console.info("[MANUAL BOARD SCENE AUDIO FALLBACK]", {
+      sceneId: String(selectedScene?.scene_id || selectedScene?.id || "").trim(),
+      hasAudioSliceUrl: Boolean(String(selectedScene?.audio_slice_url || selectedScene?.audioSliceUrl || "").trim()),
+      hasMasterAudio: Boolean(audioUrl),
+      startSec: Number(selectedScene?.start_sec || 0) || 0,
+      endSec: Number(selectedScene?.end_sec || 0) || 0,
+      mode: "master_audio_range",
+    });
     playQuickListenRange("scene", Number(selectedScene.start_sec || 0), Number(selectedScene.end_sec || 0));
   };
 
@@ -5170,7 +5178,11 @@ export default function ManualClipDirectorBoardEditor({
         <div className="manualDirectorButtons">
           {selectedScene.route === "ia2v" ? <button className="clipSB_btn" onClick={() => {
             if (!selectedScene.audio_slice_url) {
-              updateScene(selectedScene.scene_id, { error: "Аудио сцены ещё не нарезано" });
+              if (!audioUrl) {
+                updateScene(selectedScene.scene_id, { error: "Аудио сцены не нарезано, а аудио проекта отсутствует" });
+                return;
+              }
+              updateScene(selectedScene.scene_id, { error: "Сцена проигрывается из основного аудио. Для генерации lip-sync можно нарезать audio slice." });
               return;
             }
             const nextScene = { ...selectedScene, audio_extracted: true };
@@ -5189,6 +5201,9 @@ export default function ManualClipDirectorBoardEditor({
           <button className="clipSB_btn" disabled={!selectedMMAudioSourceVideoUrl} onClick={() => onDeleteSceneVideo(selectedScene)}>{selectedMMAudioSourceVideoUrl ? "Удалить видео" : "Видео нет"}</button>
         </div>
         {selectedScene.error ? <div className="manualError">{selectedScene.error}</div> : null}
+        {selectedScene.route === "ia2v" && !selectedScene.audio_slice_url && audioUrl && selectedScene.audio_source_mode === "master_audio_range"
+          ? <div className="manualVideoInfo">Аудио slice ещё не создан, предпрослушка идёт из основного аудио.</div>
+          : null}
         {isManualVideoInterruptedError(selectedScene) ? <div className="manualVideoInfo">job прерван после рестарта backend — можно возобновить</div> : null}
         {isManualVideoInterruptedError(selectedScene) ? <button type="button" className="clipSB_btn" onClick={() => onResumeVideoJob(selectedScene)}>Возобновить job</button> : null}
         {(["video_queued", "video_running", "video_error"].includes(selectedScene.status)) ? <div className="manualVideoDebug">job: {selectedScene.video_job_id || "—"} · route: {selectedScene.route} · workflow: {selectedScene.video_request_payload_preview?.resolvedWorkflowKey || "—"} · audioSlice: {selectedScene.video_request_payload_preview?.hasAudioSliceUrl ? "yes" : "no"} · keepAudio: {selectedScene.video_request_payload_preview?.keepGeneratedAudio ? "yes" : "no"} · gain: {selectedScene.video_request_payload_preview?.generatedAudioGainDb ?? selectedScene.generated_audio_gain_db ?? "—"} dB{isManualVideoInterruptedError(selectedScene) ? " · job прерван после рестарта backend — можно возобновить" : ""}</div> : null}
