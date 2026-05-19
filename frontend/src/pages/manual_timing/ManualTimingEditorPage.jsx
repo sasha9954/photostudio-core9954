@@ -356,6 +356,44 @@ const MANUAL_NEW_BOARD_TIMING_STORY_FIELDS = [
 ];
 
 const MANUAL_NEW_BOARD_TIMING_STORY_FIELD_SET = new Set(MANUAL_NEW_BOARD_TIMING_STORY_FIELDS);
+const MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELDS = [
+  "route",
+  "audio_slice_url",
+  "audio_slice_duration_sec",
+  "status",
+  "image_url",
+  "image_preview_url",
+  "video_url",
+  "video_job_id",
+  "job_id",
+  "image_job_id",
+  "image_status",
+  "video_status",
+  "media_status",
+  "video_error",
+  "error",
+  "audio_extracted",
+  "video_has_audio",
+  "hasAudio",
+  "videoHasAudio",
+];
+const MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELD_SET = new Set(MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELDS);
+const MANUAL_NEW_BOARD_PROJECT_STORY_BIBLE_FIELDS = [
+  "project_story_summary_ru",
+  "project_core_theme_ru",
+  "project_drama_arc_ru",
+  "project_visual_bible_ru",
+  "project_style_lock_ru",
+  "project_world_lock_ru",
+  "project_character_identity_lock_ru",
+  "project_location_lock_ru",
+  "project_time_progression_ru",
+  "project_atmosphere_lock_ru",
+  "project_camera_language_ru",
+  "project_color_progression_ru",
+  "project_continuity_rules_ru",
+  "project_reference_prompt_en",
+];
 
 function hasManualNewBoardFieldValue(scene = {}, field = "") {
   if (!scene || !Object.prototype.hasOwnProperty.call(scene, field)) return false;
@@ -405,18 +443,20 @@ function sanitizeManualTimingSceneForNewBoard(scene = {}, projectFormat = "9:16"
   cleanScene.format = safeFormat;
   cleanScene.aspect_ratio = safeFormat;
   cleanScene.format_locked = true;
-  cleanScene.status = "draft";
-  cleanScene.image_upload_status = "";
-  cleanScene.image_upload_error = "";
-  cleanScene.video_error = "";
-  cleanScene.error = "";
+  if (!String(cleanScene.status || "").trim()) cleanScene.status = "draft";
+  if (!String(cleanScene.image_upload_status || "").trim()) cleanScene.image_upload_status = "";
+  if (!String(cleanScene.image_upload_error || "").trim()) cleanScene.image_upload_error = "";
+  if (!String(cleanScene.video_error || "").trim()) cleanScene.video_error = "";
+  if (!String(cleanScene.error || "").trim()) cleanScene.error = "";
 
   MANUAL_NEW_BOARD_CLEARED_SCENE_FIELDS.forEach((field) => {
+    if (MANUAL_NEW_BOARD_TIMING_STORY_FIELD_SET.has(field)) return;
+    if (MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELD_SET.has(field)) return;
     cleanScene[field] = "";
   });
-  cleanScene.video_has_audio = false;
-  cleanScene.hasAudio = false;
-  cleanScene.videoHasAudio = false;
+  if (cleanScene.video_has_audio === undefined) cleanScene.video_has_audio = false;
+  if (cleanScene.hasAudio === undefined) cleanScene.hasAudio = false;
+  if (cleanScene.videoHasAudio === undefined) cleanScene.videoHasAudio = false;
 
   return cleanScene;
 }
@@ -485,6 +525,46 @@ function sanitizeManualNewBoardProject(projectSnapshot = {}) {
     selectedScene: null,
     selectedSceneId: cleanScenes[0]?.scene_id || "",
   };
+}
+
+function mergeManualTimingIntoDirectorBoardProject(timingProject = {}, directorBoardProject = {}) {
+  const safeTiming = timingProject && typeof timingProject === "object" ? timingProject : {};
+  const safeBoard = directorBoardProject && typeof directorBoardProject === "object" ? directorBoardProject : {};
+  const boardSceneById = new Map(
+    (Array.isArray(safeBoard.scenes) ? safeBoard.scenes : [])
+      .map((scene) => [String(scene?.scene_id || scene?.id || "").trim(), scene])
+      .filter(([sceneId]) => sceneId)
+  );
+
+  const mergedScenes = (Array.isArray(safeTiming.scenes) ? safeTiming.scenes : []).map((scene) => {
+    const safeScene = scene && typeof scene === "object" ? scene : {};
+    const sceneId = String(safeScene.scene_id || safeScene.id || "").trim();
+    const boardScene = sceneId ? (boardSceneById.get(sceneId) || {}) : {};
+    const merged = { ...safeScene };
+
+    MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELDS.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(boardScene, field)) {
+        merged[field] = boardScene[field];
+      }
+    });
+
+    if (!Object.prototype.hasOwnProperty.call(merged, "route")) {
+      merged.route = String(safeScene.route || "i2v");
+    }
+    return merged;
+  });
+
+  const mergedProject = {
+    ...safeTiming,
+    scenes: mergedScenes,
+    story_blocks: Array.isArray(safeTiming.story_blocks) ? safeTiming.story_blocks : [],
+  };
+
+  MANUAL_NEW_BOARD_PROJECT_STORY_BIBLE_FIELDS.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(safeTiming, field)) mergedProject[field] = safeTiming[field];
+  });
+
+  return mergedProject;
 }
 
 function readActiveProject() {
@@ -5530,6 +5610,7 @@ export default function ManualTimingEditorPage() {
       }
     }
 
+    projectSnapshot = mergeManualTimingIntoDirectorBoardProject(projectSnapshot, existingBoard);
     projectSnapshot = sanitizeManualNewBoardProject(applyManualTimingProjectAudioCompat({
       ...projectSnapshot,
       nodeId: ownerNodeId,
