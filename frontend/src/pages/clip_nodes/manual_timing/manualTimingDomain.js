@@ -259,17 +259,68 @@ export function readManualTimingJsonStorage(key) {
   return readManualProjectJsonStorage(key);
 }
 
+function isValidManualTimingProject(project) {
+  const runtimeType = String(project?.project_runtime_type || "").trim();
+  if (runtimeType && runtimeType !== "manual_timing") return false;
+  if (
+    project?.board_mode !== undefined
+    || project?.quick_board === true
+    || project?.ownerNodeType !== undefined
+  ) return false;
+  return true;
+}
+
 export function readManualTimingProjectForNode(nodeId = "") {
   const safeId = String(nodeId || "").trim();
   const active = readManualTimingJsonStorage(getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY));
-  if (active && (!safeId || String(active?.nodeId || "") === safeId)) return active;
+  if (active && (!safeId || String(active?.nodeId || "") === safeId)) {
+    if (isValidManualTimingProject(active)) return active;
+    console.warn("[MANUAL TIMING READ REJECTED_NON_TIMING_PROJECT]", {
+      source: "active",
+      runtimeType: String(active?.project_runtime_type || "").trim(),
+      projectId: String(active?.project_id || active?.projectId || "").trim(),
+      nodeId: String(active?.nodeId || "").trim(),
+      boardMode: active?.board_mode,
+      quickBoard: active?.quick_board === true,
+    });
+  }
   const scoped = readManualTimingJsonStorage(getAccountScopedStorageKey(getManualTimingProjectStorageKey(safeId)));
-  if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) return scoped;
+  if (scoped && (!safeId || String(scoped?.nodeId || "") === safeId)) {
+    if (isValidManualTimingProject(scoped)) return scoped;
+    console.warn("[MANUAL TIMING READ REJECTED_NON_TIMING_PROJECT]", {
+      source: "scoped",
+      runtimeType: String(scoped?.project_runtime_type || "").trim(),
+      projectId: String(scoped?.project_id || scoped?.projectId || "").trim(),
+      nodeId: String(scoped?.nodeId || "").trim(),
+      boardMode: scoped?.board_mode,
+      quickBoard: scoped?.quick_board === true,
+    });
+  }
   if (canUseLegacyManualProjectStorage()) {
     const legacyActive = readManualTimingJsonStorage(MANUAL_TIMING_ACTIVE_PROJECT_KEY);
-    if (legacyActive && (!safeId || String(legacyActive?.nodeId || "") === safeId)) return legacyActive;
+    if (legacyActive && (!safeId || String(legacyActive?.nodeId || "") === safeId)) {
+      if (isValidManualTimingProject(legacyActive)) return legacyActive;
+      console.warn("[MANUAL TIMING READ REJECTED_NON_TIMING_PROJECT]", {
+        source: "legacyActive",
+        runtimeType: String(legacyActive?.project_runtime_type || "").trim(),
+        projectId: String(legacyActive?.project_id || legacyActive?.projectId || "").trim(),
+        nodeId: String(legacyActive?.nodeId || "").trim(),
+        boardMode: legacyActive?.board_mode,
+        quickBoard: legacyActive?.quick_board === true,
+      });
+    }
     const legacyScoped = readManualTimingJsonStorage(getManualTimingProjectStorageKey(safeId));
-    if (legacyScoped && (!safeId || String(legacyScoped?.nodeId || "") === safeId)) return legacyScoped;
+    if (legacyScoped && (!safeId || String(legacyScoped?.nodeId || "") === safeId)) {
+      if (isValidManualTimingProject(legacyScoped)) return legacyScoped;
+      console.warn("[MANUAL TIMING READ REJECTED_NON_TIMING_PROJECT]", {
+        source: "legacyScoped",
+        runtimeType: String(legacyScoped?.project_runtime_type || "").trim(),
+        projectId: String(legacyScoped?.project_id || legacyScoped?.projectId || "").trim(),
+        nodeId: String(legacyScoped?.nodeId || "").trim(),
+        boardMode: legacyScoped?.board_mode,
+        quickBoard: legacyScoped?.quick_board === true,
+      });
+    }
   }
   return null;
 }
