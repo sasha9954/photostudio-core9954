@@ -4424,7 +4424,7 @@ export default function ManualClipDirectorBoardEditor({
       updateScene(sceneId, { error: "Не удалось определить диапазон сцены для нарезки аудио." });
       return;
     }
-    const endpoint = "/api/assets/podcast-audio/extract-phrase-to-asset";
+    const endpoint = `${API_BASE}/api/podcast-audio/extract-phrase-to-asset`;
     const sourceNodeId = String(
       currentProject?.nodeId
       || currentProject?.sourceNodeId
@@ -4443,8 +4443,9 @@ export default function ManualClipDirectorBoardEditor({
       endpoint,
     });
     try {
-      const out = await fetchJson(endpoint, {
+      const response = await fetch(endpoint, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sourceAudioUrl,
@@ -4455,6 +4456,10 @@ export default function ManualClipDirectorBoardEditor({
           sourceNodeId,
         }),
       });
+      const out = await response.json().catch(() => null);
+      if (!response.ok || out?.ok === false) {
+        throw new Error(String(out?.detail || out?.message || `HTTP ${response.status}`));
+      }
       const audioSliceUrl = String(out?.url || out?.assetUrl || out?.asset_url || out?.publicUrl || out?.public_url || "").trim();
       const rawDuration = Number(out?.duration_sec ?? out?.durationSec ?? durationSec);
       const audioSliceDurationSec = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : durationSec;
