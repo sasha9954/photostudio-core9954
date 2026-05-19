@@ -427,7 +427,11 @@ function sanitizeManualTimingSceneForNewBoard(scene = {}, projectFormat = "9:16"
   const cleanScene = {};
   Object.entries(sourceScene).forEach(([key, value]) => {
     if (MANUAL_NEW_BOARD_CLEARED_SCENE_FIELDS.includes(key)) return;
-    if (MANUAL_NEW_BOARD_TIMING_STORY_FIELD_SET.has(key) || /(^|_)(text|translation|meaning|summary)($|_)/i.test(key)) {
+    if (
+      MANUAL_NEW_BOARD_TIMING_STORY_FIELD_SET.has(key)
+      || MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELD_SET.has(key)
+      || /(^|_)(text|translation|meaning|summary)($|_)/i.test(key)
+    ) {
       cleanScene[key] = value;
     }
   });
@@ -542,12 +546,29 @@ function mergeManualTimingIntoDirectorBoardProject(timingProject = {}, directorB
     const boardScene = sceneId ? (boardSceneById.get(sceneId) || {}) : {};
     const merged = { ...safeScene };
 
+    const preferTimingFields = new Set([
+      "route",
+      "audio_slice_url",
+      "audio_slice_duration_sec",
+    ]);
+
     MANUAL_NEW_BOARD_RUNTIME_MEDIA_FIELDS.forEach((field) => {
       if (!Object.prototype.hasOwnProperty.call(boardScene, field)) return;
-      if (["route", "audio_slice_url", "audio_slice_duration_sec"].includes(field)) {
+
+      if (field === "audio_slice_duration_sec") {
+        const timingDuration = Number(merged[field]);
+        if (Number.isFinite(timingDuration) && timingDuration > 0) return;
+        merged[field] = boardScene[field];
+        return;
+      }
+
+      if (preferTimingFields.has(field)) {
         const timingValue = merged[field];
         if (timingValue !== undefined && timingValue !== null && String(timingValue).trim() !== "") return;
+        merged[field] = boardScene[field];
+        return;
       }
+
       merged[field] = boardScene[field];
     });
 
@@ -5635,6 +5656,21 @@ export default function ManualTimingEditorPage() {
       lastPersistReason: "manual_new_project_from_audio_split",
     }, normalizeManualTimingProjectAudioForHandoff(project, audio));
     logManualBoardMediaRefs("[MANUAL BOARD MEDIA REFS AFTER CLEAN]", projectSnapshot, { sourceNodeId: ownerNodeId });
+    console.log("[MANUAL BOARD STORY FIELDS HANDOFF]", {
+      sceneCount: projectSnapshot.scenes?.length,
+      seg01: {
+        original_text: projectSnapshot.scenes?.[0]?.original_text,
+        translated_text_ru: projectSnapshot.scenes?.[0]?.translated_text_ru,
+        meaning_hint_ru: projectSnapshot.scenes?.[0]?.meaning_hint_ru,
+        source_image_prompt_en: projectSnapshot.scenes?.[0]?.source_image_prompt_en,
+        i2v_prompt_en: projectSnapshot.scenes?.[0]?.i2v_prompt_en,
+      },
+      storyBlocks: projectSnapshot.story_blocks?.map((b) => ({
+        block_id: b.block_id,
+        scene_ids: b.scene_ids,
+        hasStoryboard: Boolean(b.block_storyboard_summary_ru),
+      })),
+    });
 
     const replacedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectSnapshot, {
       forceReplace: true,
