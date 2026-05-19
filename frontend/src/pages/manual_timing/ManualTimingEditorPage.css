@@ -4141,3 +4141,15 @@
     grid-template-columns: 1fr;
   }
 }
+.manualTimingVocalPanel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 10px;
+  border: 1px solid rgba(120,160,255,0.25);
+  border-radius: 10px;
+  background: rgba(15,20,36,0.5);
+}
+.manualTimingVocalPanelActions { display: flex; gap: 8px; flex-wrap: wrap; }
+.manualTimingVocalPanelStatus { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; opacity: .95; }
+.manualTimingVocalWarning { color: #ffb17a; }

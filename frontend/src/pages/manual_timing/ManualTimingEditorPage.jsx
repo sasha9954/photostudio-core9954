@@ -609,6 +609,19 @@ function readAudioFileMetadata(file) {
   });
 }
 
+function buildVocalAsrSourcePatch(uploadedAsset = {}, file = null, durationSec = 0) {
+  return {
+    type: "vocal_stem",
+    filename: String(uploadedAsset?.name || uploadedAsset?.filename || uploadedAsset?.fileName || file?.name || "").trim(),
+    url: String(uploadedAsset?.url || uploadedAsset?.assetUrl || uploadedAsset?.asset_url || uploadedAsset?.publicUrl || uploadedAsset?.public_url || uploadedAsset?.path || "").trim(),
+    duration_sec: roundTimingSec(Number(durationSec || 0) || 0),
+    size: Number(uploadedAsset?.size || file?.size || 0) || 0,
+    mime_type: String(uploadedAsset?.mime_type || uploadedAsset?.mimeType || file?.type || "").trim(),
+    offset_sec: 0,
+    aligned_to_master_audio: true,
+  };
+}
+
 function buildManualTimingProjectForAudioChange(baseProject = {}, nextAudio = getEmptyManualTimingAudio(), audioSource = "") {
   const safeAudio = normalizeManualTimingAudio(nextAudio);
   const durationSec = Number(safeAudio.duration_sec || 0);
@@ -2475,6 +2488,10 @@ export default function ManualTimingEditorPage() {
   ]);
   const { routeSourceNodeId, projectSourceNodeId, fallbackOwnerNodeId, finalOwnerNodeId } = manualTimingOwner;
   const isTimingAudioUploading = audioUploadStatus === "uploading";
+  const vocalAsrSource = project?.vocal_asr_source && typeof project.vocal_asr_source === "object" ? project.vocal_asr_source : null;
+  const vocalAsrDurationMismatch = vocalAsrSource
+    ? Math.abs(Number(vocalAsrSource.duration_sec || 0) - Number(audio.duration_sec || 0)) > 0.25
+    : false;
   const workflowLabels = getManualTimingWorkflowLabels(modeConfig.mode);
   const routeOptions = getManualTimingRouteOptions(modeConfig.mode);
   const isMusicClip = modeConfig.mode === MANUAL_TIMING_MUSIC_CLIP_MODE;
@@ -2608,7 +2625,8 @@ export default function ManualTimingEditorPage() {
     if (!(durationSec > 0)) return [];
 
     return audioPhrases.flatMap((phrase) => {
-      const ranges = mapSourceRangeToTimelineRanges(phrase.start_sec, phrase.end_sec, scenes);
+      const offsetSec = String(phrase?.source || "") === "vocal_stem_asr" ? Number(vocalAsrSource?.offset_sec || 0) || 0 : 0;
+      const ranges = mapSourceRangeToTimelineRanges(Number(phrase.start_sec || 0) + offsetSec, Number(phrase.end_sec || 0) + offsetSec, scenes);
       if (!ranges.length) return [];
 
       return ranges.map((range, rangeIndex) => ({
@@ -2622,7 +2640,7 @@ export default function ManualTimingEditorPage() {
         style: getAsrPhraseStyle({ start_sec: range.start_sec, end_sec: range.end_sec }, durationSec),
       }));
     });
-  }, [audioPhrases, durationSec, scenes]);
+  }, [audioPhrases, durationSec, scenes, vocalAsrSource?.offset_sec]);
   const selectedMissingPhrase = useMemo(
     () => audioPhrases.find((phrase) => String(phrase.phrase_id || "") === String(selectedMissingPhraseId || "")) || null,
     [audioPhrases, selectedMissingPhraseId]
@@ -5040,6 +5058,69 @@ export default function ManualTimingEditorPage() {
     }
   };
 
+  const onUploadVocalForAsr = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !audio.url) return;
+    setAudioUploadStatus("uploading");
+    try {
+      const [metadata, uploadedAsset] = await Promise.all([readAudioFileMetadata(file), uploadManualTimingAudioAsset(file)]);
+      const uploadedDurationSec = Number(uploadedAsset?.durationSec || uploadedAsset?.duration_sec || metadata.duration_sec || 0);
+      const vocalSource = buildVocalAsrSourcePatch(uploadedAsset, file, uploadedDurationSec);
+      const delta = Math.abs(Number(vocalSource.duration_sec || 0) - Number(audio.duration_sec || 0));
+      if (delta > 0.25) vocalSource.aligned_to_master_audio = false;
+      persist({ ...project, vocal_asr_source: vocalSource });
+      setAsrStatus(delta > 0.25
+        ? "Длина вокала отличается от основной песни. Нужен full-length vocal stem без обрезки тишины."
+        : "Вокал загружен для ASR.");
+    } catch (error) {
+      setAsrStatus(`Ошибка загрузки вокала: ${error?.message || error}`);
+    } finally {
+      setAudioUploadStatus("");
+    }
+  };
+
+  const onCreateVocalAsrPhraseMap = async () => {
+    if (!vocalAsrSource?.url) return;
+    setAsrStatus("ASR по вокалу: распознаю фразы…");
+    try {
+      const res = await fetch(`${API_BASE}/api/manual-timing/audio-phrases`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: "en", split_mode: "pause_based", min_pause_sec: 0.45, max_phrase_sec: 8.0, min_phrase_sec: 1.2 }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
+      const offsetSec = Number(vocalAsrSource?.offset_sec || 0) || 0;
+      const vocalPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "vocal_stem_asr", translation_ru: String(phrase?.translation_ru || ""), meaning_ru: String(phrase?.meaning_ru || "") })));
+      const nextScenes = scenes.map((scene) => {
+        const s0 = Number(scene?.start_sec || 0);
+        const s1 = Number(scene?.end_sec || s0);
+        const overlap = vocalPhrases.filter((phrase) => {
+          const p0 = Number(phrase?.start_sec || 0) + offsetSec;
+          const p1 = Number(phrase?.end_sec || p0) + offsetSec;
+          return p1 > s0 + 0.001 && p0 < s1 - 0.001;
+        });
+        const sourceIds = overlap.map((phrase) => String(phrase?.phrase_id || "")).filter(Boolean);
+        const firstPhrase = overlap[0] || null;
+        return {
+          ...scene,
+          source_phrase_ids: sourceIds,
+          original_text: firstPhrase ? pickManualTimingAudioPhraseOriginalText(firstPhrase) : String(scene?.original_text || ""),
+          source_text_en: firstPhrase ? pickManualTimingAudioPhraseOriginalText(firstPhrase) : String(scene?.source_text_en || ""),
+          translated_text_ru: firstPhrase ? String(firstPhrase?.translation_ru || "") : String(scene?.translated_text_ru || ""),
+          meaning_hint_ru: firstPhrase ? String(firstPhrase?.meaning_ru || "") : String(scene?.meaning_hint_ru || ""),
+          contains_vocal: sourceIds.length > 0 ? true : Boolean(scene?.contains_vocal),
+        };
+      });
+      persist({ ...project, audio_phrases: vocalPhrases, scenes: nextScenes, asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now() } });
+      setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз.`);
+    } catch (error) {
+      setAsrStatus(`Ошибка ASR по вокалу: ${error?.message || error}`);
+    }
+  };
+
   const onOpenAsrVerificationScenes = () => {
     if (!audioPhrases.length) return;
     const confirmed = window.confirm("Это заменит текущие сцены на ASR-preview. Продолжить?");
@@ -5847,6 +5928,9 @@ export default function ManualTimingEditorPage() {
         speaker: String(scene?.speaker || scene?.voice || "").trim() || "",
         voice: String(scene?.voice || scene?.speaker || "").trim() || "",
         notes: String(scene?.notes || "").trim() || "",
+        translated_text_ru: String(scene?.translated_text_ru || "").trim(),
+        meaning_hint_ru: String(scene?.meaning_hint_ru || "").trim(),
+        contains_vocal: Boolean(scene?.contains_vocal),
       };
     });
 
@@ -5872,6 +5956,17 @@ export default function ManualTimingEditorPage() {
         source_of_truth: "audio_map",
         do_not_change_audio_timings: true,
         segments,
+      },
+      vocal_asr_source: sourceProject?.vocal_asr_source ? {
+        type: String(sourceProject.vocal_asr_source?.type || "vocal_stem"),
+        filename: String(sourceProject.vocal_asr_source?.filename || ""),
+        duration_sec: roundTimingSec(Number(sourceProject.vocal_asr_source?.duration_sec || 0)),
+        aligned_to_master_audio: Boolean(sourceProject.vocal_asr_source?.aligned_to_master_audio),
+      } : null,
+      lyrics_asr_policy: {
+        asr_source: "vocal_stem",
+        main_audio_is_master: true,
+        vocal_stem_must_be_full_length: true,
       },
       instructions_for_chatgpt: [
         "When this JSON is sent back to ChatGPT, treat it as a Video Match seed.",
@@ -7272,6 +7367,21 @@ export default function ManualTimingEditorPage() {
         </div>
 
         <div className="manualTimingWorkflowPanel" aria-label={`Основной workflow ${workflowLabels.pass}`}>
+          <div className="manualTimingVocalPanel">
+            <strong>🎤 Вокал для ASR</strong>
+            <div className="manualTimingVocalPanelActions">
+              <label className="clipSB_btn clipSB_btnSecondary">
+                Загрузить вокал
+                <input type="file" accept="audio/*" onChange={onUploadVocalForAsr} hidden />
+              </label>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onCreateVocalAsrPhraseMap} disabled={!vocalAsrSource?.url || String(asrStatus || "").startsWith("ASR по вокалу:")}>ASR по вокалу</button>
+            </div>
+            <div className="manualTimingVocalPanelStatus">
+              <span>{vocalAsrSource?.url ? "вокал загружен" : "вокал не загружен"}</span>
+              <span>{audioPhrases.some((phrase) => String(phrase?.source || "") === "vocal_stem_asr") ? "ASR готов" : "ASR не запускался"}</span>
+              {vocalAsrDurationMismatch ? <span className="manualTimingVocalWarning">Длина вокала отличается от основной песни. Нужен full-length vocal stem без обрезки тишины.</span> : null}
+            </div>
+          </div>
           <div className="manualTimingWorkflowActions manualTimingWorkflowActionsPrimary">
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>1 · Audio Phrase Map</button>
             <button
