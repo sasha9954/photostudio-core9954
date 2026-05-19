@@ -277,6 +277,7 @@ export function readManualTimingProjectForNode(nodeId = "") {
     console.info("[MANUAL TIMING READ PICKED]", {
       source,
       nodeId: String(project?.nodeId || "").trim(),
+      candidateNodeId: String(project?.nodeId || project?.sourceNodeId || project?.ownerNodeId || "").trim(),
       projectId: String(project?.project_id || project?.projectId || "").trim(),
       scenesCount: Array.isArray(project?.scenes) ? project.scenes.length : 0,
       audioDurationSec: Number(project?.audio_duration_sec || project?.audioDurationSec || 0),
@@ -286,13 +287,17 @@ export function readManualTimingProjectForNode(nodeId = "") {
 
   function readCandidate(source, key) {
     const project = readManualTimingJsonStorage(key);
-    if (!project || (safeId && String(project?.nodeId || "") !== safeId)) return null;
+    const candidateNodeId = String(
+      project?.nodeId || project?.sourceNodeId || project?.ownerNodeId || ""
+    ).trim();
+    if (!project || (safeId && candidateNodeId !== safeId)) return null;
     if (isValidManualTimingProject(project)) return pickProject(project, source);
     console.warn("[MANUAL TIMING READ REJECTED_NON_TIMING_PROJECT]", {
       source,
       runtimeType: String(project?.project_runtime_type || "").trim(),
       projectId: String(project?.project_id || project?.projectId || "").trim(),
       nodeId: String(project?.nodeId || "").trim(),
+      candidateNodeId: String(project?.nodeId || project?.sourceNodeId || project?.ownerNodeId || "").trim(),
       boardMode: project?.board_mode,
       quickBoard: project?.quick_board === true,
     });
@@ -306,7 +311,6 @@ export function readManualTimingProjectForNode(nodeId = "") {
     ]
     : [
       ["active", getAccountScopedStorageKey(MANUAL_TIMING_ACTIVE_PROJECT_KEY)],
-      ["scoped", getAccountScopedStorageKey(getManualTimingProjectStorageKey(safeId))],
     ];
 
   if (canUseLegacyManualProjectStorage()) {
@@ -315,7 +319,6 @@ export function readManualTimingProjectForNode(nodeId = "") {
       readOrder.push(["legacyActive", MANUAL_TIMING_ACTIVE_PROJECT_KEY]);
     } else {
       readOrder.push(["legacyActive", MANUAL_TIMING_ACTIVE_PROJECT_KEY]);
-      readOrder.push(["legacyScoped", getManualTimingProjectStorageKey(safeId)]);
     }
   }
 
