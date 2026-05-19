@@ -90,6 +90,14 @@ function isOverrideCandidate(candidate = {}) {
   return candidate?.sourceKind === "override_video" || Boolean(candidate?.overrideVideoUrl || candidate?.overrideVideoPath);
 }
 
+function isOverrideBlock(block = {}) {
+  return block?.sourceKind === "override_video" || block?.overrideVideoUrl || block?.overrideVideoPath;
+}
+
+function getResolvedOverrideUrl(blockOrCandidate = {}) {
+  return resolveOutputUrl(blockOrCandidate?.overrideVideoUrl || "");
+}
+
 export default function VideoMatchBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -98,6 +106,7 @@ export default function VideoMatchBoardPage() {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const playbackRef = useRef(null);
+  const activeVideoSourceKindRef = useRef("source");
   const objectUrlRef = useRef("");
   const audioObjectUrlRef = useRef("");
   const overrideUploadInputRef = useRef(null);
@@ -257,7 +266,32 @@ export default function VideoMatchBoardPage() {
       }
     })();
     if (currentSrc !== expectedSrc && currentSrc !== resolvedExpectedSrc) {
+      activeVideoSourceKindRef.current = "source";
       videoRef.current.src = sourceVideoUrl;
+    }
+  };
+
+  const getOverrideBlockEndSec = (block = {}) => {
+    const overrideDuration = Number(block?.overrideDurationSec || 0);
+    const sourceEnd = getBlockSourceEnd(block);
+    const targetDuration = Math.max(0, getBlockTargetEnd(block) - getBlockTargetStart(block));
+    const baseEnd = Math.max(0, overrideDuration || sourceEnd);
+    return targetDuration > 0 ? Math.min(baseEnd, targetDuration) : baseEnd;
+  };
+
+  const playOverrideRange = async (block = {}, { muted = false } = {}) => {
+    const overrideUrl = getResolvedOverrideUrl(block);
+    if (!overrideUrl || !videoRef.current) return false;
+    activeVideoSourceKindRef.current = "override";
+    videoRef.current.muted = Boolean(muted);
+    videoRef.current.src = overrideUrl;
+    videoRef.current.currentTime = 0;
+    try {
+      await videoRef.current.play();
+      return true;
+    } catch (error) {
+      patchProject({ jsonError: `Не удалось запустить override video: ${String(error?.message || error)}` }, { lastGood: false });
+      return false;
     }
   };
 
@@ -267,6 +301,7 @@ export default function VideoMatchBoardPage() {
       return false;
     }
     restoreSourceVideoElement();
+    activeVideoSourceKindRef.current = "source";
     videoRef.current.muted = Boolean(muted);
     videoRef.current.currentTime = Math.max(0, Number(start || 0));
     try {
@@ -294,13 +329,16 @@ export default function VideoMatchBoardPage() {
   };
 
   const startVideoOnlyBlock = async (block = {}) => {
-    const start = getBlockSourceStart(block);
-    const end = getBlockSourceEnd(block);
-    playbackRef.current = { mode: "video_range", end, blocks: [], index: 0, currentBlockId: block.id || "" };
+    const isOverride = isOverrideBlock(block) && block.overrideVideoUrl;
+    const start = isOverride ? 0 : getBlockSourceStart(block);
+    const end = isOverride ? getOverrideBlockEndSec(block) : getBlockSourceEnd(block);
+    playbackRef.current = { mode: isOverride ? "override_video_range" : "video_range", end, blocks: [], index: 0, currentBlockId: block.id || "" };
     if (audioRef.current) audioRef.current.pause();
     setIsAssemblyPlaying(false);
     setIsPlaybackActive(true);
-    const didPlay = await playSourceRange(start, end, { muted: false });
+    const didPlay = isOverride
+      ? await playOverrideRange(block, { muted: false })
+      : await playSourceRange(start, end, { muted: false });
     if (!didPlay) setIsPlaybackActive(false);
     return didPlay;
   };
@@ -371,7 +409,9 @@ export default function VideoMatchBoardPage() {
       };
       setIsAssemblyPlaying(true);
       setIsPlaybackActive(true);
-      const didStartVideo = await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: true });
+      const didStartVideo = (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl)
+        ? await playOverrideRange(firstBlock, { muted: true })
+        : await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: true });
       if (!didStartVideo) {
         setIsAssemblyPlaying(false);
         setIsPlaybackActive(false);
@@ -388,14 +428,16 @@ export default function VideoMatchBoardPage() {
 
     playbackRef.current = {
       mode: "assembly_video",
-      end: getBlockSourceEnd(firstBlock),
+      end: (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl) ? getOverrideBlockEndSec(firstBlock) : getBlockSourceEnd(firstBlock),
       blocks: assemblyBlocks,
       index: startIndex,
       currentBlockId: firstBlock.id || "",
     };
     setIsAssemblyPlaying(true);
     setIsPlaybackActive(true);
-    const didPlay = await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: false });
+    const didPlay = (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl)
+      ? await playOverrideRange(firstBlock, { muted: false })
+      : await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: false });
     if (!didPlay) {
       setIsAssemblyPlaying(false);
       setIsPlaybackActive(false);
@@ -410,7 +452,7 @@ export default function VideoMatchBoardPage() {
 
     if (playback.mode === "audio_range" || playback.mode === "assembly_audio") {
       const currentBlock = playback.blocks?.[playback.index] || selectedBlock;
-      const sourceEnd = getBlockSourceEnd(currentBlock);
+      const sourceEnd = (isOverrideBlock(currentBlock) && currentBlock.overrideVideoUrl) ? getOverrideBlockEndSec(currentBlock) : getBlockSourceEnd(currentBlock);
       if (sourceEnd > 0 && current >= sourceEnd && videoRef.current) {
         videoRef.current.pause();
         videoRef.current.currentTime = sourceEnd;
@@ -429,7 +471,12 @@ export default function VideoMatchBoardPage() {
       if (nextBlock) {
         playbackRef.current = { ...playback, index: nextIndex, end: getBlockSourceEnd(nextBlock), currentBlockId: nextBlock.id || "" };
         onSelectBlock(nextBlock);
-        void playSourceRange(getBlockSourceStart(nextBlock), getBlockSourceEnd(nextBlock), { muted: false });
+        if (isOverrideBlock(nextBlock) && nextBlock.overrideVideoUrl) {
+          playbackRef.current = { ...playbackRef.current, mode: "assembly_video", end: getOverrideBlockEndSec(nextBlock) };
+          void playOverrideRange(nextBlock, { muted: false });
+        } else {
+          void playSourceRange(getBlockSourceStart(nextBlock), getBlockSourceEnd(nextBlock), { muted: false });
+        }
         return;
       }
       playbackRef.current = null;
@@ -469,7 +516,11 @@ export default function VideoMatchBoardPage() {
         currentBlockId: found.block.id || "",
       };
       onSelectBlock(found.block);
-      void playSourceRange(getBlockSourceStart(found.block), getBlockSourceEnd(found.block), { muted: true });
+      if (isOverrideBlock(found.block) && found.block.overrideVideoUrl) {
+        void playOverrideRange(found.block, { muted: true });
+      } else {
+        void playSourceRange(getBlockSourceStart(found.block), getBlockSourceEnd(found.block), { muted: true });
+      }
     }
   };
 
@@ -501,16 +552,12 @@ export default function VideoMatchBoardPage() {
   const onPreviewCandidate = async (segment = {}, candidate = {}) => {
     setPreviewCandidateId(candidate.id || "");
     if (isOverrideCandidate(candidate) && candidate.overrideVideoUrl && videoRef.current) {
-      const overrideUrl = resolveOutputUrl(candidate.overrideVideoUrl);
       playbackRef.current = null;
       setIsAssemblyPlaying(false);
       setIsPlaybackActive(true);
       if (audioRef.current) audioRef.current.pause();
       patchProject({ selectedSegmentId: segment.id || "", selectedCandidateId: candidate.id || "" }, { lastGood: false });
-      videoRef.current.muted = false;
-      videoRef.current.src = overrideUrl;
-      videoRef.current.currentTime = 0;
-      const didPlay = await videoRef.current.play().then(() => true).catch(() => false);
+      const didPlay = await playOverrideRange(candidate, { muted: false });
       if (!didPlay) setIsPlaybackActive(false);
       return;
     }
@@ -601,6 +648,7 @@ export default function VideoMatchBoardPage() {
     setSourceVideoLoadMessage("");
     const duration = Number(videoRef.current?.duration || 0);
     if (!Number.isFinite(duration) || duration <= 0) return;
+    if (activeVideoSourceKindRef.current === "override") return;
     setVideoDurationSec(duration);
     patchProject({
       sourceVideo: {
