@@ -1034,6 +1034,7 @@ function buildManualTimingCurrentProjectBackupPayload(project = {}, createdAt = 
     audio_duration_sec: project?.audio_duration_sec ?? getManualTimingCurrentProjectAudioDuration(project),
     audio_phrases: project?.audio_phrases || [],
     vocal_asr_source: project?.vocal_asr_source || null,
+    vocal_asr_split_preset: project?.vocal_asr_split_preset || "song_lines",
     markers: project?.markers || [],
     scenes: project?.scenes || [],
     story_blocks: project?.story_blocks || [],
@@ -7418,6 +7419,7 @@ export default function ManualTimingEditorPage() {
                 </select>
               </label>
               <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onCreateVocalAsrPhraseMap} disabled={!vocalAsrSource?.url || String(asrStatus || "").startsWith("ASR по вокалу:")}>ASR по вокалу</button>
+              <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled title="Следующий шаг: перевод vocal ASR фраз">🌍 Перевести фразы</button>
             </div>
             <div className="manualTimingVocalPanelStatus">
               <span>{vocalAsrSource?.url ? "вокал загружен" : "вокал не загружен"}</span>
