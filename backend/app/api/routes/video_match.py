@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -14,6 +14,7 @@ from app.api.deps import get_current_user
 router = APIRouter(prefix="/video-match")
 
 VIDEO_MATCH_OUTPUTS_DIR = Path(__file__).resolve().parents[2] / "static" / "assets" / "video_match_outputs"
+VIDEO_MATCH_OVERRIDES_DIR = Path(__file__).resolve().parents[2] / "static" / "assets" / "video_match_overrides"
 
 
 class VideoMatchBlock(BaseModel):
@@ -23,6 +24,10 @@ class VideoMatchBlock(BaseModel):
     targetEndSec: float = 0
     sourceVideoStartSec: float = 0
     sourceVideoEndSec: float = 0
+    overrideVideoPath: str | None = None
+    overrideVideoUrl: str | None = None
+    candidateType: str | None = None
+    sourceKind: str | None = None
 
 
 class AssembleVideoMatchRequest(BaseModel):
@@ -77,6 +82,50 @@ async def get_video_match_output(filename: str, _user=Depends(get_current_user))
     return FileResponse(output_path, media_type="video/mp4", filename=safe_name)
 
 
+@router.get("/override/{filename}")
+async def get_video_match_override(filename: str, _user=Depends(get_current_user)):
+    safe_name = Path(filename).name
+    if safe_name != filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail={"code": "invalid_filename"})
+    path = VIDEO_MATCH_OVERRIDES_DIR / safe_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail={"code": "override_not_found"})
+    return FileResponse(path, media_type="video/mp4", filename=safe_name)
+
+
+@router.post("/override-upload")
+async def upload_video_match_override(
+    file: UploadFile = File(...),
+    nodeId: str | None = Form(default=None),
+    segmentId: str | None = Form(default=None),
+    candidateType: str = Form(default="user_override"),
+    _user=Depends(get_current_user),
+):
+    _ = (nodeId, segmentId)
+    original_name = str(file.filename or "override.mp4").strip() or "override.mp4"
+    suffix = Path(original_name).suffix.lower()
+    allowed_ext = {".mp4", ".mov", ".webm", ".mkv"}
+    content_type = str(file.content_type or "").lower()
+    if not (content_type.startswith("video/") or suffix in allowed_ext):
+        raise HTTPException(status_code=400, detail={"code": "invalid_override_type"})
+    safe_ext = suffix if suffix in allowed_ext else ".mp4"
+    VIDEO_MATCH_OVERRIDES_DIR.mkdir(parents=True, exist_ok=True)
+    stored_filename = f"video_match_override_{uuid.uuid4().hex}{safe_ext}"
+    stored_path = VIDEO_MATCH_OVERRIDES_DIR / stored_filename
+    data = await file.read()
+    stored_path.write_bytes(data)
+    duration_sec = _probe_duration_sec(stored_path)
+    return {
+        "ok": True,
+        "candidateType": candidateType,
+        "overrideVideoPath": str(stored_path),
+        "overrideVideoUrl": f"/api/video-match/override/{stored_filename}",
+        "filename": original_name,
+        "storedFilename": stored_filename,
+        "durationSec": round(float(duration_sec or 0), 3),
+    }
+
+
 @router.post("/assemble")
 async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body(...), _user=Depends(get_current_user)):
     source_path = Path(payload.sourceVideoPath).expanduser()
@@ -94,13 +143,29 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
 
     try:
         clip_paths: list[Path] = []
+        warnings: list[str] = []
+        override_used_count = 0
         for idx, block in enumerate(blocks):
+            override_path = Path(str(block.overrideVideoPath or "")).expanduser() if block.overrideVideoPath else None
+            target_duration = max(0.01, float(block.targetEndSec or 0) - float(block.targetStartSec or 0))
+            source_for_clip = source_path
             start = max(0.0, float(block.sourceVideoStartSec or 0))
             end = max(start, float(block.sourceVideoEndSec or start))
             duration = max(0.01, end - start)
+            if override_path:
+                if override_path.is_file():
+                    override_used_count += 1
+                    source_for_clip = override_path
+                    start = 0.0
+                    override_duration = _probe_duration_sec(override_path)
+                    if override_duration > 0 and override_duration < target_duration:
+                        warnings.append(f"override_shorter_than_target:{block.id}")
+                    duration = max(0.01, min(override_duration if override_duration > 0 else target_duration, target_duration))
+                else:
+                    warnings.append(f"override_video_missing:{block.id}")
             clip_path = work_dir / f"clip_{idx:04d}.mp4"
             _run_ffmpeg([
-                "ffmpeg", "-y", "-ss", f"{start:.6f}", "-i", str(source_path), "-t", f"{duration:.6f}",
+                "ffmpeg", "-y", "-ss", f"{start:.6f}", "-i", str(source_for_clip), "-t", f"{duration:.6f}",
                 "-an", "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,fps=30",
                 "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", str(clip_path),
             ])
@@ -134,6 +199,8 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
             "outputPath": str(output_path),
             "durationSec": round(duration_sec, 3),
             "audioUsed": has_audio,
+            "overrideUsedCount": override_used_count,
+            "warnings": warnings + [f"override_used_count:{override_used_count}"],
         }
         if audio_warning:
             result["warning"] = audio_warning
