@@ -5,6 +5,29 @@ export const VIDEO_MATCH_BOARD_ACTIVE_PROJECT_ID_KEY = "VIDEO_MATCH_BOARD_ACTIVE
 export const VIDEO_MATCH_BOARD_SCHEMA_V1 = "video_match_board_v1";
 export const VIDEO_MATCH_BOARD_SCHEMA_V2 = "video_match_board_v2";
 
+function isBlobUrl(value = "") {
+  return String(value || "").trim().startsWith("blob:");
+}
+
+export function buildVideoMatchImportSignature(project = {}) {
+  const source = project && typeof project === "object" ? project : {};
+  const sourceVideoPath = String(
+    source?.sourceVideo?.path
+    || source?.source_video?.path
+    || source?.sourceVideoPath
+    || "",
+  ).trim();
+  const segments = Array.isArray(source.matchSegments) ? source.matchSegments : [];
+  const signatureParts = segments.map((segment = {}, index = 0) => {
+    const id = String(segment.id || segment.audioSceneId || segment.audio_scene_id || `seg_${index}`).trim();
+    const t0 = toFiniteNumber(segment.targetStartSec ?? segment.target_t0, 0).toFixed(3);
+    const t1 = toFiniteNumber(segment.targetEndSec ?? segment.target_t1, 0).toFixed(3);
+    const selectedCandidateId = String(segment.selectedCandidateId || segment.selected_candidate_id || "").trim();
+    return `${id}:${t0}:${t1}:${selectedCandidateId}`;
+  });
+  return [String(source.schema || "").trim(), sourceVideoPath, ...signatureParts].join("|");
+}
+
 function getVideoMatchBoardAccountScopedStorageKey(baseKey = "") {
   return getAccountScopedStorageKey(baseKey);
 }
@@ -456,10 +479,50 @@ export function parseVideoMatchBoardJson(jsonText = "", sourceVideoUrl = "") {
 export function readVideoMatchBoardProjectForNode(nodeId = "") {
   const safeNodeId = String(nodeId || "").trim();
   const nodeProject = safeReadVideoMatchJson(getVideoMatchBoardNodeStorageKey(safeNodeId));
-  if (nodeProject) return nodeProject;
   const activeProject = safeReadVideoMatchJson(getVideoMatchBoardActiveProjectStorageKey());
-  if (activeProject && (!safeNodeId || String(activeProject.nodeId || "") === safeNodeId)) return activeProject;
-  return null;
+  const emergencyProject = safeReadVideoMatchJson(getVideoMatchBoardEmergencyStorageKey(safeNodeId));
+  const candidates = [
+    { key: "node", project: nodeProject },
+    { key: "active", project: activeProject && (!safeNodeId || String(activeProject.nodeId || "") === safeNodeId) ? activeProject : null },
+    { key: "emergency", project: emergencyProject },
+  ].filter((item) => item.project);
+  if (!candidates.length) return null;
+
+  const scoreProject = (project = {}) => {
+    const importedAt = Number(project?.importedAt || 0);
+    const matchSegmentsCount = Array.isArray(project?.matchSegments) ? project.matchSegments.length : 0;
+    const videoBlocksCount = Array.isArray(project?.videoBlocks) ? project.videoBlocks.length : 0;
+    const hasImportMeta = Boolean(project?.importSignature) && importedAt > 0;
+    const hasBlobPreview = isBlobUrl(project?.sourceVideoUrl) || isBlobUrl(project?.audioPreviewUrl);
+    const updatedAt = Number(project?.updatedAt || 0);
+    const hasMaterial = matchSegmentsCount > 0 || videoBlocksCount > 0;
+    return { importedAt, matchSegmentsCount, videoBlocksCount, hasImportMeta, hasBlobPreview, updatedAt, hasMaterial };
+  };
+
+  const sorted = [...candidates].sort((a, b) => {
+    const A = scoreProject(a.project);
+    const B = scoreProject(b.project);
+    if (A.hasImportMeta !== B.hasImportMeta) return A.hasImportMeta ? -1 : 1;
+    if (A.importedAt !== B.importedAt) return B.importedAt - A.importedAt;
+    if (A.hasMaterial !== B.hasMaterial) return A.hasMaterial ? -1 : 1;
+    if (A.matchSegmentsCount !== B.matchSegmentsCount) return B.matchSegmentsCount - A.matchSegmentsCount;
+    if (A.videoBlocksCount !== B.videoBlocksCount) return B.videoBlocksCount - A.videoBlocksCount;
+    return B.updatedAt - A.updatedAt;
+  });
+  const picked = sorted[0];
+  const activeStats = scoreProject(nodeProject || activeProject || {});
+  const emergencyStats = scoreProject(emergencyProject || {});
+  const pickedPath = String(picked.project?.sourceVideo?.path || picked.project?.source_video?.path || picked.project?.sourceVideoPath || "").trim();
+  console.info("[VIDEO MATCH HYDRATE PICK]", {
+    picked: picked.key,
+    activeImportedAt: activeStats.importedAt,
+    emergencyImportedAt: emergencyStats.importedAt,
+    activeSegments: activeStats.matchSegmentsCount,
+    emergencySegments: emergencyStats.matchSegmentsCount,
+    hasBlobPreview: Boolean(picked?.project?.sourceVideoUrl && isBlobUrl(picked.project.sourceVideoUrl)),
+    sourceVideoPath: pickedPath,
+  });
+  return picked.project;
 }
 
 export function persistVideoMatchBoardProject(project = {}, options = {}) {

@@ -11,6 +11,7 @@ import {
   readVideoMatchBoardProjectForNode,
   normalizeVideoMatchSourceVideo,
   shouldSkipVideoMatchPersistToProtectMaterials,
+  buildVideoMatchImportSignature,
 } from "../clip_nodes/video_match/videoMatchBoardDomain.js";
 import "./VideoMatchBoardPage.css";
 
@@ -160,6 +161,8 @@ export default function VideoMatchBoardPage() {
   const selectedBlock = videoBlocks.find((block) => block.id === project.selectedBlockId) || assemblyBlocks[0] || null;
   const sourceVideoUrl = String(project.sourceVideoUrl || "");
   const audioPreviewUrl = String(project.audioPreviewUrl || "");
+  const runtimeSourceVideoUrlRef = useRef(String(initialProject?.sourceVideoUrl || "").startsWith("blob:") ? String(initialProject?.sourceVideoUrl || "") : "");
+  const runtimeAudioPreviewUrlRef = useRef(String(initialProject?.audioPreviewUrl || "").startsWith("blob:") ? String(initialProject?.audioPreviewUrl || "") : "");
   const useAudioPreview = Boolean(project.useAudioPreview);
   const timelineDuration = videoDurationSec || Number(project?.sourceVideo?.duration_sec || 0) || 0;
   const effectiveAudioDurationSec = audioDurationSec || Number(project?.audioPreviewMeta?.duration_sec || 0) || 0;
@@ -222,26 +225,20 @@ export default function VideoMatchBoardPage() {
 
   useEffect(() => {
     if (!String(initialProject?.sourceVideoUrl || "").startsWith("blob:")) return;
-    setSourceVideoLoadMessage("Загрузите source video заново");
-    patchProject({
-      sourceVideoUrl: "",
-      sourceVideo: {
-        ...(initialProject?.sourceVideo || {}),
-        path: String(initialProject?.sourceVideo?.path || "").startsWith("blob:") ? "" : String(initialProject?.sourceVideo?.path || ""),
-      },
-      source_video: {
-        ...(initialProject?.source_video || {}),
-        path: String(initialProject?.source_video?.path || "").startsWith("blob:") ? "" : String(initialProject?.source_video?.path || ""),
-      },
-      sourceVideoPath: String(initialProject?.sourceVideoPath || "").startsWith("blob:") ? "" : String(initialProject?.sourceVideoPath || ""),
-    }, { lastGood: false });
+    runtimeSourceVideoUrlRef.current = "";
+    setSourceVideoLoadMessage("Видео для предпросмотра недоступно после перезагрузки. Загрузите source video заново. Тайминг и candidates сохранены.");
+    console.info("[VIDEO MATCH BLOB PREVIEW CLEARED]", {
+      reason: "reload_blob_source_video_unavailable",
+      keptSegments: Array.isArray(initialProject?.matchSegments) ? initialProject.matchSegments.length : 0,
+      keptSourceVideoPath: String(initialProject?.sourceVideo?.path || initialProject?.source_video?.path || initialProject?.sourceVideoPath || "").trim(),
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProject?.sourceVideoUrl]);
 
   useEffect(() => {
     if (!String(initialProject?.audioPreviewUrl || "").startsWith("blob:")) return;
-    setAudioLoadMessage("Загрузите аудио заново");
-    patchProject({ audioPreviewUrl: "" }, { lastGood: false });
+    runtimeAudioPreviewUrlRef.current = "";
+    setAudioLoadMessage("Аудио для предпросмотра недоступно после перезагрузки. Загрузите аудио заново. Тайминг сохранён.");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialProject?.audioPreviewUrl]);
 
@@ -622,10 +619,14 @@ export default function VideoMatchBoardPage() {
 
   const onVideoFileChange = (file) => {
     if (!file) return;
-    const chosenPath = String(file.path || file.webkitRelativePath || file.name || "").trim();
+    const chosenPathRaw = String(file.path || file.webkitRelativePath || file.name || "").trim();
+    const existingPath = String(project?.sourceVideo?.path || project?.source_video?.path || project?.sourceVideoPath || "").trim();
+    const hasFullLocalPath = /^[a-zA-Z]:[\\/]/.test(chosenPathRaw) || /^\\\\[^\\]/.test(chosenPathRaw);
+    const chosenPath = hasFullLocalPath ? chosenPathRaw : (existingPath || chosenPathRaw);
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     const url = URL.createObjectURL(file);
     objectUrlRef.current = url;
+    runtimeSourceVideoUrlRef.current = url;
     setVideoDurationSec(0);
     setSourceVideoLoadMessage("");
     patchProject({
@@ -656,6 +657,7 @@ export default function VideoMatchBoardPage() {
     if (audioObjectUrlRef.current) URL.revokeObjectURL(audioObjectUrlRef.current);
     const url = URL.createObjectURL(file);
     audioObjectUrlRef.current = url;
+    runtimeAudioPreviewUrlRef.current = url;
     setAudioDurationSec(0);
     setAudioCurrentTimeSec(0);
     setAudioLoadMessage("");
@@ -743,11 +745,13 @@ export default function VideoMatchBoardPage() {
         sourceVideo: result.sourceVideo,
       });
       const normalizedPath = String(normalizedSourceVideo.path || "").trim();
-      const safeSourceVideoUrl = String(project.sourceVideoUrl || "").startsWith("blob:") ? "" : String(project.sourceVideoUrl || "");
+      const keptRuntimeSourceVideoUrl = String(runtimeSourceVideoUrlRef.current || "").startsWith("blob:") ? runtimeSourceVideoUrlRef.current : "";
+      const keptRuntimeAudioPreviewUrl = String(runtimeAudioPreviewUrlRef.current || "").startsWith("blob:") ? runtimeAudioPreviewUrlRef.current : "";
+      const importedAt = Date.now();
       const nextProject = persistVideoMatchBoardProject({
         ...getDefaultVideoMatchBoardProject(nodeId),
         schema: result.schema,
-        sourceVideoUrl: safeSourceVideoUrl,
+        sourceVideoUrl: "",
         sourceVideo: {
           ...normalizedSourceVideo,
           filename: normalizedSourceVideo.filename || currentFilename || "source.mp4",
@@ -769,16 +773,31 @@ export default function VideoMatchBoardPage() {
         selectedBlockId: safeVideoBlocks[0]?.id || "",
         jsonInput: project.jsonInput || "",
         jsonError: durationWarning,
+        audioPreviewUrl: "",
+        importedAt,
         sourceNodeId: nodeId,
         nodeId,
       }, { forceReplace: true, allowMaterialLoss: true });
+      nextProject.importSignature = buildVideoMatchImportSignature(nextProject);
+      const importedProject = persistVideoMatchBoardProject(nextProject, { forceReplace: true, allowMaterialLoss: true });
+      importedProject.sourceVideoUrl = keptRuntimeSourceVideoUrl;
+      importedProject.audioPreviewUrl = keptRuntimeAudioPreviewUrl;
+      console.info("[VIDEO MATCH IMPORT COMMIT]", {
+        importedAt,
+        importSignature: importedProject.importSignature,
+        matchSegmentsCount: Array.isArray(importedProject.matchSegments) ? importedProject.matchSegments.length : 0,
+        videoBlocksCount: Array.isArray(importedProject.videoBlocks) ? importedProject.videoBlocks.length : 0,
+        sourceVideoPath: importedProject.sourceVideoPath,
+        keptRuntimeSourceVideoUrl: Boolean(keptRuntimeSourceVideoUrl),
+        keptRuntimeAudioPreviewUrl: Boolean(keptRuntimeAudioPreviewUrl),
+      });
       console.log("[VIDEO MATCH IMPORT SOURCE VIDEO]", {
         inputSourceVideo: result.sourceVideo,
         inputSource_video: result.source_video,
         normalizedSourceVideo: nextProject.sourceVideo,
         sourceVideoPath: nextProject.sourceVideoPath,
       });
-      setProject(nextProject);
+      setProject(importedProject);
       if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
     } catch (error) {
       patchProject({ jsonError: String(error?.message || error || "JSON parse error") }, { lastGood: false });
