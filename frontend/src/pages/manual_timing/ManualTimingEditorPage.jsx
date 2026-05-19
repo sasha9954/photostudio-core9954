@@ -599,8 +599,12 @@ function isDirectorBoardProject(value = null) {
     Object.prototype.hasOwnProperty.call(scene, "video_prompt")
     || Object.prototype.hasOwnProperty.call(scene, "image_url")
     || Object.prototype.hasOwnProperty.call(scene, "video_url")
-    || Object.prototype.hasOwnProperty.call(scene, "status")
-    || Object.prototype.hasOwnProperty.call(scene, "route")
+    || Object.prototype.hasOwnProperty.call(scene, "generatedImageUrl")
+    || Object.prototype.hasOwnProperty.call(scene, "generatedVideoUrl")
+    || Object.prototype.hasOwnProperty.call(scene, "photo_status")
+    || Object.prototype.hasOwnProperty.call(scene, "video_status")
+    || Object.prototype.hasOwnProperty.call(scene, "media")
+    || Object.prototype.hasOwnProperty.call(scene, "jobs")
   ));
   const lastPersistReason = String(project?.lastPersistReason || project?.last_persist_reason || "").trim();
   return Boolean(
@@ -5789,6 +5793,21 @@ export default function ManualTimingEditorPage() {
       format: String(project?.format || project?.aspect_ratio || "9:16"),
       aspect_ratio: String(project?.aspect_ratio || project?.format || "9:16"),
     };
+    [
+      "project_mode",
+      "project_kind",
+      "split_type",
+      "manual_timing_workflow",
+      "markers",
+      "vocal_asr_source",
+      "vocal_asr_split_preset",
+      "podcastEditManifest",
+      "composerEditManifest",
+    ].forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(project, field)) {
+        sourceManualTimingReturnProject[field] = project[field];
+      }
+    });
     projectSnapshot = {
       ...projectSnapshot,
       source_manual_timing_project_id: sourceManualTimingReturnProject.project_id,
