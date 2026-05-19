@@ -323,6 +323,7 @@ export function getDefaultManualTimingNodeData() {
     },
     audio_source: "",
     vocal_asr_source: null,
+    vocal_asr_language: "auto",
     vocal_asr_split_preset: "song_lines",
     vocal_asr_gaps: [],
     timing_status: "empty",
@@ -542,6 +543,8 @@ export function normalizeManualTimingAudioPhrases(audioPhrases = []) {
         assignment_status: String(phrase?.assignment_status || phrase?.assignmentStatus || (String(phrase?.status || "needs_transcription") === "needs_transcription" ? "unassigned" : "")),
         confidence: Number.isFinite(Number(phrase?.confidence)) ? Number(Number(phrase.confidence).toFixed(4)) : 0,
         source: String(phrase?.source || phrase?.timing_source || phrase?.timingSource || (String(phrase?.status || "") === "asr_raw" ? "asr" : "")),
+        source_language: String(phrase?.source_language || phrase?.sourceLanguage || phrase?.language || ""),
+        language: String(phrase?.language || phrase?.source_language || phrase?.sourceLanguage || ""),
         note_ru: String(phrase?.note_ru || phrase?.noteRu || ""),
       };
     })
@@ -1103,8 +1106,8 @@ export function buildGapAwareScenesFromAudioPhrases(audioPhrases = [], options =
       drama_hint: "",
       short_note: "Gap-aware ASR story scene — паузы включены в монтажную длительность.",
       source_phrase_ids: sourcePhraseIds,
-      original_text: joinPhraseText(group, "text_en"),
-      translated_text_ru: joinPhraseText(group, "text_ru"),
+      original_text: joinPhraseText(group, "text_original") || joinPhraseText(group, "original_text") || joinPhraseText(group, "text_en"),
+      translated_text_ru: joinPhraseText(group, "translation_ru") || joinPhraseText(group, "text_ru"),
       meaning_hint_ru: joinPhraseText(group, "meaning_ru"),
       story_block_id: storyBlockId,
       story_block_title_ru: "",
@@ -2739,6 +2742,13 @@ export function normalizeManualTimingProjectFromJson(raw = {}, baseProject = {})
       || safeBase.vocalAsrSplitPreset
       || "song_lines"
     ),
+    vocal_asr_language: String(
+      safeRaw.vocal_asr_language
+      || safeRaw.vocalAsrLanguage
+      || safeBase.vocal_asr_language
+      || safeBase.vocalAsrLanguage
+      || "auto"
+    ),
     vocal_asr_gaps: vocalAsrGaps,
     audio_phrases: audioPhrases,
     scenes,
@@ -3050,6 +3060,7 @@ export function buildManualTimingExportJson(project = {}) {
     audio_mode: String(safeProject.audio_mode || ""),
     vocal_asr_source: safeProject.vocal_asr_source || safeProject.vocalAsrSource || null,
     vocal_asr_split_preset: String(safeProject.vocal_asr_split_preset || safeProject.vocalAsrSplitPreset || "song_lines"),
+    vocal_asr_language: String(safeProject.vocal_asr_language || safeProject.vocalAsrLanguage || "auto"),
     audio_phrases,
     vocal_asr_gaps: Array.isArray(safeProject?.vocal_asr_gaps)
       ? safeProject.vocal_asr_gaps

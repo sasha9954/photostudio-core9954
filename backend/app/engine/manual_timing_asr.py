@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ManualTimingAsrSettings:
-    language: str = "en"
+    language: str = "auto"
     split_mode: str = "pause_based"
     min_pause_sec: float = 0.45
     max_phrase_sec: float = 8.0
@@ -48,7 +48,9 @@ def _clamp_settings(settings: ManualTimingAsrSettings) -> ManualTimingAsrSetting
     max_phrase = max(1.0, min(30.0, _safe_float(settings.max_phrase_sec, 8.0)))
     min_phrase = max(0.1, min(max_phrase, _safe_float(settings.min_phrase_sec, 1.2)))
     padding = max(0.0, min(0.15, _safe_float(settings.padding_sec, 0.0)))
-    language = (settings.language or "en").strip().lower() or "en"
+    language = (settings.language or "auto").strip().lower() or "auto"
+    if language == "auto":
+        language = ""
     split_mode = (settings.split_mode or "pause_based").strip().lower() or "pause_based"
     if split_mode in {"song_lines", "short_phrases"}:
         min_pause = 0.26 if split_mode == "song_lines" else 0.22
@@ -252,8 +254,11 @@ def split_words_to_phrases(words: list[dict[str, Any]], settings: ManualTimingAs
             "phrase_id": f"phr_{idx:03d}",
             "start_sec": _round_sec(start),
             "end_sec": _round_sec(end),
+            "text_original": _phrase_text(phrase_words),
+            "original_text": _phrase_text(phrase_words),
             "text_en": _phrase_text(phrase_words),
             "text_ru": "",
+            "translation_ru": "",
             "meaning_ru": "",
             "status": "asr_raw",
             "confidence": _word_confidence(phrase_words),
@@ -308,8 +313,11 @@ def _split_long_phrases(
             "phrase_id": f"phr_{idx:03d}",
             "start_sec": _round_sec(start),
             "end_sec": _round_sec(end),
+            "text_original": _phrase_text(phrase_words),
+            "original_text": _phrase_text(phrase_words),
             "text_en": _phrase_text(phrase_words),
             "text_ru": "",
+            "translation_ru": "",
             "meaning_ru": "",
             "status": "asr_raw",
             "confidence": _word_confidence(phrase_words),
