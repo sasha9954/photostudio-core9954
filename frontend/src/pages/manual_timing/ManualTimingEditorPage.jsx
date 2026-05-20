@@ -466,6 +466,21 @@ function sanitizeManualTimingSceneForNewBoard(scene = {}, projectFormat = "9:16"
   cleanScene.aspect_ratio = safeFormat;
   cleanScene.format_locked = true;
   if (!String(cleanScene.status || "").trim()) cleanScene.status = "draft";
+  const hasRealVideo = Boolean(
+    String(cleanScene?.video_url || "").trim()
+    || String(cleanScene?.videoUrl || "").trim()
+    || String(cleanScene?.generated_video_url || "").trim()
+    || String(cleanScene?.generatedVideoUrl || "").trim()
+    || String(cleanScene?.final_video_url || "").trim()
+    || String(cleanScene?.finalVideoUrl || "").trim()
+    || String(cleanScene?.result_video_url || "").trim()
+    || String(cleanScene?.resultVideoUrl || "").trim()
+  );
+  if (String(cleanScene.status || "").trim() === "video_ready" && !hasRealVideo) {
+    cleanScene.status = cleanScene.audio_slice_url ? "audio_ready" : "draft";
+    cleanScene.video_status = "";
+    cleanScene.videoStatus = "";
+  }
   if (!String(cleanScene.image_upload_status || "").trim()) cleanScene.image_upload_status = "";
   if (!String(cleanScene.image_upload_error || "").trim()) cleanScene.image_upload_error = "";
   if (!String(cleanScene.video_error || "").trim()) cleanScene.video_error = "";
@@ -2130,8 +2145,19 @@ function getCompactWarningItems(project = {}, warnings = []) {
 }
 
 function sceneHasCreatedMaterials(scene = {}) {
-  return ["image_url", "image_preview_url", "video_url", "video_prompt", "negative_prompt", "sound_prompt", "video_job_id", "audio_slice_url"].some((key) => String(scene?.[key] || "").trim())
-    || String(scene?.status || "").trim().toLowerCase() === "video_ready";
+  const hasRealVideo = Boolean(
+    String(scene?.video_url || "").trim()
+    || String(scene?.videoUrl || "").trim()
+    || String(scene?.generated_video_url || "").trim()
+    || String(scene?.generatedVideoUrl || "").trim()
+    || String(scene?.final_video_url || "").trim()
+    || String(scene?.finalVideoUrl || "").trim()
+    || String(scene?.result_video_url || "").trim()
+    || String(scene?.resultVideoUrl || "").trim()
+  );
+  return ["image_url", "image_preview_url", "video_prompt", "negative_prompt", "sound_prompt", "video_job_id"].some((key) => String(scene?.[key] || "").trim())
+    || hasRealVideo
+    || (String(scene?.status || "").trim().toLowerCase() === "video_ready" && hasRealVideo);
 }
 
 function isSingleFullLengthDraftScene(scenes = [], audioDurationSec = 0) {

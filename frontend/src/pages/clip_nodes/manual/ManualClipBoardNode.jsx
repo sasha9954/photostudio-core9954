@@ -108,25 +108,42 @@ function getSceneIdKey(scene = {}) {
   return String(scene.scene_id || "").trim();
 }
 
+function hasManualSceneRealVideo(scene = {}) {
+  return Boolean(
+    String(scene?.video_url || "").trim()
+    || String(scene?.videoUrl || "").trim()
+    || String(scene?.generated_video_url || "").trim()
+    || String(scene?.generatedVideoUrl || "").trim()
+    || String(scene?.final_video_url || "").trim()
+    || String(scene?.finalVideoUrl || "").trim()
+    || String(scene?.result_video_url || "").trim()
+    || String(scene?.resultVideoUrl || "").trim()
+  );
+}
+
 function hasDirectorWork(scene = {}) {
   return Boolean(
+    hasManualSceneRealVideo(scene)
+    ||
     scene?.image_url
     || scene?.image_preview_url
-    || scene?.video_url
     || scene?.video_prompt
     || scene?.negative_prompt
     || scene?.sound_prompt
-    || scene?.audio_slice_url
-    || scene?.audio_extracted
     || scene?.video_job_id
     || scene?.video_error
     || scene?.video_request_payload_preview
-    || scene?.status === "video_ready"
+    || (scene?.status === "video_ready" && hasManualSceneRealVideo(scene))
   );
 }
 
 function mergeSceneDirectorWork(scene = {}, old = {}) {
   if (!old || typeof old !== "object") return scene;
+  const oldHasRealVideo = hasManualSceneRealVideo(old);
+  const oldStatusRaw = String(old.status || "").trim();
+  const oldStatus = oldStatusRaw === "video_ready" && !oldHasRealVideo
+    ? (old.audio_slice_url ? "audio_ready" : "draft")
+    : oldStatusRaw;
   return {
     ...scene,
     route: scene.route || old.route || "",
@@ -173,7 +190,7 @@ function mergeSceneDirectorWork(scene = {}, old = {}) {
     audio_slice_url: old.audio_slice_url || scene.audio_slice_url || "",
     audio_slice_duration_sec: old.audio_slice_duration_sec || scene.audio_slice_duration_sec || 0,
     audio_extracted: old.audio_extracted ?? scene.audio_extracted ?? false,
-    status: old.status || scene.status || "draft",
+    status: oldStatus || scene.status || "draft",
     error: old.error || scene.error || "",
     video_job_id: old.video_job_id || scene.video_job_id || "",
     video_error: old.video_error || scene.video_error || "",

@@ -100,6 +100,33 @@ const MANUAL_SCENE_VIDEO_MEDIA_FIELDS = [
   "finalVideoUrl",
 ];
 
+function hasManualSceneRealVideo(scene = {}) {
+  return Boolean(
+    String(scene?.video_url || "").trim()
+    || String(scene?.videoUrl || "").trim()
+    || String(scene?.generated_video_url || "").trim()
+    || String(scene?.generatedVideoUrl || "").trim()
+    || String(scene?.final_video_url || "").trim()
+    || String(scene?.finalVideoUrl || "").trim()
+    || String(scene?.result_video_url || "").trim()
+    || String(scene?.resultVideoUrl || "").trim()
+  );
+}
+
+function normalizeManualSceneFalseReadyStatus(scene = {}) {
+  const hasVideo = hasManualSceneRealVideo(scene);
+  const status = String(scene?.status || "").trim();
+  if (status === STATUS_VIDEO_READY && !hasVideo) {
+    return {
+      ...(scene || {}),
+      status: scene?.audio_slice_url ? "audio_ready" : "draft",
+      video_status: "",
+      videoStatus: "",
+    };
+  }
+  return scene;
+}
+
 const MANUAL_SCENE_PROTECTED_MEDIA_FIELDS = [
   ...MANUAL_SCENE_IMAGE_MEDIA_FIELDS,
   ...MANUAL_SCENE_VIDEO_MEDIA_FIELDS,
@@ -1486,7 +1513,7 @@ function buildManualBoardAutosaveSignature(project = {}) {
 }
 
 function resolveManualSceneStatus(scene = {}) {
-  if (scene.video_url) return STATUS_VIDEO_READY;
+  if (hasManualSceneRealVideo(scene)) return STATUS_VIDEO_READY;
   if (isFirstLastRoute(scene.route)) {
     const hasStart = Boolean(scene.start_image_url || scene.image_url);
     const hasEnd = Boolean(scene.end_image_url);
@@ -1502,15 +1529,18 @@ function resolveManualSceneStatus(scene = {}) {
 }
 
 function getSceneStatusLabel(scene = {}) {
-  const status = scene?.status;
+  const safeScene = normalizeManualSceneFalseReadyStatus(scene);
+  const status = safeScene?.status;
   if (status === "video_queued") return "очередь";
   if (status === "video_running") return "генерация";
   if (status === "video_error") return "ошибка";
-  if (status === STATUS_VIDEO_READY) return "готово";
-  if (scene?.audio_extracted && !scene?.video_url) return "аудио";
+  if (status === STATUS_VIDEO_READY && hasManualSceneRealVideo(safeScene)) return "готово";
+  if ((safeScene?.audio_extracted || safeScene?.audio_slice_url) && !hasManualSceneRealVideo(safeScene)) return "аудио";
   if (status === "photo_loaded") return "фото";
   if (status === "prompt_ready") return "промт";
   if (status === "audio_ready") return "аудио";
+  if (safeScene?.image_url) return "фото";
+  if (safeScene?.video_prompt) return "промт";
   return status || "draft";
 }
 
@@ -1633,6 +1663,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
   const end = Number(cleanInputScene.end_sec || start);
   const blockId = String(cleanInputScene.story_block_id || "").trim();
   const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
+  const isIa2vRoute = String(cleanInputScene.route || "").trim() === "ia2v";
   const normalizedScene = {
     ...cleanInputScene,
     scene_id: String(cleanInputScene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
@@ -1709,10 +1740,24 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     song_block_type: String(cleanInputScene.song_block_type || ""),
     song_block_title_ru: String(cleanInputScene.song_block_title_ru || ""),
     lyrics_text: String(cleanInputScene.lyrics_text || ""),
-    lip_sync_required: Boolean(cleanInputScene.lip_sync_required),
-    vocal_owner_role: String(cleanInputScene.vocal_owner_role || ""),
+    lip_sync_required: cleanInputScene.lip_sync_required ?? (isIa2vRoute ? true : false),
+    vocal_owner_role: String(cleanInputScene.vocal_owner_role || (isIa2vRoute ? "character_1" : "")),
+    audio_required: cleanInputScene.audio_required ?? (isIa2vRoute ? true : false),
+    audio_slice_required: cleanInputScene.audio_slice_required ?? (isIa2vRoute ? true : false),
     visual_role_ru: String(cleanInputScene.visual_role_ru || ""),
     performance_role_ru: String(cleanInputScene.performance_role_ru || ""),
+    preferred_shot_type: String(cleanInputScene.preferred_shot_type || (isIa2vRoute ? "close_up" : "")),
+    preferred_motion: String(cleanInputScene.preferred_motion || (isIa2vRoute ? "static" : "")),
+    scene_lock_policy: String(cleanInputScene.scene_lock_policy || (isIa2vRoute ? "soft_lock" : "")),
+    user_scene_label: String(cleanInputScene.user_scene_label || ""),
+    user_scene_tags: Array.isArray(cleanInputScene.user_scene_tags) ? cleanInputScene.user_scene_tags : (String(cleanInputScene.user_scene_tags || "").trim() ? [String(cleanInputScene.user_scene_tags).trim()] : []),
+    user_scene_color: String(cleanInputScene.user_scene_color || ""),
+    user_scene_note: String(cleanInputScene.user_scene_note || ""),
+    user_scene_priority: String(cleanInputScene.user_scene_priority || ""),
+    scene_render_intent: String(cleanInputScene.scene_render_intent || ""),
+    reserved_for_user_override: cleanInputScene.reserved_for_user_override ?? false,
+    reserved_reason: String(cleanInputScene.reserved_reason || ""),
+    video_match_role: String(cleanInputScene.video_match_role || ""),
     speaker_id: String(cleanInputScene.speaker_id || ""),
     speaker_name: String(cleanInputScene.speaker_name || ""),
     topic_block_id: String(cleanInputScene.topic_block_id || ""),
@@ -1774,7 +1819,16 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     video_request_payload_preview: cleanInputScene.video_request_payload_preview || cleanInputScene.videoRequestPayloadPreview || null,
     videoRequestPayloadPreview: cleanInputScene.videoRequestPayloadPreview || cleanInputScene.video_request_payload_preview || null,
   };
-  return preserveManualScenePromptAndModelFields(withManualSceneMediaAliases(normalizedScene), cleanInputScene);
+  const withIa2vDefaults = {
+    ...normalizedScene,
+    contains_vocal: normalizedScene.contains_vocal || isIa2vRoute,
+    lip_sync_required: toBool(normalizedScene.lip_sync_required, isIa2vRoute),
+    audio_required: toBool(normalizedScene.audio_required, isIa2vRoute),
+    audio_slice_required: toBool(normalizedScene.audio_slice_required, isIa2vRoute),
+    visual_role_ru: normalizedScene.visual_role_ru || (isIa2vRoute ? "performance close-up" : ""),
+    performance_role_ru: normalizedScene.performance_role_ru || (isIa2vRoute ? "lip-sync / vocal performance" : ""),
+  };
+  return normalizeManualSceneFalseReadyStatus(preserveManualScenePromptAndModelFields(withManualSceneMediaAliases(withIa2vDefaults), cleanInputScene));
 }
 
 const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
@@ -2056,9 +2110,16 @@ function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScen
       if (incomingIsEmpty && currentHasValue) nextScene[field] = currentScene[field];
     });
 
-    const currentStatus = String(currentScene?.status || "").trim();
+    const currentStatusRaw = String(currentScene?.status || "").trim();
+    const currentStatus = currentStatusRaw === "video_ready" && !hasManualSceneRealVideo(currentScene)
+      ? (currentScene?.audio_slice_url ? "audio_ready" : "draft")
+      : currentStatusRaw;
     const incomingStatus = String(incomingScene?.status || "").trim();
-    const protectedCurrentStatuses = new Set(["video_ready", "video_running", "video_queued"]);
+    const protectedCurrentStatuses = new Set([
+      ...(hasManualSceneRealVideo(currentScene) ? ["video_ready"] : []),
+      "video_running",
+      "video_queued",
+    ]);
     const downgradeIncomingStatuses = new Set(["", "draft", "prompt_ready"]);
     if (protectedCurrentStatuses.has(currentStatus) && downgradeIncomingStatuses.has(incomingStatus)) {
       nextScene.status = currentScene.status;
@@ -2068,7 +2129,8 @@ function mergeImportedScenesPreservingMaterials(currentScenes = [], importedScen
       nextScene.video_has_audio = true;
     }
 
-    return preserveCurrentSceneTimelineIfIncomingIsEmpty(nextScene, currentScene, incomingScene);
+    const timelinePreserved = preserveCurrentSceneTimelineIfIncomingIsEmpty(nextScene, currentScene, incomingScene);
+    return normalizeManualSceneFalseReadyStatus(timelinePreserved);
   });
 }
 
@@ -2252,6 +2314,10 @@ export default function ManualClipDirectorBoardEditor({
     const timelineBaseline = projectRef.current || lastGoodBoardRef.current || lastPersistedProjectRef.current || readManualClipBoardProjectForNode(ownerNodeId);
     const beforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
     safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, timelineBaseline, candidateProject);
+    safeProject = {
+      ...safeProject,
+      scenes: Array.isArray(safeProject?.scenes) ? safeProject.scenes.map((scene) => normalizeManualSceneFalseReadyStatus(scene)) : [],
+    };
     if (beforeTimeline.scenesWithTiming === 0 && getManualProjectTimelineDiagnostics(timelineBaseline).scenesWithTiming > 0) {
       logManualBoardRuntimeTimelineRegression(persistReason, timelineBaseline, safeProject);
     }
@@ -5030,6 +5096,8 @@ export default function ManualClipDirectorBoardEditor({
     <div className="manualDirectorGrid">
       <aside className="manualDirectorScenes">
         {scenes.map((scene, idx) => {
+          const sceneHasRealVideo = hasManualSceneRealVideo(scene);
+          const sceneIsVideoReady = scene.status === STATUS_VIDEO_READY && sceneHasRealVideo;
           const sceneBlockNumber = scene.story_block_id ? storyBlockNumberById.get(scene.story_block_id) : null;
           const sceneBlockTitle = String(scene.story_block_title_ru || "").trim();
           const sceneRuPreview = truncateText(
@@ -5038,11 +5106,11 @@ export default function ManualClipDirectorBoardEditor({
           );
           return <button
             key={scene.scene_id}
-            className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${scene.status === STATUS_VIDEO_READY ? "ready" : ""}`}
+            className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${sceneIsVideoReady ? "ready" : ""}`}
             style={scene.story_block_color ? { "--storyboard-block-color": scene.story_block_color } : undefined}
             onClick={() => selectSceneByUser(scene.scene_id)}
           >
-            <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${scene.status === STATUS_VIDEO_READY ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
+            <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${sceneIsVideoReady ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
             {(sceneBlockNumber || sceneBlockTitle) ? <span className="manualStoryBlockBadges">
               {sceneBlockNumber ? <span className="manualStoryBlockBadge manualStoryBlockNumberBadge">Блок {sceneBlockNumber}</span> : null}
               {sceneBlockTitle ? <span className="manualStoryBlockBadge">{sceneBlockTitle}</span> : null}
