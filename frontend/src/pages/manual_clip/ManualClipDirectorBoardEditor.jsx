@@ -217,6 +217,20 @@ function normalizeManualSceneFalseReadyStatus(scene = {}) {
   return scene;
 }
 
+function normalizeManualBoardSceneForSave(scene = {}) {
+  const withRouteDefaults = applyManualBoardRouteDefaults(scene, scene?.route || "i2v");
+  return normalizeManualSceneFalseReadyStatus(withRouteDefaults);
+}
+
+function normalizeManualBoardProjectForSave(project = {}) {
+  return {
+    ...(project || {}),
+    scenes: Array.isArray(project?.scenes)
+      ? project.scenes.map((scene) => normalizeManualBoardSceneForSave(scene))
+      : [],
+  };
+}
+
 const MANUAL_SCENE_PROTECTED_MEDIA_FIELDS = [
   ...MANUAL_SCENE_IMAGE_MEDIA_FIELDS,
   ...MANUAL_SCENE_VIDEO_MEDIA_FIELDS,
@@ -1912,7 +1926,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     videoRequestPayloadPreview: cleanInputScene.videoRequestPayloadPreview || cleanInputScene.video_request_payload_preview || null,
   };
   const withRouteDefaults = applyManualBoardRouteDefaults(normalizedScene, normalizedScene.route);
-  return normalizeManualSceneFalseReadyStatus(
+  return normalizeManualBoardSceneForSave(
     preserveManualScenePromptAndModelFields(
       withManualSceneMediaAliases(withRouteDefaults),
       cleanInputScene
@@ -2403,10 +2417,7 @@ export default function ManualClipDirectorBoardEditor({
     const timelineBaseline = projectRef.current || lastGoodBoardRef.current || lastPersistedProjectRef.current || readManualClipBoardProjectForNode(ownerNodeId);
     const beforeTimeline = getManualProjectTimelineDiagnostics(safeProject);
     safeProject = preserveProjectTimelineIfIncomingEmpty(safeProject, timelineBaseline, candidateProject);
-    safeProject = {
-      ...safeProject,
-      scenes: Array.isArray(safeProject?.scenes) ? safeProject.scenes.map((scene) => normalizeManualSceneFalseReadyStatus(scene)) : [],
-    };
+    safeProject = normalizeManualBoardProjectForSave(safeProject);
     if (beforeTimeline.scenesWithTiming === 0 && getManualProjectTimelineDiagnostics(timelineBaseline).scenesWithTiming > 0) {
       logManualBoardRuntimeTimelineRegression(persistReason, timelineBaseline, safeProject);
     }
@@ -3248,7 +3259,8 @@ export default function ManualClipDirectorBoardEditor({
   const onDownloadProjectBackup = () => {
     const currentProject = projectRef.current || project || {};
     const currentSelectedSceneId = selectedSceneIdRef.current || currentProject.selectedSceneId || selectedSceneId || "";
-    downloadJsonPayload(buildManualProjectBackupJson({ ...currentProject, selectedSceneId: currentSelectedSceneId }, { source: "manual_director_board" }));
+    const backupProject = normalizeManualBoardProjectForSave({ ...currentProject, selectedSceneId: currentSelectedSceneId });
+    downloadJsonPayload(buildManualProjectBackupJson(backupProject, { source: "manual_director_board" }));
   };
 
   const restoreManualProjectObject = (rawProject, successPrefix = "Backup восстановлен") => {
@@ -5398,6 +5410,7 @@ export default function ManualClipDirectorBoardEditor({
             {isUserNoteEditorOpen ? "Скрыть заметку" : "+ заметка"}
           </button>
           {isUserNoteEditorOpen ? <textarea
+            className="manualDirectorScenePromptHintInput"
             value={String(selectedScene.user_note_ru || "")}
             placeholder="Своя заметка к сцене: звук, фраза, визуал, что не забыть..."
             onChange={(e) => updateScene(selectedScene.scene_id, { user_note_ru: e.target.value })}
