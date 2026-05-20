@@ -2403,6 +2403,26 @@ function pickManualTimingAudioPhraseMeaningText(phrase = {}) {
   return String(phrase?.meaning_ru || phrase?.meaningRu || "").trim();
 }
 
+function getManualTimingPreferredWords(sourceProject = {}) {
+  const mode = String(sourceProject?.project_mode || sourceProject?.projectMode || "");
+
+  if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
+    if (Array.isArray(sourceProject?.vocal_asr_words) && sourceProject.vocal_asr_words.length) {
+      return sourceProject.vocal_asr_words;
+    }
+    if (Array.isArray(sourceProject?.audio_words) && sourceProject.audio_words.length) {
+      return sourceProject.audio_words;
+    }
+    return [];
+  }
+
+  if (Array.isArray(sourceProject?.audio_words) && sourceProject.audio_words.length) {
+    return sourceProject.audio_words;
+  }
+
+  return [];
+}
+
 function getManualTimingWordsForScene(audioWords = [], scene = null, options = {}) {
   if (!scene || !Array.isArray(audioWords) || !audioWords.length) return [];
   const sceneStart = Number(scene?.start_sec ?? getManualTimingSceneSourceStartSec(scene));
@@ -2678,11 +2698,15 @@ export default function ManualTimingEditorPage() {
   const markers = useMemo(() => normalizeManualTimingMarkers(project.markers, durationSec), [project.markers, durationSec]);
   const storyBlocks = useMemo(() => normalizeManualTimingStoryBlocks(project.story_blocks), [project.story_blocks]);
   const audioPhrases = useMemo(() => normalizeManualTimingAudioPhrases(project.audio_phrases), [project.audio_phrases]);
-  const audioWords = useMemo(() => {
-    if (Array.isArray(project?.audio_words) && project.audio_words.length) return project.audio_words;
-    if (Array.isArray(project?.vocal_asr_words) && project.vocal_asr_words.length) return project.vocal_asr_words;
-    return [];
-  }, [project?.audio_words, project?.vocal_asr_words]);
+  const audioWords = useMemo(
+    () => getManualTimingPreferredWords(project),
+    [
+      project?.project_mode,
+      project?.projectMode,
+      project?.audio_words,
+      project?.vocal_asr_words,
+    ]
+  );
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
   const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
@@ -5410,13 +5434,17 @@ export default function ManualTimingEditorPage() {
         : [];
       persist({
         ...project,
-        audio_words: vocalWords,
         audio_phrases: vocalPhrases,
         vocal_asr_words: vocalWords,
         vocal_asr_gaps: asrGaps,
         vocal_asr_split_preset: vocalAsrSplitPreset,
         vocal_asr_language: vocalAsrLanguage,
-        asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now(), gaps: asrGaps },
+        asr_phrase_map: {
+          status: "ready",
+          source: "vocal_stem",
+          generatedAt: Date.now(),
+          gaps: asrGaps,
+        },
       });
       setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз, ${vocalWords.length} слов. Теперь можно резать сцены по фразам на шкале.`);
     } catch (error) {
@@ -6622,9 +6650,7 @@ export default function ManualTimingEditorPage() {
   const buildManualTimingModePassJson = (sourceProject = {}) => {
     const mode = String(sourceProject?.project_mode || sourceProject?.projectMode || "");
     if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
-      const sourceWords = Array.isArray(sourceProject?.audio_words) && sourceProject.audio_words.length
-        ? sourceProject.audio_words
-        : (Array.isArray(sourceProject?.vocal_asr_words) ? sourceProject.vocal_asr_words : []);
+      const sourceWords = getManualTimingPreferredWords(sourceProject);
       const scenesWithWordText = (Array.isArray(sourceProject?.scenes) ? sourceProject.scenes : []).map((scene) => ({
         ...scene,
         scene_word_text: buildManualTimingSceneWordText(getManualTimingWordsForScene(sourceWords, scene, { vocalOffsetSec: Number(sourceProject?.vocal_asr_source?.offset_sec || 0) || 0 })),
