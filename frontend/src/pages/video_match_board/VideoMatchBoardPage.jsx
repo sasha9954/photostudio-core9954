@@ -12,6 +12,8 @@ import {
   normalizeVideoMatchSourceVideo,
   shouldSkipVideoMatchPersistToProtectMaterials,
   buildVideoMatchImportSignature,
+  clearVideoMatchBoardProjectStorage,
+  getVideoMatchBoardNodeStorageKey,
 } from "../clip_nodes/video_match/videoMatchBoardDomain.js";
 import "./VideoMatchBoardPage.css";
 
@@ -100,6 +102,29 @@ function getResolvedOverrideUrl(blockOrCandidate = {}) {
   return resolveOutputUrl(blockOrCandidate?.overrideVideoUrl || "");
 }
 
+
+function isLikelyTruncatedJson(cleanText = "") {
+  if (!cleanText.startsWith("{")) return false;
+  return !cleanText.endsWith("}");
+}
+
+function computeImportCompatibilityScore(currentProject = {}, incoming = {}) {
+  const currentSegments = Array.isArray(currentProject?.matchSegments) ? currentProject.matchSegments.length : 0;
+  const incomingSegments = Array.isArray(incoming?.matchSegments) ? incoming.matchSegments.length : 0;
+  const currentVideoDuration = Number(currentProject?.sourceVideo?.duration_sec || 0);
+  const incomingVideoDuration = Number(incoming?.sourceVideo?.duration_sec || 0);
+  const currentAudioDuration = Number(currentProject?.audioPreviewMeta?.duration_sec || currentProject?.timingContext?.audioDurationSec || 0);
+  const incomingAudioDuration = Number(incoming?.timingContext?.audioDurationSec || 0);
+  const durationDelta = Math.abs(currentVideoDuration - incomingVideoDuration);
+  const audioDelta = Math.abs(currentAudioDuration - incomingAudioDuration);
+  const segmentDelta = Math.abs(currentSegments - incomingSegments);
+  return {
+    currentSegments, incomingSegments, currentVideoDuration, incomingVideoDuration,
+    currentAudioDuration, incomingAudioDuration,
+    mismatch: segmentDelta >= 3 || durationDelta > 10 || audioDelta > 10,
+  };
+}
+
 export default function VideoMatchBoardPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -154,6 +179,9 @@ export default function VideoMatchBoardPage() {
   const [isAssemblingMp4, setIsAssemblingMp4] = useState(false);
   const [assembledPreview, setAssembledPreview] = useState(null);
   const [assembleError, setAssembleError] = useState("");
+  const [importWarnings, setImportWarnings] = useState([]);
+  const [pendingImportResult, setPendingImportResult] = useState(null);
+  const [stateOrigin, setStateOrigin] = useState(location.state?.project ? "state_restored" : "storage_restored");
 
   const matchSegments = Array.isArray(project.matchSegments) ? project.matchSegments : [];
   const videoBlocks = Array.isArray(project.videoBlocks) ? project.videoBlocks : [];
@@ -710,105 +738,86 @@ export default function VideoMatchBoardPage() {
     if (String(project.audioPreviewUrl || "").startsWith("blob:")) patchProject({ audioPreviewUrl: "" }, { lastGood: false });
   };
 
+  const clearNodeState = (reason = "manual_reset") => {
+    stopPlayback();
+    setImportWarnings([]);
+    setPendingImportResult(null);
+    setSourceVideoLoadMessage("");
+    setAudioLoadMessage("");
+    setAssembleError("");
+    setAssembledPreview(null);
+    setAssembleAudioPath("");
+    setCurrentTimeSec(0);
+    setAudioCurrentTimeSec(0);
+    setVideoDurationSec(0);
+    setAudioDurationSec(0);
+    if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = ""; }
+    if (audioObjectUrlRef.current) { URL.revokeObjectURL(audioObjectUrlRef.current); audioObjectUrlRef.current = ""; }
+    runtimeSourceVideoUrlRef.current = "";
+    runtimeAudioPreviewUrlRef.current = "";
+    const next = getDefaultVideoMatchBoardProject(nodeId);
+    clearVideoMatchBoardProjectStorage(nodeId);
+    setProject(next);
+    persistVideoMatchBoardProject(next, { forceReplace: true, allowMaterialLoss: true, explicitReset: true });
+    setStateOrigin(reason);
+  };
+
+  const applyImportedResult = (result, extraWarnings = []) => {
+    const warningText = extraWarnings.filter(Boolean).join("\n");
+    setImportWarnings(extraWarnings.filter(Boolean));
+    setPendingImportResult(null);
+    const safeVideoBlocks = Array.isArray(result.videoBlocks) ? result.videoBlocks : [];
+    const safeMatchSegments = Array.isArray(result.matchSegments) ? result.matchSegments : [];
+    const jsonDurationSec = getValidDurationSec(result.sourceVideo?.duration_sec);
+    const normalizedSourceVideo = normalizeVideoMatchSourceVideo({ ...result, sourceVideo: result.sourceVideo });
+    const normalizedPath = String(normalizedSourceVideo.path || "").trim();
+    const importedAt = Date.now();
+    const importDraft = {
+      ...getDefaultVideoMatchBoardProject(nodeId),
+      schema: result.schema,
+      sourceVideoUrl: String(runtimeSourceVideoUrlRef.current || ""),
+      sourceVideo: { ...normalizedSourceVideo },
+      source_video: {
+        ...(project.source_video || {}),
+        path: normalizedPath,
+        filename: normalizedSourceVideo.filename || "source.mp4",
+        duration_sec: Number(jsonDurationSec.toFixed(3)),
+      },
+      sourceVideoPath: normalizedPath,
+      matchSegments: safeMatchSegments,
+      videoBlocks: safeVideoBlocks,
+      selectedSegmentId: result.selectedSegmentId,
+      selectedCandidateId: result.selectedCandidateId,
+      selectedBlockId: safeVideoBlocks[0]?.id || "",
+      jsonInput: project.jsonInput || "",
+      jsonError: warningText,
+      importedAt,
+      sourceNodeId: nodeId,
+      nodeId,
+    };
+    importDraft.importSignature = buildVideoMatchImportSignature(importDraft);
+    const importedProject = persistVideoMatchBoardProject(importDraft, { forceReplace: true, allowMaterialLoss: true });
+    setProject(importedProject);
+    setStateOrigin("imported_fresh");
+  };
+
   const onApplyJson = () => {
-    try {
-      const result = parseVideoMatchBoardJson(project.jsonInput || "", sourceVideoUrl);
-      console.log("[VIDEO MATCH APPLY JSON RESULT]", {
-        ok: result?.ok,
-        error: result?.error,
-        hasVideoBlocks: Array.isArray(result?.videoBlocks),
-        videoBlocksCount: result?.videoBlocks?.length,
-        hasMatchSegments: Array.isArray(result?.matchSegments),
-        matchSegmentsCount: result?.matchSegments?.length,
-        keys: Object.keys(result || {}),
-      });
-      if (!result || result.error || result.ok === false) {
-        patchProject({ jsonError: String(result?.error || "JSON parse error") }, { lastGood: false });
-        return;
-      }
-
-      const safeVideoBlocks = Array.isArray(result.videoBlocks) ? result.videoBlocks : [];
-      const safeMatchSegments = Array.isArray(result.matchSegments) ? result.matchSegments : [];
-      const videoElementDurationSec = getValidDurationSec(videoRef.current?.duration);
-      const stateVideoDurationSec = getValidDurationSec(videoDurationSec);
-      const loadedVideoDurationSec = videoElementDurationSec || (sourceVideoUrl ? stateVideoDurationSec : 0);
-      const jsonDurationSec = getValidDurationSec(result.sourceVideo?.duration_sec);
-      const nextDurationSec = loadedVideoDurationSec || jsonDurationSec;
-      const currentFilename = String(project.sourceVideo?.filename || "").trim();
-      const maxBlockEndSec = Math.max(0, ...safeVideoBlocks.map((block) => Number(block.sourceVideoEndSec || 0)));
-      const durationWarning = loadedVideoDurationSec > 0 && maxBlockEndSec > loadedVideoDurationSec
-        ? `Warning: JSON содержит video_t1/sourceVideoEndSec ${formatSec(maxBlockEndSec)} с, это больше реальной длительности загруженного видео ${formatSec(loadedVideoDurationSec)} с.`
-        : "";
-
-      if (!safeMatchSegments.length) {
-        patchProject({
-          jsonError: "JSON parsed, but no matchSegments were created. Check schema video_match_board_v2 / segments.",
-        }, { lastGood: false });
-        return;
-      }
-
-      const normalizedSourceVideo = normalizeVideoMatchSourceVideo({
-        ...result,
-        sourceVideo: result.sourceVideo,
-      });
-      const normalizedPath = String(normalizedSourceVideo.path || "").trim();
-      const keptRuntimeSourceVideoUrl = String(runtimeSourceVideoUrlRef.current || "").startsWith("blob:") ? runtimeSourceVideoUrlRef.current : "";
-      const keptRuntimeAudioPreviewUrl = String(runtimeAudioPreviewUrlRef.current || "").startsWith("blob:") ? runtimeAudioPreviewUrlRef.current : "";
-      const importedAt = Date.now();
-      const importDraft = {
-        ...getDefaultVideoMatchBoardProject(nodeId),
-        schema: result.schema,
-        sourceVideoUrl: "",
-        sourceVideo: {
-          ...normalizedSourceVideo,
-          filename: normalizedSourceVideo.filename || currentFilename || "source.mp4",
-          name: normalizedSourceVideo.filename || currentFilename || "source.mp4",
-          durationSec: Number(nextDurationSec.toFixed(3)),
-          duration_sec: Number(nextDurationSec.toFixed(3)),
-        },
-        source_video: {
-          ...(project.source_video || {}),
-          path: normalizedPath,
-          filename: normalizedSourceVideo.filename || currentFilename || "source.mp4",
-          duration_sec: Number(nextDurationSec.toFixed(3)),
-        },
-        sourceVideoPath: normalizedPath,
-        matchSegments: safeMatchSegments,
-        videoBlocks: safeVideoBlocks,
-        selectedSegmentId: result.selectedSegmentId,
-        selectedCandidateId: result.selectedCandidateId,
-        selectedBlockId: safeVideoBlocks[0]?.id || "",
-        jsonInput: project.jsonInput || "",
-        jsonError: durationWarning,
-        audioPreviewUrl: "",
-        importedAt,
-        sourceNodeId: nodeId,
-        nodeId,
-      };
-      importDraft.importSignature = buildVideoMatchImportSignature(importDraft);
-      const importedProject = persistVideoMatchBoardProject(importDraft, { forceReplace: true, allowMaterialLoss: true });
-      importedProject.sourceVideoUrl = keptRuntimeSourceVideoUrl;
-      importedProject.audioPreviewUrl = keptRuntimeAudioPreviewUrl;
-      console.info("[VIDEO MATCH IMPORT COMMIT]", {
-        importedAt,
-        importSignature: importedProject.importSignature,
-        matchSegmentsCount: Array.isArray(importedProject.matchSegments) ? importedProject.matchSegments.length : 0,
-        videoBlocksCount: Array.isArray(importedProject.videoBlocks) ? importedProject.videoBlocks.length : 0,
-        sourceVideoPath: importedProject.sourceVideoPath,
-        keptRuntimeSourceVideoUrl: Boolean(keptRuntimeSourceVideoUrl),
-        keptRuntimeAudioPreviewUrl: Boolean(keptRuntimeAudioPreviewUrl),
-      });
-      console.log("[VIDEO MATCH IMPORT SOURCE VIDEO]", {
-        inputSourceVideo: result.sourceVideo,
-        inputSource_video: result.source_video,
-        normalizedSourceVideo: importDraft.sourceVideo,
-        sourceVideoPath: importDraft.sourceVideoPath,
-      });
-      setProject(importedProject);
-      if (!loadedVideoDurationSec && jsonDurationSec > 0) setVideoDurationSec(jsonDurationSec);
-    } catch (error) {
-      patchProject({ jsonError: String(error?.message || error || "JSON parse error") }, { lastGood: false });
-    }
+    const cleanText = String(project.jsonInput || "").replace(/^﻿/, "").trim();
+    if (!cleanText) { patchProject({ jsonError: "JSON пустой" }, { lastGood: false }); return; }
+    if (isLikelyTruncatedJson(cleanText)) { patchProject({ jsonError: "Похоже, JSON обрезан. Вставьте полный файл." }, { lastGood: false }); return; }
+    const result = parseVideoMatchBoardJson(cleanText, sourceVideoUrl);
+    if (!result || result.error || result.ok === false) { patchProject({ jsonError: String(result?.error || "JSON parse error") }, { lastGood: false }); return; }
+    const warnings = [];
+    const sourceData = result.raw || {};
+    if (sourceData.schema !== "photostudio_video_match_board_v2") warnings.push(`schema warning: ${sourceData.schema || "unknown"}`);
+    if (sourceData.status === "blocked_missing_audio_map") { patchProject({ jsonError: "Это не финальная доска, нужен matched/ready/completed" }, { lastGood: false }); return; }
+    if (!Array.isArray(sourceData.segments) || sourceData.segments.length === 0) { patchProject({ jsonError: "В JSON нет segments" }, { lastGood: false }); return; }
+    if (Number(sourceData.audio_map_segments_count || 0) > 0 && Number(sourceData.audio_map_segments_count) !== sourceData.segments.length) warnings.push("audio_map_segments_count не совпадает с segments.length");
+    const missingSelected = sourceData.segments.filter((seg) => !seg?.selected_candidate_id && !seg?.selectedCandidateId).length;
+    if (missingSelected > 0) warnings.push(`у ${missingSelected} segments нет selected_candidate`);
+    const mismatch = computeImportCompatibilityScore(project, result);
+    if (mismatch.mismatch && (matchSegments.length || videoBlocks.length)) { setPendingImportResult({ result, warnings }); return; }
+    applyImportedResult(result, warnings);
   };
 
   const onAssembleMp4 = async () => {
@@ -1197,9 +1206,13 @@ export default function VideoMatchBoardPage() {
           <div className="videoMatchJsonActions">
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => patchProject({ jsonInput: sampleJson }, { lastGood: false })}>Вставить пример</button>
             <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onApplyJson}>Применить JSON</button>
+            <label className="clipSB_btn clipSB_btnSecondary">📥 Импорт JSON-файла<input type="file" accept="application/json,.json" hidden onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const text = await file.text(); patchProject({ jsonInput: text, jsonError: "" }, { lastGood: false }); }} /></label>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => { if (window.confirm("Очистить Video Match Node и удалить текущий board/candidates/черновую сборку?")) clearNodeState(); }}>🧹 Очистить ноду</button>
           </div>
           <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1 или video_match_board_v2..." />
           {project.jsonError ? <div className="videoMatchError">{project.jsonError}</div> : null}
+          {importWarnings.length ? <div className="videoMatchWarnings">{importWarnings.join("; ")}</div> : null}
+          {pendingImportResult ? <div className="videoMatchWarnings"><div>Новый JSON сильно отличается от текущего проекта.</div><button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={() => { if (window.confirm("Заменить текущий проект новым JSON?")) { clearNodeState("replaced_with_new_json"); applyImportedResult(pendingImportResult.result, pendingImportResult.warnings); } }}>Заменить текущий проект новым JSON</button></div> : null}
         </details>
 
         <details className="videoMatchPanel videoMatchDetailsPanel">
@@ -1217,8 +1230,14 @@ export default function VideoMatchBoardPage() {
         <details className="videoMatchPanel videoMatchDetailsPanel videoMatchBlocksPanel">
           <summary>Статистика / Debug</summary>
           <div className="videoMatchContextRows">
+            <div>board status: {project.status || "—"}</div>
             <div>сцен: {matchSegments.length}</div>
             <div>вариантов: {candidatesTotal}</div>
+            <div>selected candidates count: {matchSegments.filter((segment) => Boolean(segment.selectedCandidateId)).length}</div>
+            <div>reserved_generated_lipsync count: {matchSegments.reduce((acc, segment) => acc + ((segment.candidates || []).filter((c) => c?.reserved_generated_lipsync).length), 0)}</div>
+            <div>source video duration: {formatSec(project?.sourceVideo?.duration_sec)} с</div>
+            <div>storage key: {getVideoMatchBoardNodeStorageKey(nodeId)}</div>
+            <div>state origin: {stateOrigin}</div>
             <div>video blocks: {videoBlocks.length}</div>
             <div>длительность сборки: {formatSec(assemblyDurationSec)} с</div>
             <div>аудио preview: {project.audioPreviewMeta?.filename || "—"}</div>
