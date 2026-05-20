@@ -56,6 +56,81 @@ const MANUAL_TIMING_PODCAST_DIALOGUE_MODE = "podcast_dialogue";
 
 const LTX_CLEAN_BASE_NEGATIVE_PROMPT = "";
 
+
+const IA2V_AUTO_LABEL = "LIP-SYNC";
+const IA2V_AUTO_COLOR = "#A855F7";
+
+function isIa2vRouteValue(route = "") {
+  return String(route || "").trim().toLowerCase() === "ia2v";
+}
+
+function cleanAutoLipSyncTags(tags = []) {
+  const source = Array.isArray(tags) ? tags : [];
+  return source.filter((tag) => {
+    const safe = String(tag || "").trim().toLowerCase();
+    return safe !== "lip_sync" && safe !== "lipsync" && safe !== "performance" && safe !== "manual_priority";
+  });
+}
+
+function applyManualBoardRouteDefaults(scene = {}, nextRoute = "") {
+  const route = String(nextRoute || scene?.route || "i2v").trim();
+  const isIa2v = isIa2vRouteValue(route);
+  const out = {
+    ...(scene || {}),
+    route,
+  };
+
+  if (isIa2v) {
+    out.contains_vocal = true;
+    out.lip_sync_required = true;
+    out.audio_required = true;
+    out.audio_slice_required = true;
+
+    out.vocal_owner_role = String(out.vocal_owner_role || "character_1");
+    out.visual_role_ru = String(out.visual_role_ru || "performance close-up");
+    out.performance_role_ru = String(out.performance_role_ru || "lip-sync / vocal performance");
+    out.preferred_shot_type = String(out.preferred_shot_type || "close_up");
+    out.preferred_motion = String(out.preferred_motion || "static");
+    out.scene_lock_policy = String(out.scene_lock_policy || "soft_lock");
+
+    out.user_scene_label = String(out.user_scene_label || IA2V_AUTO_LABEL);
+    out.user_scene_color = String(out.user_scene_color || IA2V_AUTO_COLOR);
+    out.user_scene_priority = String(out.user_scene_priority || "high");
+    out.scene_render_intent = String(out.scene_render_intent || "performance");
+    out.video_match_role = String(out.video_match_role || "performance");
+    out.reserved_for_user_override = out.reserved_for_user_override ?? true;
+    out.reserved_reason = String(out.reserved_reason || "lip-sync/user marked scene");
+
+    const tags = Array.isArray(out.user_scene_tags) ? out.user_scene_tags : [];
+    out.user_scene_tags = [...new Set([...tags, "lip_sync", "performance", "manual_priority"])];
+    return out;
+  }
+
+  out.lip_sync_required = false;
+  out.audio_required = false;
+  out.audio_slice_required = false;
+
+  if (String(out.user_scene_label || "").trim() === IA2V_AUTO_LABEL) out.user_scene_label = "";
+  if (String(out.user_scene_color || "").trim() === IA2V_AUTO_COLOR) out.user_scene_color = "";
+  if (String(out.user_scene_priority || "").trim() === "high") out.user_scene_priority = "";
+  if (String(out.scene_render_intent || "").trim() === "performance") out.scene_render_intent = "";
+  if (String(out.video_match_role || "").trim() === "performance") out.video_match_role = "";
+  if (String(out.reserved_reason || "").trim() === "lip-sync/user marked scene") out.reserved_reason = "";
+  if (out.reserved_for_user_override === true) out.reserved_for_user_override = false;
+
+  out.user_scene_tags = cleanAutoLipSyncTags(out.user_scene_tags);
+
+  if (String(out.preferred_shot_type || "").trim() === "close_up") out.preferred_shot_type = "";
+  if (String(out.preferred_motion || "").trim() === "static") out.preferred_motion = "";
+  if (String(out.scene_lock_policy || "").trim() === "soft_lock") out.scene_lock_policy = "";
+  if (String(out.visual_role_ru || "").trim() === "performance close-up") out.visual_role_ru = "";
+  if (String(out.performance_role_ru || "").trim() === "lip-sync / vocal performance") out.performance_role_ru = "";
+
+  if (String(out.vocal_owner_role || "").trim() === "character_1") out.vocal_owner_role = "";
+
+  return out;
+}
+
 function buildLtxCleanPositivePrompt(scene = {}, project = {}) {
   return String(scene.video_prompt || scene.videoPrompt || "").trim();
 }
@@ -1663,7 +1738,7 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
   const end = Number(cleanInputScene.end_sec || start);
   const blockId = String(cleanInputScene.story_block_id || "").trim();
   const block = blockId && storyBlockLookup?.get ? storyBlockLookup.get(blockId) : null;
-  const isIa2vRoute = String(cleanInputScene.route || "").trim() === "ia2v";
+  const isIa2vRoute = isIa2vRouteValue(cleanInputScene.route || "");
   const normalizedScene = {
     ...cleanInputScene,
     scene_id: String(cleanInputScene.scene_id || `seg_${String(idx + 1).padStart(2, "0")}`),
@@ -1819,16 +1894,13 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     video_request_payload_preview: cleanInputScene.video_request_payload_preview || cleanInputScene.videoRequestPayloadPreview || null,
     videoRequestPayloadPreview: cleanInputScene.videoRequestPayloadPreview || cleanInputScene.video_request_payload_preview || null,
   };
-  const withIa2vDefaults = {
-    ...normalizedScene,
-    contains_vocal: normalizedScene.contains_vocal || isIa2vRoute,
-    lip_sync_required: toBool(normalizedScene.lip_sync_required, isIa2vRoute),
-    audio_required: toBool(normalizedScene.audio_required, isIa2vRoute),
-    audio_slice_required: toBool(normalizedScene.audio_slice_required, isIa2vRoute),
-    visual_role_ru: normalizedScene.visual_role_ru || (isIa2vRoute ? "performance close-up" : ""),
-    performance_role_ru: normalizedScene.performance_role_ru || (isIa2vRoute ? "lip-sync / vocal performance" : ""),
-  };
-  return normalizeManualSceneFalseReadyStatus(preserveManualScenePromptAndModelFields(withManualSceneMediaAliases(withIa2vDefaults), cleanInputScene));
+  const withRouteDefaults = applyManualBoardRouteDefaults(normalizedScene, normalizedScene.route);
+  return normalizeManualSceneFalseReadyStatus(
+    preserveManualScenePromptAndModelFields(
+      withManualSceneMediaAliases(withRouteDefaults),
+      cleanInputScene
+    )
+  );
 }
 
 const IMPORT_EMPTY_PROTECTED_SCENE_FIELDS = [
@@ -5187,32 +5259,34 @@ export default function ManualClipDirectorBoardEditor({
 
         <label>Route
           <select value={selectedScene.route || "i2v"} onChange={(e) => {
-            const route = e.target.value;
+            const nextRoute = String(e.target.value || "i2v");
             console.info("[MANUAL BOARD ROUTE USER EDIT]", {
               sceneId: selectedScene.scene_id,
               from: selectedScene.route,
-              to: route,
+              to: nextRoute,
               autosave: false,
             });
             updateScene(selectedScene.scene_id, (currentScene = {}) => {
-              const generatedAudioEnabled = route === "i2v_sound" || route === "i2v_text" || route === "first_last_sound";
+              const generatedAudioEnabled = nextRoute === "i2v_sound" || nextRoute === "i2v_text" || nextRoute === "first_last_sound";
 
               const routePatch = {
-                route,
+                route: nextRoute,
                 keep_generated_audio: generatedAudioEnabled,
                 keepGeneratedAudio: generatedAudioEnabled,
                 generated_audio_policy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "silent_video_use_master_track",
                 generatedAudioPolicy: generatedAudioEnabled ? "mix_generated_audio_under_master" : "silent_video_use_master_track",
                 generated_audio_gain_db: Number(currentScene.generated_audio_gain_db ?? currentScene.generatedAudioGainDb ?? I2V_SOUND_GAIN_DEFAULT_DB),
                 generatedAudioGainDb: Number(currentScene.generatedAudioGainDb ?? currentScene.generated_audio_gain_db ?? I2V_SOUND_GAIN_DEFAULT_DB),
-                start_image_url: isFirstLastRoute(route) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.start_image_url,
-                image_url: isFirstLastRoute(route) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.image_url,
+                start_image_url: isFirstLastRoute(nextRoute) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.start_image_url,
+                image_url: isFirstLastRoute(nextRoute) ? String(currentScene.start_image_url || currentScene.image_url || "") : currentScene.image_url,
               };
 
+              const withRouteDefaults = applyManualBoardRouteDefaults(currentScene, nextRoute);
               return {
+                ...withRouteDefaults,
                 ...routePatch,
-                route_changed_after_video: Boolean(route !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)),
-                routeChangedAfterVideo: Boolean(route !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)),
+                route_changed_after_video: Boolean(nextRoute !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)),
+                routeChangedAfterVideo: Boolean(nextRoute !== currentScene.route && resolveManualSceneFinalVideoUrl(currentScene)),
               };
             }, {
               reason: "route_user_edit",
