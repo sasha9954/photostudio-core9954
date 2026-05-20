@@ -330,7 +330,12 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
     duration = get_audio_duration_sec(audio_path)
     words, metadata = transcribe_words_faster_whisper(audio_path, safe)
     phrases = split_words_to_phrases(words, safe, audio_duration_sec=duration)
-    detected_language = str(metadata.get("language") or safe.language or "").strip().lower()
+    raw_detected_language = str(metadata.get("language") or "").strip().lower()
+    raw_requested_language = str(safe.language or "").strip().lower()
+    if raw_detected_language in {"", "auto", "none", "unknown"}:
+        detected_language = "" if raw_requested_language in {"", "auto", "none", "unknown"} else raw_requested_language
+    else:
+        detected_language = raw_detected_language
     for phrase in phrases:
         text = str(phrase.get("text_original") or phrase.get("original_text") or "").strip()
         if detected_language == "ru":
