@@ -100,33 +100,48 @@ function applyManualBoardRouteDefaults(scene = {}, nextRoute = "") {
     out.video_match_role = String(out.video_match_role || "performance");
     out.reserved_for_user_override = out.reserved_for_user_override ?? true;
     out.reserved_reason = String(out.reserved_reason || "lip-sync/user marked scene");
+    out.route_lip_sync_defaults_source = out.route_lip_sync_defaults_source || "auto_ia2v";
+    out.auto_lip_sync_defaults = true;
 
     const tags = Array.isArray(out.user_scene_tags) ? out.user_scene_tags : [];
     out.user_scene_tags = [...new Set([...tags, "lip_sync", "performance", "manual_priority"])];
     return out;
   }
 
-  out.lip_sync_required = false;
-  out.audio_required = false;
-  out.audio_slice_required = false;
+  const hadAutoLipSyncDefaults = out.auto_lip_sync_defaults === true
+    || String(out.route_lip_sync_defaults_source || "").trim() === "auto_ia2v"
+    || String(out.reserved_reason || "").trim() === "lip-sync/user marked scene"
+    || String(out.user_scene_label || "").trim() === IA2V_AUTO_LABEL;
 
-  if (String(out.user_scene_label || "").trim() === IA2V_AUTO_LABEL) out.user_scene_label = "";
-  if (String(out.user_scene_color || "").trim() === IA2V_AUTO_COLOR) out.user_scene_color = "";
-  if (String(out.user_scene_priority || "").trim() === "high") out.user_scene_priority = "";
-  if (String(out.scene_render_intent || "").trim() === "performance") out.scene_render_intent = "";
-  if (String(out.video_match_role || "").trim() === "performance") out.video_match_role = "";
-  if (String(out.reserved_reason || "").trim() === "lip-sync/user marked scene") out.reserved_reason = "";
-  if (out.reserved_for_user_override === true) out.reserved_for_user_override = false;
+  if (hadAutoLipSyncDefaults) {
+    out.lip_sync_required = false;
+    out.audio_required = false;
+    out.audio_slice_required = false;
 
-  out.user_scene_tags = cleanAutoLipSyncTags(out.user_scene_tags);
+    if (String(out.user_scene_label || "").trim() === IA2V_AUTO_LABEL) out.user_scene_label = "";
+    if (String(out.user_scene_color || "").trim() === IA2V_AUTO_COLOR) out.user_scene_color = "";
+    if (String(out.user_scene_priority || "").trim() === "high") out.user_scene_priority = "";
+    if (String(out.scene_render_intent || "").trim() === "performance") out.scene_render_intent = "";
+    if (String(out.video_match_role || "").trim() === "performance") out.video_match_role = "";
+    if (String(out.reserved_reason || "").trim() === "lip-sync/user marked scene") out.reserved_reason = "";
+    if (out.reserved_for_user_override === true) out.reserved_for_user_override = false;
 
-  if (String(out.preferred_shot_type || "").trim() === "close_up") out.preferred_shot_type = "";
-  if (String(out.preferred_motion || "").trim() === "static") out.preferred_motion = "";
-  if (String(out.scene_lock_policy || "").trim() === "soft_lock") out.scene_lock_policy = "";
-  if (String(out.visual_role_ru || "").trim() === "performance close-up") out.visual_role_ru = "";
-  if (String(out.performance_role_ru || "").trim() === "lip-sync / vocal performance") out.performance_role_ru = "";
+    out.user_scene_tags = cleanAutoLipSyncTags(out.user_scene_tags);
 
-  if (String(out.vocal_owner_role || "").trim() === "character_1") out.vocal_owner_role = "";
+    if (String(out.preferred_shot_type || "").trim() === "close_up") out.preferred_shot_type = "";
+    if (String(out.preferred_motion || "").trim() === "static") out.preferred_motion = "";
+    if (String(out.scene_lock_policy || "").trim() === "soft_lock") out.scene_lock_policy = "";
+    if (String(out.visual_role_ru || "").trim() === "performance close-up") out.visual_role_ru = "";
+    if (String(out.performance_role_ru || "").trim() === "lip-sync / vocal performance") out.performance_role_ru = "";
+    if (String(out.vocal_owner_role || "").trim() === "character_1") out.vocal_owner_role = "";
+
+    out.auto_lip_sync_defaults = false;
+    out.route_lip_sync_defaults_source = "";
+  } else {
+    out.lip_sync_required = false;
+    out.audio_required = false;
+    out.audio_slice_required = false;
+  }
 
   return out;
 }
@@ -1833,6 +1848,8 @@ function normalizeScene(scene = {}, idx = 0, storyBlockLookup = null, project = 
     reserved_for_user_override: cleanInputScene.reserved_for_user_override ?? false,
     reserved_reason: String(cleanInputScene.reserved_reason || ""),
     video_match_role: String(cleanInputScene.video_match_role || ""),
+    auto_lip_sync_defaults: toBool(cleanInputScene.auto_lip_sync_defaults),
+    route_lip_sync_defaults_source: String(cleanInputScene.route_lip_sync_defaults_source || ""),
     speaker_id: String(cleanInputScene.speaker_id || ""),
     speaker_name: String(cleanInputScene.speaker_name || ""),
     topic_block_id: String(cleanInputScene.topic_block_id || ""),
