@@ -182,16 +182,18 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
         output_path = VIDEO_MATCH_OUTPUTS_DIR / output_name
         audio_path_raw = str(payload.audioPath or "").strip()
         audio_input = Path(audio_path_raw).expanduser() if audio_path_raw else None
+        audio_ext_allowed = {".mp3", ".wav", ".m4a", ".aac"}
         has_audio = False
         if payload.includeAudio:
             if not audio_path_raw:
                 raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_REQUIRED", "message": "Для сборки с аудио укажите путь к файлу"})
+            audio_suffix = str(audio_input.suffix or "").lower() if audio_input else ""
+            if audio_suffix not in audio_ext_allowed:
+                raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_INVALID_EXT", "message": "Неподдерживаемый формат аудио"})
             if not (audio_input and audio_input.is_file()):
                 raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_NOT_FOUND", "message": "Аудиофайл не найден по указанному пути"})
             if not os.access(audio_input, os.R_OK):
                 raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_NOT_FOUND", "message": "Аудиофайл не найден по указанному пути"})
-            has_audio = True
-        elif audio_input and audio_input.is_file():
             has_audio = True
 
         if has_audio:

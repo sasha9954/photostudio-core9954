@@ -126,6 +126,14 @@ function validateAssembleAudioPath(rawPath = "") {
   return { ok: true, code: "OK" };
 }
 
+function resolveAssembleApiErrorMessage(error) {
+  const code = String(error?.code || error?.payload?.detail?.code || "").trim();
+  if (code === "AUDIO_PATH_REQUIRED") return "Для сборки MP4 с аудио укажите путь к аудиофайлу.";
+  if (code === "AUDIO_PATH_NOT_FOUND") return "Файл не найден по указанному пути к аудио.";
+  if (code === "AUDIO_PATH_INVALID_EXT") return "Неподдерживаемый формат аудио. Используйте .mp3, .wav, .m4a или .aac.";
+  return String(error?.message || error || "Не удалось собрать MP4");
+}
+
 
 function isLikelyTruncatedJson(cleanText = "") {
   if (!cleanText.startsWith("{")) return false;
@@ -884,7 +892,7 @@ export default function VideoMatchBoardPage() {
       return;
     }
     if (wantsAssembleWithAudio && !isAssembleAudioPathValid) {
-      setAssembleError("Для MP4 с аудио укажите реальный путь к mp3/wav на диске. Загруженный через +Аудио используется только для предпросмотра.");
+      setAssembleError("Путь к аудио выглядит неверно. Для MP4 с аудио укажите реальный локальный путь.");
       return;
     }
     setIsAssemblingMp4(true);
@@ -930,7 +938,7 @@ export default function VideoMatchBoardPage() {
       });
       setAssembledPreview(response || null);
     } catch (error) {
-      setAssembleError(String(error?.message || error || "Не удалось собрать MP4"));
+      setAssembleError(resolveAssembleApiErrorMessage(error));
     } finally {
       setIsAssemblingMp4(false);
     }
@@ -1088,11 +1096,11 @@ export default function VideoMatchBoardPage() {
           <div className="videoMatchPanelHeader">
             <h2>Исходное видео</h2>
             <div className="videoMatchHeaderButtons">
-              <label className="clipSB_btn clipSB_btnPrimary videoMatchUploadBtn">
+              <label className="clipSB_btn clipSB_btnPrimary videoMatchUploadBtn videoMatchBtnUploadVideo">
                 Загрузить видео
                 <input type="file" accept="video/*" hidden onChange={(event) => onVideoFileChange(event.target.files?.[0])} />
               </label>
-              <label className="clipSB_btn clipSB_btnSecondary videoMatchUploadBtn">
+              <label className="clipSB_btn clipSB_btnSecondary videoMatchUploadBtn videoMatchBtnUploadAudio">
                 + Аудио
                 <input type="file" accept="audio/*" hidden onChange={(event) => onAudioFileChange(event.target.files?.[0])} />
               </label>
@@ -1149,11 +1157,13 @@ export default function VideoMatchBoardPage() {
             <span>{formatSec(audioCurrentTimeSec)} / {formatSec(effectiveAudioDurationSec)} с</span>
           </div>
           <div className="videoMatchAudioStatusBadges">
-            <span className="videoMatchAudioStatusBadge isOk">✅ Аудио для предпросмотра {project.audioPreviewMeta?.filename ? "загружено" : "не загружено"}</span>
+            {(audioPreviewUrl || project.audioPreviewMeta?.filename)
+              ? <span className="videoMatchAudioStatusBadge isOk">✅ Аудио для предпросмотра загружено</span>
+              : <span className="videoMatchAudioStatusBadge isWarn">⚠️ Аудио для предпросмотра не загружено</span>}
             {wantsAssembleWithAudio ? (
               isAssembleAudioPathValid
                 ? <span className="videoMatchAudioStatusBadge isOk">✅ Путь к аудио для MP4 указан</span>
-                : <span className={`videoMatchAudioStatusBadge ${resolvedAssembleAudioPath ? "isError" : "isWarn"}`}>{resolvedAssembleAudioPath ? "❌ Путь к аудио неверный / файл не найден" : "⚠️ Путь к аудио для MP4 не указан"}</span>
+                : <span className={`videoMatchAudioStatusBadge ${resolvedAssembleAudioPath ? "isError" : "isWarn"}`}>{resolvedAssembleAudioPath ? "❌ Путь к аудио выглядит неверно" : "⚠️ Путь к аудио для MP4 не указан"}</span>
             ) : (
               <span className="videoMatchAudioStatusBadge isWarn">⚠️ Собрать без аудио</span>
             )}
@@ -1179,11 +1189,11 @@ export default function VideoMatchBoardPage() {
             ))}
           </div>
           <div className="videoMatchActions videoMatchPlaybackActions">
-            <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!selectedBlock} onClick={onPlaySelectedBlock}>▶ Кусок</button>
-            <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>▶ Сборка</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>▶ Отсюда</button>
+            <button className="clipSB_btn clipSB_btnPrimary videoMatchBtnChunk" type="button" disabled={!selectedBlock} onClick={onPlaySelectedBlock}>▶ Кусок</button>
+            <button className="clipSB_btn clipSB_btnPrimary videoMatchBtnAssembly" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>▶ Сборка</button>
+            <button className="clipSB_btn clipSB_btnSecondary videoMatchBtnFromHere" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>▶ Отсюда</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isPlaybackActive} onClick={stopPlayback}>■ Стоп</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!assemblyBlocks.length || isAssemblingMp4 || (wantsAssembleWithAudio && !isAssembleAudioPathValid)} onClick={onAssembleMp4}>{isAssemblingMp4 ? "Собираем MP4..." : (wantsAssembleWithAudio ? "⬇ MP4 с аудио" : "⬇ MP4 без аудио")}</button>
+            <button className={`clipSB_btn clipSB_btnSecondary ${wantsAssembleWithAudio ? "videoMatchBtnMp4WithAudio" : "videoMatchBtnMp4NoAudio"}`} type="button" disabled={!assemblyBlocks.length || isAssemblingMp4 || (wantsAssembleWithAudio && !isAssembleAudioPathValid)} onClick={onAssembleMp4}>{isAssemblingMp4 ? "Собираем MP4..." : (wantsAssembleWithAudio ? "⬇ MP4 с аудио" : "⬇ MP4 без аудио")}</button>
             <span>{selectedBlock ? `${selectedBlock.id}: ${formatSec(selectedBlock.sourceVideoStartSec)}–${formatSec(selectedBlock.sourceVideoEndSec)} с` : "Кусок не выбран"}</span>
           </div>
           <div className="videoMatchContextRows">
@@ -1227,7 +1237,7 @@ export default function VideoMatchBoardPage() {
             <span>{selectedSegmentCandidates.length} вариантов</span>
           </div>
           <input ref={overrideUploadInputRef} type="file" accept="video/*" hidden onChange={(event) => { onUploadOverrideVideo(event.target.files?.[0]); event.target.value = ""; }} />
-          <button className="clipSB_btn clipSB_btnSecondary videoMatchOverrideUploadBtn" type="button" disabled={!selectedSegment} onClick={() => overrideUploadInputRef.current?.click()}>🎭 Заменить видео</button>
+          <button className="clipSB_btn clipSB_btnSecondary videoMatchOverrideUploadBtn videoMatchBtnReplaceVideo" type="button" disabled={!selectedSegment} onClick={() => overrideUploadInputRef.current?.click()}>🎭 Заменить видео</button>
           {selectedSegment ? (
             <>
               <div className="videoMatchSceneInfo">
