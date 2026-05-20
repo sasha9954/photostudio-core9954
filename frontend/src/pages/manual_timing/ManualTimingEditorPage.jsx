@@ -6606,6 +6606,7 @@ export default function ManualTimingEditorPage() {
   const inferVideoMatchSceneMarkersFromNote = (note = "", scene = {}) => {
     const normalizedNote = String(note || "").toLowerCase();
     const tags = new Set();
+    const lockPolicyRank = { free: 0, soft_lock: 1, hard_lock: 2 };
     const result = {
       user_scene_label: "",
       user_scene_tags: [],
@@ -6613,11 +6614,19 @@ export default function ManualTimingEditorPage() {
       user_scene_note: String(note || "").trim(),
       user_scene_priority: "normal",
       scene_render_intent: "",
+      scene_lock_policy: "free",
+      preferred_shot_type: "",
+      preferred_motion: "",
       reserved_for_user_override: false,
       reserved_reason: "",
       video_match_role: "",
     };
     const hasAny = (phrases = []) => phrases.some((phrase) => normalizedNote.includes(phrase));
+    const chooseStrongerLockPolicy = (currentPolicy = "free", nextPolicy = "free") => {
+      const currentRank = lockPolicyRank[currentPolicy] ?? lockPolicyRank.free;
+      const nextRank = lockPolicyRank[nextPolicy] ?? lockPolicyRank.free;
+      return nextRank >= currentRank ? nextPolicy : currentPolicy;
+    };
     const labelPriority = {
       "": 0,
       "CLOSING": 1,
@@ -6651,6 +6660,7 @@ export default function ManualTimingEditorPage() {
       ["lip_sync", "performance", "manual_priority"].forEach((tag) => tags.add(tag));
       result.reserved_for_user_override = true;
       result.reserved_reason = "lip-sync/user marked scene";
+      result.scene_lock_policy = chooseStrongerLockPolicy(result.scene_lock_policy, "soft_lock");
     }
     if (hasAny(["воспоминание", "прошлое", "flashback", "memory"])) {
       applyMarker({ label: "MEMORY", color: "#38BDF8", role: "memory", intent: "memory", priority: "normal" });
@@ -6675,6 +6685,7 @@ export default function ManualTimingEditorPage() {
       ["lip_sync", "performance", "manual_priority"].forEach((tag) => tags.add(tag));
       result.reserved_for_user_override = true;
       if (!result.reserved_reason) result.reserved_reason = "lip-sync/user marked scene";
+      result.scene_lock_policy = chooseStrongerLockPolicy(result.scene_lock_policy, "soft_lock");
     }
 
     if (hasAny(["override", "вручную", "оставить", "не менять", "не заменять"])) {
@@ -6682,7 +6693,24 @@ export default function ManualTimingEditorPage() {
       result.user_scene_priority = chooseHigherPriority(result.user_scene_priority, "critical");
       tags.add("manual_override");
       if (!result.reserved_reason) result.reserved_reason = "user override scene";
+      result.scene_lock_policy = chooseStrongerLockPolicy(result.scene_lock_policy, "hard_lock");
     }
+
+    if (hasAny(["крупный план", "крупно", "close-up", "close up", "лицо", "рот"])) result.preferred_shot_type = "close_up";
+    else if (hasAny(["средний план", "medium"])) result.preferred_shot_type = "medium";
+    else if (hasAny(["общий план", "широкий план", "wide"])) result.preferred_shot_type = "wide";
+    else if (hasAny(["деталь", "предмет", "макро", "macro"])) result.preferred_shot_type = "detail";
+    else if (hasAny(["вид сверху", "дрон", "aerial"])) result.preferred_shot_type = "aerial";
+
+    if (hasAny(["статично", "статичный", "без движения", "static"])) result.preferred_motion = "static";
+    else if (hasAny(["медленный наезд", "приближение", "push-in", "push in"])) result.preferred_motion = "slow_push";
+    else if (hasAny(["сбоку", "side tracking", "tracking"])) result.preferred_motion = "side_tracking";
+    else if (hasAny(["с рук", "handheld"])) result.preferred_motion = "handheld";
+    else if (hasAny(["бежит", "погоня", "драка", "экшен", "action"])) result.preferred_motion = "action_motion";
+    else if (hasAny(["идет", "идёт", "прогулка", "walk"])) result.preferred_motion = "slow_walk";
+
+    if (result.user_scene_label === "LIP-SYNC" && !result.preferred_shot_type) result.preferred_shot_type = "close_up";
+    if (result.user_scene_label === "LIP-SYNC" && !result.preferred_motion) result.preferred_motion = "static";
 
     result.user_scene_tags = [...tags];
     return result;
@@ -6727,6 +6755,9 @@ export default function ManualTimingEditorPage() {
         user_scene_note: userSceneMarkers.user_scene_note,
         user_scene_priority: userSceneMarkers.user_scene_priority || "normal",
         scene_render_intent: userSceneMarkers.scene_render_intent || "",
+        scene_lock_policy: userSceneMarkers.scene_lock_policy || "free",
+        preferred_shot_type: userSceneMarkers.preferred_shot_type || "",
+        preferred_motion: userSceneMarkers.preferred_motion || "",
         reserved_for_user_override: Boolean(userSceneMarkers.reserved_for_user_override),
         reserved_reason: userSceneMarkers.reserved_reason,
         video_match_role: userSceneMarkers.video_match_role,
@@ -6801,7 +6832,7 @@ export default function ManualTimingEditorPage() {
         "Before preparing a Codex video matching job, ChatGPT MUST ask the user what composition / montage concept should be used. Do not write the Codex job immediately. First discuss the desired montage direction, emotional arc, visual priorities, reserved override/lip-sync scenes, and final style. Only after the user confirms the composition, prepare the Codex job.",
         "ChatGPT must prepare a Codex video matching job only after user-confirmed composition discussion.",
         "Preserve target_t0/target_t1 exactly.",
-        "Preserve user_scene_label, user_scene_tags, user_scene_color, user_scene_note, user_scene_priority, scene_render_intent, reserved_for_user_override, reserved_reason and video_match_role. These are user intent markers for Video Match Board. Lip-sync/reserved scenes must be shown as marked scenes and should not be replaced by random b-roll unless the user explicitly allows it.",
+        "Preserve user_scene_label, user_scene_tags, user_scene_color, user_scene_note, user_scene_priority, scene_render_intent, scene_lock_policy, preferred_shot_type, preferred_motion, reserved_for_user_override, reserved_reason and video_match_role. These are user intent markers for Video Match Board. Lip-sync/reserved scenes must be shown as marked scenes and should not be replaced by random b-roll unless the user explicitly allows it.",
         "audio_map is the source of truth.",
         "If source video has already been indexed, use match_audio against existing video_index.",
         "If source video is new, create build_index job first.",
@@ -6817,6 +6848,7 @@ export default function ManualTimingEditorPage() {
           "На какую композицию делаем монтаж?",
           "Что главное: герой/исполнитель, ферма/работа, природа/детали, техника, урожай, дорога/пространство?",
           "Какие сцены оставляем под lip-sync / user override?",
+          "Есть ли сцены с жёсткой фиксацией, preferred shot type или preferred motion, которые нельзя менять при подборе видео?",
           "Какие сцены уже помечены как lip-sync / ручная вставка / воспоминание / action / b-roll и нужно ли сохранять эти метки?",
           "Где должен быть эмоциональный пик?",
           "Какой финал нужен?",
