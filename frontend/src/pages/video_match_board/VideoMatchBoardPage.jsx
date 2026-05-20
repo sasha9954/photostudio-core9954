@@ -854,6 +854,8 @@ export default function VideoMatchBoardPage() {
       selectedSegmentId: result.selectedSegmentId,
       selectedCandidateId: result.selectedCandidateId,
       selectedBlockId: safeVideoBlocks[0]?.id || "",
+      status: result.raw?.status || result.status || "matched",
+      boardMode: result.raw?.board_mode || "",
       jsonInput: project.jsonInput || "",
       jsonError: warningText,
       importedAt,
