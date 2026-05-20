@@ -2403,15 +2403,18 @@ function pickManualTimingAudioPhraseMeaningText(phrase = {}) {
   return String(phrase?.meaning_ru || phrase?.meaningRu || "").trim();
 }
 
-function getManualTimingWordsForScene(audioWords = [], scene = null) {
+function getManualTimingWordsForScene(audioWords = [], scene = null, options = {}) {
   if (!scene || !Array.isArray(audioWords) || !audioWords.length) return [];
   const sceneStart = Number(scene?.start_sec ?? getManualTimingSceneSourceStartSec(scene));
   const sceneEnd = Number(scene?.end_sec ?? getManualTimingSceneSourceEndSec(scene));
   if (!(sceneEnd > sceneStart)) return [];
 
   return audioWords.filter((word) => {
-    const wordStart = Number(word?.start_sec ?? word?.start ?? 0);
-    const wordEnd = Number(word?.end_sec ?? word?.end ?? wordStart);
+    const offsetSec = String(word?.source || "") === "vocal_stem_asr"
+      ? Number(options?.vocalOffsetSec || 0)
+      : 0;
+    const wordStart = Number(word?.start_sec ?? word?.start ?? 0) + offsetSec;
+    const wordEnd = Number(word?.end_sec ?? word?.end ?? wordStart) + offsetSec;
     return wordStart < sceneEnd && wordEnd > sceneStart;
   });
 }
@@ -2675,7 +2678,11 @@ export default function ManualTimingEditorPage() {
   const markers = useMemo(() => normalizeManualTimingMarkers(project.markers, durationSec), [project.markers, durationSec]);
   const storyBlocks = useMemo(() => normalizeManualTimingStoryBlocks(project.story_blocks), [project.story_blocks]);
   const audioPhrases = useMemo(() => normalizeManualTimingAudioPhrases(project.audio_phrases), [project.audio_phrases]);
-  const audioWords = useMemo(() => (Array.isArray(project?.audio_words) ? project.audio_words : []), [project?.audio_words]);
+  const audioWords = useMemo(() => {
+    if (Array.isArray(project?.audio_words) && project.audio_words.length) return project.audio_words;
+    if (Array.isArray(project?.vocal_asr_words) && project.vocal_asr_words.length) return project.vocal_asr_words;
+    return [];
+  }, [project?.audio_words, project?.vocal_asr_words]);
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
   const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
@@ -2855,8 +2862,8 @@ export default function ManualTimingEditorPage() {
   const selectedSceneHasRuText = Boolean(selectedSceneFullRuText);
   const selectedSceneHasPartialPhrase = selectedScenePhraseInspectorRows.some((row) => row.isPartial);
   const selectedSceneWords = useMemo(
-    () => getManualTimingWordsForScene(audioWords, selectedScene),
-    [audioWords, selectedScene]
+    () => getManualTimingWordsForScene(audioWords, selectedScene, { vocalOffsetSec: Number(vocalAsrSource?.offset_sec || 0) || 0 }),
+    [audioWords, selectedScene, vocalAsrSource?.offset_sec]
   );
   const selectedSceneWordText = useMemo(
     () => buildManualTimingSceneWordText(selectedSceneWords),
@@ -5395,15 +5402,23 @@ export default function ManualTimingEditorPage() {
       if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);
       const vocalPhrases = normalizeManualTimingAudioPhrases((data.audio_phrases || []).map((phrase) => ({ ...phrase, source: "vocal_stem_asr", text_original: String(phrase?.text_original || phrase?.original_text || phrase?.text || phrase?.text_en || ""), original_text: String(phrase?.original_text || phrase?.text_original || phrase?.text || phrase?.text_en || ""), source_language: String(phrase?.source_language || phrase?.language || data?.asr?.language || vocalAsrLanguage || ""), language: String(phrase?.language || phrase?.source_language || data?.asr?.language || vocalAsrLanguage || ""), translation_ru: String(phrase?.translation_ru || ""), meaning_ru: String(phrase?.meaning_ru || "") })));
       const asrGaps = Array.isArray(data?.asr_gaps) ? data.asr_gaps : [];
+      const vocalWords = Array.isArray(data?.words)
+        ? data.words.map((word) => ({
+          ...word,
+          source: "vocal_stem_asr",
+        }))
+        : [];
       persist({
         ...project,
+        audio_words: vocalWords,
         audio_phrases: vocalPhrases,
+        vocal_asr_words: vocalWords,
         vocal_asr_gaps: asrGaps,
         vocal_asr_split_preset: vocalAsrSplitPreset,
         vocal_asr_language: vocalAsrLanguage,
         asr_phrase_map: { status: "ready", source: "vocal_stem", generatedAt: Date.now(), gaps: asrGaps },
       });
-      setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз. Теперь можно резать сцены по фразам на шкале.`);
+      setAsrStatus(`ASR по вокалу готов: ${vocalPhrases.length} фраз, ${vocalWords.length} слов. Теперь можно резать сцены по фразам на шкале.`);
     } catch (error) {
       setAsrStatus(`Ошибка ASR по вокалу: ${error?.message || error}`);
     }
@@ -6607,10 +6622,12 @@ export default function ManualTimingEditorPage() {
   const buildManualTimingModePassJson = (sourceProject = {}) => {
     const mode = String(sourceProject?.project_mode || sourceProject?.projectMode || "");
     if (mode === MANUAL_TIMING_MUSIC_CLIP_MODE) {
-      const sourceWords = Array.isArray(sourceProject?.audio_words) ? sourceProject.audio_words : [];
+      const sourceWords = Array.isArray(sourceProject?.audio_words) && sourceProject.audio_words.length
+        ? sourceProject.audio_words
+        : (Array.isArray(sourceProject?.vocal_asr_words) ? sourceProject.vocal_asr_words : []);
       const scenesWithWordText = (Array.isArray(sourceProject?.scenes) ? sourceProject.scenes : []).map((scene) => ({
         ...scene,
-        scene_word_text: buildManualTimingSceneWordText(getManualTimingWordsForScene(sourceWords, scene)),
+        scene_word_text: buildManualTimingSceneWordText(getManualTimingWordsForScene(sourceWords, scene, { vocalOffsetSec: Number(sourceProject?.vocal_asr_source?.offset_sec || 0) || 0 })),
       }));
       return buildManualTimingClipPassJson({ ...sourceProject, scenes: scenesWithWordText });
     }
@@ -7906,7 +7923,7 @@ export default function ManualTimingEditorPage() {
                         <p>{selectedSceneWordText}</p>
                       </div>
                     </div>
-                    : <div className="manualTimingSelectedPhraseEmpty">В выбранной сцене нет слов audio_words в этом диапазоне.</div>
+                    : <div className="manualTimingSelectedPhraseEmpty">{audioWords.length ? "В этом диапазоне нет слов." : "Нет word-level ASR. Запусти ASR ещё раз — нужны data.words."}</div>
                 ) : (selectedScenePhraseInspectorRows.length ? selectedScenePhraseInspectorRows.map((row) => <div
                   key={`selected-phrase-inspector-${row.phraseId || row.timingLabel}`}
                   className={`manualTimingSelectedPhraseRow ${row.isPartial ? "isPartial" : ""}`}
