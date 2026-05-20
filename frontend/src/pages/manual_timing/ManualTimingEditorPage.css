@@ -4254,3 +4254,33 @@
 }
 .manualTimingVocalPanelStatus { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; opacity: .95; }
 .manualTimingVocalWarning { color: #ffb17a; }
+
+.manualTimingAsrPanel { display: grid; gap: 12px; }
+.manualTimingAsrHeader { display: grid; gap: 4px; }
+.manualTimingAsrHeader strong { font-size: 16px; color: #eef4ff; }
+.manualTimingAsrHeader span { font-size: 13px; color: #b6c7ea; }
+.manualTimingAsrHeroRow { display: grid; grid-template-columns: repeat(2,minmax(220px,1fr)); gap: 10px; }
+.manualTimingAsrHeroCard { border: 1px solid rgba(255,255,255,.18); border-radius: 12px; padding: 12px; min-height: 118px; display: grid; gap: 6px; align-content: start; }
+.manualTimingAsrHeroCardAudio { background: linear-gradient(135deg, rgba(59,130,246,.35), rgba(139,92,246,.3)); }
+.manualTimingAsrHeroCardVocal { background: linear-gradient(135deg, rgba(20,184,166,.32), rgba(34,197,94,.28)); }
+.manualTimingAsrHeroCardAudio:hover,.manualTimingAsrHeroCardVocal:hover { transform: translateY(-1px); filter: brightness(1.05); }
+.manualTimingAsrHeroIcon { font-size: 20px; }
+.manualTimingAsrHeroTitle { font-weight: 700; color: #f8fbff; }
+.manualTimingAsrHeroSubtitle { font-size: 12px; color: #dbeafe; }
+.manualTimingAsrSettingsRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px; background: rgba(12,18,32,.5); border-radius: 10px; border: 1px solid rgba(140,160,220,.24); }
+.manualTimingAsrSecondaryRow, .manualTimingAsrStepsRow { display: flex; flex-wrap: wrap; gap: 8px; }
+.manualTimingAsrStatusChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.manualTimingAsrStatusChip { padding: 3px 8px; border-radius: 999px; font-size: 11px; background: rgba(15,23,42,.55); border: 1px solid rgba(191,219,254,.35); color: #dbeafe; }
+.manualTimingAsrSecondaryRow .clipSB_btn { padding: 6px 10px; }
+
+.manualTimingAdvancedScenePanel { border: 1px solid rgba(140,160,220,.24); background: rgba(10,14,24,.55); border-radius: 12px; padding: 12px; display: grid; gap: 10px; }
+.manualTimingAdvancedSceneHeader { display: grid; gap: 4px; }
+.manualTimingAdvancedSceneSummary { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: #cfe0ff; }
+.manualTimingAdvancedSceneSummary b { color: #fde68a; }
+.manualTimingAdvancedSceneToggle { width: fit-content; }
+.manualTimingAdvancedSceneBody { border-top: 1px solid rgba(140,160,220,.2); padding-top: 10px; }
+.manualTimingAdvancedSceneList { max-height: 480px; overflow-y: auto; }
+
+@media (max-width: 860px) {
+  .manualTimingAsrHeroRow { grid-template-columns: 1fr; }
+}
