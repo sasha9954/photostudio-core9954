@@ -64,9 +64,11 @@ import {
   normalizeManualTimingSourcePhraseIds,
   readManualTimingProjectForNode,
   normalizeManualTimingStoryBlocks,
+  manualTimingSceneIntersectsVocalGap,
   persistManualTimingProject,
   repairManualTimingSourcePhraseIdsFromTiming,
   roundTimingSec,
+  isManualTimingLipSyncScene,
   updateManualTimingSceneById,
   validateManualTimingBlockStoryboardPassImport,
   validateManualTimingClipPassImport,
@@ -6871,6 +6873,8 @@ export default function ManualTimingEditorPage() {
     const normalizedAudioMetadata = sourceProject?.audio_metadata || sourceProject?.audioMetadata || {};
     const audioInfo = sourceProject?.audio || {};
     const audioDurationSec = Number(sourceProject?.audio_duration_sec ?? sourceProject?.audioDurationSec ?? durationSec) || 0;
+    const vocalGaps = Array.isArray(sourceProject?.vocal_asr_gaps) ? sourceProject.vocal_asr_gaps : [];
+    const vocalOffsetSec = Number(sourceProject?.vocal_asr_source?.offset_sec || 0) || 0;
     const safeAutoHint = "auto";
     const segments = normalizedScenes.map((scene, index) => {
       const startSec = Number(scene?.start_sec ?? scene?.startSec ?? 0) || 0;
@@ -6878,10 +6882,19 @@ export default function ManualTimingEditorPage() {
       const endSec = Math.max(startSec, endSecRaw);
       const fallbackSegId = `seg_${String(index + 1).padStart(2, "0")}`;
       const rawSceneId = String(scene?.scene_id || scene?.sceneId || "").trim();
-      const text = String(scene?.text || scene?.original_text || scene?.originalText || "").trim();
-      const originalText = String(scene?.original_text || scene?.originalText || "").trim();
+      const text = String(scene?.lyrics_text || scene?.scene_word_text || scene?.translated_text_ru || scene?.original_text || scene?.originalText || scene?.text || "").trim();
+      const originalText = String(scene?.lyrics_text || scene?.original_text || scene?.originalText || "").trim();
       const userSceneNote = getManualTimingSceneUserNote(scene);
       const userSceneMarkers = inferVideoMatchSceneMarkersFromNote(userSceneNote, scene);
+      const intersectsVocalGap = manualTimingSceneIntersectsVocalGap(scene, vocalGaps, vocalOffsetSec);
+      const isLipSync = isManualTimingLipSyncScene(scene, { intersectsVocalGap });
+      const isIa2vRoute = String(scene?.route || "").trim().toLowerCase() === "ia2v";
+      const isLipSyncScene = isIa2vRoute || isLipSync || Boolean(scene?.lip_sync_required);
+      const containsVocal = Boolean(scene?.contains_vocal || intersectsVocalGap || isLipSyncScene);
+      const meaningHintRu = String(scene?.meaning_hint_ru || "").trim();
+      const translatedTextRu = String(scene?.translated_text_ru || "").trim();
+      const userTags = Array.isArray(userSceneMarkers.user_scene_tags) ? userSceneMarkers.user_scene_tags : [];
+      const mergedLipSyncTags = [...new Set([...userTags, "lip_sync", "performance", "manual_priority"])];
       return {
         audio_scene_id: rawSceneId || fallbackSegId,
         target_t0: roundTimingSec(startSec),
@@ -6894,22 +6907,28 @@ export default function ManualTimingEditorPage() {
         emotion: String(scene?.emotion || "").trim() || safeAutoHint,
         speaker: String(scene?.speaker || scene?.voice || "").trim() || "",
         voice: String(scene?.voice || scene?.speaker || "").trim() || "",
-        notes: String(scene?.notes || "").trim() || "",
-        translated_text_ru: String(scene?.translated_text_ru || "").trim(),
-        meaning_hint_ru: String(scene?.meaning_hint_ru || "").trim(),
-        contains_vocal: Boolean(scene?.contains_vocal),
-        user_scene_label: userSceneMarkers.user_scene_label,
-        user_scene_tags: Array.isArray(userSceneMarkers.user_scene_tags) ? userSceneMarkers.user_scene_tags : [],
-        user_scene_color: userSceneMarkers.user_scene_color,
+        notes: String(scene?.user_note_ru || scene?.short_note || scene?.notes || "").trim() || "",
+        translated_text_ru: translatedTextRu,
+        meaning_hint_ru: meaningHintRu || ((intersectsVocalGap && !text && isLipSyncScene)
+          ? "Вокальный участок без точного ASR-текста; reserved lip-sync/performance scene."
+          : ""),
+        contains_vocal: containsVocal,
+        route: isLipSyncScene ? "ia2v" : String(scene?.route || "").trim().toLowerCase(),
+        lip_sync_required: isLipSyncScene ? true : Boolean(scene?.lip_sync_required),
+        audio_required: isLipSyncScene ? true : Boolean(scene?.audio_required),
+        audio_slice_required: isLipSyncScene ? true : Boolean(scene?.audio_slice_required),
+        user_scene_label: userSceneMarkers.user_scene_label || (isLipSyncScene ? "LIP-SYNC" : ""),
+        user_scene_tags: isLipSyncScene ? mergedLipSyncTags : userTags,
+        user_scene_color: userSceneMarkers.user_scene_color || (isLipSyncScene ? "#A855F7" : ""),
         user_scene_note: userSceneMarkers.user_scene_note,
-        user_scene_priority: userSceneMarkers.user_scene_priority || "normal",
-        scene_render_intent: userSceneMarkers.scene_render_intent || "",
-        scene_lock_policy: userSceneMarkers.scene_lock_policy || "free",
-        preferred_shot_type: userSceneMarkers.preferred_shot_type || "",
-        preferred_motion: userSceneMarkers.preferred_motion || "",
-        reserved_for_user_override: Boolean(userSceneMarkers.reserved_for_user_override),
-        reserved_reason: userSceneMarkers.reserved_reason,
-        video_match_role: userSceneMarkers.video_match_role,
+        user_scene_priority: userSceneMarkers.user_scene_priority || (isLipSyncScene ? "high" : "normal"),
+        scene_render_intent: userSceneMarkers.scene_render_intent || (isLipSyncScene ? "performance" : ""),
+        scene_lock_policy: userSceneMarkers.scene_lock_policy || (isLipSyncScene ? "soft_lock" : "free"),
+        preferred_shot_type: userSceneMarkers.preferred_shot_type || (isLipSyncScene ? "close_up" : ""),
+        preferred_motion: userSceneMarkers.preferred_motion || (isLipSyncScene ? "static" : ""),
+        reserved_for_user_override: isLipSyncScene ? true : Boolean(userSceneMarkers.reserved_for_user_override),
+        reserved_reason: userSceneMarkers.reserved_reason || (isLipSyncScene ? "lip-sync/user marked scene" : ""),
+        video_match_role: userSceneMarkers.video_match_role || (isLipSyncScene ? "performance" : ""),
       };
     });
     const vocalAsrOffsetSec = Number(sourceProject?.vocal_asr_source?.offset_sec || 0) || 0;

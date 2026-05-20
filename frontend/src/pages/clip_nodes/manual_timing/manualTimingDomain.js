@@ -2309,6 +2309,8 @@ function buildManualTimingLockedPassScenes(project = {}) {
   const exportJson = buildManualTimingExportJson(project);
   const audioPhrases = Array.isArray(exportJson.audio_phrases) ? exportJson.audio_phrases : [];
   const phraseById = new Map(audioPhrases.map((phrase) => [String(phrase?.phrase_id || ""), phrase]));
+  const vocalGaps = Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [];
+  const vocalOffsetSec = Number(project?.vocal_asr_source?.offset_sec || 0) || 0;
   return exportJson.scenes.map((scene) => {
     const sourceIds = normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids).length
       ? normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids)
@@ -2319,17 +2321,68 @@ function buildManualTimingLockedPassScenes(project = {}) {
     const scenePhrases = sourceIds.map((id) => phraseById.get(id)).filter(Boolean);
     const lyricsText = scenePhrases.map((phrase) => String(phrase?.original_text || phrase?.text_original || phrase?.text || phrase?.text_ru || phrase?.text_en || "").trim()).filter(Boolean).join(" ");
     const translatedTextRu = scenePhrases.map((phrase) => String(phrase?.translation_ru || "").trim()).filter(Boolean).join(" ");
-    return ({
-    ...scene,
-    source_phrase_ids: sourceIds,
-    lyrics_text: lyricsText || String(scene?.lyrics_text || ""),
-    translated_text_ru: translatedTextRu || String(scene?.translated_text_ru || ""),
-    meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
-    video_prompt: "",
-    negative_prompt: "",
-    sound_prompt: "",
+    const intersectsVocalGap = manualTimingSceneIntersectsVocalGap(scene, vocalGaps, vocalOffsetSec);
+    const isLipSync = isManualTimingLipSyncScene(scene, { intersectsVocalGap });
+    const sceneContainsAnySourcePhrases = sourceIds.length > 0;
+    const sceneContainsVocal = Boolean(scene?.contains_vocal || sceneContainsAnySourcePhrases || intersectsVocalGap || isLipSync);
+    const hasLyricsText = Boolean((lyricsText || String(scene?.lyrics_text || "")).trim());
+    const isGapLipSyncWithoutLyrics = isLipSync && intersectsVocalGap && !hasLyricsText;
+
+    const normalizedScene = {
+      ...scene,
+      source_phrase_ids: sourceIds,
+      lyrics_text: lyricsText || String(scene?.lyrics_text || ""),
+      translated_text_ru: translatedTextRu || String(scene?.translated_text_ru || ""),
+      meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
+      contains_vocal: sceneContainsVocal,
+      video_prompt: "",
+      negative_prompt: "",
+      sound_prompt: "",
+    };
+
+    if (isLipSync) {
+      normalizedScene.route = "ia2v";
+      normalizedScene.lip_sync_required = true;
+      if (!String(normalizedScene.performance_role_ru || "").trim()) normalizedScene.performance_role_ru = "lip-sync / vocal performance";
+      if (!String(normalizedScene.visual_role_ru || "").trim()) normalizedScene.visual_role_ru = "performance close-up";
+      if (!String(normalizedScene.vocal_owner_role || "").trim()) normalizedScene.vocal_owner_role = "character_1";
+      if (!String(normalizedScene.scene_goal_ru || "").trim()) normalizedScene.scene_goal_ru = "Крупный/средний план исполнителя, читаемый рот, спокойная камера, lip-sync по аудио.";
+      if (!String(normalizedScene.photo_prompt_hint_ru || "").trim()) normalizedScene.photo_prompt_hint_ru = "Портрет исполнителя для lip-sync: лицо видно, рот слегка открыт, мягкий свет, стабильный кадр.";
+      if (!String(normalizedScene.prompt_hint_ru || "").trim()) normalizedScene.prompt_hint_ru = "Lip-sync to provided audio, readable mouth, natural jaw movement, subtle head motion, stable close-up.";
+    }
+    if (isGapLipSyncWithoutLyrics && !String(normalizedScene.meaning_hint_ru || "").trim()) {
+      normalizedScene.meaning_hint_ru = "Вокальный участок без точного ASR-текста; использовать как lip-sync/performance сцену по аудио.";
+    }
+
+    return normalizedScene;
   });
+}
+
+export function manualTimingSceneIntersectsVocalGap(scene = {}, vocalGaps = [], vocalOffsetSec = 0) {
+  if (!scene || !Array.isArray(vocalGaps) || !vocalGaps.length) return false;
+  const sceneStart = Number(scene?.source_start_sec ?? scene?.start_sec ?? 0);
+  const sceneEnd = Number(scene?.source_end_sec ?? scene?.end_sec ?? sceneStart);
+  if (!(sceneEnd > sceneStart)) return false;
+  return vocalGaps.some((gap) => {
+    const gapStart = Number(gap?.start_sec ?? gap?.start ?? 0) + Number(vocalOffsetSec || 0);
+    const gapEnd = Number(gap?.end_sec ?? gap?.end ?? gapStart) + Number(vocalOffsetSec || 0);
+    return gapStart < sceneEnd && gapEnd > sceneStart;
   });
+}
+
+export function isManualTimingLipSyncScene(scene = {}, options = {}) {
+  const route = String(scene?.route || "").toLowerCase();
+  const note = String(scene?.user_note_ru || scene?.note || scene?.short_note || "").toLowerCase();
+  const label = String(scene?.user_scene_label || "").toLowerCase();
+  const tags = Array.isArray(scene?.user_scene_tags) ? scene.user_scene_tags.map((tag) => String(tag).toLowerCase()) : [];
+  const hasManualLipSync = note.includes("липсинк")
+    || note.includes("lip-sync")
+    || note.includes("lipsync")
+    || label.includes("lip")
+    || tags.includes("lip_sync")
+    || tags.includes("lipsync");
+  const routeLooksLipSync = route === "ia2v" || route === "lip_sync" || route === "lip-sync";
+  return Boolean(routeLooksLipSync || hasManualLipSync);
 }
 
 export function buildManualTimingClipPassJson(project = {}) {
