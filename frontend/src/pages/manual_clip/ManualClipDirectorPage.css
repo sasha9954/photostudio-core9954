@@ -57,7 +57,7 @@
 
 .manualDirectorGrid {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr) minmax(420px, 560px);
+  grid-template-columns: minmax(260px, 300px) minmax(520px, 1.35fr) minmax(320px, 420px);
   gap: 12px;
   align-items: stretch;
   grid-template-areas: "left center right";
@@ -640,9 +640,21 @@
   line-height: 1.45;
 }
 
+@media (max-width: 1280px) {
+  .manualDirectorGrid {
+    grid-template-columns: minmax(240px, 280px) minmax(500px, 1fr);
+    grid-template-areas:
+      "left center"
+      "right right";
+  }
+}
+
 @media (max-width: 1180px) {
   .manualDirectorGrid {
-    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(360px, 420px);
+    grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+    grid-template-areas:
+      "left center"
+      "right right";
   }
 }
 
