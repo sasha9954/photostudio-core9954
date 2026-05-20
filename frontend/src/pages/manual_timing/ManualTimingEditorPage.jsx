@@ -5917,7 +5917,10 @@ export default function ManualTimingEditorPage() {
   const onOpenDirectorBoard = () => {
     const ownerNodeId = finalOwnerNodeId;
     const freshProject = buildDirectorProjectSnapshot();
-    const existingProject = readManualClipBoardProjectForNode(ownerNodeId) || activeBoardProject || null;
+    const existingProject = readManualClipBoardProjectForNode(ownerNodeId)
+      || activeBoardProject
+      || readActiveManualClipBoardProject(ownerNodeId)
+      || null;
     const projectToOpen = hasMeaningfulManualProject(existingProject)
       ? {
         ...existingProject,
@@ -5932,7 +5935,7 @@ export default function ManualTimingEditorPage() {
       reason: "open_board_sync_from_manual_timing",
       forceReplace: true,
       allowMaterialLoss: true,
-    }) || projectToOpen;
+    }) || readManualClipBoardProjectForNode(ownerNodeId) || projectToOpen;
     if (hasMeaningfulManualProject(persistedProject)) {
       const safeBoard = {
         ...persistedProject,
@@ -5943,8 +5946,34 @@ export default function ManualTimingEditorPage() {
       const forceProjectId = String(safeBoard?.project_id || safeBoard?.projectId || "").trim();
       const forceInputSignature = String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim();
       const forceAudioSignature = String(safeBoard?.audio_signature || safeBoard?.audioSignature || "").trim();
+      console.info("[MANUAL TIMING OPEN BOARD DEBUG]", {
+        ownerNodeId,
+        hasPersistedProject: true,
+        scenesCount: Array.isArray(safeBoard?.scenes) ? safeBoard.scenes.length : 0,
+        selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(),
+        forceProjectId,
+        forceInputSignature,
+        forceAudioSignature,
+      });
       writeManualClipBoardOpenState({ isOpen: true, sourceNodeId: ownerNodeId, selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(), project_id: forceProjectId, input_signature: forceInputSignature, audio_signature: forceAudioSignature, forceProjectId, forceInputSignature, forceAudioSignature, routePath: STORYBOARD_ROUTE, updatedAt: Date.now() });
-      navigate(STORYBOARD_ROUTE, { state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: ownerNodeId, ownerNodeId, manualBoardForceProjectId: forceProjectId, manualBoardForceInputSignature: forceInputSignature, manualBoardForceAudioSignature: forceAudioSignature, forceProjectId, forceInputSignature, forceAudioSignature, director_board: safeBoard, project: safeBoard } });
+      navigate(STORYBOARD_ROUTE, {
+        state: {
+          openManualDirectorBoard: true,
+          closeLegacyScenarioEditors: true,
+          sourceNodeId: ownerNodeId,
+          ownerNodeId,
+          manualBoardForceProjectId: forceProjectId,
+          manualBoardForceInputSignature: forceInputSignature,
+          manualBoardForceAudioSignature: forceAudioSignature,
+          forceProjectId,
+          forceInputSignature,
+          forceAudioSignature,
+          manualBoardSkipOpenStateReason: undefined,
+          closeManualDirectorBoard: undefined,
+          director_board: safeBoard,
+          project: safeBoard,
+        },
+      });
       return;
     }
     setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");

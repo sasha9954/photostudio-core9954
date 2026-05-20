@@ -3509,6 +3509,8 @@ export default function ManualClipDirectorBoardEditor({
   const stopAtQuickListenRangeEndIfNeeded = () => {
     const audioEl = quickListenAudioRef.current;
     if (!audioEl) return false;
+    const mode = String(playbackMode || "").trim().toLowerCase();
+    if (mode === "all") return false;
     const endSec = Number(playbackRangeRef.current?.endSec);
     if (!Number.isFinite(endSec)) return false;
     if (Number(audioEl.currentTime || 0) < endSec - 0.012) return false;
@@ -3610,7 +3612,13 @@ export default function ManualClipDirectorBoardEditor({
   };
 
   const playFullAudio = () => {
-    playQuickListenRange("full", 0, null);
+    const audioEl = quickListenAudioRef.current;
+    if (audioEl) {
+      try {
+        audioEl.currentTime = 0;
+      } catch {}
+    }
+    playQuickListenRange("all", 0, null);
   };
 
   const onQuickListenTimeUpdate = () => {
@@ -5301,7 +5309,7 @@ export default function ManualClipDirectorBoardEditor({
             className="clipSB_btn manualDirectorQuickListenFull"
             onClick={playFullAudio}
             disabled={!audioUrl}
-          >{isAudioPlaying && playbackMode === "full" ? "⏸ Всё аудио" : "🎵 Всё аудио"}</button>
+          >{isAudioPlaying && playbackMode === "all" ? "⏸ Всё аудио" : "🎵 Всё аудио"}</button>
         </div>
 
         <label>Route
