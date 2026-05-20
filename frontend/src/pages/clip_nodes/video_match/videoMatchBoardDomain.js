@@ -322,8 +322,8 @@ export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourc
     fitMode: String(source.fit_mode || source.fitMode || "").trim(),
     confidence: toNullableFiniteNumber(source.confidence),
     matchReason: String(source.match_reason || source.matchReason || source.visual_reason_ru || "").trim(),
-    visualType: String(source.visual_type || source.visualType || "").trim(),
-    shotType: String(source.shot_type || source.shotType || "").trim(),
+    visualType: String(source.visual_type || source.visualType || source.visual_role || "").trim(),
+    shotType: String(source.shot_type || source.shotType || source.shot_role || "").trim(),
     emotion: String(source.emotion || "").trim(),
     action: String(source.action || "").trim(),
     containsFace: toBool(source.contains_face ?? source.containsFace),
@@ -331,7 +331,7 @@ export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourc
     lipSyncCandidate: toBool(source.lip_sync_candidate ?? source.lipSyncCandidate),
     dialoguePresent: toBool(source.dialogue_present ?? source.dialoguePresent),
     motionLevel: String(source.motion_level || source.motionLevel || "").trim(),
-    cameraMotion: String(source.camera_motion || source.cameraMotion || "").trim(),
+    cameraMotion: String(source.camera_motion || source.cameraMotion || source.motion_type || "").trim(),
     thumbnail: String(source.thumbnail || "").trim(),
     warnings,
     candidateType: String(source.candidateType || source.candidate_type || "").trim(),
@@ -350,7 +350,29 @@ export function normalizeVideoMatchSegment(segment = {}, index = 0, sourceVideoU
   const id = audioSceneId || `segment_${String(index + 1).padStart(3, "0")}`;
   const baseSegment = { id, audioSceneId, storySceneId };
   const rawCandidates = Array.isArray(source.candidates) ? source.candidates : [];
+  const rawSelectedCandidate = source.selected_candidate && typeof source.selected_candidate === "object"
+    ? source.selected_candidate
+    : (source.selectedCandidate && typeof source.selectedCandidate === "object" ? source.selectedCandidate : {});
+  const reservedGeneratedLipsync = toBool(source.reserved_generated_lipsync ?? source.reservedGeneratedLipsync);
+  const useRealSourceClip = toBool(source.use_real_source_clip ?? source.useRealSourceClip);
+  const sourceVisualReference = source.source_visual_reference || source.sourceVisualReference || {};
   const candidates = rawCandidates.map((candidate, candidateIndex) => normalizeVideoMatchCandidate(candidate, baseSegment, sourceVideoUrl, candidateIndex));
+  if (reservedGeneratedLipsync && candidates.length === 0) {
+    const generatedInsertId = String(rawSelectedCandidate.generated_insert_id || rawSelectedCandidate.generatedInsertId || `${audioSceneId}_generated_lipsync`).trim();
+    candidates.push(normalizeVideoMatchCandidate({
+      id: generatedInsertId,
+      candidateType: "generated_lipsync_insert",
+      reserved_generated_lipsync: true,
+      reservedGeneratedLipsync: true,
+      use_real_source_clip: false,
+      useRealSourceClip: false,
+      source_video_reference_only: rawSelectedCandidate.source_video_reference_only || sourceVisualReference || {},
+      sourceVideoReferenceOnly: rawSelectedCandidate.source_video_reference_only || sourceVisualReference || {},
+      sourceVideoStartSec: toFiniteNumber(rawSelectedCandidate?.source_video_reference_only?.video_t0 ?? sourceVisualReference?.video_t0, 0),
+      sourceVideoEndSec: toFiniteNumber(rawSelectedCandidate?.source_video_reference_only?.video_t1 ?? sourceVisualReference?.video_t1, 0),
+      visual_type: rawSelectedCandidate.visual_type || source.visual_type || source.visual_role || "",
+    }, baseSegment, sourceVideoUrl, 0));
+  }
   const rawSelectedCandidateId = String(
     source.selected_candidate_id
     ?? source.selectedCandidateId
@@ -374,6 +396,14 @@ export function normalizeVideoMatchSegment(segment = {}, index = 0, sourceVideoU
     text: String(source.text || "").trim(),
     mood: String(source.mood || "").trim(),
     visualNeed: String(source.visual_need || source.visualNeed || "").trim(),
+    reservedGeneratedLipsync,
+    reserved_generated_lipsync: reservedGeneratedLipsync,
+    useRealSourceClip,
+    use_real_source_clip: useRealSourceClip,
+    sourceVisualReference,
+    source_visual_reference: sourceVisualReference,
+    selectedCandidateRaw: rawSelectedCandidate,
+    selected_candidate: rawSelectedCandidate,
     selectedCandidateId,
     selected_candidate_id: selectedCandidateId,
     candidates,

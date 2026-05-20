@@ -26,15 +26,14 @@ function formatSec(value) {
 function getBlockLeft(block, duration) {
   const dur = Number(duration || 0);
   if (!Number.isFinite(dur) || dur <= 0) return 0;
-  return Math.max(0, Math.min(100, (Number(block?.sourceVideoStartSec || 0) / dur) * 100));
+  return Math.max(0, Math.min(100, (getBlockClipRange(block).clipStart / dur) * 100));
 }
 
 function getBlockWidth(block, duration) {
   const dur = Number(duration || 0);
   if (!Number.isFinite(dur) || dur <= 0) return 0;
-  const start = Number(block?.sourceVideoStartSec || 0);
-  const end = Number(block?.sourceVideoEndSec || start);
-  return Math.max(0.8, Math.min(100, ((end - start) / dur) * 100));
+  const { clipStart, clipEnd } = getBlockClipRange(block);
+  return Math.max(0.8, Math.min(100, ((clipEnd - clipStart) / dur) * 100));
 }
 
 function getValidDurationSec(value) {
@@ -66,7 +65,8 @@ function getBlockClipRange(block = {}) {
   const sourceEnd = getBlockSourceEnd(block);
   const segmentDuration = Math.max(0, getBlockTargetEnd(block) - getBlockTargetStart(block));
   const clipStart = Math.max(0, sourceStart);
-  const clipEnd = Math.max(clipStart, Math.min(sourceEnd, clipStart + segmentDuration));
+  const safeSourceEnd = sourceEnd > clipStart ? sourceEnd : clipStart + segmentDuration;
+  const clipEnd = Math.max(clipStart, Math.min(safeSourceEnd, clipStart + segmentDuration));
   return { clipStart, clipEnd };
 }
 
@@ -762,13 +762,17 @@ export default function VideoMatchBoardPage() {
     setAudioCurrentTimeSec(0);
     setVideoDurationSec(0);
     setAudioDurationSec(0);
-    if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = ""; }
-    if (audioObjectUrlRef.current) { URL.revokeObjectURL(audioObjectUrlRef.current); audioObjectUrlRef.current = ""; }
     if (!keepRuntimeMedia) {
+      if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = ""; }
+      if (audioObjectUrlRef.current) { URL.revokeObjectURL(audioObjectUrlRef.current); audioObjectUrlRef.current = ""; }
       runtimeSourceVideoUrlRef.current = "";
       runtimeAudioPreviewUrlRef.current = "";
     }
     const next = getDefaultVideoMatchBoardProject(nodeId);
+    if (keepRuntimeMedia) {
+      next.sourceVideoUrl = String(project.sourceVideoUrl || runtimeSourceVideoUrlRef.current || "");
+      next.audioPreviewUrl = String(project.audioPreviewUrl || runtimeAudioPreviewUrlRef.current || "");
+    }
     clearVideoMatchBoardProjectStorage(nodeId);
     setProject(next);
     persistVideoMatchBoardProject(next, { forceReplace: true, allowMaterialLoss: true, explicitReset: true });
@@ -788,7 +792,7 @@ export default function VideoMatchBoardPage() {
     const importDraft = {
       ...getDefaultVideoMatchBoardProject(nodeId),
       schema: result.schema,
-      sourceVideoUrl: String(runtimeSourceVideoUrlRef.current || ""),
+      sourceVideoUrl: String(runtimeSourceVideoUrlRef.current || project.sourceVideoUrl || ""),
       audioPreviewUrl: String(runtimeAudioPreviewUrlRef.current || project.audioPreviewUrl || ""),
       audioPreviewMeta: project.audioPreviewMeta || {},
       useAudioPreview: project.useAudioPreview,
@@ -859,6 +863,16 @@ export default function VideoMatchBoardPage() {
     setAssembleError("");
     setAssembledPreview(null);
     try {
+      const assemblyBlocksForExport = assemblyBlocks.map((block) => {
+        const { clipStart, clipEnd } = getBlockClipRange(block);
+        return {
+          ...block,
+          clipSourceStartSec: clipStart,
+          clipSourceEndSec: clipEnd,
+          sourceVideoStartSec: clipStart,
+          sourceVideoEndSec: clipEnd,
+        };
+      });
       const response = await fetchJson("/api/video-match/assemble", {
         method: "POST",
         body: {
@@ -869,13 +883,15 @@ export default function VideoMatchBoardPage() {
           audioUrl: project?.timingContext?.sourceAudioUrl || "",
           outputFormat: "16:9",
           previewQuality: "720p",
-          blocks: assemblyBlocks.map((block) => ({
+          blocks: assemblyBlocksForExport.map((block) => ({
             id: block.id,
             audioSceneId: block.audioSceneId || block.segmentId || "",
             targetStartSec: Number(block.targetStartSec || 0),
             targetEndSec: Number(block.targetEndSec || 0),
             sourceVideoStartSec: Number(block.sourceVideoStartSec || 0),
             sourceVideoEndSec: Number(block.sourceVideoEndSec || 0),
+            clipSourceStartSec: Number(block.clipSourceStartSec || 0),
+            clipSourceEndSec: Number(block.clipSourceEndSec || 0),
             candidateType: block.candidateType || "",
             sourceKind: block.sourceKind || "",
             overrideVideoPath: block.overrideVideoPath || "",
@@ -1261,10 +1277,13 @@ export default function VideoMatchBoardPage() {
             <div>selectedSegmentId: {project.selectedSegmentId || "—"}</div>
             <div>selectedCandidateId: {project.selectedCandidateId || "—"}</div>
             <div>selectedBlockId: {project.selectedBlockId || "—"}</div>
+            <div>selected segment id(debug): {selectedSegment?.id || "—"}</div>
             <div>targetStartSec/targetEndSec: {selectedSegment ? `${formatSec(selectedSegment.targetStartSec)} / ${formatSec(selectedSegment.targetEndSec)}` : "—"}</div>
             <div>sourceVideoStartSec/sourceVideoEndSec: {selectedBlock ? `${formatSec(selectedBlock.sourceVideoStartSec)} / ${formatSec(selectedBlock.sourceVideoEndSec)}` : "—"}</div>
             <div>clip_source_start_sec/clip_source_end_sec: {selectedBlock ? `${formatSec(getBlockClipRange(selectedBlock).clipStart)} / ${formatSec(getBlockClipRange(selectedBlock).clipEnd)}` : "—"}</div>
             <div>selectedCandidateId(debug): {selectedSegment?.selectedCandidateId || "—"}</div>
+            <div>reservedGeneratedLipsync(selected): {String(Boolean(selectedSegment?.reservedGeneratedLipsync || selectedSegment?.reserved_generated_lipsync))}</div>
+            <div>useRealSourceClip(selected): {String(Boolean(selectedSegment?.useRealSourceClip ?? selectedSegment?.use_real_source_clip))}</div>
             <div>reserved_generated_lipsync(selected): {selectedSegmentCandidates.filter((candidate) => candidate?.reserved_generated_lipsync).length}</div>
           </div>
 
