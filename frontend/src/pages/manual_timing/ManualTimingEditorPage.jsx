@@ -5850,12 +5850,57 @@ export default function ManualTimingEditorPage() {
   }
 
   function mergeDirectorSceneWorkKeepingFreshBlocks(freshScenes = [], existingScenes = []) {
-    const merged = mergeDirectorSceneWork(freshScenes, existingScenes);
-    const freshById = new Map((Array.isArray(freshScenes) ? freshScenes : []).map((scene) => [String(scene?.scene_id || "").trim(), scene]));
-    return merged.map((scene) => {
-      const fresh = freshById.get(String(scene?.scene_id || "").trim());
-      if (!fresh) return scene;
-      return { ...scene, story_block_id: fresh.story_block_id || scene.story_block_id || "", story_block_title_ru: fresh.story_block_title_ru || scene.story_block_title_ru || "", story_block_color: fresh.story_block_color || fresh.block_color || fresh.song_block_color || scene.story_block_color || "", block_color: fresh.block_color || fresh.story_block_color || fresh.song_block_color || scene.block_color || "", song_block_id: fresh.song_block_id || fresh.story_block_id || scene.song_block_id || "", song_block_title_ru: fresh.song_block_title_ru || fresh.story_block_title_ru || scene.song_block_title_ru || "", song_block_color: fresh.song_block_color || fresh.story_block_color || fresh.block_color || scene.song_block_color || "" };
+    const safeFreshScenes = Array.isArray(freshScenes) ? freshScenes : [];
+    const existingById = new Map(
+      (Array.isArray(existingScenes) ? existingScenes : [])
+        .map((scene) => [String(scene?.scene_id || scene?.id || "").trim(), scene])
+        .filter(([sceneId]) => sceneId)
+    );
+
+    return safeFreshScenes.map((freshScene, index) => {
+      const sceneId = String(freshScene?.scene_id || freshScene?.id || "").trim();
+      const existingScene = sceneId ? existingById.get(sceneId) : null;
+      if (!existingScene) return freshScene;
+      const resolvedSceneId = freshScene?.scene_id || existingScene?.scene_id || `seg_${String(index + 1).padStart(2, "0")}`;
+      const preservedPromptFields = Object.keys(existingScene || {}).reduce((acc, key) => {
+        if (!/prompt/i.test(key)) return acc;
+        const freshValue = freshScene?.[key];
+        if (freshValue !== undefined && freshValue !== null && String(freshValue).trim() !== "") return acc;
+        const existingValue = existingScene?.[key];
+        if (existingValue === undefined || existingValue === null || String(existingValue).trim() === "") return acc;
+        acc[key] = existingValue;
+        return acc;
+      }, {});
+
+      return {
+        ...existingScene,
+        ...freshScene,
+        ...preservedPromptFields,
+        scene_id: resolvedSceneId,
+        start_sec: freshScene.start_sec,
+        end_sec: freshScene.end_sec,
+        duration_sec: freshScene.duration_sec,
+        speech_start_sec: freshScene.speech_start_sec,
+        speech_end_sec: freshScene.speech_end_sec,
+        story_block_id: freshScene.story_block_id || existingScene.story_block_id || "",
+        story_block_title_ru: freshScene.story_block_title_ru || existingScene.story_block_title_ru || "",
+        story_block_color: freshScene.story_block_color || freshScene.block_color || freshScene.song_block_color || existingScene.story_block_color || "",
+        block_color: freshScene.block_color || freshScene.story_block_color || freshScene.song_block_color || existingScene.block_color || "",
+        song_block_id: freshScene.song_block_id || freshScene.story_block_id || existingScene.song_block_id || "",
+        song_block_title_ru: freshScene.song_block_title_ru || freshScene.story_block_title_ru || existingScene.song_block_title_ru || "",
+        song_block_color: freshScene.song_block_color || freshScene.story_block_color || freshScene.block_color || existingScene.song_block_color || "",
+        image_url: freshScene.image_url || existingScene.image_url || existingScene.imageUrl || "",
+        imageUrl: freshScene.imageUrl || freshScene.image_url || existingScene.imageUrl || existingScene.image_url || "",
+        start_image_url: freshScene.start_image_url || existingScene.start_image_url || existingScene.startImageUrl || "",
+        end_image_url: freshScene.end_image_url || existingScene.end_image_url || existingScene.endImageUrl || "",
+        video_url: freshScene.video_url || existingScene.video_url || existingScene.videoUrl || "",
+        videoUrl: freshScene.videoUrl || freshScene.video_url || existingScene.videoUrl || existingScene.video_url || "",
+        result_video_url: freshScene.result_video_url || existingScene.result_video_url || existingScene.resultVideoUrl || "",
+        mmaudio_url: freshScene.mmaudio_url || existingScene.mmaudio_url || existingScene.mmaudioUrl || "",
+        status: existingScene.status || freshScene.status,
+        image_status: existingScene.image_status || freshScene.image_status,
+        video_status: existingScene.video_status || freshScene.video_status,
+      };
     });
   }
 
@@ -5915,33 +5960,38 @@ export default function ManualTimingEditorPage() {
   };
 
   const onOpenDirectorBoard = () => {
-    const ownerNodeId = finalOwnerNodeId;
-    const freshProject = buildDirectorProjectSnapshot();
-    const existingProject = readManualClipBoardProjectForNode(ownerNodeId)
-      || activeBoardProject
-      || readActiveManualClipBoardProject(ownerNodeId)
-      || null;
-    const projectToOpen = hasMeaningfulManualProject(existingProject)
-      ? {
-        ...existingProject,
-        ...freshProject,
-        story_blocks: freshProject.story_blocks,
-        storyBlocks: freshProject.story_blocks,
-        scenes: mergeDirectorSceneWorkKeepingFreshBlocks(freshProject.scenes, existingProject.scenes),
-        updatedAt: Date.now(),
+    try {
+      const safeBoard = (function buildBoardForOpen() {
+          const ownerNodeId = finalOwnerNodeId;
+          const freshProject = buildDirectorProjectSnapshot();
+          const existingProject = readManualClipBoardProjectForNode(ownerNodeId)
+            || activeBoardProject
+            || readActiveManualClipBoardProject(ownerNodeId)
+            || null;
+          const projectToOpen = hasMeaningfulManualProject(existingProject)
+            ? {
+              ...existingProject,
+              ...freshProject,
+              story_blocks: freshProject.story_blocks,
+              storyBlocks: freshProject.story_blocks,
+              scenes: mergeDirectorSceneWorkKeepingFreshBlocks(freshProject.scenes, existingProject.scenes),
+              updatedAt: Date.now(),
+            }
+            : freshProject;
+          const persistedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectToOpen, {
+            reason: "open_board_sync_from_manual_timing",
+            forceReplace: true,
+            allowMaterialLoss: true,
+          }) || readManualClipBoardProjectForNode(ownerNodeId) || projectToOpen;
+          if (!hasMeaningfulManualProject(persistedProject)) return null;
+          return { ...persistedProject, nodeId: ownerNodeId, sourceNodeId: ownerNodeId };
+        })();
+      if (!safeBoard || !hasMeaningfulManualProject(safeBoard)) {
+        setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
+        window.setTimeout(() => setCopyStatus(""), 4200);
+        return;
       }
-      : freshProject;
-    const persistedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectToOpen, {
-      reason: "open_board_sync_from_manual_timing",
-      forceReplace: true,
-      allowMaterialLoss: true,
-    }) || readManualClipBoardProjectForNode(ownerNodeId) || projectToOpen;
-    if (hasMeaningfulManualProject(persistedProject)) {
-      const safeBoard = {
-        ...persistedProject,
-        nodeId: ownerNodeId,
-        sourceNodeId: ownerNodeId,
-      };
+      const ownerNodeId = finalOwnerNodeId;
       setActiveBoardProject(safeBoard);
       const forceProjectId = String(safeBoard?.project_id || safeBoard?.projectId || "").trim();
       const forceInputSignature = String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim();
@@ -5975,9 +6025,13 @@ export default function ManualTimingEditorPage() {
         },
       });
       return;
+    } catch (error) {
+      console.error("[MANUAL TIMING OPEN BOARD FAILED]", error);
+      const errorText = String(error?.message || error || "unknown_error");
+      setCopyStatus(`Не удалось открыть доску: ${errorText}`);
+      window.setTimeout(() => setCopyStatus(""), 4200);
+      return;
     }
-    setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
-    window.setTimeout(() => setCopyStatus(""), 4200);
   };
 
   const onCreateNewDirectorBoardFromTiming = async () => {
