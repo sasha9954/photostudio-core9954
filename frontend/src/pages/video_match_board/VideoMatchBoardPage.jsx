@@ -127,10 +127,21 @@ function validateAssembleAudioPath(rawPath = "") {
 }
 
 function resolveAssembleApiErrorMessage(error) {
-  const code = String(error?.code || error?.payload?.detail?.code || "").trim();
+  const code = String(
+    error?.code
+    || error?.detail?.code
+    || error?.payload?.code
+    || error?.payload?.detail?.code
+    || error?.response?.code
+    || error?.response?.detail?.code
+    || "",
+  ).trim();
   if (code === "AUDIO_PATH_REQUIRED") return "Для сборки MP4 с аудио укажите путь к аудиофайлу.";
   if (code === "AUDIO_PATH_NOT_FOUND") return "Файл не найден по указанному пути к аудио.";
   if (code === "AUDIO_PATH_INVALID_EXT") return "Неподдерживаемый формат аудио. Используйте .mp3, .wav, .m4a или .aac.";
+  if (["AUDIO_PATH_PREVIEW_ONLY", "AUDIO_PATH_NOT_LOCAL", "AUDIO_PATH_TRUNCATED"].includes(code)) {
+    return "Путь к аудио выглядит неверно. Для MP4 с аудио укажите реальный локальный путь.";
+  }
   return String(error?.message || error || "Не удалось собрать MP4");
 }
 
