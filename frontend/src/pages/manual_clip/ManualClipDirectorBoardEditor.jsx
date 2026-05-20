@@ -5174,7 +5174,7 @@ export default function ManualClipDirectorBoardEditor({
           key={`story-block-${blockId}-${idx}`}
           type="button"
           className={`storyboardBlockChip ${isActive ? "storyboardBlockChipActive" : ""}`}
-          style={{ "--storyboard-block-color": block.color || "#8aa4ff" }}
+          style={{ "--storyboard-block-color": String(block?.color || block?.story_block_color || block?.block_color || "#64748B") }}
           onClick={() => firstScene ? selectSceneByUser(firstScene.scene_id) : undefined}
           disabled={!firstScene}
         >
@@ -5226,7 +5226,7 @@ export default function ManualClipDirectorBoardEditor({
           return <button
             key={scene.scene_id}
             className={`manualDirectorSceneItem ${selectedScene?.scene_id === scene.scene_id ? "active" : ""} ${sceneIsVideoReady ? "ready" : ""}`}
-            style={scene.story_block_color ? { "--storyboard-block-color": scene.story_block_color } : undefined}
+            style={{ "--storyboard-block-color": String(scene?.story_block_color || scene?.block_color || scene?.song_block_color || "#64748B") }}
             onClick={() => selectSceneByUser(scene.scene_id)}
           >
             <strong>{idx + 1} сцена</strong><span>{scene.route}</span><span>{Number(scene.start_sec).toFixed(2)}–{Number(scene.end_sec).toFixed(2)} c</span><span className={`manualStatusBadge ${sceneIsVideoReady ? "ready" : scene.status === "video_error" ? "error" : (scene.status === "video_running" || scene.status === "video_queued") ? "running" : ""}`}>{getSceneStatusLabel(scene)}</span>
@@ -5266,7 +5266,7 @@ export default function ManualClipDirectorBoardEditor({
               >📥 Видео<input type="file" accept=".json,application/json" hidden onChange={onImportBlockVideoPromptFile} /></label>
             </div>
           </div>
-          {selectedScene.story_block_title_ru ? <div className="storyboardSceneBlockBadge" style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>
+          {selectedScene.story_block_title_ru ? <div className="storyboardSceneBlockBadge" style={{ "--storyboard-block-color": String(selectedScene?.story_block_color || selectedScene?.block_color || selectedScene?.song_block_color || "#64748B") }}>
             {selectedBlockNumber ? <span>Блок {selectedBlockNumber}</span> : null}
             <strong>Блок: {selectedScene.story_block_title_ru}</strong>
           </div> : null}
@@ -5354,7 +5354,7 @@ export default function ManualClipDirectorBoardEditor({
         {isStoryVoiceover ? <section className="manualDirectorStoryPassPanel">
           <div className="manualDirectorStoryPassHeader">
             <strong>Story Pass сцены</strong>
-            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
+            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": String(selectedScene?.story_block_color || selectedScene?.block_color || selectedScene?.song_block_color || "#64748B") }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
           </div>
           <div className="manualDirectorStoryPassCompactHint">
             {selectedSceneRuText || selectedSceneActionText || "Подробный Story Pass доступен в раскрывающемся блоке ниже и через кнопки копирования JSON/текста блока."}
@@ -5385,7 +5385,7 @@ export default function ManualClipDirectorBoardEditor({
         {!isStoryVoiceover && isMeaningSceneVisible(selectedScene) ? <div className="storyboardSceneMeaningCompact">
           <div className="storyboardSceneMeaningHeader">
             <strong>Смысл сцены</strong>
-            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": selectedScene.story_block_color || "#8aa4ff" }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
+            {selectedScene.story_block_title_ru ? <span style={{ "--storyboard-block-color": String(selectedScene?.story_block_color || selectedScene?.block_color || selectedScene?.song_block_color || "#64748B") }}>{selectedBlockNumber ? `Блок ${selectedBlockNumber}: ` : ""}{selectedScene.story_block_title_ru}</span> : null}
             {selectedBlockSceneCount ? <em>сцена {selectedBlockSceneIndex || 1} из {selectedBlockSceneCount}</em> : null}
           </div>
           <div className="storyboardSceneMeaningBody">
