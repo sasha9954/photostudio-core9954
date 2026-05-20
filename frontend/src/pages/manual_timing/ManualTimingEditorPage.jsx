@@ -3034,7 +3034,8 @@ export default function ManualTimingEditorPage() {
   const vocalGapTimelineMarkers = useMemo(() => {
     if (!(durationSec > 0) || !vocalAsrGaps.length) return [];
     return vocalAsrGaps.flatMap((gap) => {
-      const ranges = mapSourceRangeToTimelineRanges(Number(gap?.start_sec || 0), Number(gap?.end_sec || 0), scenes);
+      const offsetSec = Number(vocalAsrSource?.offset_sec || 0) || 0;
+      const ranges = mapSourceRangeToTimelineRanges(Number(gap?.start_sec || 0) + offsetSec, Number(gap?.end_sec || 0) + offsetSec, scenes);
       if (!ranges.length) return [];
       return ranges.map((range, rangeIndex) => {
         const start = clampTime(range.start_sec, durationSec);
@@ -3050,7 +3051,7 @@ export default function ManualTimingEditorPage() {
         };
       }).filter(Boolean);
     });
-  }, [durationSec, scenes, vocalAsrGaps]);
+  }, [durationSec, scenes, vocalAsrGaps, vocalAsrSource?.offset_sec]);
   const selectedSceneHasAsrMissingWarning = useMemo(() => {
     if (!selectedScene || !Array.isArray(project?.vocal_asr_gaps) || !project.vocal_asr_gaps.length) {
       return false;
@@ -8485,7 +8486,12 @@ export default function ManualTimingEditorPage() {
             <span>Распознай фразы из основного аудио или vocal stem, затем собери сцены и подтверди тайминг.</span>
           </div>
           <div className="manualTimingAsrHeroRow">
-            <button className="manualTimingAsrHeroCard manualTimingAsrHeroCardAudio" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>
+            <button
+              type="button"
+              className="manualTimingAsrHeroCard manualTimingAsrHeroCardAudio"
+              onClick={onCreateAudioPhraseMap}
+              disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}
+            >
               <span className="manualTimingAsrHeroIcon">🎧</span>
               <span className="manualTimingAsrHeroTitle">ASR по аудио</span>
               <span className="manualTimingAsrHeroSubtitle">распознать фразы из main audio</span>
@@ -8528,17 +8534,18 @@ export default function ManualTimingEditorPage() {
             </label>
           </div>
           <div className="manualTimingAsrSecondaryRow">
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled title="Следующий шаг: перевод vocal ASR фраз">Перевести ASR-фразы</button>
+            <span className="manualTimingAsrStatusChip">Перевод ASR: скачать/импортировать JSON в инспекторе</span>
             <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onClearAsrOnly} disabled={!audioPhrases.length && !audioWords.length && !vocalAsrWords.length}>Очистить ASR</button>
           </div>
           <div className="manualTimingAsrStepsRow">
             <button
+              type="button"
               className="clipSB_btn clipSB_btnPrimary"
               onClick={onBuildStoryScenesFromAsr}
               disabled={mainActionsDisabled || !audioPhrases.length}
               title="Пересобрать сцены из текущего JSON/ASR. Может перезаписать ручные разрезы."
             >Собрать сцены из ASR</button>
-            <button className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить тайминг</button>
+            <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить тайминг</button>
           </div>
           {vocalAsrDurationMismatch ? <span className="manualTimingVocalWarning">Длина вокала отличается от основной песни. Нужен full-length vocal stem без обрезки тишины.</span> : null}
           <div className="manualTimingWorkflowStatusLine">
@@ -8729,9 +8736,9 @@ export default function ManualTimingEditorPage() {
           <span>После подтверждения тайминга можно создать режиссёрскую доску.</span>
         </div>
         <div className="manualTimingAsrSecondaryRow">
-          <button className="clipSB_btn clipSB_btnSecondary" onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)} title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}>{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
-          <button className="clipSB_btn clipSB_btnSecondary manualTimingQuickBoardBtn" onClick={onCreateQuickDirectorBoard} disabled={mainActionsDisabled || !quickBoardReady || Boolean(handoffStatus)} title={quickBoardTitle}>⚡ Быстрая доска</button>
-          {hasActiveBoardProject ? <button className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Создать новую доску</button> : null}
+          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)} title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}>{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
+          <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingQuickBoardBtn" onClick={onCreateQuickDirectorBoard} disabled={mainActionsDisabled || !quickBoardReady || Boolean(handoffStatus)} title={quickBoardTitle}>⚡ Быстрая доска</button>
+          {hasActiveBoardProject ? <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Создать новую доску</button> : null}
         </div>
       </section>
 
