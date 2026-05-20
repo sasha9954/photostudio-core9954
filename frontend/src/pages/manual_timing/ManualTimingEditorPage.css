@@ -4016,12 +4016,23 @@
 .manualTimingSelectedPhraseInspector {
   display: grid;
   gap: 8px;
-  max-height: 190px;
+  max-height: 340px;
   overflow: hidden;
   padding: 9px;
   border-radius: 12px;
   background: rgba(15, 23, 42, 0.72);
   border: 1px solid rgba(125, 211, 252, 0.18);
+}
+.manualTimingSelectedPhraseInspector.isWordsMode {
+  border-color: rgba(45, 212, 191, 0.42);
+  background: rgba(7, 28, 31, 0.72);
+}
+.manualTimingSelectedPhraseInspector.isPhraseMode {
+  border-color: rgba(167, 139, 250, 0.4);
+  background: rgba(30, 20, 52, 0.66);
+}
+.manualTimingSelectedPhraseInspector.isPartialPhrase {
+  border-color: rgba(251, 191, 36, 0.55);
 }
 
 .manualTimingSelectedPhraseInspector.hasPartialPhrase {
@@ -4078,6 +4089,13 @@
   align-items: center;
   flex-wrap: wrap;
 }
+.manualTimingPhraseInspectorControls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 .manualTimingSelectedPhraseMeta span {
   color: rgba(219, 234, 254, 0.72);
@@ -4103,7 +4121,8 @@
 .manualTimingSelectedPhraseRows {
   display: grid;
   gap: 6px;
-  max-height: 115px;
+  min-height: 72px;
+  max-height: 180px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -4160,8 +4179,24 @@
   margin: 0;
   color: #f8fafc;
   font-size: 13px;
-  line-height: 1.35;
+  line-height: 1.45;
   white-space: pre-wrap;
+}
+.manualTimingPhraseModeHint {
+  color: rgba(191, 219, 254, 0.82) !important;
+  font-size: 11px !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+.manualTimingAsrInspectorPartial {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: rgba(251, 191, 36, 0.44);
+  color: #fde68a;
+}
+.manualTimingAsrInspectorGap {
+  background: rgba(249, 115, 22, 0.16);
+  border-color: rgba(249, 115, 22, 0.45);
+  color: #fdba74;
 }
 
 .manualTimingSelectedPhraseRow.isPartial .manualTimingSelectedPhraseRu p {

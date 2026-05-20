@@ -1549,6 +1549,29 @@ function reindexManualTimingTimelineScenes(scenes = []) {
     }));
 }
 
+function clearManualTimingAsrFields(project = {}) {
+  const next = {
+    ...project,
+    audio_phrases: [],
+    audio_words: [],
+    vocal_asr_words: [],
+    vocal_asr_gaps: [],
+    asr_phrase_map: null,
+    asr_translation_status: "",
+  };
+  [
+    "asr_translation",
+    "asr_translation_map",
+    "asr_translation_json",
+    "asr_translation_error",
+    "asr_translation_updated_at",
+    "asr_translation_result",
+  ].forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(next, key)) next[key] = "";
+  });
+  return next;
+}
+
 function buildManualTimingMarkersFromScenesList(scenes = [], durationSec = 0) {
   const values = [0, roundTimingSec(durationSec)];
   (Array.isArray(scenes) ? scenes : []).forEach((scene) => {
@@ -4334,7 +4357,9 @@ export default function ManualTimingEditorPage() {
       nextDrafts.push(...parts);
     });
 
-    const nextScenes = reindexManualTimingTimelineScenes(nextDrafts);
+    const nextScenes = hasSceneMaterials
+      ? nextDrafts
+      : reindexManualTimingTimelineScenes(nextDrafts);
     const selectedAfterCut = nextScenes.find((scene) => (
       cut >= Number(scene.start_sec || 0) - 0.001
       && cut < Number(scene.end_sec || 0) - 0.001
@@ -7430,6 +7455,16 @@ export default function ManualTimingEditorPage() {
     setAudioTime(0, { pause: true, clearBound: true });
   };
 
+  const onClearAsrOnly = () => {
+    const confirmed = window.confirm("Очистить ASR-фразы, слова, перевод и сомнительные места? Сцены останутся.");
+    if (!confirmed) return;
+    rememberManualTimingAction("очистить asr");
+    persist(clearManualTimingAsrFields(project));
+    setAsrStatus("ASR очищен. Сцены сохранены.");
+    setCopyStatus("ASR очищен. Сцены, маркеры и story_blocks сохранены.");
+    window.setTimeout(() => setCopyStatus(""), 2400);
+  };
+
   const onAudioLoadedMetadata = () => {
     const audioEl = audioRef.current;
     if (!audioEl) return;
@@ -7902,7 +7937,7 @@ export default function ManualTimingEditorPage() {
             <div><b>Главная шкала разметки</b></div>
             <div>верхняя полоса — story blocks · нижняя — сцены · линия — текущее место · двойной клик по сцене — быстрая правка</div>
           </div>
-          <div className={`manualTimingSelectedPhraseInspector ${isGroupPhraseInspectorMode ? "isGroupMode" : ""} ${selectedSceneHasPartialPhrase ? "hasPartialPhrase" : ""} ${isPhraseInspectorCollapsed ? "isCollapsed" : ""}`}>
+          <div className={`manualTimingSelectedPhraseInspector ${isGroupPhraseInspectorMode ? "isGroupMode" : ""} ${selectedSceneHasPartialPhrase ? "hasPartialPhrase isPartialPhrase" : ""} ${isSceneWordsInspectorMode ? "isWordsMode" : "isPhraseMode"} ${isPhraseInspectorCollapsed ? "isCollapsed" : ""}`}>
             <div className="manualTimingPhraseInspectorHeader">
               <div className="manualTimingPhraseInspectorTitle">
                 <span>ASR / перевод</span>
@@ -7938,23 +7973,37 @@ export default function ManualTimingEditorPage() {
                   <strong>{selectedScene?.scene_id || "—"}</strong>
                   <span>{selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
                 </>}
-                {selectedSceneHasPartialPhrase ? <b className="manualTimingPartialBadge">часть ASR-фразы</b> : null}
+                {selectedSceneHasPartialPhrase ? <b className="manualTimingPartialBadge manualTimingAsrInspectorPartial">часть ASR-фразы</b> : null}
+                {selectedSceneHasAsrMissingWarning ? <b className="manualTimingPartialBadge manualTimingAsrInspectorGap">vocal not recognized / gap</b> : null}
+              </div>
+              <div className="manualTimingPhraseInspectorControls">
                 {!isGroupPhraseInspectorMode ? <div className="manualTimingPhraseInspectorModeSwitch" role="tablist" aria-label="Режим ASR инспектора">
                   <button
                     type="button"
-                    className={`clipSB_btn clipSB_btnSecondary ${isSceneWordsInspectorMode ? "isActive" : ""}`}
+                    className={`clipSB_btn clipSB_btnSecondary manualTimingAsrInspectorModeWords ${isSceneWordsInspectorMode ? "isActive" : ""}`}
                     onClick={() => setSceneAsrInspectorMode("scene_words")}
                   >
                     Слова сцены
                   </button>
                   <button
                     type="button"
-                    className={`clipSB_btn clipSB_btnSecondary ${!isSceneWordsInspectorMode ? "isActive" : ""}`}
+                    className={`clipSB_btn clipSB_btnSecondary manualTimingAsrInspectorModePhrases ${!isSceneWordsInspectorMode ? "isActive" : ""}`}
                     onClick={() => setSceneAsrInspectorMode("asr_phrases")}
                   >
                     ASR фразы
                   </button>
                 </div> : null}
+                <div className="manualTimingSelectedPhraseActions">
+                  <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneSpeakText)} disabled={!canSpeakSelectedSceneText}>{selectedSceneSpeakButtonLabel}</button>
+                  <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={stopManualTimingSpeech}>■ стоп</button>
+                  <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
+                  <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
+                  <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!audioPhrases.length ? "isDisabled" : ""}`}>
+                    Импорт ASR text_ru
+                    <input type="file" accept="application/json,.json,text/plain" onChange={onImportAsrTranslationJsonFile} disabled={!audioPhrases.length} />
+                  </label>
+                  <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onClearAsrOnly} disabled={!audioPhrases.length && !audioWords.length && !vocalAsrWords.length}>Очистить ASR</button>
+                </div>
               </div>
               <div className="manualTimingSelectedPhraseRows">
                 {isGroupPhraseInspectorMode || selectedScene ? (isSceneWordsInspectorMode && !isGroupPhraseInspectorMode ? (
@@ -7962,6 +8011,8 @@ export default function ManualTimingEditorPage() {
                     ? <div className="manualTimingSelectedPhraseRow">
                       <div className="manualTimingSelectedPhraseOriginal">
                         <span>{selectedScene?.scene_id || "scene"} · {selectedScene ? `${formatTimingSec(selectedSceneStartSec)} → ${formatTimingSec(selectedSceneEndSec)}` : "тайминг —"}</span>
+                        <span className="manualTimingPhraseModeHint">word-level / оригинал</span>
+                        <span className="manualTimingPhraseModeHint">Слова сцены: оригинал по word timestamps, без отдельного перевода.</span>
                         <p>{selectedSceneWordText}</p>
                       </div>
                     </div>
@@ -7972,6 +8023,7 @@ export default function ManualTimingEditorPage() {
                 >
                   <div className="manualTimingSelectedPhraseOriginal">
                     <span>{row.phraseId || "audio_phrase"} · {row.timingLabel}</span>
+                    <span className="manualTimingPhraseModeHint">ASR phrase / перевод</span>
                     <p>{row.originalText}</p>
                   </div>
                   <div className="manualTimingSelectedPhraseRu">
@@ -7986,16 +8038,6 @@ export default function ManualTimingEditorPage() {
                     {row.hasRuText ? <p>{row.ruText}</p> : null}
                   </div>
                 </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>)) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
-              </div>
-              <div className="manualTimingSelectedPhraseActions">
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneSpeakText)} disabled={!canSpeakSelectedSceneText}>{selectedSceneSpeakButtonLabel}</button>
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={stopManualTimingSpeech}>■ стоп</button>
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
-                <label className={`clipSB_btn clipSB_btnSecondary manualTimingFileBtn ${!audioPhrases.length ? "isDisabled" : ""}`}>
-                  Импорт ASR text_ru
-                  <input type="file" accept="application/json,.json,text/plain" onChange={onImportAsrTranslationJsonFile} disabled={!audioPhrases.length} />
-                </label>
               </div>
             </> : null}
           </div>
