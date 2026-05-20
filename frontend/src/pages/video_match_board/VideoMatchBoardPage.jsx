@@ -208,9 +208,8 @@ export default function VideoMatchBoardPage() {
   const selectedSegment = matchSegments.find((segment) => segment.id === project.selectedSegmentId || segment.audioSceneId === project.selectedSegmentId) || matchSegments[0] || null;
   const selectedSegmentCandidates = Array.isArray(selectedSegment?.candidates) ? selectedSegment.candidates : [];
   const currentPlayingBlockId = videoBlocks.find((block) => {
-    const start = getBlockSourceStart(block);
-    const end = getBlockSourceEnd(block);
-    return currentTimeSec >= start && currentTimeSec < end;
+    const { clipStart, clipEnd } = getBlockClipRange(block);
+    return currentTimeSec >= clipStart && currentTimeSec < clipEnd;
   })?.id || "";
 
   const patchProject = (patch = {}, persistOptions = {}) => {
@@ -821,8 +820,8 @@ export default function VideoMatchBoardPage() {
     setStateOrigin("imported_fresh");
   };
 
-  const onApplyJson = () => {
-    const cleanText = String(project.jsonInput || "").replace(/^﻿/, "").trim();
+  const validateAndApplyVideoMatchJsonText = (text = "") => {
+    const cleanText = String(text || "").replace(/^﻿/, "").trim();
     if (!cleanText) { patchProject({ jsonError: "JSON пустой" }, { lastGood: false }); return; }
     if (isLikelyTruncatedJson(cleanText)) { patchProject({ jsonError: "Похоже, JSON обрезан. Вставьте полный файл." }, { lastGood: false }); return; }
     const result = parseVideoMatchBoardJson(cleanText, sourceVideoUrl);
@@ -838,6 +837,10 @@ export default function VideoMatchBoardPage() {
     const mismatch = computeImportCompatibilityScore(project, result);
     if (mismatch.mismatch && (matchSegments.length || videoBlocks.length)) { setPendingImportResult({ result, warnings }); return; }
     applyImportedResult(result, warnings);
+  };
+
+  const onApplyJson = () => {
+    validateAndApplyVideoMatchJsonText(project.jsonInput || "");
   };
 
   const onAssembleMp4 = async () => {
@@ -1238,7 +1241,7 @@ export default function VideoMatchBoardPage() {
           <div className="videoMatchJsonActions">
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => patchProject({ jsonInput: sampleJson }, { lastGood: false })}>Вставить пример</button>
             <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onApplyJson}>Применить JSON</button>
-            <label className="clipSB_btn clipSB_btnSecondary">📥 Импорт JSON-файла<input type="file" accept="application/json,.json" hidden onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const text = await file.text(); patchProject({ jsonInput: text, jsonError: "" }, { lastGood: false }); const cleanText = String(text || "").replace(/^﻿/, "").trim(); if (!cleanText || isLikelyTruncatedJson(cleanText)) return; const result = parseVideoMatchBoardJson(cleanText, sourceVideoUrl); if (!result || result.error || result.ok === false) return; const sourceData = result.raw || {}; const warnings = []; if (!["photostudio_video_match_board_v2", "video_match_board_v2", "video_match_board_v1"].includes(sourceData.schema)) warnings.push(`schema warning: ${sourceData.schema || "unknown"}`); const mismatch = computeImportCompatibilityScore(project, result); if (mismatch.mismatch && (matchSegments.length || videoBlocks.length)) { setPendingImportResult({ result, warnings }); return; } applyImportedResult(result, warnings); }} /></label>
+            <label className="clipSB_btn clipSB_btnSecondary">📥 Импорт JSON-файла<input type="file" accept="application/json,.json" hidden onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const text = await file.text(); patchProject({ jsonInput: text, jsonError: "" }, { lastGood: false }); validateAndApplyVideoMatchJsonText(text); }} /></label>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => { if (window.confirm("Очистить Video Match Node и удалить текущий board/candidates/черновую сборку?")) clearNodeState(); }}>🧹 Очистить ноду</button>
           </div>
           <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1 или video_match_board_v2..." />
