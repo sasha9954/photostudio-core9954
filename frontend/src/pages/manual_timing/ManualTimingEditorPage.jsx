@@ -5283,7 +5283,7 @@ export default function ManualTimingEditorPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           audio_url: audio.url,
-          language: mainAsrLanguage === "auto" ? "" : mainAsrLanguage,
+          language: mainAsrLanguage === "auto" ? null : mainAsrLanguage,
           split_mode: "pause_based",
           min_pause_sec: 0.45,
           max_phrase_sec: 8.0,
@@ -5355,7 +5355,7 @@ export default function ManualTimingEditorPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: vocalAsrLanguage === "auto" ? "" : vocalAsrLanguage, ...preset }),
+        body: JSON.stringify({ audio_url: vocalAsrSource.url, language: vocalAsrLanguage === "auto" ? null : vocalAsrLanguage, ...preset }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) throw new Error(data?.detail || data?.message || `HTTP ${res.status}`);

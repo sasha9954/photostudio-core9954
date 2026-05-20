@@ -15,6 +15,13 @@ _SENTENCE_PUNCT_RE = re.compile(r"[.!?…:;]+[\"')\]]*$")
 logger = logging.getLogger(__name__)
 
 
+def normalize_asr_language(value: Any) -> str | None:
+    lang = str(value or "").strip().lower()
+    if lang in {"", "auto", "none", "null", "unknown"}:
+        return None
+    return lang
+
+
 @dataclass(frozen=True)
 class ManualTimingAsrSettings:
     language: str = "auto"
@@ -48,9 +55,8 @@ def _clamp_settings(settings: ManualTimingAsrSettings) -> ManualTimingAsrSetting
     max_phrase = max(1.0, min(30.0, _safe_float(settings.max_phrase_sec, 8.0)))
     min_phrase = max(0.1, min(max_phrase, _safe_float(settings.min_phrase_sec, 1.2)))
     padding = max(0.0, min(0.15, _safe_float(settings.padding_sec, 0.0)))
-    language = (settings.language or "auto").strip().lower() or "auto"
-    if language == "auto":
-        language = ""
+    normalized_language = normalize_asr_language(settings.language)
+    language = normalized_language or "auto"
     split_mode = (settings.split_mode or "pause_based").strip().lower() or "pause_based"
     if split_mode in {"song_lines", "short_phrases"}:
         min_pause = 0.26 if split_mode == "song_lines" else 0.22
@@ -137,7 +143,7 @@ def transcribe_words_faster_whisper(audio_path: str, settings: ManualTimingAsrSe
     model = WhisperModel(safe.model_size, device=device, compute_type=compute_type)
     segments, info = model.transcribe(
         audio_path,
-        language=safe.language,
+        language=normalize_asr_language(safe.language),
         word_timestamps=True,
         vad_filter=True,
         beam_size=int(_safe_float(os.getenv("MANUAL_TIMING_ASR_BEAM_SIZE") or 5, 5)),
@@ -330,12 +336,7 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
     duration = get_audio_duration_sec(audio_path)
     words, metadata = transcribe_words_faster_whisper(audio_path, safe)
     phrases = split_words_to_phrases(words, safe, audio_duration_sec=duration)
-    raw_detected_language = str(metadata.get("language") or "").strip().lower()
-    raw_requested_language = str(safe.language or "").strip().lower()
-    if raw_detected_language in {"", "auto", "none", "unknown"}:
-        detected_language = "" if raw_requested_language in {"", "auto", "none", "unknown"} else raw_requested_language
-    else:
-        detected_language = raw_detected_language
+    detected_language = normalize_asr_language(metadata.get("language")) or ""
     for phrase in phrases:
         text = str(phrase.get("text_original") or phrase.get("original_text") or "").strip()
         if detected_language == "ru":
