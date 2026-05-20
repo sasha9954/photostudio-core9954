@@ -5413,24 +5413,25 @@ export default function ManualClipDirectorBoardEditor({
         </div> : null}
 
         <div className={`manualSceneGuidance ${isSceneGuidanceOpen ? "isOpen" : "isCollapsed"}`}>
-          <div className="manualSceneGuidanceHeader">
-            <div>
+          <button
+            type="button"
+            className="manualSceneGuidanceHeader"
+            onClick={() => setIsSceneGuidanceOpen((value) => !value)}
+            aria-expanded={isSceneGuidanceOpen}
+          >
+            <span className="manualSceneGuidanceArrow" aria-hidden="true">
+              {isSceneGuidanceOpen ? "▾" : "▸"}
+            </span>
+
+            <span className="manualSceneGuidanceTitleBlock">
               <strong>Подсказка сцены</strong>
               <small>
                 {promptHintText
                   ? "Есть подсказка для prompt"
                   : "Пока нет подробной подсказки"}
               </small>
-            </div>
-
-            <button
-              type="button"
-              className="clipSB_btn manualSceneGuidanceToggle"
-              onClick={() => setIsSceneGuidanceOpen((value) => !value)}
-            >
-              {isSceneGuidanceOpen ? "Скрыть" : "Раскрыть"}
-            </button>
-          </div>
+            </span>
+          </button>
 
           {isSceneGuidanceOpen ? (
             <div className="manualSceneGuidanceBody">

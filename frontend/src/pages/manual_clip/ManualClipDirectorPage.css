@@ -286,7 +286,7 @@
   display: grid;
   gap: 8px;
   width: 100%;
-  padding: 10px 12px;
+  padding: 8px 10px;
   border-radius: 12px;
   border: 1px solid rgba(138, 164, 255, 0.22);
   background: rgba(15, 20, 36, 0.62);
@@ -294,25 +294,43 @@
 }
 
 .manualSceneGuidanceHeader {
+  width: 100%;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
-.manualSceneGuidanceHeader > div {
+.manualSceneGuidanceHeader:hover .manualSceneGuidanceArrow {
+  color: #a5f3fc;
+}
+
+.manualSceneGuidanceArrow {
+  flex: 0 0 auto;
+  width: 18px;
+  color: rgba(125, 211, 252, 0.9);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.manualSceneGuidanceTitleBlock {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
-.manualSceneGuidanceHeader strong {
+.manualSceneGuidanceTitleBlock strong {
   font-size: 14px;
   color: #eef4ff;
 }
 
-.manualSceneGuidanceHeader small {
+.manualSceneGuidanceTitleBlock small {
   font-size: 12px;
   color: rgba(190, 205, 235, 0.78);
   white-space: nowrap;
@@ -320,24 +338,15 @@
   text-overflow: ellipsis;
 }
 
-.manualSceneGuidanceToggle {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  font-size: 12px;
-}
-
 .manualSceneGuidanceBody {
   display: grid;
   gap: 8px;
+  padding-top: 6px;
 }
 
 .manualSceneGuidance.isCollapsed {
-  padding-top: 9px;
-  padding-bottom: 9px;
-}
-
-.manualSceneGuidance.isCollapsed .manualSceneGuidanceHeader {
-  min-height: 30px;
+  padding-top: 7px;
+  padding-bottom: 7px;
 }
 
 .manualSceneGuidanceRow,
@@ -368,15 +377,17 @@
 }
 
 .manualSceneGuidancePromptBox {
-  min-height: 72px;
-  padding: 10px 12px;
+  min-height: 0;
+  padding: 9px 10px;
   border-radius: 10px;
-  border: 1px solid rgba(125, 211, 252, 0.2);
-  background: rgba(8, 13, 26, 0.72);
+  border: 0;
+  border-left: 3px solid rgba(125, 211, 252, 0.42);
+  background: rgba(8, 13, 26, 0.42);
 }
 
 .manualSceneGuidancePromptBox p {
-  max-height: 180px;
+  margin: 6px 0 0;
+  max-height: 160px;
   overflow-y: auto;
 }
 
