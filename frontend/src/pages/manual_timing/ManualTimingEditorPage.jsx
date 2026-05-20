@@ -6870,6 +6870,9 @@ export default function ManualTimingEditorPage() {
   const buildManualTimingVideoMatchSeedJson = (sourceProject = {}) => {
     const normalizedScenes = Array.isArray(sourceProject?.scenes) ? sourceProject.scenes : [];
     const normalizedAudioPhrases = Array.isArray(sourceProject?.audio_phrases) ? sourceProject.audio_phrases : [];
+    const phraseById = new Map(
+      normalizedAudioPhrases.map((phrase) => [String(phrase?.phrase_id || ""), phrase])
+    );
     const normalizedAudioMetadata = sourceProject?.audio_metadata || sourceProject?.audioMetadata || {};
     const audioInfo = sourceProject?.audio || {};
     const audioDurationSec = Number(sourceProject?.audio_duration_sec ?? sourceProject?.audioDurationSec ?? durationSec) || 0;
@@ -6882,17 +6885,72 @@ export default function ManualTimingEditorPage() {
       const endSec = Math.max(startSec, endSecRaw);
       const fallbackSegId = `seg_${String(index + 1).padStart(2, "0")}`;
       const rawSceneId = String(scene?.scene_id || scene?.sceneId || "").trim();
-      const text = String(scene?.lyrics_text || scene?.scene_word_text || scene?.translated_text_ru || scene?.original_text || scene?.originalText || scene?.text || "").trim();
-      const originalText = String(scene?.lyrics_text || scene?.original_text || scene?.originalText || "").trim();
+      const explicitSourceIds = normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids);
+      const sourceIds = explicitSourceIds.length
+        ? explicitSourceIds
+        : normalizedAudioPhrases
+          .filter((phrase) => (
+            Number(phrase?.start_sec || 0) < endSec
+            && Number(phrase?.end_sec || 0) > startSec
+          ))
+          .map((phrase) => String(phrase?.phrase_id || ""))
+          .filter(Boolean);
+      const scenePhrases = sourceIds.map((id) => phraseById.get(id)).filter(Boolean);
+      const phraseLyricsText = scenePhrases
+        .map((phrase) => String(
+          phrase?.original_text
+          || phrase?.text_original
+          || phrase?.text
+          || phrase?.text_ru
+          || phrase?.text_en
+          || ""
+        ).trim())
+        .filter(Boolean)
+        .join(" ");
+      const phraseTranslatedTextRu = scenePhrases
+        .map((phrase) => String(
+          phrase?.translation_ru
+          || phrase?.text_ru
+          || ""
+        ).trim())
+        .filter(Boolean)
+        .join(" ");
+      const text = String(
+        scene?.lyrics_text
+        || scene?.scene_word_text
+        || phraseLyricsText
+        || scene?.translated_text_ru
+        || phraseTranslatedTextRu
+        || scene?.original_text
+        || scene?.originalText
+        || scene?.text
+        || ""
+      ).trim();
+      const originalText = String(
+        scene?.lyrics_text
+        || phraseLyricsText
+        || scene?.original_text
+        || scene?.originalText
+        || ""
+      ).trim();
       const userSceneNote = getManualTimingSceneUserNote(scene);
       const userSceneMarkers = inferVideoMatchSceneMarkersFromNote(userSceneNote, scene);
       const intersectsVocalGap = manualTimingSceneIntersectsVocalGap(scene, vocalGaps, vocalOffsetSec);
       const isLipSync = isManualTimingLipSyncScene(scene, { intersectsVocalGap });
       const isIa2vRoute = String(scene?.route || "").trim().toLowerCase() === "ia2v";
       const isLipSyncScene = isIa2vRoute || isLipSync || Boolean(scene?.lip_sync_required);
-      const containsVocal = Boolean(scene?.contains_vocal || intersectsVocalGap || isLipSyncScene);
+      const containsVocal = Boolean(
+        scene?.contains_vocal
+        || sourceIds.length
+        || intersectsVocalGap
+        || isLipSyncScene
+      );
       const meaningHintRu = String(scene?.meaning_hint_ru || "").trim();
-      const translatedTextRu = String(scene?.translated_text_ru || "").trim();
+      const translatedTextRu = String(
+        scene?.translated_text_ru
+        || phraseTranslatedTextRu
+        || ""
+      ).trim();
       const userTags = Array.isArray(userSceneMarkers.user_scene_tags) ? userSceneMarkers.user_scene_tags : [];
       const mergedLipSyncTags = [...new Set([...userTags, "lip_sync", "performance", "manual_priority"])];
       return {
@@ -6900,6 +6958,7 @@ export default function ManualTimingEditorPage() {
         target_t0: roundTimingSec(startSec),
         target_t1: roundTimingSec(endSec),
         duration_sec: roundTimingSec(Math.max(0, endSec - startSec)),
+        source_phrase_ids: sourceIds,
         text: text || "",
         original_text: originalText || text || "",
         section: String(scene?.section || "").trim() || safeAutoHint,
