@@ -305,12 +305,16 @@ const MANUAL_NEW_BOARD_TIMING_STORY_FIELDS = [
   "source_phrase_ids",
   "story_block_id",
   "story_block_title_ru",
+  "story_block_color",
+  "block_color",
+  "song_block_color",
   "story_block_position_ru",
   "story_block_index",
   "story_block_order",
   "story_block_range_ru",
   "story_block_summary_ru",
   "song_block_id",
+  "song_block_title_ru",
   "topic_block_id",
   "scene_type",
   "speaker_id",
@@ -5776,6 +5780,13 @@ export default function ManualTimingEditorPage() {
         return {
           ...scene,
           ...passScene,
+          story_block_id: scene?.story_block_id || passScene?.story_block_id || "",
+          story_block_title_ru: scene?.story_block_title_ru || passScene?.story_block_title_ru || "",
+          story_block_color: scene?.story_block_color || scene?.block_color || scene?.song_block_color || passScene?.story_block_color || "",
+          block_color: scene?.block_color || scene?.story_block_color || scene?.song_block_color || passScene?.block_color || passScene?.story_block_color || "",
+          song_block_id: scene?.song_block_id || scene?.story_block_id || passScene?.song_block_id || passScene?.story_block_id || "",
+          song_block_title_ru: scene?.song_block_title_ru || scene?.story_block_title_ru || passScene?.song_block_title_ru || passScene?.story_block_title_ru || "",
+          song_block_color: scene?.song_block_color || scene?.story_block_color || scene?.block_color || passScene?.song_block_color || passScene?.story_block_color || "",
           user_note_ru: scene?.user_note_ru || passScene?.user_note_ru || "",
           route: passScene?.route || scene?.route || "i2v",
         };
@@ -5787,10 +5798,74 @@ export default function ManualTimingEditorPage() {
   }
 
 
+  function getManualTimingRawStoryBlocks(projectValue = {}) {
+    if (Array.isArray(projectValue?.story_blocks)) return projectValue.story_blocks;
+    if (Array.isArray(projectValue?.storyBlocks)) return projectValue.storyBlocks;
+    if (Array.isArray(projectValue?.semantic_blocks)) return projectValue.semantic_blocks;
+    if (Array.isArray(projectValue?.manual_story_blocks)) return projectValue.manual_story_blocks;
+    if (Array.isArray(projectValue?.blocks)) return projectValue.blocks;
+    if (Array.isArray(projectValue?.timeline_blocks)) return projectValue.timeline_blocks;
+    return [];
+  }
+
+  function normalizeManualTimingStoryBlocksForDirector(projectValue = {}, directorScenes = []) {
+    const rawBlocks = getManualTimingRawStoryBlocks(projectValue);
+    const safeScenes = Array.isArray(directorScenes) ? directorScenes : [];
+    const normalizedBlocks = rawBlocks.map((block, index) => {
+      const blockId = String(block?.block_id || block?.id || block?.blockId || `block_${String(index + 1).padStart(2, "0")}`).trim();
+      const title = String(block?.title_ru || block?.title || block?.label || block?.name || `Блок ${index + 1}`).trim();
+      const blockColor = String(block?.color || block?.block_color || block?.story_block_color || block?.backgroundColor || block?.accentColor || "#64748B").trim();
+      const startSec = Number(block?.start_sec ?? block?.startSec ?? block?.t0 ?? 0) || 0;
+      const endSec = Number(block?.end_sec ?? block?.endSec ?? block?.t1 ?? startSec) || startSec;
+      const explicitSceneIds = Array.isArray(block?.scene_ids) ? block.scene_ids.map((id) => String(id).trim()).filter(Boolean) : (Array.isArray(block?.sceneIds) ? block.sceneIds.map((id) => String(id).trim()).filter(Boolean) : []);
+      const sceneIds = explicitSceneIds.length ? explicitSceneIds : safeScenes.filter((scene) => {
+        const s0 = Number(scene?.start_sec ?? 0) || 0;
+        const s1 = Number(scene?.end_sec ?? s0) || s0;
+        return startSec < s1 && endSec > s0;
+      }).map((scene) => String(scene?.scene_id || "").trim()).filter(Boolean);
+      return { ...block, block_id: blockId, id: blockId, title_ru: title, title, summary_ru: String(block?.summary_ru || block?.summary || ""), block_goal_ru: String(block?.block_goal_ru || block?.goal_ru || ""), block_reveal_ru: String(block?.block_reveal_ru || block?.reveal_ru || ""), block_emotion_ru: String(block?.block_emotion_ru || block?.emotion_ru || ""), color: blockColor, story_block_color: blockColor, block_color: blockColor, start_sec: startSec, end_sec: endSec, scene_ids: sceneIds };
+    }).filter((block) => block.block_id);
+    if (normalizedBlocks.length) return normalizedBlocks;
+    return [{ block_id: "block_unknown", id: "block_unknown", title_ru: "Без блока", title: "Без блока", summary_ru: "", block_goal_ru: "", block_reveal_ru: "", block_emotion_ru: "", color: "#64748B", story_block_color: "#64748B", block_color: "#64748B", scene_ids: safeScenes.map((scene) => String(scene?.scene_id || "").trim()).filter(Boolean), start_sec: 0, end_sec: 0 }];
+  }
+
+  function attachStoryBlockInfoToScenes(scenesValue = [], directorBlocks = []) {
+    const blockBySceneId = new Map();
+    (Array.isArray(directorBlocks) ? directorBlocks : []).forEach((block) => {
+      const blockId = String(block?.block_id || block?.id || "").trim();
+      const title = String(block?.title_ru || block?.title || "Без блока").trim();
+      const color = String(block?.color || block?.story_block_color || block?.block_color || "#64748B").trim();
+      (Array.isArray(block?.scene_ids) ? block.scene_ids : []).forEach((sceneId) => {
+        const safeSceneId = String(sceneId || "").trim();
+        if (safeSceneId) blockBySceneId.set(safeSceneId, { block_id: blockId, title_ru: title, color });
+      });
+    });
+    return (Array.isArray(scenesValue) ? scenesValue : []).map((scene) => {
+      const blockInfo = blockBySceneId.get(String(scene?.scene_id || "").trim());
+      if (!blockInfo) {
+        return { ...scene, story_block_id: scene?.story_block_id || "block_unknown", song_block_id: scene?.song_block_id || scene?.story_block_id || "block_unknown", story_block_title_ru: scene?.story_block_title_ru || "Без блока", song_block_title_ru: scene?.song_block_title_ru || scene?.story_block_title_ru || "Без блока", story_block_color: scene?.story_block_color || scene?.block_color || scene?.song_block_color || "#64748B", block_color: scene?.block_color || scene?.story_block_color || scene?.song_block_color || "#64748B", song_block_color: scene?.song_block_color || scene?.story_block_color || scene?.block_color || "#64748B" };
+      }
+      return { ...scene, story_block_id: blockInfo.block_id, song_block_id: scene?.song_block_id || blockInfo.block_id, story_block_title_ru: blockInfo.title_ru || "Без блока", song_block_title_ru: scene?.song_block_title_ru || blockInfo.title_ru || "Без блока", story_block_color: blockInfo.color || "#64748B", block_color: blockInfo.color || "#64748B", song_block_color: scene?.song_block_color || blockInfo.color || "#64748B", story_block_position_ru: scene?.story_block_position_ru || "" };
+    });
+  }
+
+  function mergeDirectorSceneWorkKeepingFreshBlocks(freshScenes = [], existingScenes = []) {
+    const merged = mergeDirectorSceneWork(freshScenes, existingScenes);
+    const freshById = new Map((Array.isArray(freshScenes) ? freshScenes : []).map((scene) => [String(scene?.scene_id || "").trim(), scene]));
+    return merged.map((scene) => {
+      const fresh = freshById.get(String(scene?.scene_id || "").trim());
+      if (!fresh) return scene;
+      return { ...scene, story_block_id: fresh.story_block_id || scene.story_block_id || "", story_block_title_ru: fresh.story_block_title_ru || scene.story_block_title_ru || "", story_block_color: fresh.story_block_color || fresh.block_color || fresh.song_block_color || scene.story_block_color || "", block_color: fresh.block_color || fresh.story_block_color || fresh.song_block_color || scene.block_color || "", song_block_id: fresh.song_block_id || fresh.story_block_id || scene.song_block_id || "", song_block_title_ru: fresh.song_block_title_ru || fresh.story_block_title_ru || scene.song_block_title_ru || "", song_block_color: fresh.song_block_color || fresh.story_block_color || fresh.block_color || scene.song_block_color || "" };
+    });
+  }
+
+
   const buildDirectorProjectSnapshot = () => {
     const sourceNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
-    const handoffScenes = buildManualTimingScenesForDirectorHandoff();
+    const handoffScenesBase = buildManualTimingScenesForDirectorHandoff();
+    const storyBlocks = normalizeManualTimingStoryBlocksForDirector(project, handoffScenesBase);
+    const handoffScenes = attachStoryBlockInfoToScenes(handoffScenesBase, storyBlocks);
     const sceneCleanStats = getManualNewBoardCleanSceneStats(handoffScenes);
     const cleanScenes = handoffScenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat));
     console.info("[MANUAL BOARD NEW PROJECT CLEAN SCENES]", sceneCleanStats);
@@ -5810,6 +5885,7 @@ export default function ManualTimingEditorPage() {
       audio,
       audio_phrases: audioPhrases,
       story_blocks: storyBlocks,
+      storyBlocks,
       scenes: cleanScenes,
       selectedSceneId: cleanScenes[0]?.scene_id || selectedScene?.scene_id || scenes[0]?.scene_id || "",
       timing_status: project.timing_status || "confirmed",
@@ -5840,10 +5916,26 @@ export default function ManualTimingEditorPage() {
 
   const onOpenDirectorBoard = () => {
     const ownerNodeId = finalOwnerNodeId;
-    const existingBoard = getManualTimingBoardForOwner(ownerNodeId);
-    if (hasMeaningfulManualProject(existingBoard)) {
+    const freshProject = buildDirectorProjectSnapshot();
+    const existingProject = readManualClipBoardProjectForNode(ownerNodeId) || activeBoardProject || null;
+    const projectToOpen = hasMeaningfulManualProject(existingProject)
+      ? {
+        ...existingProject,
+        ...freshProject,
+        story_blocks: freshProject.story_blocks,
+        storyBlocks: freshProject.story_blocks,
+        scenes: mergeDirectorSceneWorkKeepingFreshBlocks(freshProject.scenes, existingProject.scenes),
+        updatedAt: Date.now(),
+      }
+      : freshProject;
+    const persistedProject = replaceManualClipBoardProjectForNode(ownerNodeId, projectToOpen, {
+      reason: "open_board_sync_from_manual_timing",
+      forceReplace: true,
+      allowMaterialLoss: true,
+    }) || projectToOpen;
+    if (hasMeaningfulManualProject(persistedProject)) {
       const safeBoard = {
-        ...existingBoard,
+        ...persistedProject,
         nodeId: ownerNodeId,
         sourceNodeId: ownerNodeId,
       };
@@ -5851,35 +5943,8 @@ export default function ManualTimingEditorPage() {
       const forceProjectId = String(safeBoard?.project_id || safeBoard?.projectId || "").trim();
       const forceInputSignature = String(safeBoard?.input_signature || safeBoard?.inputSignature || "").trim();
       const forceAudioSignature = String(safeBoard?.audio_signature || safeBoard?.audioSignature || "").trim();
-      writeManualClipBoardOpenState({
-        isOpen: true,
-        sourceNodeId: ownerNodeId,
-        selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(),
-        project_id: forceProjectId,
-        input_signature: forceInputSignature,
-        audio_signature: forceAudioSignature,
-        forceProjectId,
-        forceInputSignature,
-        forceAudioSignature,
-        routePath: STORYBOARD_ROUTE,
-        updatedAt: Date.now(),
-      });
-      navigate(STORYBOARD_ROUTE, {
-        state: {
-          openManualDirectorBoard: true,
-          closeLegacyScenarioEditors: true,
-          sourceNodeId: ownerNodeId,
-          ownerNodeId,
-          manualBoardForceProjectId: forceProjectId,
-          manualBoardForceInputSignature: forceInputSignature,
-          manualBoardForceAudioSignature: forceAudioSignature,
-          forceProjectId,
-          forceInputSignature,
-          forceAudioSignature,
-          director_board: safeBoard,
-          project: safeBoard,
-        },
-      });
+      writeManualClipBoardOpenState({ isOpen: true, sourceNodeId: ownerNodeId, selectedSceneId: String(safeBoard?.selectedSceneId || safeBoard?.scenes?.[0]?.scene_id || "").trim(), project_id: forceProjectId, input_signature: forceInputSignature, audio_signature: forceAudioSignature, forceProjectId, forceInputSignature, forceAudioSignature, routePath: STORYBOARD_ROUTE, updatedAt: Date.now() });
+      navigate(STORYBOARD_ROUTE, { state: { openManualDirectorBoard: true, closeLegacyScenarioEditors: true, sourceNodeId: ownerNodeId, ownerNodeId, manualBoardForceProjectId: forceProjectId, manualBoardForceInputSignature: forceInputSignature, manualBoardForceAudioSignature: forceAudioSignature, forceProjectId, forceInputSignature, forceAudioSignature, director_board: safeBoard, project: safeBoard } });
       return;
     }
     setCopyStatus("Для текущего тайминга доска не найдена. Нажмите ‘Создать новую доску из тайминга’.");
@@ -6051,6 +6116,9 @@ export default function ManualTimingEditorPage() {
       audio_duration_sec: Number(project?.audio_duration_sec || project?.audioDurationSec || project?.audio?.duration_sec || 0) || 0,
       scenes: Array.isArray(project?.scenes) ? project.scenes : [],
       story_blocks: Array.isArray(project?.story_blocks) ? project.story_blocks : [],
+      storyBlocks: Array.isArray(project?.storyBlocks) ? project.storyBlocks : (Array.isArray(project?.story_blocks) ? project.story_blocks : []),
+      semantic_blocks: Array.isArray(project?.semantic_blocks) ? project.semantic_blocks : [],
+      manual_story_blocks: Array.isArray(project?.manual_story_blocks) ? project.manual_story_blocks : [],
       audio_phrases: Array.isArray(project?.audio_phrases) ? project.audio_phrases : [],
       timing_status: String(project?.timing_status || "").trim(),
       vocal_asr_gaps: Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [],
@@ -6066,6 +6134,12 @@ export default function ManualTimingEditorPage() {
       "split_type",
       "manual_timing_workflow",
       "markers",
+      "story_blocks",
+      "storyBlocks",
+      "semantic_blocks",
+      "manual_story_blocks",
+      "blocks",
+      "timeline_blocks",
       "vocal_asr_source",
       "vocal_asr_split_preset",
       "vocal_asr_gaps",
@@ -6174,7 +6248,10 @@ export default function ManualTimingEditorPage() {
 
     const ownerNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
-    const storyBlocks = Array.isArray(project?.story_blocks) ? project.story_blocks : [];
+    const quickSourceScenesBase = buildManualTimingScenesForDirectorHandoff();
+    const quickStoryBlocks = normalizeManualTimingStoryBlocksForDirector(project, quickSourceScenesBase);
+    const quickSourceScenes = attachStoryBlockInfoToScenes(quickSourceScenesBase, quickStoryBlocks);
+    const storyBlocks = quickStoryBlocks;
     const storyBlockById = new Map(
       storyBlocks
         .map((block) => [String(block?.block_id || block?.id || "").trim(), block])
@@ -6189,7 +6266,6 @@ export default function ManualTimingEditorPage() {
         return ids.map((id) => String(id || "").trim()).includes(sceneId);
       }) || null;
     }
-    const quickSourceScenes = buildManualTimingScenesForDirectorHandoff();
     const quickScenes = quickSourceScenes.map((scene, index) => {
       const block = findStoryBlockForScene(scene);
       const blockId = String(scene?.story_block_id || scene?.storyBlockId || block?.block_id || block?.id || "").trim();
@@ -6307,15 +6383,6 @@ export default function ManualTimingEditorPage() {
       audioPath: handoffAudioPath,
       audioDurationSec: handoffAudioDurationSec,
     });
-    const quickStoryBlocks = storyBlocks.map((block, index) => ({
-      ...block,
-      block_id: String(block?.block_id || block?.id || `block_${index + 1}`).trim(),
-      id: String(block?.id || block?.block_id || `block_${index + 1}`).trim(),
-      title_ru: String(block?.title_ru || block?.title || "").trim(),
-      color: String(block?.color || block?.block_color || block?.story_block_color || "").trim(),
-      block_color: String(block?.block_color || block?.color || block?.story_block_color || "").trim(),
-      scene_ids: Array.isArray(block?.scene_ids) ? block.scene_ids : [],
-    }));
     const scenesWithStoryBlockId = quickScenes.filter((scene) => String(scene?.story_block_id || "").trim()).length;
     const scenesWithBlockColor = quickScenes.filter((scene) => String(scene?.story_block_color || scene?.block_color || scene?.storyBlockColor || scene?.blockColor || "").trim()).length;
     console.info("[MANUAL TIMING QUICK BOARD AUDIO HANDOFF]", {
@@ -6354,6 +6421,7 @@ export default function ManualTimingEditorPage() {
       audioDurationSec: handoffAudioDurationSec,
       audio: handoffAudioUrl ? handoffAudio : normalizeManualTimingProjectAudioForHandoff(project, audio),
       story_blocks: quickStoryBlocks,
+      storyBlocks: quickStoryBlocks,
       audio_phrases: audioPhrases,
       scenes: quickScenes,
       selectedSceneId: quickScenes[0]?.scene_id || "",
@@ -6397,6 +6465,9 @@ export default function ManualTimingEditorPage() {
       audio_duration_sec: Number(project?.audio_duration_sec || project?.audioDurationSec || project?.audio?.duration_sec || 0) || 0,
       scenes: Array.isArray(project?.scenes) ? project.scenes : [],
       story_blocks: Array.isArray(project?.story_blocks) ? project.story_blocks : [],
+      storyBlocks: Array.isArray(project?.storyBlocks) ? project.storyBlocks : (Array.isArray(project?.story_blocks) ? project.story_blocks : []),
+      semantic_blocks: Array.isArray(project?.semantic_blocks) ? project.semantic_blocks : [],
+      manual_story_blocks: Array.isArray(project?.manual_story_blocks) ? project.manual_story_blocks : [],
       audio_phrases: Array.isArray(project?.audio_phrases) ? project.audio_phrases : [],
       timing_status: String(project?.timing_status || "").trim(),
       vocal_asr_gaps: Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [],
