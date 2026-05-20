@@ -61,11 +61,17 @@ function getBlockSourceEnd(block = {}) {
   return Math.max(start, end);
 }
 function getBlockClipRange(block = {}) {
-  const sourceStart = getBlockSourceStart(block);
-  const sourceEnd = getBlockSourceEnd(block);
+  const clipStartRaw = Number(block?.clipSourceStartSec ?? block?.clip_source_start_sec);
+  const clipEndRaw = Number(block?.clipSourceEndSec ?? block?.clip_source_end_sec);
+  const hasClipStart = Number.isFinite(clipStartRaw);
+  const hasClipEnd = Number.isFinite(clipEndRaw);
+  const sourceStart = hasClipStart ? clipStartRaw : getBlockSourceStart(block);
+  const sourceEnd = hasClipEnd ? clipEndRaw : getBlockSourceEnd(block);
   const segmentDuration = Math.max(0, getBlockTargetEnd(block) - getBlockTargetStart(block));
   const clipStart = Math.max(0, sourceStart);
-  const safeSourceEnd = sourceEnd > clipStart ? sourceEnd : clipStart + segmentDuration;
+  const safeSourceEnd = (hasClipEnd ? sourceEnd > clipStart : sourceEnd >= clipStart)
+    ? sourceEnd
+    : clipStart + segmentDuration;
   const clipEnd = Math.max(clipStart, Math.min(safeSourceEnd, clipStart + segmentDuration));
   return { clipStart, clipEnd };
 }
@@ -869,7 +875,7 @@ export default function VideoMatchBoardPage() {
     const warnings = [];
     const sourceData = result.raw || {};
     if (!["photostudio_video_match_board_v2", "video_match_board_v2", "video_match_board_v1"].includes(sourceData.schema)) warnings.push(`schema warning: ${sourceData.schema || "unknown"}`);
-    if (sourceData.status === "blocked_missing_audio_map") { patchProject({ jsonError: "Это не финальная доска, нужен matched/ready/completed" }, { lastGood: false }); return; }
+    if (sourceData.status === "blocked_missing_audio_map") { patchProject({ jsonError: "Это не финальная доска, нужен matched/matched_global_clean/ready/completed" }, { lastGood: false }); return; }
     if (!Array.isArray(sourceData.segments) || sourceData.segments.length === 0) { patchProject({ jsonError: "В JSON нет segments" }, { lastGood: false }); return; }
     if (Number(sourceData.audio_map_segments_count || 0) > 0 && Number(sourceData.audio_map_segments_count) !== sourceData.segments.length) warnings.push("audio_map_segments_count не совпадает с segments.length");
     const missingSelected = sourceData.segments.filter((seg) => !(seg?.selected_candidate_id || seg?.selectedCandidateId || seg?.selected_candidate || seg?.selectedCandidate || seg?.selected_candidate?.candidate_id || seg?.selectedCandidate?.candidate_id)).length;
@@ -1321,6 +1327,7 @@ export default function VideoMatchBoardPage() {
           <summary>Статистика / Debug</summary>
           <div className="videoMatchContextRows">
             <div>board status: {project.status || "—"}</div>
+            <div>status matched_global_clean: {String(project.status === "matched_global_clean")}</div>
             <div>сцен: {matchSegments.length}</div>
             <div>вариантов: {candidatesTotal}</div>
             <div>selected candidates count: {matchSegments.filter((segment) => Boolean(segment.selectedCandidateId)).length}</div>
@@ -1338,7 +1345,13 @@ export default function VideoMatchBoardPage() {
             <div>selected segment id(debug): {selectedSegment?.id || "—"}</div>
             <div>targetStartSec/targetEndSec: {selectedSegment ? `${formatSec(selectedSegment.targetStartSec)} / ${formatSec(selectedSegment.targetEndSec)}` : "—"}</div>
             <div>sourceVideoStartSec/sourceVideoEndSec: {selectedBlock ? `${formatSec(selectedBlock.sourceVideoStartSec)} / ${formatSec(selectedBlock.sourceVideoEndSec)}` : "—"}</div>
+            <div>source candidate range: {selectedBlock ? `${formatSec(selectedBlock.sourceCandidateStartSec)} / ${formatSec(selectedBlock.sourceCandidateEndSec)}` : "—"}</div>
             <div>clip_source_start_sec/clip_source_end_sec: {selectedBlock ? `${formatSec(getBlockClipRange(selectedBlock).clipStart)} / ${formatSec(getBlockClipRange(selectedBlock).clipEnd)}` : "—"}</div>
+            <div>final clip range: {selectedBlock ? `${formatSec(getBlockClipRange(selectedBlock).clipStart)} / ${formatSec(getBlockClipRange(selectedBlock).clipEnd)}` : "—"}</div>
+            <div>visual_family: {selectedSegment?.visual_family || selectedSegment?.visualFamily || "—"}</div>
+            <div>source_usage_key: {selectedSegment?.source_usage_key || selectedSegment?.sourceUsageKey || "—"}</div>
+            <div>clean_cut_status: {selectedSegment?.clean_cut_status || selectedSegment?.cleanCutStatus || "—"}</div>
+            <div>event_anchor: {selectedSegment?.event_anchor || selectedSegment?.eventAnchor || "—"}</div>
             <div>selectedCandidateId(debug): {selectedSegment?.selectedCandidateId || "—"}</div>
             <div>reservedGeneratedLipsync(selected): {String(Boolean(selectedSegment?.reservedGeneratedLipsync || selectedSegment?.reserved_generated_lipsync))}</div>
             <div>useRealSourceClip(selected): {String(Boolean(selectedSegment?.useRealSourceClip ?? selectedSegment?.use_real_source_clip))}</div>
