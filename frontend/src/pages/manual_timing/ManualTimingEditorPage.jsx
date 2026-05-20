@@ -2408,29 +2408,23 @@ function isManualTimingPhrasePartialInScene(phrase = {}, scene = null) {
 
 function getManualTimingPhrasesForSceneInspector(audioPhrases = [], scene = null) {
   if (!scene || !Array.isArray(audioPhrases) || isManualTimingSilenceScene(scene)) return [];
-  const sceneStart = Number(getManualTimingSceneSourceStartSec(scene));
-  const sceneEnd = Number(getManualTimingSceneSourceEndSec(scene));
+  const sceneStart = Number(scene?.start_sec ?? getManualTimingSceneSourceStartSec(scene));
+  const sceneEnd = Number(scene?.end_sec ?? getManualTimingSceneSourceEndSec(scene));
   if (!(sceneEnd > sceneStart)) return [];
+  const sourcePhraseIdSet = new Set(normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds));
 
   return audioPhrases.reduce((inspectorPhrases, phrase) => {
+    const phraseId = String(phrase?.phrase_id || "").trim();
+    if (sourcePhraseIdSet.size && phraseId && !sourcePhraseIdSet.has(phraseId)) return inspectorPhrases;
     const phraseStart = Number(phrase?.start_sec || 0);
     const phraseEnd = Number(phrase?.end_sec || 0);
     const phraseDuration = phraseEnd - phraseStart;
     if (!(phraseDuration > 0)) return inspectorPhrases;
-
-    const overlapStart = Math.max(sceneStart, phraseStart);
-    const overlapEnd = Math.min(sceneEnd, phraseEnd);
-    const overlapSec = overlapEnd - overlapStart;
-    const overlapRatio = overlapSec > 0 ? overlapSec / phraseDuration : 0;
-    const isFullyInside = phraseStart >= sceneStart - 0.001 && phraseEnd <= sceneEnd + 0.001;
-    const isMeaningfulOverlap = overlapSec >= 0.35 || overlapRatio >= 0.25;
-
-    if (isFullyInside || isMeaningfulOverlap) {
+    const intersects = phraseStart < sceneEnd && phraseEnd > sceneStart;
+    if (intersects) {
       inspectorPhrases.push({
         ...phrase,
-        overlapSec,
-        overlapRatio,
-        isPartial: !isFullyInside,
+        isPartial: phraseStart < sceneStart - 0.001 || phraseEnd > sceneEnd + 0.001,
       });
     }
 
@@ -2681,6 +2675,7 @@ export default function ManualTimingEditorPage() {
   const vocalAsrSource = project?.vocal_asr_source && typeof project.vocal_asr_source === "object" ? project.vocal_asr_source : null;
   const vocalAsrSplitPreset = String(project?.vocal_asr_split_preset || "song_lines");
   const vocalAsrLanguage = String(project?.vocal_asr_language || "auto");
+  const mainAsrLanguage = String(project?.main_asr_language || "auto");
   const vocalAsrDurationMismatch = vocalAsrSource
     ? Math.abs(Number(vocalAsrSource.duration_sec || 0) - Number(audio.duration_sec || 0)) > 0.25
     : false;
@@ -2798,6 +2793,10 @@ export default function ManualTimingEditorPage() {
     : selectedSceneInspectorPhrases;
   const selectedScenePhraseInspectorRows = useMemo(
     () => activeInspectorPhrases.map((phrase) => {
+      const sourceLanguage = String(phrase?.source_language || phrase?.sourceLanguage || phrase?.language || "").trim().toLowerCase();
+      const isRuPhrase = sourceLanguage === "ru";
+      const translationText = String(phrase?.translation_ru || phrase?.translationRu || "").trim();
+      const meaningText = String(phrase?.meaning_ru || phrase?.meaningRu || "").trim();
       const ruText = pickManualTimingAudioPhraseRuText(phrase);
       return {
         phrase,
@@ -2806,6 +2805,9 @@ export default function ManualTimingEditorPage() {
         originalText: pickManualTimingAudioPhraseOriginalText(phrase) || "—",
         ruText: ruText || MANUAL_TIMING_RU_TTS_EMPTY_TEXT,
         hasRuText: Boolean(ruText && ruText !== MANUAL_TIMING_RU_TTS_EMPTY_TEXT),
+        isRuPhrase,
+        translationText,
+        meaningText,
         isPartial: phrase?.isPartial ?? isManualTimingPhrasePartialInScene(phrase, selectedScene),
       };
     }),
@@ -5274,7 +5276,7 @@ export default function ManualTimingEditorPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           audio_url: audio.url,
-          language: "en",
+          language: mainAsrLanguage === "auto" ? "" : mainAsrLanguage,
           split_mode: "pause_based",
           min_pause_sec: 0.45,
           max_phrase_sec: 8.0,
@@ -7696,18 +7698,15 @@ export default function ManualTimingEditorPage() {
                     <p>{row.originalText}</p>
                   </div>
                   <div className="manualTimingSelectedPhraseRu">
-                    <div className="manualTimingSelectedPhraseRuHeader">
+                    {!row.isRuPhrase && row.translationText ? <><div className="manualTimingSelectedPhraseRuHeader"><span>Перевод</span></div><p>{row.translationText}</p></> : null}
+                    {row.meaningText ? <><div className="manualTimingSelectedPhraseRuHeader"><span>Смысл</span></div><p>{row.meaningText}</p></> : null}
+                    {row.hasRuText ? <div className="manualTimingSelectedPhraseRuHeader">
                       <span>RU</span>
-                      <button
-                        className="clipSB_btn clipSB_btnSecondary manualTimingSelectedPhraseSpeakBtn"
-                        type="button"
-                        onClick={() => speakManualTimingRuText(row.ruText)}
-                        disabled={!row.hasRuText}
-                      >
+                      <button className="clipSB_btn clipSB_btnSecondary manualTimingSelectedPhraseSpeakBtn" type="button" onClick={() => speakManualTimingRuText(row.ruText)}>
                         ▶ RU
                       </button>
-                    </div>
-                    <p>{row.ruText}</p>
+                    </div> : null}
+                    {row.hasRuText ? <p>{row.ruText}</p> : null}
                   </div>
                 </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
               </div>
@@ -8179,6 +8178,15 @@ export default function ManualTimingEditorPage() {
             </div>
           </div>
           <div className="manualTimingWorkflowActions manualTimingWorkflowActionsPrimary">
+            <label className="manualTimingVocalModeSelect">
+              <span>ASR язык (main)</span>
+              <select value={mainAsrLanguage} onChange={(event) => persist({ ...project, main_asr_language: String(event.target.value || "auto") })}>
+                <option value="auto">auto / авто</option>
+                <option value="ru">ru / Русский</option>
+                <option value="en">en / English</option>
+                <option value="uk">uk / Українська</option>
+              </select>
+            </label>
             <button className="clipSB_btn clipSB_btnPrimary" onClick={onCreateAudioPhraseMap} disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}>1 · Audio Phrase Map</button>
             <button
               className="clipSB_btn clipSB_btnPrimary"

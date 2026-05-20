@@ -256,7 +256,7 @@ def split_words_to_phrases(words: list[dict[str, Any]], settings: ManualTimingAs
             "end_sec": _round_sec(end),
             "text_original": _phrase_text(phrase_words),
             "original_text": _phrase_text(phrase_words),
-            "text_en": _phrase_text(phrase_words),
+            "text_en": "",
             "text_ru": "",
             "translation_ru": "",
             "meaning_ru": "",
@@ -315,7 +315,7 @@ def _split_long_phrases(
             "end_sec": _round_sec(end),
             "text_original": _phrase_text(phrase_words),
             "original_text": _phrase_text(phrase_words),
-            "text_en": _phrase_text(phrase_words),
+            "text_en": "",
             "text_ru": "",
             "translation_ru": "",
             "meaning_ru": "",
@@ -330,6 +330,29 @@ def build_manual_timing_audio_phrase_map(audio_path: str, settings: ManualTiming
     duration = get_audio_duration_sec(audio_path)
     words, metadata = transcribe_words_faster_whisper(audio_path, safe)
     phrases = split_words_to_phrases(words, safe, audio_duration_sec=duration)
+    detected_language = str(metadata.get("language") or safe.language or "").strip().lower()
+    for phrase in phrases:
+        text = str(phrase.get("text_original") or phrase.get("original_text") or "").strip()
+        if detected_language == "ru":
+            phrase["text_original"] = text
+            phrase["original_text"] = text
+            phrase["text"] = text
+            phrase["text_ru"] = text
+            phrase["text_en"] = ""
+            phrase["translation_ru"] = ""
+            phrase["meaning_ru"] = ""
+            phrase["language"] = "ru"
+            phrase["source_language"] = "ru"
+        else:
+            phrase["text_original"] = text
+            phrase["original_text"] = text
+            phrase["text"] = ""
+            phrase["text_en"] = text if detected_language == "en" else ""
+            phrase["text_ru"] = ""
+            phrase["translation_ru"] = ""
+            phrase["meaning_ru"] = ""
+            phrase["language"] = detected_language
+            phrase["source_language"] = detected_language
     asr_gaps = _detect_unrecognized_vocal_gaps(audio_path, phrases, duration)
     metadata["phrase_count"] = len(phrases)
     metadata["word_count"] = len(words)

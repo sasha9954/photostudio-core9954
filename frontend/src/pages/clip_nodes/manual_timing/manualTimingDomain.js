@@ -2301,17 +2301,35 @@ export function validateManualTimingStoryPassImport(raw = {}, baseProject = {}) 
 }
 
 
-export const MANUAL_TIMING_CLIP_PASS_TASK_RU = "Это JSON для Music Clip Pass. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids. Нужно определить структуру песни: intro, verse, pre_chorus, chorus, drop, bridge, instrumental, outro. Заполни song_blocks и смысловые поля сцен. Назначь route: ia2v только для реального lip-sync/вокальной фразы, i2v для сюжетных/визуальных сцен, i2v_sound для атмосферных сцен со звуком. video_prompt, negative_prompt, sound_prompt оставить пустыми.";
+export const MANUAL_TIMING_CLIP_PASS_TASK_RU = "Это JSON для Music Clip Pass. Перед заполнением JSON сначала спроси пользователя, что делать с файлом. Предложи варианты: 1) буквальный клип по словам/фразам ASR; 2) отдельная история поверх аудио; 3) смешанный клип: lip-sync на вокальных/речевых сценах + сюжетные перебивки; 4) только перевод/смысл без сюжета; 5) JSON для Video Match Board. После выбора режима заполни смысловые поля scenes и song_blocks. Не меняй scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids и audio_phrases. Нужно определить структуру песни: intro, verse, pre_chorus, chorus, drop, bridge, instrumental, outro. route rules: ia2v только для реального lip-sync/вокальной/речевой фразы; i2v для сюжетных сцен, воспоминаний, действий, b-roll; i2v_sound для атмосферных сцен со звуком. Для lip-sync используй крупные/средние планы лица, читаемый рот, стабильную камеру. Не планируй слишком сложные драки/толпы/хаотичные движения/резкие camera orbit. LTX лучше держит медленный push-in, side tracking, restrained walk, micro acting и понятное действие. video_prompt, negative_prompt, sound_prompt оставить пустыми.";
 
 export const MANUAL_TIMING_PODCAST_PASS_TASK_RU = "Это JSON для Podcast / Dialogue Pass. Не меняй audio_phrases, scene_id, start_sec, end_sec, speech_start_sec, speech_end_sec, source_phrase_ids. Нужно определить speakers, topic_blocks, scene_type и поля сцен. Если сцена должна произносить текст через generated voice, заполни narrator_text_en/ru или speaker_text_en/ru из текста сцены. route может быть i2v, i2v_sound или i2v_text. video_prompt, negative_prompt, sound_prompt оставить пустыми.";
 
 function buildManualTimingLockedPassScenes(project = {}) {
-  return buildManualTimingExportJson(project).scenes.map((scene) => ({
+  const exportJson = buildManualTimingExportJson(project);
+  const audioPhrases = Array.isArray(exportJson.audio_phrases) ? exportJson.audio_phrases : [];
+  const phraseById = new Map(audioPhrases.map((phrase) => [String(phrase?.phrase_id || ""), phrase]));
+  return exportJson.scenes.map((scene) => {
+    const sourceIds = normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids).length
+      ? normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids)
+      : audioPhrases
+        .filter((phrase) => Number(phrase?.start_sec || 0) < Number(scene?.end_sec || 0) && Number(phrase?.end_sec || 0) > Number(scene?.start_sec || 0))
+        .map((phrase) => String(phrase?.phrase_id || ""))
+        .filter(Boolean);
+    const scenePhrases = sourceIds.map((id) => phraseById.get(id)).filter(Boolean);
+    const lyricsText = scenePhrases.map((phrase) => String(phrase?.original_text || phrase?.text_original || phrase?.text || phrase?.text_ru || phrase?.text_en || "").trim()).filter(Boolean).join(" ");
+    const translatedTextRu = scenePhrases.map((phrase) => String(phrase?.translation_ru || "").trim()).filter(Boolean).join(" ");
+    return ({
     ...scene,
+    source_phrase_ids: sourceIds,
+    lyrics_text: lyricsText || String(scene?.lyrics_text || ""),
+    translated_text_ru: translatedTextRu || String(scene?.translated_text_ru || ""),
+    meaning_hint_ru: String(scene?.meaning_hint_ru || ""),
     video_prompt: "",
     negative_prompt: "",
     sound_prompt: "",
-  }));
+  });
+  });
 }
 
 export function buildManualTimingClipPassJson(project = {}) {
