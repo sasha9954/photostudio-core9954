@@ -5396,10 +5396,22 @@ export default function ManualClipDirectorBoardEditor({
 
         <div className="manualSceneGuidance">
           <strong>Подсказка сцены</strong>
-          <div>Позиция: {storyPositionText}</div>
-          <div>Драматургия: {dramaturgyText}</div>
-          <div>Смысл: {sceneGoalText}</div>
-          <div>Что учесть в prompt: {promptHintText}</div>
+          <div className="manualSceneGuidanceRow">
+            <span>Позиция:</span>
+            <p>{storyPositionText || "—"}</p>
+          </div>
+          <div className="manualSceneGuidanceRow">
+            <span>Драматургия:</span>
+            <p>{dramaturgyText || "—"}</p>
+          </div>
+          <div className="manualSceneGuidanceRow">
+            <span>Смысл:</span>
+            <p>{sceneGoalText || "—"}</p>
+          </div>
+          <div className="manualSceneGuidancePromptBox">
+            <span>Что учесть в prompt:</span>
+            <p>{promptHintText || "Пока нет подсказки. После Story/Clip Pass здесь появится, что учитывать в prompt."}</p>
+          </div>
           {userNoteItems.length ? <div className="manualUserNotesList">
             <div>Заметки пользователя:</div>
             {userNoteItems.map((item, idx) => <div key={`${selectedScene.scene_id}-user-note-${idx}`}>• {item}</div>)}
@@ -5410,7 +5422,6 @@ export default function ManualClipDirectorBoardEditor({
             {isUserNoteEditorOpen ? "Скрыть заметку" : "+ заметка"}
           </button>
           {isUserNoteEditorOpen ? <textarea
-            className="manualDirectorScenePromptHintInput"
             value={String(selectedScene.user_note_ru || "")}
             placeholder="Своя заметка к сцене: звук, фраза, визуал, что не забыть..."
             onChange={(e) => updateScene(selectedScene.scene_id, { user_note_ru: e.target.value })}
