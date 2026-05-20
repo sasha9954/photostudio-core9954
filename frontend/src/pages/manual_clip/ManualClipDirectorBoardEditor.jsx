@@ -2284,6 +2284,7 @@ export default function ManualClipDirectorBoardEditor({
   const [project, setProject] = useState(null);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const [isUserNoteEditorOpen, setIsUserNoteEditorOpen] = useState(false);
+  const [isSceneGuidanceOpen, setIsSceneGuidanceOpen] = useState(false);
   const [storyPrepTemplateText, setStoryPrepTemplateText] = useState("");
   const [isStoryPrepExpanded, setIsStoryPrepExpanded] = useState(false);
   const [backupStatus, setBackupStatus] = useState("");
@@ -5411,28 +5412,50 @@ export default function ManualClipDirectorBoardEditor({
           </details> : null}
         </div> : null}
 
-        <div className="manualSceneGuidance">
-          <strong>Подсказка сцены</strong>
-          <div className="manualSceneGuidanceRow">
-            <span>Позиция:</span>
-            <p>{storyPositionText || "—"}</p>
+        <div className={`manualSceneGuidance ${isSceneGuidanceOpen ? "isOpen" : "isCollapsed"}`}>
+          <div className="manualSceneGuidanceHeader">
+            <div>
+              <strong>Подсказка сцены</strong>
+              <small>
+                {promptHintText
+                  ? "Есть подсказка для prompt"
+                  : "Пока нет подробной подсказки"}
+              </small>
+            </div>
+
+            <button
+              type="button"
+              className="clipSB_btn manualSceneGuidanceToggle"
+              onClick={() => setIsSceneGuidanceOpen((value) => !value)}
+            >
+              {isSceneGuidanceOpen ? "Скрыть" : "Раскрыть"}
+            </button>
           </div>
-          <div className="manualSceneGuidanceRow">
-            <span>Драматургия:</span>
-            <p>{dramaturgyText || "—"}</p>
-          </div>
-          <div className="manualSceneGuidanceRow">
-            <span>Смысл:</span>
-            <p>{sceneGoalText || "—"}</p>
-          </div>
-          <div className="manualSceneGuidancePromptBox">
-            <span>Что учесть в prompt:</span>
-            <p>{promptHintText || "Пока нет подсказки. После Story/Clip Pass здесь появится, что учитывать в prompt."}</p>
-          </div>
-          {userNoteItems.length ? <div className="manualUserNotesList">
-            <div>Заметки пользователя:</div>
-            {userNoteItems.map((item, idx) => <div key={`${selectedScene.scene_id}-user-note-${idx}`}>• {item}</div>)}
-          </div> : null}
+
+          {isSceneGuidanceOpen ? (
+            <div className="manualSceneGuidanceBody">
+              <div className="manualSceneGuidanceRow">
+                <span>Позиция:</span>
+                <p>{storyPositionText || "—"}</p>
+              </div>
+              <div className="manualSceneGuidanceRow">
+                <span>Драматургия:</span>
+                <p>{dramaturgyText || "—"}</p>
+              </div>
+              <div className="manualSceneGuidanceRow">
+                <span>Смысл:</span>
+                <p>{sceneGoalText || "—"}</p>
+              </div>
+              <div className="manualSceneGuidancePromptBox">
+                <span>Что учесть в prompt:</span>
+                <p>{promptHintText || "Пока нет подсказки. После Story/Clip Pass здесь появится, что учитывать в prompt."}</p>
+              </div>
+              {userNoteItems.length ? <div className="manualUserNotesList">
+                <div>Заметки пользователя:</div>
+                {userNoteItems.map((item, idx) => <div key={`${selectedScene.scene_id}-user-note-${idx}`}>• {item}</div>)}
+              </div> : null}
+            </div>
+          ) : null}
         </div>
         <div className="manualUserNoteEditor">
           <button className="clipSB_btn manualUserNoteToggle" onClick={() => setIsUserNoteEditorOpen((prev) => !prev)}>
