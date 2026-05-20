@@ -5075,67 +5075,82 @@ export default function ManualClipDirectorBoardEditor({
 
   return <div className="manualDirectorPage">
     <div className="manualDirectorTopbar">
-      <button
-        className="clipSB_btn"
-        onClick={isManualTimingProjectSource(project) ? handleBackToManualTiming : handleLegacyBackToAiSplit}
-      >
-        {isManualTimingProjectSource(project) ? "← Назад в тайминг" : "Назад к AI-разбивке"}
-      </button>
-      {isManualTimingProjectSource(project) ? <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={handleBackToManualTimingNode}>← К ноде</button> : null}
-      <button className="clipSB_btn" onClick={() => {
-        const currentProject = { ...(projectRef.current || project || {}), selectedSceneId };
-        const ownerNodeId = getProjectOwnerNodeId(currentProject);
-        const forceProjectId = String(currentProject.project_id || currentProject.projectId || "").trim();
-        const forceInputSignature = String(currentProject.input_signature || currentProject.inputSignature || "").trim();
-        const forceAudioSignature = String(currentProject.audio_signature || currentProject.audioSignature || "").trim();
-        persistAndBroadcastDirectorProject(currentProject, { reason: "open_manual_audio_preview", forceReplace: true });
-        writeManualClipBoardOpenState({
-          isOpen: true,
-          sourceNodeId: ownerNodeId,
-          selectedSceneId: String(currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "").trim(),
-          project_id: forceProjectId,
-          input_signature: forceInputSignature,
-          audio_signature: forceAudioSignature,
-          manualBoardExplicitNewProject: true,
-          forceProjectId,
-          forceInputSignature,
-          forceAudioSignature,
-          routePath: "/studio/storyboard",
-          updatedAt: Date.now(),
-        });
-        console.info("[MANUAL BOARD AUDIO PREVIEW OPEN]", {
-          sourceNodeId: ownerNodeId,
-          ownerNodeId,
-          project_id: forceProjectId,
-          input_signature: forceInputSignature,
-          audio_signature: forceAudioSignature,
-          audio: {
-            url: String(currentProject.audio?.url || currentProject.audio_url || currentProject.audioUrl || "").trim(),
-            name: String(currentProject.audio?.name || currentProject.audio?.filename || currentProject.audio_name || "").trim(),
-            duration_sec: Number(currentProject.audio?.duration_sec || currentProject.audio_duration_sec || 0) || 0,
-          },
-          explicitNewProject: true,
-        });
-        navigate("/studio/manual-clip-audio-preview", {
-          state: {
+      <div className="manualDirectorPrimaryActions">
+        <button
+          className="clipSB_btn"
+          onClick={isManualTimingProjectSource(project) ? handleBackToManualTiming : handleLegacyBackToAiSplit}
+        >
+          {isManualTimingProjectSource(project) ? "← Назад в тайминг" : "Назад к AI-разбивке"}
+        </button>
+        <button className="clipSB_btn" onClick={() => {
+          const currentProject = { ...(projectRef.current || project || {}), selectedSceneId };
+          const ownerNodeId = getProjectOwnerNodeId(currentProject);
+          const forceProjectId = String(currentProject.project_id || currentProject.projectId || "").trim();
+          const forceInputSignature = String(currentProject.input_signature || currentProject.inputSignature || "").trim();
+          const forceAudioSignature = String(currentProject.audio_signature || currentProject.audioSignature || "").trim();
+          persistAndBroadcastDirectorProject(currentProject, { reason: "open_manual_audio_preview", forceReplace: true });
+          writeManualClipBoardOpenState({
+            isOpen: true,
+            sourceNodeId: ownerNodeId,
+            selectedSceneId: String(currentProject.selectedSceneId || currentProject.scenes?.[0]?.scene_id || "").trim(),
+            project_id: forceProjectId,
+            input_signature: forceInputSignature,
+            audio_signature: forceAudioSignature,
             manualBoardExplicitNewProject: true,
             forceProjectId,
             forceInputSignature,
             forceAudioSignature,
+            routePath: "/studio/storyboard",
+            updatedAt: Date.now(),
+          });
+          console.info("[MANUAL BOARD AUDIO PREVIEW OPEN]", {
             sourceNodeId: ownerNodeId,
             ownerNodeId,
-            navigationProject: currentProject,
-            director_board: currentProject,
-            project: currentProject,
-          },
-        });
-      }}>Прослушать сцены</button>
-      <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
-      <span className={`manualDirectorAutosaveStatus ${autosaveStatus === "Ошибка autosave" || autosaveStatus.startsWith("Autosave переполнен") ? "isError" : ""}`} title={autosaveError || undefined} aria-live="polite">{autosaveStatus}</span>
+            project_id: forceProjectId,
+            input_signature: forceInputSignature,
+            audio_signature: forceAudioSignature,
+            audio: {
+              url: String(currentProject.audio?.url || currentProject.audio_url || currentProject.audioUrl || "").trim(),
+              name: String(currentProject.audio?.name || currentProject.audio?.filename || currentProject.audio_name || "").trim(),
+              duration_sec: Number(currentProject.audio?.duration_sec || currentProject.audio_duration_sec || 0) || 0,
+            },
+            explicitNewProject: true,
+          });
+          navigate("/studio/manual-clip-audio-preview", {
+            state: {
+              manualBoardExplicitNewProject: true,
+              forceProjectId,
+              forceInputSignature,
+              forceAudioSignature,
+              sourceNodeId: ownerNodeId,
+              ownerNodeId,
+              navigationProject: currentProject,
+              director_board: currentProject,
+              project: currentProject,
+            },
+          });
+        }}>Прослушать сцены</button>
+        <button className="clipSB_btn clipSB_btnPrimary" onClick={onForceSaveDirectorBoard}>Сохранить доску</button>
+        <span
+          className={autosaveStatus === "Есть несохранённые изменения"
+            ? "manualDirectorUnsavedBadge"
+            : `manualDirectorAutosaveStatus ${autosaveStatus === "Ошибка autosave" || autosaveStatus.startsWith("Autosave переполнен") ? "isError" : ""}`}
+          title={autosaveError || undefined}
+          aria-live="polite"
+        >
+          {autosaveStatus === "Есть несохранённые изменения" ? "несохранено" : autosaveStatus}
+        </span>
+      </div>
+      <details className="manualDirectorMoreActions">
+        <summary className="clipSB_btn clipSB_btnSecondary">⋯ Ещё</summary>
+        <div className="manualDirectorMoreActionsMenu">
+          {isManualTimingProjectSource(project) ? <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={handleBackToManualTimingNode}>← К ноде</button> : null}
+          <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
+          <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
+        </div>
+      </details>
       {autosaveStatus === "Ошибка autosave" ? <button className="clipSB_btn" onClick={onCleanupOldBrowserBackups}>Очистить старые backup в браузере</button> : null}
       {showEmergencyBackupButton ? <button className="clipSB_btn clipSB_btnDanger" onClick={() => downloadEmergencyBoardBackup("manual_director_board_emergency_button")}>Скачать аварийный backup</button> : null}
-      <button className="clipSB_btn clipSB_btnPrimary" onClick={onDownloadProjectBackup}>Скачать backup проекта</button>
-      <label className="clipSB_btn manualUploadBtn">Импорт backup / storyboard JSON<input type="file" accept=".json,application/json" hidden onChange={onImportProjectBackupFile} /></label>
       {backupStatus ? <span className="manualDirectorBackupStatus">{backupStatus}</span> : null}
     </div>
     {uploadAspectWarning ? <div className="manualAspectModalBackdrop" role="presentation">
@@ -5184,9 +5199,11 @@ export default function ManualClipDirectorBoardEditor({
             <span aria-hidden="true">{isStoryPrepExpanded ? "⤡" : "⛶"}</span>
             <span>{isStoryPrepExpanded ? "Свернуть" : "Развернуть"}</span>
           </button>
-          <button className="clipSB_btn" onClick={refreshStoryPrepTemplate}>Обновить шаблон</button>
-          <button className="clipSB_btn" onClick={onCopyStoryPrepTemplate}>Скопировать шаблон</button>
-          <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
+          {isStoryPrepExpanded ? <>
+            <button className="clipSB_btn" onClick={refreshStoryPrepTemplate}>Обновить шаблон</button>
+            <button className="clipSB_btn" onClick={onCopyStoryPrepTemplate}>Скопировать шаблон</button>
+            <button className="clipSB_btn" onClick={onDownloadStoryPrepTemplate}>Скачать .txt</button>
+          </> : null}
         </div>
       </div>
       {isStoryPrepExpanded ? (
