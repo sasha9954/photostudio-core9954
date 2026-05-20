@@ -61,6 +61,14 @@ function getBlockSourceEnd(block = {}) {
   const end = Number(block?.sourceVideoEndSec ?? block?.video_t1 ?? start) || start;
   return Math.max(start, end);
 }
+function getBlockClipRange(block = {}) {
+  const sourceStart = getBlockSourceStart(block);
+  const sourceEnd = getBlockSourceEnd(block);
+  const segmentDuration = Math.max(0, getBlockTargetEnd(block) - getBlockTargetStart(block));
+  const clipStart = Math.max(0, sourceStart);
+  const clipEnd = Math.max(clipStart, Math.min(sourceEnd, clipStart + segmentDuration));
+  return { clipStart, clipEnd };
+}
 
 function findAssemblyBlockByAudioTime(blocks = [], audioTimeSec = 0, fallbackIndex = 0) {
   if (!Array.isArray(blocks) || blocks.length === 0) return { block: null, index: -1 };
@@ -367,8 +375,9 @@ export default function VideoMatchBoardPage() {
 
   const startVideoOnlyBlock = async (block = {}) => {
     const isOverride = isOverrideBlock(block) && block.overrideVideoUrl;
-    const start = isOverride ? 0 : getBlockSourceStart(block);
-    const end = isOverride ? getOverrideBlockEndSec(block) : getBlockSourceEnd(block);
+    const { clipStart, clipEnd } = getBlockClipRange(block);
+    const start = isOverride ? 0 : clipStart;
+    const end = isOverride ? getOverrideBlockEndSec(block) : clipEnd;
     playbackRef.current = { mode: isOverride ? "override_video_range" : "video_range", end, blocks: [], index: 0, currentBlockId: block.id || "" };
     if (audioRef.current) audioRef.current.pause();
     setIsAssemblyPlaying(false);
@@ -398,7 +407,7 @@ export default function VideoMatchBoardPage() {
     setIsPlaybackActive(true);
     const didStartVideo = (isOverrideBlock(block) && block.overrideVideoUrl)
       ? await playOverrideRange(block, { muted: true })
-      : await playSourceRange(getBlockSourceStart(block), getBlockSourceEnd(block), { muted: true });
+      : await playSourceRange(getBlockClipRange(block).clipStart, getBlockClipRange(block).clipEnd, { muted: true });
     if (!didStartVideo) {
       setIsPlaybackActive(false);
       return false;
@@ -450,7 +459,7 @@ export default function VideoMatchBoardPage() {
       setIsPlaybackActive(true);
       const didStartVideo = (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl)
         ? await playOverrideRange(firstBlock, { muted: true })
-        : await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: true });
+        : await playSourceRange(getBlockClipRange(firstBlock).clipStart, getBlockClipRange(firstBlock).clipEnd, { muted: true });
       if (!didStartVideo) {
         setIsAssemblyPlaying(false);
         setIsPlaybackActive(false);
@@ -467,7 +476,7 @@ export default function VideoMatchBoardPage() {
 
     playbackRef.current = {
       mode: "assembly_video",
-      end: (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl) ? getOverrideBlockEndSec(firstBlock) : getBlockSourceEnd(firstBlock),
+      end: (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl) ? getOverrideBlockEndSec(firstBlock) : getBlockClipRange(firstBlock).clipEnd,
       blocks: assemblyBlocks,
       index: startIndex,
       currentBlockId: firstBlock.id || "",
@@ -476,7 +485,7 @@ export default function VideoMatchBoardPage() {
     setIsPlaybackActive(true);
     const didPlay = (isOverrideBlock(firstBlock) && firstBlock.overrideVideoUrl)
       ? await playOverrideRange(firstBlock, { muted: false })
-      : await playSourceRange(getBlockSourceStart(firstBlock), getBlockSourceEnd(firstBlock), { muted: false });
+      : await playSourceRange(getBlockClipRange(firstBlock).clipStart, getBlockClipRange(firstBlock).clipEnd, { muted: false });
     if (!didPlay) {
       setIsAssemblyPlaying(false);
       setIsPlaybackActive(false);
@@ -491,7 +500,7 @@ export default function VideoMatchBoardPage() {
 
     if (playback.mode === "audio_range" || playback.mode === "assembly_audio") {
       const currentBlock = playback.blocks?.[playback.index] || selectedBlock;
-      const sourceEnd = (isOverrideBlock(currentBlock) && currentBlock.overrideVideoUrl) ? getOverrideBlockEndSec(currentBlock) : getBlockSourceEnd(currentBlock);
+      const sourceEnd = (isOverrideBlock(currentBlock) && currentBlock.overrideVideoUrl) ? getOverrideBlockEndSec(currentBlock) : getBlockClipRange(currentBlock).clipEnd;
       if (sourceEnd > 0 && current >= sourceEnd && videoRef.current) {
         videoRef.current.pause();
         videoRef.current.currentTime = sourceEnd;
@@ -508,13 +517,13 @@ export default function VideoMatchBoardPage() {
       const nextIndex = Number(playback?.index || 0) + 1;
       const nextBlock = Array.isArray(playback?.blocks) ? playback.blocks[nextIndex] : null;
       if (nextBlock) {
-        playbackRef.current = { ...playback, index: nextIndex, end: getBlockSourceEnd(nextBlock), currentBlockId: nextBlock.id || "" };
+        playbackRef.current = { ...playback, index: nextIndex, end: getBlockClipRange(nextBlock).clipEnd, currentBlockId: nextBlock.id || "" };
         onSelectBlock(nextBlock);
         if (isOverrideBlock(nextBlock) && nextBlock.overrideVideoUrl) {
           playbackRef.current = { ...playbackRef.current, mode: "assembly_video", end: getOverrideBlockEndSec(nextBlock) };
           void playOverrideRange(nextBlock, { muted: false });
         } else {
-          void playSourceRange(getBlockSourceStart(nextBlock), getBlockSourceEnd(nextBlock), { muted: false });
+          void playSourceRange(getBlockClipRange(nextBlock).clipStart, getBlockClipRange(nextBlock).clipEnd, { muted: false });
         }
         return;
       }
@@ -558,7 +567,7 @@ export default function VideoMatchBoardPage() {
       if (isOverrideBlock(found.block) && found.block.overrideVideoUrl) {
         void playOverrideRange(found.block, { muted: true });
       } else {
-        void playSourceRange(getBlockSourceStart(found.block), getBlockSourceEnd(found.block), { muted: true });
+        void playSourceRange(getBlockClipRange(found.block).clipStart, getBlockClipRange(found.block).clipEnd, { muted: true });
       }
     }
   };
@@ -601,8 +610,9 @@ export default function VideoMatchBoardPage() {
       return;
     }
     restoreSourceVideoElement();
+    const segmentDuration = Math.max(0, Number(segment?.targetEndSec || 0) - Number(segment?.targetStartSec || 0));
     const start = Math.max(0, Number(candidate.sourceVideoStartSec || 0));
-    const end = Math.max(start, Number(candidate.sourceVideoEndSec || start));
+    const end = Math.max(start, Math.min(Number(candidate.sourceVideoEndSec || start), start + segmentDuration));
     playbackRef.current = { mode: "video_range", end, blocks: [], index: 0, currentBlockId: candidate.id || "" };
     setIsAssemblyPlaying(false);
     setIsPlaybackActive(true);
@@ -738,7 +748,8 @@ export default function VideoMatchBoardPage() {
     if (String(project.audioPreviewUrl || "").startsWith("blob:")) patchProject({ audioPreviewUrl: "" }, { lastGood: false });
   };
 
-  const clearNodeState = (reason = "manual_reset") => {
+  const clearNodeState = (reason = "manual_reset", options = {}) => {
+    const keepRuntimeMedia = Boolean(options?.keepRuntimeMedia);
     stopPlayback();
     setImportWarnings([]);
     setPendingImportResult(null);
@@ -753,8 +764,10 @@ export default function VideoMatchBoardPage() {
     setAudioDurationSec(0);
     if (objectUrlRef.current) { URL.revokeObjectURL(objectUrlRef.current); objectUrlRef.current = ""; }
     if (audioObjectUrlRef.current) { URL.revokeObjectURL(audioObjectUrlRef.current); audioObjectUrlRef.current = ""; }
-    runtimeSourceVideoUrlRef.current = "";
-    runtimeAudioPreviewUrlRef.current = "";
+    if (!keepRuntimeMedia) {
+      runtimeSourceVideoUrlRef.current = "";
+      runtimeAudioPreviewUrlRef.current = "";
+    }
     const next = getDefaultVideoMatchBoardProject(nodeId);
     clearVideoMatchBoardProjectStorage(nodeId);
     setProject(next);
@@ -776,6 +789,9 @@ export default function VideoMatchBoardPage() {
       ...getDefaultVideoMatchBoardProject(nodeId),
       schema: result.schema,
       sourceVideoUrl: String(runtimeSourceVideoUrlRef.current || ""),
+      audioPreviewUrl: String(runtimeAudioPreviewUrlRef.current || project.audioPreviewUrl || ""),
+      audioPreviewMeta: project.audioPreviewMeta || {},
+      useAudioPreview: project.useAudioPreview,
       sourceVideo: { ...normalizedSourceVideo },
       source_video: {
         ...(project.source_video || {}),
@@ -809,11 +825,11 @@ export default function VideoMatchBoardPage() {
     if (!result || result.error || result.ok === false) { patchProject({ jsonError: String(result?.error || "JSON parse error") }, { lastGood: false }); return; }
     const warnings = [];
     const sourceData = result.raw || {};
-    if (sourceData.schema !== "photostudio_video_match_board_v2") warnings.push(`schema warning: ${sourceData.schema || "unknown"}`);
+    if (!["photostudio_video_match_board_v2", "video_match_board_v2", "video_match_board_v1"].includes(sourceData.schema)) warnings.push(`schema warning: ${sourceData.schema || "unknown"}`);
     if (sourceData.status === "blocked_missing_audio_map") { patchProject({ jsonError: "Это не финальная доска, нужен matched/ready/completed" }, { lastGood: false }); return; }
     if (!Array.isArray(sourceData.segments) || sourceData.segments.length === 0) { patchProject({ jsonError: "В JSON нет segments" }, { lastGood: false }); return; }
     if (Number(sourceData.audio_map_segments_count || 0) > 0 && Number(sourceData.audio_map_segments_count) !== sourceData.segments.length) warnings.push("audio_map_segments_count не совпадает с segments.length");
-    const missingSelected = sourceData.segments.filter((seg) => !seg?.selected_candidate_id && !seg?.selectedCandidateId).length;
+    const missingSelected = sourceData.segments.filter((seg) => !(seg?.selected_candidate_id || seg?.selectedCandidateId || seg?.selected_candidate || seg?.selectedCandidate || seg?.selected_candidate?.candidate_id || seg?.selectedCandidate?.candidate_id)).length;
     if (missingSelected > 0) warnings.push(`у ${missingSelected} segments нет selected_candidate`);
     const mismatch = computeImportCompatibilityScore(project, result);
     if (mismatch.mismatch && (matchSegments.length || videoBlocks.length)) { setPendingImportResult({ result, warnings }); return; }
@@ -1206,13 +1222,13 @@ export default function VideoMatchBoardPage() {
           <div className="videoMatchJsonActions">
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => patchProject({ jsonInput: sampleJson }, { lastGood: false })}>Вставить пример</button>
             <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onApplyJson}>Применить JSON</button>
-            <label className="clipSB_btn clipSB_btnSecondary">📥 Импорт JSON-файла<input type="file" accept="application/json,.json" hidden onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const text = await file.text(); patchProject({ jsonInput: text, jsonError: "" }, { lastGood: false }); }} /></label>
+            <label className="clipSB_btn clipSB_btnSecondary">📥 Импорт JSON-файла<input type="file" accept="application/json,.json" hidden onChange={async (event) => { const file = event.target.files?.[0]; event.target.value = ""; if (!file) return; const text = await file.text(); patchProject({ jsonInput: text, jsonError: "" }, { lastGood: false }); const cleanText = String(text || "").replace(/^﻿/, "").trim(); if (!cleanText || isLikelyTruncatedJson(cleanText)) return; const result = parseVideoMatchBoardJson(cleanText, sourceVideoUrl); if (!result || result.error || result.ok === false) return; const sourceData = result.raw || {}; const warnings = []; if (!["photostudio_video_match_board_v2", "video_match_board_v2", "video_match_board_v1"].includes(sourceData.schema)) warnings.push(`schema warning: ${sourceData.schema || "unknown"}`); const mismatch = computeImportCompatibilityScore(project, result); if (mismatch.mismatch && (matchSegments.length || videoBlocks.length)) { setPendingImportResult({ result, warnings }); return; } applyImportedResult(result, warnings); }} /></label>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => { if (window.confirm("Очистить Video Match Node и удалить текущий board/candidates/черновую сборку?")) clearNodeState(); }}>🧹 Очистить ноду</button>
           </div>
           <textarea value={project.jsonInput || ""} onChange={(event) => patchProject({ jsonInput: event.target.value, jsonError: "" }, { lastGood: false })} placeholder="Вставьте JSON schema video_match_board_v1 или video_match_board_v2..." />
           {project.jsonError ? <div className="videoMatchError">{project.jsonError}</div> : null}
           {importWarnings.length ? <div className="videoMatchWarnings">{importWarnings.join("; ")}</div> : null}
-          {pendingImportResult ? <div className="videoMatchWarnings"><div>Новый JSON сильно отличается от текущего проекта.</div><button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={() => { if (window.confirm("Заменить текущий проект новым JSON?")) { clearNodeState("replaced_with_new_json"); applyImportedResult(pendingImportResult.result, pendingImportResult.warnings); } }}>Заменить текущий проект новым JSON</button></div> : null}
+          {pendingImportResult ? <div className="videoMatchWarnings"><div>Новый JSON сильно отличается от текущего проекта.</div><button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={() => { if (window.confirm("Заменить текущий проект новым JSON?")) { clearNodeState("replaced_with_new_json", { keepRuntimeMedia: true }); applyImportedResult(pendingImportResult.result, pendingImportResult.warnings); } }}>Заменить текущий проект новым JSON</button></div> : null}
         </details>
 
         <details className="videoMatchPanel videoMatchDetailsPanel">
@@ -1245,6 +1261,11 @@ export default function VideoMatchBoardPage() {
             <div>selectedSegmentId: {project.selectedSegmentId || "—"}</div>
             <div>selectedCandidateId: {project.selectedCandidateId || "—"}</div>
             <div>selectedBlockId: {project.selectedBlockId || "—"}</div>
+            <div>targetStartSec/targetEndSec: {selectedSegment ? `${formatSec(selectedSegment.targetStartSec)} / ${formatSec(selectedSegment.targetEndSec)}` : "—"}</div>
+            <div>sourceVideoStartSec/sourceVideoEndSec: {selectedBlock ? `${formatSec(selectedBlock.sourceVideoStartSec)} / ${formatSec(selectedBlock.sourceVideoEndSec)}` : "—"}</div>
+            <div>clip_source_start_sec/clip_source_end_sec: {selectedBlock ? `${formatSec(getBlockClipRange(selectedBlock).clipStart)} / ${formatSec(getBlockClipRange(selectedBlock).clipEnd)}` : "—"}</div>
+            <div>selectedCandidateId(debug): {selectedSegment?.selectedCandidateId || "—"}</div>
+            <div>reserved_generated_lipsync(selected): {selectedSegmentCandidates.filter((candidate) => candidate?.reserved_generated_lipsync).length}</div>
           </div>
 
           <details className="videoMatchNestedDebug">
