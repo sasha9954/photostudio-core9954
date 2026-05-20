@@ -8480,72 +8480,66 @@ export default function ManualTimingEditorPage() {
           </details> : null}
         </div>
 
-        <div className="manualTimingWorkflowPanel manualTimingAsrPanel" aria-label={`Основной workflow ${workflowLabels.pass}`}>
-          <div className="manualTimingAsrHeader">
+        <div className="manualTimingWorkflowPanel manualTimingAsrCompactPanel" aria-label={`Основной workflow ${workflowLabels.pass}`}>
+          <div className="manualTimingAsrCompactHeader">
             <strong>ASR и разметка аудио</strong>
-            <span>Распознай фразы из основного аудио или vocal stem, затем собери сцены и подтверди тайминг.</span>
+            <span>Распознай фразы, собери сцены и создай доску.</span>
+            <div className="manualTimingAsrCompactStatus">
+              <span className="manualTimingAsrStatusChip">audio_phrases: {audioPhrases.length}</span>
+              <span className="manualTimingAsrStatusChip">words: {audioWords.length}</span>
+              <span className="manualTimingAsrStatusChip">vocal: {vocalAsrSource?.url ? "загружен" : "нет"}</span>
+              <span className="manualTimingAsrStatusChip">{audioPhrases.some((phrase) => String(phrase?.source || "") === "vocal_stem_asr") ? "ASR готов" : "ASR не запускался"}</span>
+            </div>
           </div>
-          <div className="manualTimingAsrHeroRow">
+          <div className="manualTimingAsrCompactToolbar">
             <button
               type="button"
-              className="manualTimingAsrHeroCard manualTimingAsrHeroCardAudio"
+              className="clipSB_btn manualTimingAsrCompactButton manualTimingAsrCompactPrimary"
               onClick={onCreateAudioPhraseMap}
               disabled={mainActionsDisabled || !audio.url || String(asrStatus || "").startsWith("ASR: распознаю")}
             >
-              <span className="manualTimingAsrHeroIcon">🎧</span>
-              <span className="manualTimingAsrHeroTitle">ASR по аудио</span>
-              <span className="manualTimingAsrHeroSubtitle">распознать фразы из main audio</span>
+              🎧 ASR по аудио
             </button>
-            <div className="manualTimingAsrHeroCard manualTimingAsrHeroCardVocal">
-              <button className="clipSB_btn clipSB_btnPrimary" type="button" onClick={onCreateVocalAsrPhraseMap} disabled={!vocalAsrSource?.url || String(asrStatus || "").startsWith("ASR по вокалу:")}>🎤 ASR по вокалу</button>
-              <span className="manualTimingAsrHeroSubtitle">распознать строки песни из vocal stem</span>
-              <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn">
-                Загрузить vocal stem
-                <input type="file" accept="audio/*" onChange={onUploadVocalForAsr} hidden />
-              </label>
-              <div className="manualTimingAsrStatusChips">
-                <span className="manualTimingAsrStatusChip">{vocalAsrSource?.url ? "вокал загружен" : "вокал не загружен"}</span>
-                <span className="manualTimingAsrStatusChip">{audioPhrases.some((phrase) => String(phrase?.source || "") === "vocal_stem_asr") ? "ASR готов" : "ASR не запускался"}</span>
-              </div>
-            </div>
-          </div>
-          <div className="manualTimingAsrSettingsRow">
-            <strong>Настройки ASR</strong>
-            <label className="manualTimingVocalModeSelect">
-              <span>ASR язык (main)</span>
-              <select value={mainAsrLanguage} onChange={(event) => persist({ ...project, main_asr_language: String(event.target.value || "auto") })}>
-                <option value="auto">auto / авто</option>
-                <option value="ru">ru / Русский</option>
-                <option value="en">en / English</option>
-                <option value="uk">uk / Українська</option>
-              </select>
-            </label>
-            <label className="manualTimingVocalModeSelect">
-              <span>Язык вокала</span>
-              <select value={vocalAsrLanguage} onChange={(event) => persist({ ...project, vocal_asr_language: String(event.target.value || "auto") })}>
-                <option value="auto">auto / авто</option><option value="en">en / English</option><option value="ru">ru / Русский</option><option value="uk">uk / Українська</option><option value="de">de / Deutsch</option><option value="fr">fr / Français</option>
-              </select>
-            </label>
-            <label className="manualTimingVocalModeSelect">
-              <span>Режим vocal ASR</span>
-              <select value={vocalAsrSplitPreset} onChange={(event) => persist({ ...project, vocal_asr_split_preset: String(event.target.value || "song_lines") })}>
-                <option value="large">крупно</option><option value="song_lines">строки песни</option><option value="short_phrases">короткие фразы</option>
-              </select>
-            </label>
-          </div>
-          <div className="manualTimingAsrSecondaryRow">
-            <span className="manualTimingAsrStatusChip">Перевод ASR: скачать/импортировать JSON в инспекторе</span>
-            <button className="clipSB_btn clipSB_btnDanger" type="button" onClick={onClearAsrOnly} disabled={!audioPhrases.length && !audioWords.length && !vocalAsrWords.length}>Очистить ASR</button>
-          </div>
-          <div className="manualTimingAsrStepsRow">
             <button
               type="button"
-              className="clipSB_btn clipSB_btnPrimary"
+              className="clipSB_btn manualTimingAsrCompactButton manualTimingAsrCompactVocal"
+              onClick={onCreateVocalAsrPhraseMap}
+              disabled={!vocalAsrSource?.url || String(asrStatus || "").startsWith("ASR по вокалу:")}
+            >🎤 ASR по вокалу</button>
+            <label className="clipSB_btn clipSB_btnSecondary manualTimingFileBtn manualTimingAsrCompactButton">
+              ⬆ Загрузить vocal
+              <input type="file" accept="audio/*" onChange={onUploadVocalForAsr} hidden />
+            </label>
+            <button
+              type="button"
+              className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton"
               onClick={onBuildStoryScenesFromAsr}
               disabled={mainActionsDisabled || !audioPhrases.length}
               title="Пересобрать сцены из текущего JSON/ASR. Может перезаписать ручные разрезы."
-            >Собрать сцены из ASR</button>
-            <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить тайминг</button>
+            >Собрать сцены</button>
+            <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
+            <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton manualTimingAsrCompactBoard" onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)} title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}>{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
+            <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton manualTimingAsrCompactQuick" onClick={onCreateQuickDirectorBoard} disabled={mainActionsDisabled || !quickBoardReady || Boolean(handoffStatus)} title={quickBoardTitle}>⚡ Быстрая доска</button>
+            {hasActiveBoardProject ? <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Новая доска</button> : null}
+          </div>
+          <div className="manualTimingAsrCompactSettings">
+            <label>main:
+              <select value={mainAsrLanguage} onChange={(event) => persist({ ...project, main_asr_language: String(event.target.value || "auto") })}>
+                <option value="auto">auto</option><option value="ru">ru</option><option value="en">en</option><option value="uk">uk</option>
+              </select>
+            </label>
+            <label>vocal:
+              <select value={vocalAsrLanguage} onChange={(event) => persist({ ...project, vocal_asr_language: String(event.target.value || "auto") })}>
+                <option value="auto">auto</option><option value="en">en</option><option value="ru">ru</option><option value="uk">uk</option><option value="de">de</option><option value="fr">fr</option>
+              </select>
+            </label>
+            <label>режим:
+              <select value={vocalAsrSplitPreset} onChange={(event) => persist({ ...project, vocal_asr_split_preset: String(event.target.value || "song_lines") })}>
+                <option value="large">крупно</option><option value="song_lines">строки</option><option value="short_phrases">короткие</option>
+              </select>
+            </label>
+            <span className="manualTimingAsrStatusChip">Перевод ASR через JSON в инспекторе</span>
+            <button className="clipSB_btn clipSB_btnDanger manualTimingAsrCompactButton" type="button" onClick={onClearAsrOnly} disabled={!audioPhrases.length && !audioWords.length && !vocalAsrWords.length}>Очистить ASR</button>
           </div>
           {vocalAsrDurationMismatch ? <span className="manualTimingVocalWarning">Длина вокала отличается от основной песни. Нужен full-length vocal stem без обрезки тишины.</span> : null}
           <div className="manualTimingWorkflowStatusLine">
@@ -8681,10 +8675,13 @@ export default function ManualTimingEditorPage() {
       </section> : null}
 
       {/* Нижняя дублирующая шкала удалена: основной плеер сверху остаётся единственной рабочей шкалой. */}
+      
+      <p className="manualTimingPage_hint">Размечай песню по слуху: вступление, куплет, припев, проигрыш. Пиши заметки к отрезкам — они потом отобразятся в “Подсказка сцены” в режиссёрской доске.</p>
+
       <section className="manualTimingAdvancedScenePanel">
         <div className="manualTimingAdvancedSceneHeader">
           <strong>Расширенная разметка сцен</strong>
-          <span>Массовая настройка секций, маршрутов, энергии, вокала и звука. Для быстрой правки одной сцены — двойной клик по сцене на шкале.</span>
+          <span>Массовая правка параметров сцен. Для точечной правки — двойной клик по сцене на шкале.</span>
         </div>
         <div className="manualTimingAdvancedSceneSummary">
           <span>Сцен: {advancedSceneSummary.scenesCount}</span><span>vocal: {advancedSceneSummary.vocalCount}</span><span>i2v: {advancedSceneSummary.i2vCount}</span><span>ia2v: {advancedSceneSummary.ia2vCount}</span><span>коротких: {advancedSceneSummary.shortCount}</span><span>предупреждений: {advancedSceneSummary.warningsCount}</span>
@@ -8729,20 +8726,6 @@ export default function ManualTimingEditorPage() {
         })}
       </section></div> : null}
       </section>
-
-      <section className="manualTimingWorkflowPanel">
-        <div className="manualTimingAsrHeader">
-          <strong>Следующий этап</strong>
-          <span>После подтверждения тайминга можно создать режиссёрскую доску.</span>
-        </div>
-        <div className="manualTimingAsrSecondaryRow">
-          <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)} title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}>{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
-          <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingQuickBoardBtn" onClick={onCreateQuickDirectorBoard} disabled={mainActionsDisabled || !quickBoardReady || Boolean(handoffStatus)} title={quickBoardTitle}>⚡ Быстрая доска</button>
-          {hasActiveBoardProject ? <button type="button" className="clipSB_btn clipSB_btnSecondary" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Создать новую доску</button> : null}
-        </div>
-      </section>
-
-      <p className="manualTimingPage_hint">Размечай песню по слуху: вступление, куплет, припев, проигрыш. Пиши заметки к отрезкам — они потом отобразятся в “Подсказка сцены” в режиссёрской доске.</p>
     </div>
     {newBoardConfirm ? <div className="manualTimingNewBoardOverlay" role="presentation" onClick={() => resolveNewBoardReplaceConfirmation("cancel")}>
       <div className="manualTimingNewBoardDialog" role="dialog" aria-modal="true" aria-labelledby="manualTimingNewBoardTitle" onClick={(event) => event.stopPropagation()}>
