@@ -6611,58 +6611,77 @@ export default function ManualTimingEditorPage() {
       user_scene_tags: [],
       user_scene_color: "",
       user_scene_note: String(note || "").trim(),
+      user_scene_priority: "normal",
+      scene_render_intent: "",
       reserved_for_user_override: false,
       reserved_reason: "",
       video_match_role: "",
     };
     const hasAny = (phrases = []) => phrases.some((phrase) => normalizedNote.includes(phrase));
+    const labelPriority = {
+      "": 0,
+      "CLOSING": 1,
+      "B-ROLL": 2,
+      "MEMORY": 3,
+      "ACTION": 4,
+      "LIP-SYNC": 5,
+    };
+    const priorityWeight = { low: 0, normal: 1, high: 2, critical: 3 };
+    const chooseHigherPriority = (currentPriority = "normal", nextPriority = "normal") => {
+      const currentWeight = priorityWeight[currentPriority] ?? priorityWeight.normal;
+      const nextWeight = priorityWeight[nextPriority] ?? priorityWeight.normal;
+      return nextWeight >= currentWeight ? nextPriority : currentPriority;
+    };
+    const applyMarker = ({ label = "", color = "", role = "", intent = "", priority = "" }) => {
+      const currentPriority = labelPriority[result.user_scene_label] || 0;
+      const nextPriority = labelPriority[label] || 0;
+      if (nextPriority >= currentPriority) {
+        result.user_scene_label = label;
+        result.user_scene_color = color || result.user_scene_color;
+        result.video_match_role = role || result.video_match_role;
+        result.scene_render_intent = intent || result.scene_render_intent;
+      }
+      if (priority) {
+        result.user_scene_priority = chooseHigherPriority(result.user_scene_priority, priority);
+      }
+    };
 
     if (hasAny(["липсинк", "lip sync", "lipsync", "поёт", "поет", "говорит в кадр", "крупный план рот"])) {
-      result.user_scene_label = "LIP-SYNC";
+      applyMarker({ label: "LIP-SYNC", color: "#A855F7", role: "performance", intent: "performance", priority: "high" });
       ["lip_sync", "performance", "manual_priority"].forEach((tag) => tags.add(tag));
-      result.user_scene_color = "#A855F7";
       result.reserved_for_user_override = true;
       result.reserved_reason = "lip-sync/user marked scene";
-      result.video_match_role = "performance";
-    }
-    if (hasAny(["override", "вручную", "оставить", "не менять", "не заменять"])) {
-      result.reserved_for_user_override = true;
-      tags.add("manual_override");
-      if (!result.reserved_reason) result.reserved_reason = "user override scene";
     }
     if (hasAny(["воспоминание", "прошлое", "flashback", "memory"])) {
-      result.user_scene_label = "MEMORY";
+      applyMarker({ label: "MEMORY", color: "#38BDF8", role: "memory", intent: "memory", priority: "normal" });
       ["memory", "flashback"].forEach((tag) => tags.add(tag));
-      result.user_scene_color = "#38BDF8";
-      result.video_match_role = "memory";
     }
     if (hasAny(["экшен", "боевик", "драка", "погоня", "action"])) {
-      result.user_scene_label = "ACTION";
+      applyMarker({ label: "ACTION", color: "#EF4444", role: "action", intent: "action", priority: "high" });
       ["action", "movement"].forEach((tag) => tags.add(tag));
-      result.user_scene_color = "#EF4444";
-      result.video_match_role = "action";
     }
     if (hasAny(["деталь", "предмет", "перебивка", "b-roll", "broll"])) {
-      result.user_scene_label = "B-ROLL";
+      applyMarker({ label: "B-ROLL", color: "#22C55E", role: "detail", intent: "b_roll", priority: "normal" });
       ["b_roll", "detail"].forEach((tag) => tags.add(tag));
-      result.user_scene_color = "#22C55E";
-      result.video_match_role = "detail";
     }
     if (hasAny(["финал", "концовка", "closing", "outro"])) {
-      result.user_scene_label = "CLOSING";
+      applyMarker({ label: "CLOSING", color: "#F59E0B", role: "closing", intent: "ending", priority: "normal" });
       ["closing", "final"].forEach((tag) => tags.add(tag));
-      result.user_scene_color = "#F59E0B";
-      result.video_match_role = "closing";
     }
 
     const route = String(scene?.route || "").trim().toLowerCase();
     if (route === "ia2v" || scene?.lip_sync_required === true) {
-      tags.add("lip_sync");
-      if (!result.user_scene_label) result.user_scene_label = "LIP-SYNC";
-      if (!result.user_scene_color) result.user_scene_color = "#A855F7";
+      applyMarker({ label: "LIP-SYNC", color: "#A855F7", role: "performance", intent: "performance", priority: "high" });
+      ["lip_sync", "performance", "manual_priority"].forEach((tag) => tags.add(tag));
       result.reserved_for_user_override = true;
       if (!result.reserved_reason) result.reserved_reason = "lip-sync/user marked scene";
-      result.video_match_role = "performance";
+    }
+
+    if (hasAny(["override", "вручную", "оставить", "не менять", "не заменять"])) {
+      result.reserved_for_user_override = true;
+      result.user_scene_priority = chooseHigherPriority(result.user_scene_priority, "critical");
+      tags.add("manual_override");
+      if (!result.reserved_reason) result.reserved_reason = "user override scene";
     }
 
     result.user_scene_tags = [...tags];
@@ -6706,6 +6725,8 @@ export default function ManualTimingEditorPage() {
         user_scene_tags: Array.isArray(userSceneMarkers.user_scene_tags) ? userSceneMarkers.user_scene_tags : [],
         user_scene_color: userSceneMarkers.user_scene_color,
         user_scene_note: userSceneMarkers.user_scene_note,
+        user_scene_priority: userSceneMarkers.user_scene_priority || "normal",
+        scene_render_intent: userSceneMarkers.scene_render_intent || "",
         reserved_for_user_override: Boolean(userSceneMarkers.reserved_for_user_override),
         reserved_reason: userSceneMarkers.reserved_reason,
         video_match_role: userSceneMarkers.video_match_role,
@@ -6780,7 +6801,7 @@ export default function ManualTimingEditorPage() {
         "Before preparing a Codex video matching job, ChatGPT MUST ask the user what composition / montage concept should be used. Do not write the Codex job immediately. First discuss the desired montage direction, emotional arc, visual priorities, reserved override/lip-sync scenes, and final style. Only after the user confirms the composition, prepare the Codex job.",
         "ChatGPT must prepare a Codex video matching job only after user-confirmed composition discussion.",
         "Preserve target_t0/target_t1 exactly.",
-        "Preserve user_scene_label, user_scene_tags, user_scene_color, user_scene_note, reserved_for_user_override, reserved_reason and video_match_role. These are user intent markers for Video Match Board. Lip-sync/reserved scenes must be shown as marked scenes and should not be replaced by random b-roll unless the user explicitly allows it.",
+        "Preserve user_scene_label, user_scene_tags, user_scene_color, user_scene_note, user_scene_priority, scene_render_intent, reserved_for_user_override, reserved_reason and video_match_role. These are user intent markers for Video Match Board. Lip-sync/reserved scenes must be shown as marked scenes and should not be replaced by random b-roll unless the user explicitly allows it.",
         "audio_map is the source of truth.",
         "If source video has already been indexed, use match_audio against existing video_index.",
         "If source video is new, create build_index job first.",
