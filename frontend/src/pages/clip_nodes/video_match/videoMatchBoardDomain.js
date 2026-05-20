@@ -311,14 +311,24 @@ export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourc
   const segmentId = String(segment.id || segment.audioSceneId || segment.audio_scene_id || `segment_${String(index + 1).padStart(3, "0")}`).trim();
   const id = String(source.id || source.candidateId || source.candidate_id || source.candidate_id || `${segmentId}_candidate_${String(index + 1).padStart(2, "0")}`).trim();
   const warnings = Array.isArray(source.warnings) ? source.warnings.map((warning) => String(warning || "").trim()).filter(Boolean) : [];
+  const sourceCandidateStartSec = toFiniteNumber(source.source_video_start_sec ?? source.sourceVideoStartSec ?? source.video_t0, 0);
+  const sourceCandidateEndSec = toFiniteNumber(source.source_video_end_sec ?? source.sourceVideoEndSec ?? source.video_t1, 0);
+  const clipSourceStartSec = toNullableFiniteNumber(source.clip_source_start_sec ?? source.clipSourceStartSec);
+  const clipSourceEndSec = toNullableFiniteNumber(source.clip_source_end_sec ?? source.clipSourceEndSec);
   return {
     id,
     candidateId: id,
     segmentId,
     videoStartSec: toFiniteNumber(source.video_t0 ?? source.videoStartSec ?? source.sourceVideoStartSec ?? source.source_video_start_sec, 0),
     videoEndSec: toFiniteNumber(source.video_t1 ?? source.videoEndSec ?? source.sourceVideoEndSec ?? source.source_video_end_sec, 0),
-    sourceVideoStartSec: toFiniteNumber(source.video_t0 ?? source.videoStartSec ?? source.sourceVideoStartSec ?? source.source_video_start_sec, 0),
-    sourceVideoEndSec: toFiniteNumber(source.video_t1 ?? source.videoEndSec ?? source.sourceVideoEndSec ?? source.source_video_end_sec, 0),
+    sourceVideoStartSec: clipSourceStartSec ?? toFiniteNumber(source.video_t0 ?? source.videoStartSec ?? source.sourceVideoStartSec ?? source.source_video_start_sec, 0),
+    sourceVideoEndSec: clipSourceEndSec ?? toFiniteNumber(source.video_t1 ?? source.videoEndSec ?? source.sourceVideoEndSec ?? source.source_video_end_sec, 0),
+    sourceCandidateStartSec,
+    sourceCandidateEndSec,
+    clipSourceStartSec,
+    clipSourceEndSec,
+    clip_source_start_sec: clipSourceStartSec,
+    clip_source_end_sec: clipSourceEndSec,
     fitMode: String(source.fit_mode || source.fitMode || "").trim(),
     confidence: toNullableFiniteNumber(source.confidence),
     matchReason: String(source.match_reason || source.matchReason || source.visual_reason_ru || "").trim(),
@@ -397,6 +407,12 @@ export function normalizeVideoMatchSegment(segment = {}, index = 0, sourceVideoU
     ?? source.selectedCandidate?.id
     ?? "",
   ).trim();
+  const normalizedSelectedCandidate = rawSelectedCandidateId
+    ? normalizeVideoMatchCandidate({ ...rawSelectedCandidate, id: rawSelectedCandidateId, candidate_id: rawSelectedCandidateId }, baseSegment, sourceVideoUrl, candidates.length)
+    : null;
+  if (normalizedSelectedCandidate && !candidates.some((candidate) => candidate.id === normalizedSelectedCandidate.id)) {
+    candidates.push(normalizedSelectedCandidate);
+  }
   const selectedCandidateId = candidates.some((candidate) => candidate.id === rawSelectedCandidateId)
     ? rawSelectedCandidateId
     : (candidates[0]?.id || rawSelectedCandidateId);
@@ -438,6 +454,12 @@ export function normalizeVideoBlock(match = {}, sourceVideoUrl = "") {
     targetEndSec: toFiniteNumber(match.target_t1 ?? match.targetEndSec, 0),
     sourceVideoStartSec: toFiniteNumber(match.video_t0 ?? match.sourceVideoStartSec ?? match.videoStartSec, 0),
     sourceVideoEndSec: toFiniteNumber(match.video_t1 ?? match.sourceVideoEndSec ?? match.videoEndSec, 0),
+    sourceCandidateStartSec: toNullableFiniteNumber(match.sourceCandidateStartSec ?? match.source_candidate_start_sec),
+    sourceCandidateEndSec: toNullableFiniteNumber(match.sourceCandidateEndSec ?? match.source_candidate_end_sec),
+    clipSourceStartSec: toNullableFiniteNumber(match.clipSourceStartSec ?? match.clip_source_start_sec),
+    clipSourceEndSec: toNullableFiniteNumber(match.clipSourceEndSec ?? match.clip_source_end_sec),
+    clip_source_start_sec: toNullableFiniteNumber(match.clipSourceStartSec ?? match.clip_source_start_sec),
+    clip_source_end_sec: toNullableFiniteNumber(match.clipSourceEndSec ?? match.clip_source_end_sec),
     sourceVideoUrl: String(match.sourceVideoUrl || sourceVideoUrl || "").trim(),
     matchReason: String(match.match_reason || match.matchReason || "").trim(),
     confidence: toNullableFiniteNumber(match.confidence),
@@ -471,6 +493,10 @@ export function buildVideoBlocksFromMatchSegments(matchSegments = [], sourceVide
         sourceVideoEndSec: isOverride
           ? toFiniteNumber(selectedCandidate.overrideDurationSec ?? selectedCandidate.sourceVideoEndSec, selectedCandidate.sourceVideoEndSec)
           : selectedCandidate.sourceVideoEndSec,
+        sourceCandidateStartSec: selectedCandidate.sourceCandidateStartSec,
+        sourceCandidateEndSec: selectedCandidate.sourceCandidateEndSec,
+        clipSourceStartSec: selectedCandidate.clipSourceStartSec,
+        clipSourceEndSec: selectedCandidate.clipSourceEndSec,
         sourceVideoUrl: selectedCandidate.sourceVideoUrl || sourceVideoUrl,
         matchReason: selectedCandidate.matchReason,
         confidence: selectedCandidate.confidence,
