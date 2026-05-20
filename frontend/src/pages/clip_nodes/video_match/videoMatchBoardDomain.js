@@ -44,6 +44,10 @@ export function getVideoMatchBoardEmergencyStorageKey(nodeId = "") {
   return getVideoMatchBoardAccountScopedStorageKey(`video_match_board:emergency:${String(nodeId || "default").trim() || "default"}`);
 }
 
+export function getVideoMatchBoardStoragePrefix() {
+  return getVideoMatchBoardAccountScopedStorageKey("video_match_board:");
+}
+
 function getVideoMatchBoardActiveProjectStorageKey() {
   return getVideoMatchBoardAccountScopedStorageKey(VIDEO_MATCH_BOARD_ACTIVE_PROJECT_KEY);
 }
@@ -475,6 +479,7 @@ export function parseVideoMatchBoardJson(jsonText = "", sourceVideoUrl = "") {
     videoBlocks,
     selectedSegmentId: matchSegments[0]?.id || "",
     selectedCandidateId: matchSegments[0]?.selectedCandidateId || "",
+    raw: parsed,
   };
 }
 
@@ -584,4 +589,26 @@ export function persistVideoMatchBoardProject(project = {}, options = {}) {
     reason: saveOk ? "saved" : "write_failed",
   });
   return safeProject;
+}
+
+export function clearVideoMatchBoardProjectStorage(nodeId = "") {
+  const safeNodeId = String(nodeId || "default").trim() || "default";
+  const keys = [
+    getVideoMatchBoardNodeStorageKey(safeNodeId),
+    getVideoMatchBoardLastGoodStorageKey(safeNodeId),
+    getVideoMatchBoardEmergencyStorageKey(safeNodeId),
+    getVideoMatchBoardActiveProjectStorageKey(),
+    getVideoMatchBoardActiveProjectIdStorageKey(),
+  ];
+  try {
+    const prefix = getVideoMatchBoardStoragePrefix();
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key && key.startsWith(prefix) && !keys.includes(key)) keys.push(key);
+    }
+  } catch {}
+  keys.forEach((key) => {
+    try { localStorage.removeItem(key); } catch {}
+    try { sessionStorage.removeItem(key); } catch {}
+  });
 }
