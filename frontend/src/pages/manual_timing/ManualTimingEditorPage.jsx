@@ -322,6 +322,7 @@ const MANUAL_NEW_BOARD_TIMING_STORY_FIELDS = [
   "original_text",
   "translated_text_ru",
   "translation_ru",
+  "lyrics_text",
   "meaning_hint_ru",
   "meaning_ru",
   "semantic_summary_ru",
@@ -348,6 +349,21 @@ const MANUAL_NEW_BOARD_TIMING_STORY_FIELDS = [
   "visual_role_ru",
   "performance_role_ru",
   "lip_sync_required",
+  "vocal_owner_role",
+  "audio_required",
+  "audio_slice_required",
+  "user_scene_label",
+  "user_scene_tags",
+  "user_scene_color",
+  "user_scene_note",
+  "user_scene_priority",
+  "scene_render_intent",
+  "scene_lock_policy",
+  "preferred_shot_type",
+  "preferred_motion",
+  "reserved_for_user_override",
+  "reserved_reason",
+  "video_match_role",
   "vocal_asr_gap_ids",
   "asr_missing",
   "format",
@@ -2810,13 +2826,28 @@ export default function ManualTimingEditorPage() {
       || (isPodcastDialogue && hasNonEmptyArray(project.speakers) && hasNonEmptyArray(project.topic_blocks) && scenes.every(sceneHasCompletePodcastPassFields))
     );
   const storyPassReadyForDirector = passReadyForDirector;
+  const timingConfirmed = String(project?.timing_status || "").trim() === "confirmed";
   const quickBoardScenesReady = scenes.length > 0 && scenes.every((scene) => {
     const startSec = Number(scene?.start_sec ?? scene?.target_t0);
     const endSec = Number(scene?.end_sec ?? scene?.target_t1);
     return Number.isFinite(startSec) && Number.isFinite(endSec) && endSec >= startSec;
   });
   const quickBoardReady = Boolean(audio?.url || project?.audio_url || project?.audio_path) && quickBoardScenesReady;
-  const openDirectorBoardTitle = passReadyForDirector ? "Открыть режиссёрскую доску" : `Сначала примените ${workflowLabels.pass} JSON и подтвердите тайминг`;
+  const timingReadyForDraftBoard = Boolean(
+    timingConfirmed
+    && scenes.length > 0
+    && (audio?.url || project?.audio_url || project?.audio_path)
+    && quickBoardScenesReady
+  );
+  const directorBoardReady = Boolean(
+    storyPassReadyForDirector
+    || timingReadyForDraftBoard
+  );
+  const openDirectorBoardTitle = storyPassReadyForDirector
+    ? "Открыть режиссёрскую доску"
+    : timingReadyForDraftBoard
+      ? "Создать режиссёрскую доску из текущего подтверждённого тайминга"
+      : `Сначала подтвердите тайминг или примените ${workflowLabels.pass} JSON`;
   const quickBoardTitle = scenes.length
     ? (hasActiveBoardProject
       ? "Есть сохранённая доска. Можно открыть старую или создать новую быструю."
@@ -5688,11 +5719,54 @@ export default function ManualTimingEditorPage() {
     if (typeof resolver === "function") resolver(choice);
   };
 
+  function buildManualTimingScenesForDirectorHandoff() {
+    const baseScenes = Array.isArray(scenes) ? scenes : [];
+
+    if (!isMusicClip) return baseScenes;
+
+    try {
+      const projectFormat = String(project?.format || project?.aspect_ratio || "9:16");
+      const clipPass = buildManualTimingClipPassJson({
+        ...project,
+        scenes: baseScenes,
+        audio_phrases: audioPhrases,
+        vocal_asr_gaps: Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [],
+        vocal_asr_source: project?.vocal_asr_source || null,
+        format: projectFormat,
+        aspect_ratio: projectFormat,
+      });
+
+      const passSceneById = new Map(
+        (Array.isArray(clipPass?.scenes) ? clipPass.scenes : [])
+          .map((scene) => [String(scene?.scene_id || "").trim(), scene])
+          .filter(([sceneId]) => sceneId)
+      );
+
+      return baseScenes.map((scene) => {
+        const sceneId = String(scene?.scene_id || "").trim();
+        const passScene = sceneId ? passSceneById.get(sceneId) : null;
+        if (!passScene) return scene;
+
+        return {
+          ...scene,
+          ...passScene,
+          user_note_ru: scene?.user_note_ru || passScene?.user_note_ru || "",
+          route: passScene?.route || scene?.route || "i2v",
+        };
+      });
+    } catch (error) {
+      console.warn("[MANUAL TIMING DRAFT BOARD ENRICH FAILED]", error);
+      return baseScenes;
+    }
+  }
+
+
   const buildDirectorProjectSnapshot = () => {
     const sourceNodeId = finalOwnerNodeId;
     const projectFormat = String(project.format || project.aspect_ratio || "9:16");
-    const sceneCleanStats = getManualNewBoardCleanSceneStats(scenes);
-    const cleanScenes = scenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat));
+    const handoffScenes = buildManualTimingScenesForDirectorHandoff();
+    const sceneCleanStats = getManualNewBoardCleanSceneStats(handoffScenes);
+    const cleanScenes = handoffScenes.map((scene) => sanitizeManualTimingSceneForNewBoard(scene, projectFormat));
     console.info("[MANUAL BOARD NEW PROJECT CLEAN SCENES]", sceneCleanStats);
     const handoffAudio = normalizeManualTimingProjectAudioForHandoff(project, audio);
     return applyManualTimingProjectAudioCompat({
@@ -5787,8 +5861,9 @@ export default function ManualTimingEditorPage() {
   };
 
   const onCreateNewDirectorBoardFromTiming = async () => {
-    if (!storyPassReadyForDirector) {
-      setCopyStatus(`Сначала примените ${workflowLabels.pass} JSON`);
+    if (!directorBoardReady) {
+      setCopyStatus(`Сначала подтвердите тайминг или примените ${workflowLabels.pass} JSON`);
+      window.setTimeout(() => setCopyStatus(""), 3200);
       return;
     }
     if (handoffStatus) return;
@@ -5952,6 +6027,10 @@ export default function ManualTimingEditorPage() {
       story_blocks: Array.isArray(project?.story_blocks) ? project.story_blocks : [],
       audio_phrases: Array.isArray(project?.audio_phrases) ? project.audio_phrases : [],
       timing_status: String(project?.timing_status || "").trim(),
+      vocal_asr_gaps: Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [],
+      vocal_asr_words: Array.isArray(project?.vocal_asr_words) ? project.vocal_asr_words : [],
+      main_asr_language: String(project?.main_asr_language || "auto").trim(),
+      vocal_asr_language: String(project?.vocal_asr_language || "auto").trim(),
       format: String(project?.format || project?.aspect_ratio || "9:16"),
       aspect_ratio: String(project?.aspect_ratio || project?.format || "9:16"),
     };
@@ -5963,6 +6042,10 @@ export default function ManualTimingEditorPage() {
       "markers",
       "vocal_asr_source",
       "vocal_asr_split_preset",
+      "vocal_asr_gaps",
+      "vocal_asr_words",
+      "main_asr_language",
+      "vocal_asr_language",
       "podcastEditManifest",
       "composerEditManifest",
     ].forEach((field) => {
@@ -6080,7 +6163,8 @@ export default function ManualTimingEditorPage() {
         return ids.map((id) => String(id || "").trim()).includes(sceneId);
       }) || null;
     }
-    const quickScenes = scenes.map((scene, index) => {
+    const quickSourceScenes = buildManualTimingScenesForDirectorHandoff();
+    const quickScenes = quickSourceScenes.map((scene, index) => {
       const block = findStoryBlockForScene(scene);
       const blockId = String(scene?.story_block_id || scene?.storyBlockId || block?.block_id || block?.id || "").trim();
       const blockTitle = String(scene?.story_block_title_ru || scene?.storyBlockTitleRu || block?.title_ru || block?.title || blockId || "").trim();
@@ -6098,8 +6182,19 @@ export default function ManualTimingEditorPage() {
       const endSec = Number.isFinite(endSecBase) ? endSecBase : startSec;
       const durationSec = Math.max(0, Number(scene?.duration_sec ?? (endSec - startSec)) || 0);
       const sceneId = String(scene?.scene_id || scene?.id || `scene_${index + 1}`);
-      const originalText = String(scene?.original_text || scene?.text_original || "").trim();
-      const translatedTextRu = String(scene?.translated_text_ru || scene?.text_ru || "").trim();
+      const originalText = String(
+        scene?.lyrics_text
+        || scene?.original_text
+        || scene?.text_original
+        || scene?.text
+        || ""
+      ).trim();
+      const translatedTextRu = String(
+        scene?.translated_text_ru
+        || scene?.translation_ru
+        || scene?.text_ru
+        || ""
+      ).trim();
       const normalizedPhraseIds = normalizeManualTimingSourcePhraseIds(scene?.source_phrase_ids || scene?.sourcePhraseIds);
       return {
         scene_id: sceneId,
@@ -6134,12 +6229,29 @@ export default function ManualTimingEditorPage() {
         audio_source_mode: "master_audio_range",
         audio_range_start_sec: startSec,
         audio_range_end_sec: endSec,
-        contains_vocal: Boolean(scene?.contains_vocal),
+        contains_vocal: Boolean(scene?.contains_vocal || scene?.lip_sync_required),
         source: "manual_timing_quick_board",
         board_mode: "quick",
         quick_board: true,
-        route: "i2v",
-        route_hint: scene?.contains_vocal ? "can_use_lipsync" : "",
+        route: String(scene?.route || "i2v"),
+        route_hint: scene?.lip_sync_required || scene?.contains_vocal ? "can_use_lipsync" : "",
+        lyrics_text: String(scene?.lyrics_text || "").trim(),
+        visual_role_ru: String(scene?.visual_role_ru || "").trim(),
+        performance_role_ru: String(scene?.performance_role_ru || "").trim(),
+        lip_sync_required: Boolean(scene?.lip_sync_required),
+        vocal_owner_role: String(scene?.vocal_owner_role || "").trim(),
+        audio_required: Boolean(scene?.audio_required || scene?.lip_sync_required),
+        audio_slice_required: Boolean(scene?.audio_slice_required || scene?.lip_sync_required),
+        scene_goal_ru: String(scene?.scene_goal_ru || "").trim(),
+        photo_prompt_hint_ru: String(scene?.photo_prompt_hint_ru || "").trim(),
+        prompt_hint_ru: String(scene?.prompt_hint_ru || "").trim(),
+        meaning_hint_ru: String(scene?.meaning_hint_ru || "").trim(),
+        user_scene_label: String(scene?.user_scene_label || "").trim(),
+        user_scene_tags: Array.isArray(scene?.user_scene_tags) ? scene.user_scene_tags : [],
+        user_scene_color: String(scene?.user_scene_color || "").trim(),
+        scene_lock_policy: String(scene?.scene_lock_policy || "").trim(),
+        preferred_shot_type: String(scene?.preferred_shot_type || "").trim(),
+        preferred_motion: String(scene?.preferred_motion || "").trim(),
         video_prompt: "",
         negative_prompt: "",
         sound_prompt: "",
@@ -6261,6 +6373,10 @@ export default function ManualTimingEditorPage() {
       story_blocks: Array.isArray(project?.story_blocks) ? project.story_blocks : [],
       audio_phrases: Array.isArray(project?.audio_phrases) ? project.audio_phrases : [],
       timing_status: String(project?.timing_status || "").trim(),
+      vocal_asr_gaps: Array.isArray(project?.vocal_asr_gaps) ? project.vocal_asr_gaps : [],
+      vocal_asr_words: Array.isArray(project?.vocal_asr_words) ? project.vocal_asr_words : [],
+      main_asr_language: String(project?.main_asr_language || "auto").trim(),
+      vocal_asr_language: String(project?.vocal_asr_language || "auto").trim(),
       format: String(project?.format || project?.aspect_ratio || "9:16"),
       aspect_ratio: String(project?.aspect_ratio || project?.format || "9:16"),
     };
@@ -8596,9 +8712,9 @@ export default function ManualTimingEditorPage() {
               title="Пересобрать сцены из текущего JSON/ASR. Может перезаписать ручные разрезы."
             >Собрать сцены</button>
             <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton" onClick={onConfirmTiming} disabled={mainActionsDisabled || !scenes.length}>Подтвердить</button>
-            <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton manualTimingAsrCompactBoard" onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || (!hasActiveBoardProject && !storyPassReadyForDirector) || Boolean(handoffStatus)} title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}>{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
+            <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton manualTimingAsrCompactBoard" onClick={hasActiveBoardProject ? onOpenDirectorBoard : onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || (!hasActiveBoardProject && !directorBoardReady) || Boolean(handoffStatus)} title={hasActiveBoardProject ? "Открыть сохранённую режиссёрскую доску" : openDirectorBoardTitle}>{handoffStatus || (hasActiveBoardProject ? "Открыть доску" : "Создать доску")}</button>
             <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton manualTimingAsrCompactQuick" onClick={onCreateQuickDirectorBoard} disabled={mainActionsDisabled || !quickBoardReady || Boolean(handoffStatus)} title={quickBoardTitle}>⚡ Быстрая доска</button>
-            {hasActiveBoardProject ? <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !storyPassReadyForDirector || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Новая доска</button> : null}
+            {hasActiveBoardProject ? <button type="button" className="clipSB_btn clipSB_btnSecondary manualTimingAsrCompactButton" onClick={onCreateNewDirectorBoardFromTiming} disabled={mainActionsDisabled || !directorBoardReady || Boolean(handoffStatus)} title="Создать новую доску из текущего тайминга">Новая доска</button> : null}
           </div>
           <div className="manualTimingAsrCompactSettings">
             <label>main:
