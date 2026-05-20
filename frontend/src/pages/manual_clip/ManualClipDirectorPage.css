@@ -15,10 +15,17 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 12px;
   flex: 0 0 auto;
+}
+
+.manualDirectorPrimaryActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .manualDirectorTopbar .clipSB_btn,
@@ -53,6 +60,54 @@
 .manualDirectorAutosaveStatus.isError {
   background: rgba(255, 91, 91, 0.16);
   color: #ffb4b4;
+}
+
+.manualDirectorUnsavedBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.14);
+  color: #fde68a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.manualDirectorMoreActions {
+  position: relative;
+}
+
+.manualDirectorMoreActions summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.manualDirectorMoreActions summary::-webkit-details-marker {
+  display: none;
+}
+
+.manualDirectorMoreActionsMenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  min-width: 230px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(138, 164, 255, 0.28);
+  background: rgba(13, 18, 32, 0.96);
+  box-shadow: 0 14px 36px rgba(0,0,0,0.36);
+  display: grid;
+  gap: 6px;
+}
+
+.manualDirectorMoreActionsMenu .clipSB_btn,
+.manualDirectorMoreActionsMenu .manualUploadBtn {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 .manualDirectorGrid {
