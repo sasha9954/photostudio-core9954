@@ -2376,7 +2376,6 @@ function createManualTimingHistorySnapshot(project, currentTimeSec = 0, label = 
 
 
 function pickManualTimingAudioPhraseOriginalText(phrase = {}) {
-  const translationRu = String(phrase?.translation_ru || phrase?.translationRu || "").trim();
   const sourceLanguage = String(phrase?.source_language || phrase?.sourceLanguage || phrase?.language || "").trim().toLowerCase();
   const textRu = String(phrase?.text_ru || phrase?.textRu || "").trim();
   return String(
@@ -2385,15 +2384,23 @@ function pickManualTimingAudioPhraseOriginalText(phrase = {}) {
     || phrase?.original_text
     || phrase?.originalText
     || phrase?.text
+    || ((sourceLanguage === "ru") ? textRu : "")
     || phrase?.text_en
     || phrase?.textEn
-    || ((sourceLanguage === "ru" && !translationRu) ? textRu : "")
     || ""
   ).trim();
 }
 
 function pickManualTimingAudioPhraseRuText(phrase = {}) {
-  return String(phrase?.text_ru || phrase?.textRu || phrase?.translation_ru || phrase?.translationRu || phrase?.meaning_ru || phrase?.meaningRu || "").trim();
+  return String(phrase?.text_ru || phrase?.textRu || "").trim();
+}
+
+function pickManualTimingAudioPhraseTranslationText(phrase = {}) {
+  return String(phrase?.translation_ru || phrase?.translationRu || "").trim();
+}
+
+function pickManualTimingAudioPhraseMeaningText(phrase = {}) {
+  return String(phrase?.meaning_ru || phrase?.meaningRu || "").trim();
 }
 
 function isManualTimingPhrasePartialInScene(phrase = {}, scene = null) {
@@ -2795,8 +2802,8 @@ export default function ManualTimingEditorPage() {
     () => activeInspectorPhrases.map((phrase) => {
       const sourceLanguage = String(phrase?.source_language || phrase?.sourceLanguage || phrase?.language || "").trim().toLowerCase();
       const isRuPhrase = sourceLanguage === "ru";
-      const translationText = String(phrase?.translation_ru || phrase?.translationRu || "").trim();
-      const meaningText = String(phrase?.meaning_ru || phrase?.meaningRu || "").trim();
+      const translationText = pickManualTimingAudioPhraseTranslationText(phrase);
+      const meaningText = pickManualTimingAudioPhraseMeaningText(phrase);
       const ruText = pickManualTimingAudioPhraseRuText(phrase);
       return {
         phrase,
@@ -2815,7 +2822,7 @@ export default function ManualTimingEditorPage() {
   );
   const selectedSceneFullRuText = useMemo(
     () => selectedScenePhraseInspectorRows
-      .map((row) => row.ruText)
+      .map((row) => (row.isRuPhrase ? row.ruText : row.translationText))
       .filter((text) => text && text !== MANUAL_TIMING_RU_TTS_EMPTY_TEXT)
       .join(" "),
     [selectedScenePhraseInspectorRows]
