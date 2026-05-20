@@ -2883,7 +2883,6 @@ export default function ManualTimingEditorPage() {
       .join(" "),
     [selectedScenePhraseInspectorRows]
   );
-  const selectedSceneHasRuText = Boolean(selectedSceneFullRuText);
   const selectedSceneHasPartialPhrase = selectedScenePhraseInspectorRows.some((row) => row.isPartial);
   const selectedSceneWords = useMemo(
     () => getManualTimingWordsForScene(audioWords, selectedScene, { vocalOffsetSec: Number(vocalAsrSource?.offset_sec || 0) || 0 }),
@@ -2894,6 +2893,23 @@ export default function ManualTimingEditorPage() {
     [selectedSceneWords]
   );
   const isSceneWordsInspectorMode = sceneAsrInspectorMode !== "asr_phrases";
+  const selectedSceneSpeakText = useMemo(() => {
+    if (isSceneWordsInspectorMode && !isGroupPhraseInspectorMode) {
+      return String(selectedSceneWordText || "").trim();
+    }
+
+    return String(selectedSceneFullRuText || "").trim();
+  }, [
+    isSceneWordsInspectorMode,
+    isGroupPhraseInspectorMode,
+    selectedSceneWordText,
+    selectedSceneFullRuText,
+  ]);
+  const selectedSceneSpeakButtonLabel =
+    isSceneWordsInspectorMode && !isGroupPhraseInspectorMode
+      ? "▶ слова сцены"
+      : "▶ весь перевод";
+  const canSpeakSelectedSceneText = Boolean(selectedSceneSpeakText);
   const selectedGroupStartSec = selectedGroupScenes.length ? Math.min(...selectedGroupScenes.map((scene) => Number(scene?.start_sec || 0))) : 0;
   const selectedGroupEndSec = selectedGroupScenes.length ? Math.max(...selectedGroupScenes.map((scene) => Number(scene?.end_sec || 0))) : 0;
   const selectedGroupFirstSceneId = selectedGroupScenes[0]?.scene_id || "—";
@@ -7972,7 +7988,7 @@ export default function ManualTimingEditorPage() {
                 </div>) : <div className="manualTimingSelectedPhraseEmpty">{isGroupPhraseInspectorMode ? "В выбранном блоке нет ASR-фраз." : "В выбранной сцене нет ASR-фразы."}</div>)) : <div className="manualTimingSelectedPhraseEmpty">Выбери сцену, чтобы увидеть ASR-фразу и перевод.</div>}
               </div>
               <div className="manualTimingSelectedPhraseActions">
-                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneFullRuText)} disabled={!selectedSceneHasRuText}>▶ весь перевод</button>
+                <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={() => speakManualTimingRuText(selectedSceneSpeakText)} disabled={!canSpeakSelectedSceneText}>{selectedSceneSpeakButtonLabel}</button>
                 <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={stopManualTimingSpeech}>■ стоп</button>
                 <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={refreshSceneSourcePhraseIds} disabled={!scenes.length || !audioPhrases.length}>Обновить фразы</button>
                 <button className="clipSB_btn clipSB_btnSecondary" type="button" onClick={onDownloadAsrTranslationJson} disabled={!audioPhrases.length}>Скачать JSON для перевода ASR</button>
