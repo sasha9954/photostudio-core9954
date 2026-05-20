@@ -363,6 +363,20 @@
   min-height: 72px;
 }
 
+.manualDirectorCenter .manualDirectorSceneNoteInput,
+.manualDirectorCenter .manualDirectorPromptNoteInput,
+.manualDirectorCenter .manualDirectorScenePromptHintInput {
+  width: 100%;
+  max-width: 100%;
+  min-height: 72px;
+  max-height: 180px;
+  resize: vertical;
+  overflow-y: auto;
+  box-sizing: border-box;
+  line-height: 1.45;
+  padding: 10px 12px;
+}
+
 .storyboardBlockStrip {
   display: flex;
   gap: 8px;
