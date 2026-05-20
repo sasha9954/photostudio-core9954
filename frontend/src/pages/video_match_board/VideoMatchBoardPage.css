@@ -317,14 +317,14 @@
   color: #fff;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255,255,255,0.16);
 }
-.videoMatchBtnUploadVideo { background: linear-gradient(135deg, #3b82f6, #06b6d4); }
-.videoMatchBtnUploadAudio { background: linear-gradient(135deg, #8b5cf6, #ec4899); }
-.videoMatchBtnReplaceVideo { background: linear-gradient(135deg, #ef4444, #f97316); }
-.videoMatchBtnChunk { background: linear-gradient(135deg, #0ea5e9, #22c55e); }
-.videoMatchBtnAssembly { background: linear-gradient(135deg, #14b8a6, #84cc16); }
-.videoMatchBtnFromHere { background: linear-gradient(135deg, #6366f1, #a855f7); }
-.videoMatchBtnMp4WithAudio { background: linear-gradient(135deg, #10b981, #059669); }
-.videoMatchBtnMp4NoAudio { background: linear-gradient(135deg, #64748b, #334155); }
+.videoMatchBtnUploadVideo { background: linear-gradient(135deg, #3b82f6, #06b6d4) !important; }
+.videoMatchBtnUploadAudio { background: linear-gradient(135deg, #8b5cf6, #ec4899) !important; }
+.videoMatchBtnReplaceVideo { background: linear-gradient(135deg, #ef4444, #f97316) !important; }
+.videoMatchBtnChunk { background: linear-gradient(135deg, #0ea5e9, #22c55e) !important; }
+.videoMatchBtnAssembly { background: linear-gradient(135deg, #14b8a6, #84cc16) !important; }
+.videoMatchBtnFromHere { background: linear-gradient(135deg, #6366f1, #a855f7) !important; }
+.videoMatchBtnMp4WithAudio { background: linear-gradient(135deg, #10b981, #059669) !important; }
+.videoMatchBtnMp4NoAudio { background: linear-gradient(135deg, #64748b, #334155) !important; }
 .videoMatchBtnUploadVideo:hover,
 .videoMatchBtnUploadAudio:hover,
 .videoMatchBtnReplaceVideo:hover,

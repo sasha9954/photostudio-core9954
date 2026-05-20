@@ -195,6 +195,9 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
             if not os.access(audio_input, os.R_OK):
                 raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_NOT_FOUND", "message": "Аудиофайл не найден по указанному пути"})
             has_audio = True
+        else:
+            # Строго игнорируем audioPath, если includeAudio=false.
+            audio_input = None
 
         if has_audio:
             _run_ffmpeg([
