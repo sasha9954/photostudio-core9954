@@ -4031,6 +4031,16 @@
   border-color: rgba(167, 139, 250, 0.4);
   background: rgba(30, 20, 52, 0.66);
 }
+.manualTimingAsrInspectorModeWords.isActive {
+  border-color: rgba(45, 212, 191, 0.65);
+  background: rgba(20, 184, 166, 0.18);
+  color: #ccfbf1;
+}
+.manualTimingAsrInspectorModePhrases.isActive {
+  border-color: rgba(167, 139, 250, 0.65);
+  background: rgba(139, 92, 246, 0.18);
+  color: #ede9fe;
+}
 .manualTimingSelectedPhraseInspector.isPartialPhrase {
   border-color: rgba(251, 191, 36, 0.55);
 }

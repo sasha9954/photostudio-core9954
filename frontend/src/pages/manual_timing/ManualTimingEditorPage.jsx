@@ -2730,6 +2730,10 @@ export default function ManualTimingEditorPage() {
       project?.vocal_asr_words,
     ]
   );
+  const vocalAsrWords = useMemo(
+    () => (Array.isArray(project?.vocal_asr_words) ? project.vocal_asr_words : []),
+    [project?.vocal_asr_words]
+  );
   const scenes = Array.isArray(project.scenes) ? project.scenes : [];
   const activeBoardScenes = Array.isArray(activeBoardProject?.scenes) ? activeBoardProject.scenes : [];
   const activeBoardBlocks = Array.isArray(activeBoardProject?.story_blocks) ? activeBoardProject.story_blocks : [];
@@ -3046,13 +3050,23 @@ export default function ManualTimingEditorPage() {
       }).filter(Boolean);
     });
   }, [durationSec, scenes, vocalAsrGaps]);
-  const selectedSceneOverlappingVocalGaps = useMemo(() => {
-    if (!selectedScene) return [];
-    const sceneStart = Number(selectedScene.start_sec || 0);
-    const sceneEnd = Number(selectedScene.end_sec || 0);
-    return vocalAsrGaps.filter((gap) => Number(gap?.end_sec || 0) > sceneStart && Number(gap?.start_sec || 0) < sceneEnd);
-  }, [selectedScene, vocalAsrGaps]);
-  const selectedSceneHasAsrMissingWarning = Boolean(selectedScene && selectedSceneOverlappingVocalGaps.length);
+  const selectedSceneHasAsrMissingWarning = useMemo(() => {
+    if (!selectedScene || !Array.isArray(project?.vocal_asr_gaps) || !project.vocal_asr_gaps.length) {
+      return false;
+    }
+
+    const sceneStart = Number(getManualTimingSceneSourceStartSec(selectedScene));
+    const sceneEnd = Number(getManualTimingSceneSourceEndSec(selectedScene));
+    if (!(sceneEnd > sceneStart)) return false;
+
+    const offsetSec = Number(vocalAsrSource?.offset_sec || 0) || 0;
+
+    return project.vocal_asr_gaps.some((gap) => {
+      const gapStart = Number(gap?.start_sec ?? gap?.start ?? 0) + offsetSec;
+      const gapEnd = Number(gap?.end_sec ?? gap?.end ?? gapStart) + offsetSec;
+      return gapStart < sceneEnd && gapEnd > sceneStart;
+    });
+  }, [selectedScene, project?.vocal_asr_gaps, vocalAsrSource?.offset_sec]);
 
   const timelineBlockRanges = useMemo(() => {
     if (!(durationSec > 0) || !storyBlocks.length) return [];
@@ -7447,7 +7461,6 @@ export default function ManualTimingEditorPage() {
       ...project,
       markers: nextMarkers,
       story_blocks: nextStoryBlocks,
-      audio_phrases: [],
       scenes: nextScenes,
       selectedSceneId: nextScenes[0]?.scene_id || "",
       timing_status: durationSec > 0 ? "draft" : "empty",
