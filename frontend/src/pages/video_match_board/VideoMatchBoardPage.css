@@ -261,6 +261,34 @@
   background: rgba(109,213,255,0.08);
   color: rgba(210,239,255,0.95);
 }
+.videoMatchAudioStatusBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.videoMatchAudioStatusBadge {
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.videoMatchAudioStatusBadge.isOk {
+  color: #bff5cd;
+  border-color: rgba(108,255,177,0.32);
+}
+.videoMatchAudioStatusBadge.isWarn {
+  color: #ffd28a;
+  border-color: rgba(255,210,138,0.35);
+}
+.videoMatchAudioStatusBadge.isError {
+  color: #ffb4b4;
+  border-color: rgba(255,120,120,0.4);
+}
+.videoMatchInputInvalid {
+  border-color: rgba(255, 70, 70, 0.8) !important;
+  box-shadow: 0 0 0 2px rgba(255, 70, 70, 0.22);
+}
 .videoMatchActions {
   display: flex;
   align-items: center;

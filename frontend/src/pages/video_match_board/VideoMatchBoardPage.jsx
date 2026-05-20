@@ -110,6 +110,22 @@ function getResolvedOverrideUrl(blockOrCandidate = {}) {
   return resolveOutputUrl(blockOrCandidate?.overrideVideoUrl || "");
 }
 
+const AUDIO_EXPORT_EXTENSIONS = [".mp3", ".wav", ".m4a", ".aac"];
+
+function validateAssembleAudioPath(rawPath = "") {
+  const value = String(rawPath || "").trim();
+  if (!value) return { ok: false, code: "AUDIO_PATH_REQUIRED" };
+  if (value.endsWith("...")) return { ok: false, code: "AUDIO_PATH_TRUNCATED" };
+  const lowered = value.toLowerCase();
+  if (lowered.startsWith("blob:") || lowered.startsWith("http://") || lowered.startsWith("https://") || lowered.startsWith("data:")) {
+    return { ok: false, code: "AUDIO_PATH_PREVIEW_ONLY" };
+  }
+  const looksLikeAbsolutePath = /^([a-zA-Z]:[\\/]|\/|~\/)/.test(value);
+  if (!looksLikeAbsolutePath) return { ok: false, code: "AUDIO_PATH_NOT_LOCAL" };
+  if (!AUDIO_EXPORT_EXTENSIONS.some((ext) => lowered.endsWith(ext))) return { ok: false, code: "AUDIO_PATH_INVALID_EXT" };
+  return { ok: true, code: "OK" };
+}
+
 
 function isLikelyTruncatedJson(cleanText = "") {
   if (!cleanText.startsWith("{")) return false;
@@ -200,6 +216,11 @@ export default function VideoMatchBoardPage() {
   const runtimeSourceVideoUrlRef = useRef(String(initialProject?.sourceVideoUrl || "").startsWith("blob:") ? String(initialProject?.sourceVideoUrl || "") : "");
   const runtimeAudioPreviewUrlRef = useRef(String(initialProject?.audioPreviewUrl || "").startsWith("blob:") ? String(initialProject?.audioPreviewUrl || "") : "");
   const useAudioPreview = Boolean(project.useAudioPreview);
+  const wantsAssembleWithAudio = useAudioPreview;
+  const resolvedAssembleAudioPath = String(assembleAudioPath || project?.timingContext?.sourceAudioPath || "").trim();
+  const assembleAudioPathValidation = validateAssembleAudioPath(resolvedAssembleAudioPath);
+  const isAssembleAudioPathValid = assembleAudioPathValidation.ok;
+  const audioPathInputError = wantsAssembleWithAudio && !isAssembleAudioPathValid;
   const timelineDuration = videoDurationSec || Number(project?.sourceVideo?.duration_sec || 0) || 0;
   const effectiveAudioDurationSec = audioDurationSec || Number(project?.audioPreviewMeta?.duration_sec || 0) || 0;
   const assemblyDurationSec = Math.max(0, ...assemblyBlocks.map((block) => getBlockTargetEnd(block)));
@@ -862,6 +883,10 @@ export default function VideoMatchBoardPage() {
       });
       return;
     }
+    if (wantsAssembleWithAudio && !isAssembleAudioPathValid) {
+      setAssembleError("Для MP4 с аудио укажите реальный путь к mp3/wav на диске. Загруженный через +Аудио используется только для предпросмотра.");
+      return;
+    }
     setIsAssemblingMp4(true);
     setAssembleError("");
     setAssembledPreview(null);
@@ -882,7 +907,8 @@ export default function VideoMatchBoardPage() {
           sourceVideoPath,
           sourceVideo: project?.sourceVideo || {},
           source_video: project?.source_video || {},
-          audioPath: assembleAudioPath || project?.timingContext?.sourceAudioPath || "",
+          includeAudio: wantsAssembleWithAudio,
+          audioPath: wantsAssembleWithAudio ? resolvedAssembleAudioPath : "",
           audioUrl: project?.timingContext?.sourceAudioUrl || "",
           outputFormat: "16:9",
           previewQuality: "720p",
@@ -903,9 +929,6 @@ export default function VideoMatchBoardPage() {
         },
       });
       setAssembledPreview(response || null);
-      if (response?.warning === "audio_missing_backend_path") {
-        setAssembleError("MP4 собран без аудио: укажите реальный путь к mp3.");
-      }
     } catch (error) {
       setAssembleError(String(error?.message || error || "Не удалось собрать MP4"));
     } finally {
@@ -1125,6 +1148,16 @@ export default function VideoMatchBoardPage() {
             <span>{project.audioPreviewMeta?.filename || "аудио не загружено"}</span>
             <span>{formatSec(audioCurrentTimeSec)} / {formatSec(effectiveAudioDurationSec)} с</span>
           </div>
+          <div className="videoMatchAudioStatusBadges">
+            <span className="videoMatchAudioStatusBadge isOk">✅ Аудио для предпросмотра {project.audioPreviewMeta?.filename ? "загружено" : "не загружено"}</span>
+            {wantsAssembleWithAudio ? (
+              isAssembleAudioPathValid
+                ? <span className="videoMatchAudioStatusBadge isOk">✅ Путь к аудио для MP4 указан</span>
+                : <span className={`videoMatchAudioStatusBadge ${resolvedAssembleAudioPath ? "isError" : "isWarn"}`}>{resolvedAssembleAudioPath ? "❌ Путь к аудио неверный / файл не найден" : "⚠️ Путь к аудио для MP4 не указан"}</span>
+            ) : (
+              <span className="videoMatchAudioStatusBadge isWarn">⚠️ Собрать без аудио</span>
+            )}
+          </div>
 
           <div className="videoMatchAssemblyHeader">
             <h2>Черновая сборка</h2>
@@ -1150,7 +1183,7 @@ export default function VideoMatchBoardPage() {
             <button className="clipSB_btn clipSB_btnPrimary" type="button" disabled={!assemblyBlocks.length} onClick={() => playAssemblyFromBlock(assemblyBlocks[0])}>▶ Сборка</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!selectedBlock || !assemblyBlocks.length} onClick={() => playAssemblyFromBlock(selectedBlock)}>▶ Отсюда</button>
             <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!isPlaybackActive} onClick={stopPlayback}>■ Стоп</button>
-            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!assemblyBlocks.length || isAssemblingMp4} onClick={onAssembleMp4}>{isAssemblingMp4 ? "Собираем MP4..." : "⬇ MP4"}</button>
+            <button className="clipSB_btn clipSB_btnSecondary" type="button" disabled={!assemblyBlocks.length || isAssemblingMp4 || (wantsAssembleWithAudio && !isAssembleAudioPathValid)} onClick={onAssembleMp4}>{isAssemblingMp4 ? "Собираем MP4..." : (wantsAssembleWithAudio ? "⬇ MP4 с аудио" : "⬇ MP4 без аудио")}</button>
             <span>{selectedBlock ? `${selectedBlock.id}: ${formatSec(selectedBlock.sourceVideoStartSec)}–${formatSec(selectedBlock.sourceVideoEndSec)} с` : "Кусок не выбран"}</span>
           </div>
           <div className="videoMatchContextRows">
@@ -1159,6 +1192,7 @@ export default function VideoMatchBoardPage() {
               <input
                 type="text"
                 value={assembleAudioPath}
+                className={audioPathInputError ? "videoMatchInputInvalid" : ""}
                 onChange={(event) => {
                   const value = event.target.value;
                   setAssembleAudioPath(value);

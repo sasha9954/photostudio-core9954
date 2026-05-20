@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import uuid
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -32,6 +33,7 @@ class VideoMatchBlock(BaseModel):
 
 class AssembleVideoMatchRequest(BaseModel):
     sourceVideoPath: str
+    includeAudio: bool = False
     audioPath: str | None = None
     audioUrl: str | None = None
     outputFormat: Literal["16:9"] = "16:9"
@@ -178,9 +180,19 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
 
         output_name = f"video_match_preview_{job_id}.mp4"
         output_path = VIDEO_MATCH_OUTPUTS_DIR / output_name
-        audio_warning = ""
-        audio_input = Path(str(payload.audioPath or "")).expanduser() if payload.audioPath else None
-        has_audio = bool(audio_input and audio_input.is_file())
+        audio_path_raw = str(payload.audioPath or "").strip()
+        audio_input = Path(audio_path_raw).expanduser() if audio_path_raw else None
+        has_audio = False
+        if payload.includeAudio:
+            if not audio_path_raw:
+                raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_REQUIRED", "message": "Для сборки с аудио укажите путь к файлу"})
+            if not (audio_input and audio_input.is_file()):
+                raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_NOT_FOUND", "message": "Аудиофайл не найден по указанному пути"})
+            if not os.access(audio_input, os.R_OK):
+                raise HTTPException(status_code=400, detail={"code": "AUDIO_PATH_NOT_FOUND", "message": "Аудиофайл не найден по указанному пути"})
+            has_audio = True
+        elif audio_input and audio_input.is_file():
+            has_audio = True
 
         if has_audio:
             _run_ffmpeg([
@@ -189,8 +201,6 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
             ])
         else:
             _run_ffmpeg(["ffmpeg", "-y", "-i", str(merged_video), "-c", "copy", str(output_path)])
-            if payload.audioPath or payload.audioUrl:
-                audio_warning = "audio_missing_backend_path"
 
         duration_sec = _probe_duration_sec(output_path)
         result = {
@@ -202,8 +212,6 @@ async def assemble_video_match_preview(payload: AssembleVideoMatchRequest = Body
             "overrideUsedCount": override_used_count,
             "warnings": warnings + [f"override_used_count:{override_used_count}"],
         }
-        if audio_warning:
-            result["warning"] = audio_warning
         return result
     finally:
         for path in sorted(work_dir.glob("**/*"), reverse=True):
