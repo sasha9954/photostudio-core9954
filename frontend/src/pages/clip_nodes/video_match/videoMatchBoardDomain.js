@@ -340,6 +340,21 @@ export function normalizeVideoMatchCandidate(candidate = {}, segment = {}, sourc
     overrideVideoUrl: String(source.overrideVideoUrl || source.override_video_url || "").trim(),
     overrideDurationSec: toNullableFiniteNumber(source.overrideDurationSec ?? source.override_duration_sec),
     sourceVideoUrl: String(source.sourceVideoUrl || sourceVideoUrl || "").trim(),
+    reservedGeneratedLipsync: toBool(source.reservedGeneratedLipsync ?? source.reserved_generated_lipsync),
+    reserved_generated_lipsync: toBool(source.reservedGeneratedLipsync ?? source.reserved_generated_lipsync),
+    useRealSourceClip: toBool(source.useRealSourceClip ?? source.use_real_source_clip),
+    use_real_source_clip: toBool(source.useRealSourceClip ?? source.use_real_source_clip),
+    sourceVideoReferenceOnly: source.sourceVideoReferenceOnly || source.source_video_reference_only || {},
+    source_video_reference_only: source.source_video_reference_only || source.sourceVideoReferenceOnly || {},
+  };
+}
+
+
+function getReferenceRangeSec(reference = {}) {
+  const source = reference && typeof reference === "object" ? reference : {};
+  return {
+    start: toFiniteNumber(source.source_video_start_sec ?? source.sourceVideoStartSec ?? source.video_t0, 0),
+    end: toFiniteNumber(source.source_video_end_sec ?? source.sourceVideoEndSec ?? source.video_t1, 0),
   };
 }
 
@@ -366,10 +381,10 @@ export function normalizeVideoMatchSegment(segment = {}, index = 0, sourceVideoU
       reservedGeneratedLipsync: true,
       use_real_source_clip: false,
       useRealSourceClip: false,
-      source_video_reference_only: rawSelectedCandidate.source_video_reference_only || sourceVisualReference || {},
-      sourceVideoReferenceOnly: rawSelectedCandidate.source_video_reference_only || sourceVisualReference || {},
-      sourceVideoStartSec: toFiniteNumber(rawSelectedCandidate?.source_video_reference_only?.video_t0 ?? sourceVisualReference?.video_t0, 0),
-      sourceVideoEndSec: toFiniteNumber(rawSelectedCandidate?.source_video_reference_only?.video_t1 ?? sourceVisualReference?.video_t1, 0),
+      source_video_reference_only: rawSelectedCandidate.source_video_reference_only || rawSelectedCandidate.sourceVideoReferenceOnly || sourceVisualReference || {},
+      sourceVideoReferenceOnly: rawSelectedCandidate.sourceVideoReferenceOnly || rawSelectedCandidate.source_video_reference_only || sourceVisualReference || {},
+      sourceVideoStartSec: getReferenceRangeSec(rawSelectedCandidate.source_video_reference_only || rawSelectedCandidate.sourceVideoReferenceOnly || sourceVisualReference).start,
+      sourceVideoEndSec: getReferenceRangeSec(rawSelectedCandidate.source_video_reference_only || rawSelectedCandidate.sourceVideoReferenceOnly || sourceVisualReference).end,
       visual_type: rawSelectedCandidate.visual_type || source.visual_type || source.visual_role || "",
     }, baseSegment, sourceVideoUrl, 0));
   }
